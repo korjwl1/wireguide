@@ -27,15 +27,15 @@
 **Acceptance**: QR 3초 이내 디코딩, 키 생성 < 100ms
 
 **Tasks**:
-- [ ] T009 QR 디코딩 라이브러리 추가 (Go: `makiuchi-d/gozxing` 또는 JS: `jsQR`)
-- [ ] T010 `internal/app/app.go` — ImportFromQR 바인딩 (이미지 파일 → QR 디코딩 → .conf 파싱)
-- [ ] T011 `frontend/src/lib/ImportDialog.svelte` — QR import 버튼 + 이미지 파일 선택
-- [ ] T012 `internal/config/keygen.go` — WireGuard 키페어 생성 (Curve25519)
-- [ ] T013 `frontend/src/lib/KeyGenerator.svelte` — 키 생성 UI + PublicKey 클립보드 복사
-- [ ] T014 `internal/tunnel/stats.go` — 속도 히스토리 저장 (최근 60초 RX/TX 샘플)
-- [ ] T015 `frontend/src/lib/StatsDashboard.svelte` — 실시간 속도 그래프 (Canvas/SVG)
-- [ ] T016 `internal/storage/history.go` — 연결 이력 저장 (시작/종료 시간, 전송량)
-- [ ] T017 `frontend/src/lib/StatsDashboard.svelte` — 연결 이력 탭
+- [ ] T009 QR 디코딩 — Phase 5에서 JS 라이브러리(jsQR)로 프론트엔드 구현
+- [ ] T010 QR import 바인딩 — Phase 5
+- [ ] T011 QR import UI — Phase 5
+- [x] T012 `internal/config/keygen.go` — Curve25519 키페어 생성 + 2개 테스트
+- [x] T013 `KeyGenerator.svelte` — 키 생성 UI + 클립보드 복사
+- [x] T014 `internal/tunnel/stats.go` — StatsCollector (속도 계산 + 샘플 링버퍼)
+- [x] T015 `StatsDashboard.svelte` — Canvas 기반 실시간 RX/TX 속도 그래프
+- [x] T016 `internal/storage/history.go` — HistoryStore (세션 기록 저장/로드)
+- [x] T017 StatsDashboard — 그래프 + 범례 (RX 초록, TX 파랑)
 
 ---
 
