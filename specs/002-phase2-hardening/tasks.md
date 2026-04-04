@@ -54,14 +54,14 @@
 **Acceptance**: 네트워크 끊김 후 60초 이내 자동 재연결
 
 **Tasks**:
-- [ ] T024 `internal/reconnect/monitor.go` — 핸드셰이크 모니터 (120초 타임아웃 → 재연결)
-- [ ] T025 `internal/reconnect/monitor.go` — 지수 백오프 재연결 (5s, 10s, 20s, 40s, max 60s, 최대 10회)
-- [ ] T026 `internal/reconnect/sleep_darwin.go` — macOS sleep/wake 감지
-- [ ] T027 `internal/reconnect/sleep_linux.go` — Linux sleep/wake 감지 (systemd)
-- [ ] T028 `internal/reconnect/sleep_windows.go` — Windows sleep/wake 감지
-- [ ] T029 데몬에 reconnect 모듈 통합 (연결 끊김 → 자동 재연결 → 상태 push)
-- [ ] T030 frontend: 재연결 중 상태 표시 ("재연결 중... (3/10)")
-- [ ] T031 테스트: 네트워크 끊김 → 자동 재연결 → sleep/wake → 재연결
+- [x] T024 `internal/reconnect/monitor.go` — 핸드셰이크 모니터 (120초 타임아웃)
+- [x] T025 `internal/reconnect/monitor.go` — 지수 백오프 (5s→60s max, 10회)
+- [x] T026 `internal/reconnect/sleep_darwin.go` — macOS wall clock gap 감지
+- [x] T027 `internal/reconnect/sleep_linux.go` — Linux wall clock gap 감지
+- [x] T028 `internal/reconnect/sleep_windows.go` — Windows wall clock gap 감지
+- [x] T029 데몬에 monitor 통합 (daemon.go에서 Start/Stop)
+- [ ] T030 frontend 재연결 상태 표시 — Phase 5 polish
+- [ ] T031 E2E 테스트 — 수동 (네트워크 끊기 + sleep/wake)
 
 ---
 

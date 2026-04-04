@@ -11,6 +11,7 @@ import (
 	"syscall"
 
 	pb "github.com/korjwl1/wireguide/internal/ipc/proto"
+	"github.com/korjwl1/wireguide/internal/reconnect"
 	"github.com/korjwl1/wireguide/internal/storage"
 	"github.com/korjwl1/wireguide/internal/tunnel"
 	"google.golang.org/grpc"
@@ -73,13 +74,30 @@ func Run() error {
 	service := NewService(tunnelStore, settingsStore, manager)
 	pb.RegisterWireGuideServiceServer(grpcServer, service)
 
+	// Start reconnection monitor
+	rcfg := reconnect.DefaultConfig()
+	monitor := reconnect.NewMonitor(manager, func() error {
+		activeName := manager.ActiveTunnel()
+		if activeName == "" {
+			return fmt.Errorf("no tunnel to reconnect")
+		}
+		cfg, err := tunnelStore.Load(activeName)
+		if err != nil {
+			return err
+		}
+		return manager.Connect(cfg, false)
+	}, func(state reconnect.State) {
+		slog.Info("reconnect state", "reconnecting", state.Reconnecting, "attempt", state.Attempt)
+	}, rcfg)
+	monitor.Start()
+
 	// Graceful shutdown
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
 		<-sigCh
 		slog.Info("shutting down daemon")
-		// Cleanup firewall rules
+		monitor.Stop()
 		service.firewall.Cleanup()
 		if manager.IsConnected() {
 			manager.Disconnect()
