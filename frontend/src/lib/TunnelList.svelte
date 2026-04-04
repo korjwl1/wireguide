@@ -119,6 +119,7 @@
     background: #555;
     margin-right: 10px;
     flex-shrink: 0;
+    transition: background 300ms ease, box-shadow 300ms ease;
   }
   .status-dot.on {
     background: #00b894;

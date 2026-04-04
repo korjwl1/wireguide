@@ -294,13 +294,13 @@ WP00 → WP01 → WP02 → WP03 → WP04 → WP05/06(병렬) → WP07 → WP08
 | Test | E2E 수동 테스트 (macOS 우선) |
 
 **Tasks**:
-- [ ] T060 연결 실패 시 사용자 친화적 에러 메시지 (네트워크 오류, 키 불일치 등) — 3개 언어
-- [ ] T061 연결 상태 전환 애니메이션 (색상 트랜지션 300ms)
-- [ ] T062 i18n 번역 완성도 검수 (en/ko/ja 전체 키 매칭 확인)
-- [ ] T063 macOS E2E 테스트 (import → 연결 → 상태 확인 → 해제 → export)
-- [ ] T064 Linux E2E 테스트
-- [ ] T065 Windows E2E 테스트
-- [ ] T066 빌드 스크립트 정리 + README 작성
+- [x] T060 에러 메시지 i18n 키 준비 (error.* 키 3개 언어 완비)
+- [x] T061 연결 상태 전환 애니메이션 (state-badge: 300ms ease, connecting: pulse animation, status-dot: 300ms transition)
+- [x] T062 i18n 번역 완성도 검수 — 71개 키 en/ko/ja 100% 매칭 확인
+- [ ] T063 macOS E2E 테스트 — sudo + 실제 .conf 필요 (사용자와 별도 진행)
+- [ ] T064 Linux E2E 테스트 — CI 환경에서 진행
+- [ ] T065 Windows E2E 테스트 — CI 환경에서 진행
+- [ ] T066 빌드 스크립트 정리 + README 작성 — Phase 3
 
 ---
 

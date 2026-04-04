@@ -193,6 +193,7 @@
     font-size: 12px;
     background: #333;
     color: #888;
+    transition: background 300ms ease, color 300ms ease;
   }
   .state-badge.on {
     background: #00b89422;
@@ -201,6 +202,11 @@
   .state-badge.connecting {
     background: #fdcb6e22;
     color: #fdcb6e;
+    animation: pulse 1.5s ease-in-out infinite;
+  }
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
   }
   .stats-grid {
     display: grid;
