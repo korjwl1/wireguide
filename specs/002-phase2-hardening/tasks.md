@@ -72,15 +72,15 @@
 **Acceptance**: CodeMirror로 .conf 편집 + 시스템 테마 추종 + 부팅 시 자동 시작
 
 **Tasks**:
-- [ ] T032 CodeMirror 6 npm 설치 + Svelte 래퍼 컴포넌트
-- [ ] T033 WireGuard .conf 커스텀 language mode (섹션 헤더, 키워드, 값 하이라이팅)
-- [ ] T034 키워드 자동완성 (PrivateKey, PublicKey, Endpoint, AllowedIPs, DNS, MTU 등)
-- [ ] T035 `ConfigEditor.svelte` — CodeMirror 6 통합 (textarea 교체)
-- [ ] T036 다크/라이트 테마 CSS 변수 시스템 + 시스템 테마 감지 (`prefers-color-scheme`)
-- [ ] T037 `Settings.svelte` — 테마 선택 (시스템/다크/라이트) + 언어 선택 + 자동 시작 토글
-- [ ] T038 자동 시작: macOS LaunchAgent plist
-- [ ] T039 자동 시작: Linux XDG autostart desktop entry
-- [ ] T040 자동 시작: Windows Registry Run key
+- [x] T032 CodeMirror 6 npm 패키지 설치 (@codemirror/view, state, language, autocomplete, theme-one-dark)
+- [x] T033 `wireguard-lang.js` — 커스텀 StreamLanguage (섹션 헤더, 키워드, 키, IP, 스크립트 구분)
+- [x] T034 자동완성: 섹션별 키워드 (Interface 11개, Peer 5개) + 섹션 헤더
+- [x] T035 `ConfigEditor.svelte` — CodeMirror 6 Svelte 래퍼 (oneDark 테마, line numbers, history)
+- [x] T036 `style.css` — CSS 변수 테마 (dark/light/system with prefers-color-scheme)
+- [x] T037 `Settings.svelte` — 테마/언어/자동시작/재연결/로그레벨 설정
+- [x] T038 `install.go` — macOS LaunchAgent plist
+- [x] T039 `install.go` — Linux XDG autostart desktop entry
+- [x] T040 `install.go` — Windows Registry Run key
 
 ---
 

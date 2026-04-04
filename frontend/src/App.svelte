@@ -3,11 +3,14 @@
   import TunnelList from './lib/TunnelList.svelte';
   import TunnelDetail from './lib/TunnelDetail.svelte';
   import ScriptWarning from './lib/ScriptWarning.svelte';
+  import ConfigEditor from './lib/ConfigEditor.svelte';
+  import Settings from './lib/Settings.svelte';
   import { tunnels, selectedTunnel, refreshTunnels, startPolling, stopPolling } from './stores/tunnels.js';
   import { TunnelService } from '../bindings/github.com/korjwl1/wireguide/internal/app';
 
   let showImport = false;
   let showEditor = false;
+  let showSettings = false;
   let showScriptWarning = false;
   let scriptWarningScripts = [];
   let pendingConnectName = '';
@@ -231,25 +234,23 @@
     </div>
   {/if}
 
-  <!-- Editor Dialog -->
+  <!-- Editor Dialog (CodeMirror 6) -->
   {#if showEditor}
     <div class="modal-backdrop" on:click={() => showEditor = false}>
-      <div class="modal modal-wide" on:click|stopPropagation>
-        <h3>Edit: {editName}</h3>
-        <textarea class="editor" bind:value={editorContent} rows="16" spellcheck="false"></textarea>
-        {#if editorErrors.length > 0}
-          <div class="errors">
-            {#each editorErrors as err}
-              <p>{err}</p>
-            {/each}
-          </div>
-        {/if}
-        <div class="modal-footer">
-          <button class="btn btn-connect" on:click={doSave}>Save</button>
-          <button class="btn btn-secondary" on:click={() => showEditor = false}>Cancel</button>
-        </div>
+      <div class="modal modal-editor" on:click|stopPropagation>
+        <ConfigEditor
+          bind:content={editorContent}
+          errors={editorErrors}
+          on:save={(e) => { editorContent = e.detail; doSave(); }}
+          on:cancel={() => showEditor = false}
+        />
       </div>
     </div>
+  {/if}
+
+  <!-- Settings -->
+  {#if showSettings}
+    <Settings {TunnelService} on:close={() => showSettings = false} />
   {/if}
 
   <!-- Script Warning Dialog -->
@@ -326,6 +327,7 @@
     overflow-y: auto;
   }
   .modal-wide { width: 560px; }
+  .modal-editor { width: 600px; height: 500px; padding: 0; overflow: hidden; }
   .modal h3 {
     margin: 0 0 16px;
     color: #e0e0e0;
