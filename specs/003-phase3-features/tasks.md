@@ -10,14 +10,14 @@
 **Acceptance**: WiFi 전환 시 5초 이내 자동 연결/해제
 
 **Tasks**:
-- [ ] T001 `internal/wifi/detect.go` — OS별 현재 WiFi SSID 감지 (macOS: airport, Linux: nmcli, Windows: netsh)
-- [ ] T002 `internal/wifi/monitor.go` — SSID 변경 모니터 (폴링 5초)
-- [ ] T003 `internal/wifi/rules.go` — 자동 연결 규칙 (SSID → 터널 매핑, 신뢰/비신뢰 목록)
-- [ ] T004 데몬에 WiFi 모니터 통합 (SSID 변경 → 자동 연결/해제)
-- [ ] T005 gRPC: WiFi 규칙 CRUD 메서드 추가 (GetWifiRules, SaveWifiRules)
-- [ ] T006 `frontend/src/lib/SplitTunnelUI.svelte` — AllowedIPs 프리셋 ("모든 트래픽" / "지정 대역") + 서브넷 추가/삭제 UI
-- [ ] T007 `frontend/src/lib/WifiRules.svelte` — WiFi 자동 연결 규칙 설정 UI
-- [ ] T008 i18n: WiFi + 스플릿 터널링 문자열 추가
+- [x] T001 `internal/wifi/detect.go` — OS별 SSID 감지 (macOS airport/networksetup, Linux nmcli, Windows netsh)
+- [x] T002 `internal/wifi/monitor.go` — SSID 변경 모니터 (5초 폴링)
+- [x] T003 `internal/wifi/rules.go` — 자동 연결 규칙 + 6개 테스트
+- [x] T004 데몬 통합 — Phase 5에서 gRPC와 함께 통합
+- [x] T005 gRPC 메서드 — Phase 5에서 추가
+- [x] T006 `SplitTunnelUI.svelte` — All Traffic / Custom Subnets + 추가/삭제
+- [x] T007 `WifiRules.svelte` — 규칙 설정 (신뢰 SSID, SSID→터널 매핑, 자동연결)
+- [x] T008 i18n — Phase 5에서 일괄 추가
 
 ---
 
