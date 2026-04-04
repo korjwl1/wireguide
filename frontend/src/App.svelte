@@ -2,11 +2,15 @@
   import { onMount, onDestroy } from 'svelte';
   import TunnelList from './lib/TunnelList.svelte';
   import TunnelDetail from './lib/TunnelDetail.svelte';
+  import ScriptWarning from './lib/ScriptWarning.svelte';
   import { tunnels, selectedTunnel, refreshTunnels, startPolling, stopPolling } from './stores/tunnels.js';
   import { TunnelService } from '../bindings/github.com/korjwl1/wireguide/internal/app';
 
   let showImport = false;
   let showEditor = false;
+  let showScriptWarning = false;
+  let scriptWarningScripts = [];
+  let pendingConnectName = '';
   let editName = '';
   let importName = '';
   let importContent = '';
@@ -113,6 +117,67 @@
   async function handleRefresh() {
     await refreshTunnels(TunnelService);
   }
+
+  async function handleExport(e) {
+    const name = e.detail;
+    try {
+      const content = await TunnelService.ExportConfig(name);
+      // Create a downloadable blob
+      const blob = new Blob([content], { type: 'text/plain' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = name + '.conf';
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      console.error('export error:', e);
+    }
+  }
+
+  async function handleConnect(e) {
+    const { name, hasScripts } = e.detail;
+    if (hasScripts) {
+      // Load script details and show warning
+      try {
+        const detail = await TunnelService.GetTunnelDetail(name);
+        const scripts = [];
+        const iface = detail?.Interface;
+        if (iface?.PreUp) scripts.push({ Hook: 'PreUp', Command: iface.PreUp });
+        if (iface?.PostUp) scripts.push({ Hook: 'PostUp', Command: iface.PostUp });
+        if (iface?.PreDown) scripts.push({ Hook: 'PreDown', Command: iface.PreDown });
+        if (iface?.PostDown) scripts.push({ Hook: 'PostDown', Command: iface.PostDown });
+        scriptWarningScripts = scripts;
+        pendingConnectName = name;
+        showScriptWarning = true;
+      } catch (err) {
+        console.error(err);
+      }
+    } else {
+      await TunnelService.Connect(name, false);
+      await refreshTunnels(TunnelService);
+    }
+  }
+
+  async function handleScriptAllow() {
+    showScriptWarning = false;
+    try {
+      await TunnelService.Connect(pendingConnectName, true);
+      await refreshTunnels(TunnelService);
+    } catch (e) {
+      console.error(e);
+    }
+  }
+
+  async function handleScriptDeny() {
+    showScriptWarning = false;
+    try {
+      await TunnelService.Connect(pendingConnectName, false);
+      await refreshTunnels(TunnelService);
+    } catch (e) {
+      console.error(e);
+    }
+  }
 </script>
 
 <div class="app"
@@ -131,7 +196,7 @@
       <TunnelList on:import={handleImportOpen} />
     </div>
     <div class="main">
-      <TunnelDetail {TunnelService} on:edit={handleEdit} on:refresh={handleRefresh} />
+      <TunnelDetail {TunnelService} on:edit={handleEdit} on:export={handleExport} on:connect={handleConnect} on:refresh={handleRefresh} />
     </div>
   </div>
 
@@ -185,6 +250,16 @@
         </div>
       </div>
     </div>
+  {/if}
+
+  <!-- Script Warning Dialog -->
+  {#if showScriptWarning}
+    <ScriptWarning
+      scripts={scriptWarningScripts}
+      tunnelName={pendingConnectName}
+      on:allow={handleScriptAllow}
+      on:deny={handleScriptDeny}
+    />
   {/if}
 </div>
 

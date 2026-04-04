@@ -20,17 +20,11 @@
     }
   }
 
-  async function connect() {
-    error = '';
-    loading = true;
-    try {
-      const hasScripts = $selectedTunnel.has_scripts;
-      // For now, allow scripts (ScriptWarning dialog handled in App.svelte)
-      await TunnelService.Connect($selectedTunnel.name, !hasScripts);
-    } catch (e) {
-      error = e.toString();
-    }
-    loading = false;
+  function connect() {
+    dispatch('connect', {
+      name: $selectedTunnel.name,
+      hasScripts: $selectedTunnel.has_scripts
+    });
   }
 
   async function disconnect() {
@@ -155,6 +149,9 @@
       {/if}
       <button class="btn btn-secondary" on:click={() => dispatch('edit', $selectedTunnel.name)}>
         {t('tunnel.edit')}
+      </button>
+      <button class="btn btn-secondary" on:click={() => dispatch('export', $selectedTunnel.name)}>
+        {t('tunnel.export')}
       </button>
       <button class="btn btn-danger" on:click={deleteTunnel}>
         {t('tunnel.delete')}

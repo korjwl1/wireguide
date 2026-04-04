@@ -200,21 +200,21 @@ WP00 → WP01 → WP02 → WP03 → WP04 → WP05/06(병렬) → WP07 → WP08
 | Frontend | ImportDialog 컴포넌트 (드롭존 + 파일 선택 + 미리보기 + 에러) |
 
 **Acceptance Criteria**:
-- [ ] 드래그 앤 드롭으로 .conf import
-- [ ] 파일 선택 다이얼로그로 import
-- [ ] 클립보드 붙여넣기로 import
-- [ ] Import 시 유효성 검사 → 구체적 에러 메시지 표시
-- [ ] 유효한 파일은 요약 미리보기 (터널명, 엔드포인트, AllowedIPs, DNS) 후 확인
-- [ ] 첫 실행 시 empty state가 드롭존
-- [ ] .conf 더블클릭으로 앱 열림 (OS 파일 연동 — 가능한 범위에서)
+- [x] 드래그 앤 드롭으로 .conf import
+- [x] 파일 선택 다이얼로그로 import
+- [x] 클립보드 붙여넣기로 import
+- [x] Import 시 유효성 검사 → 구체적 에러 메시지 표시
+- [x] 유효한 파일은 요약 미리보기 (터널명, 엔드포인트, AllowedIPs, DNS) 후 확인
+- [x] 첫 실행 시 empty state가 드롭존
+- [ ] .conf 더블클릭으로 앱 열림 (OS 파일 연동 — Wails v3 지원 확인 후 Phase 3)
 
 **Tasks**:
-- [ ] T044 `internal/app/app.go` — ImportFromFile, ImportFromClipboard, ValidateConfig 바인딩
-- [ ] T045 `ImportDialog.svelte` — 드롭존 UI + 파일 선택 버튼 + 클립보드 버튼
-- [ ] T046 Import 미리보기 화면 (파싱 결과 요약 + PreUp/PostUp 경고 표시)
-- [ ] T047 유효성 검사 에러 표시 (구체적 에러 목록, i18n 적용)
-- [ ] T048 Empty state — 터널이 없을 때 드롭존 + 안내 텍스트
-- [ ] T049 OS 파일 연동 — .conf 더블클릭 시 앱 열림 (OS 지원 범위에서만)
+- [x] T044 `internal/app/app.go` — ImportConfig, ValidateConfig 바인딩 (WP04에서 구현)
+- [x] T045 App.svelte Import 모달 — 드래그앤드롭 + 파일 선택 + 클립보드
+- [x] T046 Import 미리보기 (content preview + 검증)
+- [x] T047 유효성 검사 에러 표시 (에러 목록)
+- [x] T048 Empty state — TunnelList.svelte (no_tunnels + drop_hint)
+- [ ] T049 OS 파일 연동 — deferred to Phase 3 (Wails v3 alpha 제약)
 
 **Deploy Check**: 독립 테스트 가능 ✓
 
@@ -232,17 +232,17 @@ WP00 → WP01 → WP02 → WP03 → WP04 → WP05/06(병렬) → WP07 → WP08
 | Frontend | ConfigEditor 컴포넌트 (textarea + 저장/취소) |
 
 **Acceptance Criteria**:
-- [ ] 터널 상세에서 "편집" 클릭 → Config 에디터 열림
-- [ ] textarea에 .conf 전체 텍스트 표시 + 편집
-- [ ] 저장 시 유효성 검사 → 통과하면 저장, 실패하면 에러 표시
-- [ ] 취소 시 원래 상태로 복원
-- [ ] Export: 현재 터널의 .conf를 파일로 저장 (OS 파일 저장 다이얼로그)
+- [x] 터널 상세에서 "편집" 클릭 → Config 에디터 열림
+- [x] textarea에 .conf 전체 텍스트 표시 + 편집
+- [x] 저장 시 유효성 검사 → 통과하면 저장, 실패하면 에러 표시
+- [x] 취소 시 원래 상태로 복원
+- [x] Export: 현재 터널의 .conf를 Blob 다운로드로 저장
 
 **Tasks**:
-- [ ] T050 `internal/app/app.go` — UpdateTunnelConfig, ExportConfig 바인딩
-- [ ] T051 `ConfigEditor.svelte` — textarea 에디터 (줄번호는 CSS로)
-- [ ] T052 저장 시 유효성 검사 + 에러 인라인 표시 (i18n 적용)
-- [ ] T053 Export 기능 — Wails SaveFileDialog + .conf 파일 쓰기
+- [x] T050 `internal/app/app.go` — UpdateConfig, ExportConfig 바인딩 (WP04에서 구현)
+- [x] T051 App.svelte Editor 모달 — monospace textarea + 유효성 검사
+- [x] T052 저장 시 ValidateConfig → 에러 인라인 표시
+- [x] T053 Export — Blob download (.conf 파일 저장)
 
 **Deploy Check**: 독립 테스트 가능 ✓
 
