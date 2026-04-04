@@ -1,51 +1,348 @@
 <script>
-import {Events} from "@wailsio/runtime";
-import {GreetService} from "../bindings/github.com/korjwl1/wireguide";
+  import { onMount, onDestroy } from 'svelte';
+  import TunnelList from './lib/TunnelList.svelte';
+  import TunnelDetail from './lib/TunnelDetail.svelte';
+  import { tunnels, selectedTunnel, refreshTunnels, startPolling, stopPolling } from './stores/tunnels.js';
+  import { TunnelService } from '../bindings/github.com/korjwl1/wireguide/internal/app';
 
-let name = '';
-let result = 'Please enter your name below 👇';
-let time = 'Listening for Time event...';
+  let showImport = false;
+  let showEditor = false;
+  let editName = '';
+  let importName = '';
+  let importContent = '';
+  let importErrors = [];
+  let editorContent = '';
+  let editorErrors = [];
+  let dragOver = false;
 
-const doGreet = () => {
-  let localName = name;
-  if (!localName) {
-    localName = 'anonymous';
-  }
-  GreetService.Greet(localName).then((resultValue) => {
-    result = resultValue;
-  }).catch((err) => {
-    console.log(err);
+  onMount(async () => {
+    await refreshTunnels(TunnelService);
+    startPolling(TunnelService);
   });
-}
 
-Events.On('time', (timeValue) => {
-  time = timeValue.data;
-});
+  onDestroy(() => {
+    stopPolling();
+  });
+
+  async function handleImportOpen() {
+    showImport = true;
+    importName = '';
+    importContent = '';
+    importErrors = [];
+  }
+
+  async function handleFileDrop(e) {
+    e.preventDefault();
+    dragOver = false;
+    const file = e.dataTransfer?.files?.[0];
+    if (!file) return;
+    importName = file.name.replace(/\.conf$/, '');
+    importContent = await file.text();
+    showImport = true;
+    importErrors = [];
+  }
+
+  async function handleFileSelect() {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.conf';
+    input.onchange = async (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      importName = file.name.replace(/\.conf$/, '');
+      importContent = await file.text();
+      importErrors = [];
+    };
+    input.click();
+  }
+
+  async function handleClipboard() {
+    try {
+      importContent = await navigator.clipboard.readText();
+      importName = 'clipboard-import';
+      importErrors = [];
+    } catch (e) {
+      importErrors = ['Cannot read clipboard'];
+    }
+  }
+
+  async function doImport() {
+    if (!importName || !importContent) return;
+    importErrors = [];
+    try {
+      const errors = await TunnelService.ValidateConfig(importContent);
+      if (errors && errors.length > 0) {
+        importErrors = errors;
+        return;
+      }
+      await TunnelService.ImportConfig(importName, importContent);
+      showImport = false;
+      await refreshTunnels(TunnelService);
+    } catch (e) {
+      importErrors = [e.toString()];
+    }
+  }
+
+  async function handleEdit(e) {
+    editName = e.detail;
+    try {
+      editorContent = await TunnelService.GetConfigText(editName);
+      editorErrors = [];
+      showEditor = true;
+    } catch (e) {
+      console.error(e);
+    }
+  }
+
+  async function doSave() {
+    editorErrors = [];
+    try {
+      const errors = await TunnelService.ValidateConfig(editorContent);
+      if (errors && errors.length > 0) {
+        editorErrors = errors;
+        return;
+      }
+      await TunnelService.UpdateConfig(editName, editorContent);
+      showEditor = false;
+      await refreshTunnels(TunnelService);
+    } catch (e) {
+      editorErrors = [e.toString()];
+    }
+  }
+
+  async function handleRefresh() {
+    await refreshTunnels(TunnelService);
+  }
 </script>
 
-<div class="container">
-  <div>
-    <span data-wml-openURL="https://wails.io">
-      <img src="/wails.png" class="logo" alt="Wails logo"/>
-    </span>
-    <span data-wml-openURL="https://svelte.dev">
-      <img src="/svelte.svg" class="logo svelte" alt="Svelte logo"/>
-    </span>
-  </div>
-  <h1>Wails + Svelte</h1>
-  <div aria-label="result" class="result">{result}</div>
-  <div class="card">
-    <div class="input-box">
-      <input aria-label="input" class="input" bind:value={name} type="text" autocomplete="off"/>
-      <button aria-label="greet-btn" class="btn" on:click={doGreet}>Greet</button>
+<div class="app"
+  on:dragover|preventDefault={() => dragOver = true}
+  on:dragleave={() => dragOver = false}
+  on:drop={handleFileDrop}
+>
+  {#if dragOver}
+    <div class="drop-overlay">
+      <p>Drop .conf file to import</p>
+    </div>
+  {/if}
+
+  <div class="layout">
+    <div class="sidebar">
+      <TunnelList on:import={handleImportOpen} />
+    </div>
+    <div class="main">
+      <TunnelDetail {TunnelService} on:edit={handleEdit} on:refresh={handleRefresh} />
     </div>
   </div>
-  <div class="footer">
-    <div><p>Click on the Wails logo to learn more</p></div>
-    <div><p>{time}</p></div>
-  </div>
+
+  <!-- Import Dialog -->
+  {#if showImport}
+    <div class="modal-backdrop" on:click={() => showImport = false}>
+      <div class="modal" on:click|stopPropagation>
+        <h3>Import Tunnel</h3>
+        <div class="import-actions">
+          <button class="btn-sm" on:click={handleFileSelect}>Select File</button>
+          <button class="btn-sm" on:click={handleClipboard}>From Clipboard</button>
+        </div>
+        <label>
+          Tunnel Name
+          <input type="text" bind:value={importName} placeholder="my-vpn" />
+        </label>
+        {#if importContent}
+          <pre class="preview">{importContent.substring(0, 300)}{importContent.length > 300 ? '...' : ''}</pre>
+        {/if}
+        {#if importErrors.length > 0}
+          <div class="errors">
+            {#each importErrors as err}
+              <p>{err}</p>
+            {/each}
+          </div>
+        {/if}
+        <div class="modal-footer">
+          <button class="btn btn-connect" on:click={doImport} disabled={!importContent || !importName}>Import</button>
+          <button class="btn btn-secondary" on:click={() => showImport = false}>Cancel</button>
+        </div>
+      </div>
+    </div>
+  {/if}
+
+  <!-- Editor Dialog -->
+  {#if showEditor}
+    <div class="modal-backdrop" on:click={() => showEditor = false}>
+      <div class="modal modal-wide" on:click|stopPropagation>
+        <h3>Edit: {editName}</h3>
+        <textarea class="editor" bind:value={editorContent} rows="16" spellcheck="false"></textarea>
+        {#if editorErrors.length > 0}
+          <div class="errors">
+            {#each editorErrors as err}
+              <p>{err}</p>
+            {/each}
+          </div>
+        {/if}
+        <div class="modal-footer">
+          <button class="btn btn-connect" on:click={doSave}>Save</button>
+          <button class="btn btn-secondary" on:click={() => showEditor = false}>Cancel</button>
+        </div>
+      </div>
+    </div>
+  {/if}
 </div>
 
 <style>
-  /* Put your standard CSS here */
+  :global(body) {
+    margin: 0;
+    background: #1a1a2e;
+    color: #e0e0e0;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    overflow: hidden;
+  }
+  .app {
+    width: 100vw;
+    height: 100vh;
+    position: relative;
+  }
+  .layout {
+    display: flex;
+    height: 100%;
+  }
+  .sidebar {
+    width: 240px;
+    min-width: 200px;
+    background: #12122a;
+  }
+  .main {
+    flex: 1;
+    display: flex;
+  }
+  .drop-overlay {
+    position: absolute;
+    inset: 0;
+    background: rgba(15, 52, 96, 0.85);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 100;
+    border: 3px dashed #00b894;
+    border-radius: 8px;
+    margin: 8px;
+  }
+  .drop-overlay p {
+    font-size: 18px;
+    color: #00b894;
+  }
+
+  /* Modal */
+  .modal-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.6);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 200;
+  }
+  .modal {
+    background: #1a1a2e;
+    border: 1px solid #2a2a4a;
+    border-radius: 12px;
+    padding: 24px;
+    width: 420px;
+    max-height: 80vh;
+    overflow-y: auto;
+  }
+  .modal-wide { width: 560px; }
+  .modal h3 {
+    margin: 0 0 16px;
+    color: #e0e0e0;
+  }
+  .modal label {
+    display: block;
+    margin: 12px 0 4px;
+    font-size: 12px;
+    color: #8888aa;
+  }
+  .modal input[type="text"] {
+    width: 100%;
+    padding: 8px 12px;
+    background: #16213e;
+    border: 1px solid #2a2a4a;
+    border-radius: 6px;
+    color: #e0e0e0;
+    font-size: 14px;
+    box-sizing: border-box;
+  }
+  .import-actions {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 12px;
+  }
+  .btn-sm {
+    padding: 6px 12px;
+    background: #2a2a4a;
+    border: none;
+    border-radius: 6px;
+    color: #e0e0e0;
+    font-size: 12px;
+    cursor: pointer;
+  }
+  .btn-sm:hover { background: #3a3a5a; }
+  .preview {
+    margin: 12px 0;
+    padding: 12px;
+    background: #0d0d1a;
+    border-radius: 6px;
+    font-size: 11px;
+    font-family: monospace;
+    color: #aaa;
+    overflow-x: auto;
+    white-space: pre-wrap;
+    max-height: 200px;
+    overflow-y: auto;
+  }
+  .errors {
+    margin: 8px 0;
+    padding: 8px 12px;
+    background: #d6303122;
+    border: 1px solid #d63031;
+    border-radius: 6px;
+  }
+  .errors p {
+    margin: 4px 0;
+    color: #ff7675;
+    font-size: 13px;
+  }
+  .modal-footer {
+    display: flex;
+    gap: 8px;
+    justify-content: flex-end;
+    margin-top: 16px;
+  }
+  .editor {
+    width: 100%;
+    padding: 12px;
+    background: #0d0d1a;
+    border: 1px solid #2a2a4a;
+    border-radius: 6px;
+    color: #e0e0e0;
+    font-family: monospace;
+    font-size: 13px;
+    resize: vertical;
+    box-sizing: border-box;
+    outline: none;
+  }
+  .editor:focus { border-color: #0f3460; }
+
+  .btn {
+    padding: 8px 16px;
+    border: none;
+    border-radius: 6px;
+    font-size: 13px;
+    cursor: pointer;
+    color: #e0e0e0;
+  }
+  .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  .btn-connect { background: #00b894; color: #fff; }
+  .btn-connect:hover:not(:disabled) { background: #00a884; }
+  .btn-secondary { background: #2a2a4a; }
+  .btn-secondary:hover { background: #3a3a5a; }
 </style>

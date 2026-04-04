@@ -1,0 +1,91 @@
+{
+  "app": {
+    "name": "WireGuide",
+    "disconnected": "未接続",
+    "connecting": "接続中...",
+    "connected": "接続済み",
+    "error": "エラー"
+  },
+  "tunnel": {
+    "list_title": "トンネル",
+    "search": "検索...",
+    "no_tunnels": "トンネルが設定されていません",
+    "drop_hint": ".confファイルをここにドラッグするか、インポートをクリック",
+    "import": "インポート",
+    "new_tunnel": "新しいトンネル",
+    "connect": "接続",
+    "disconnect": "切断",
+    "edit": "編集",
+    "delete": "削除",
+    "export": "エクスポート",
+    "status": "ステータス",
+    "endpoint": "エンドポイント",
+    "allowed_ips": "許可されたIP",
+    "public_key": "公開鍵",
+    "handshake": "ハンドシェイク",
+    "duration": "接続時間",
+    "rx": "ダウンロード",
+    "tx": "アップロード",
+    "kill_switch": "キルスイッチ",
+    "dns_protection": "DNS保護",
+    "details": "詳細"
+  },
+  "import": {
+    "title": "トンネルのインポート",
+    "drop_file": ".confファイルをここにドラッグ",
+    "or": "または",
+    "select_file": "ファイル選択",
+    "from_clipboard": "クリップボードから貼り付け",
+    "preview_title": "プレビュー",
+    "tunnel_name": "トンネル名",
+    "confirm": "インポート",
+    "cancel": "キャンセル",
+    "success": "トンネルをインポートしました",
+    "exists": "トンネル「{name}」は既に存在します。上書きしますか？",
+    "overwrite": "上書き"
+  },
+  "editor": {
+    "title": "トンネル編集: {name}",
+    "save": "保存",
+    "cancel": "キャンセル",
+    "validation_error": "検証エラー"
+  },
+  "scripts": {
+    "warning_title": "スクリプト警告",
+    "warning_message": "この設定にはシステムコマンドを実行するスクリプトが含まれています：",
+    "allow": "許可",
+    "deny": "拒否",
+    "denied_note": "このトンネルのスクリプトは実行されません。"
+  },
+  "settings": {
+    "title": "設定",
+    "general": "一般",
+    "auto_start": "起動時に自動実行",
+    "theme": "テーマ",
+    "language": "言語",
+    "connection": "接続",
+    "auto_reconnect": "自動再接続",
+    "advanced": "詳細設定",
+    "log_level": "ログレベル"
+  },
+  "confirm": {
+    "delete_title": "トンネル削除",
+    "delete_message": "「{name}」を削除しますか？",
+    "yes": "削除",
+    "no": "キャンセル",
+    "disconnect_first": "先にトンネルを切断してください"
+  },
+  "error": {
+    "connection_failed": "接続に失敗しました",
+    "network_error": "ネットワークエラー — インターネット接続を確認してください",
+    "key_mismatch": "鍵が一致しません — 設定を確認してください",
+    "permission_denied": "管理者権限が必要です",
+    "invalid_config": "無効な設定",
+    "file_read_error": "ファイルを読み取れません — ファイル権限を確認してください",
+    "empty_file": "空のファイルです"
+  },
+  "time": {
+    "seconds_ago": "{n}秒前",
+    "just_now": "たった今"
+  }
+}

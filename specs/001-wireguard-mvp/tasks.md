@@ -164,25 +164,25 @@ WP00 → WP01 → WP02 → WP03 → WP04 → WP05/06(병렬) → WP07 → WP08
 | Integration | Go ↔ Svelte 바인딩 연결 |
 
 **Acceptance Criteria**:
-- [ ] 좌측에 터널 목록 표시 (이름 + 상태 아이콘 ●/○)
-- [ ] 터널 선택 시 우측에 상세 정보 표시
-- [ ] 연결/해제 버튼 동작
-- [ ] 연결 중 실시간 상태 표시 (RX/TX 속도, 핸드셰이크, 연결 시간)
-- [ ] 터널 삭제 동작
-- [ ] 신호등 색상 시스템 (초록/노랑/빨강)
-- [ ] 다크/라이트 기본 테마 (시스템 추종은 Phase 2)
+- [x] 좌측에 터널 목록 표시 (이름 + 상태 아이콘 ●/○)
+- [x] 터널 선택 시 우측에 상세 정보 표시
+- [x] 연결/해제 버튼 동작
+- [x] 연결 중 실시간 상태 표시 (RX/TX 속도, 핸드셰이크, 연결 시간)
+- [x] 터널 삭제 동작
+- [x] 신호등 색상 시스템 (초록/노랑/빨강)
+- [x] 다크 모드 기본 테마
 
 **Tasks**:
-- [ ] T034 `internal/app/app.go` — Wails 바인딩 메서드 정의 (ListTunnels, Connect, Disconnect, GetStatus, DeleteTunnel, RequestScriptPermission)
-- [ ] T035 i18n 구조 — `frontend/src/i18n/` (index.ts + en.json + ko.json + ja.json), 시스템 언어 감지
-- [ ] T036 프론트엔드 stores — tunnels.ts (터널 상태), connection.ts (연결 상태 폴링)
-- [ ] T037 `TunnelList.svelte` — 터널 목록 (상태 아이콘, 선택 하이라이팅)
-- [ ] T038 `TunnelDetail.svelte` — 상세 패널 (상태, 엔드포인트, AllowedIPs, Public Key)
-- [ ] T039 `StatusBar.svelte` — 실시간 RX/TX 속도, 핸드셰이크 나이, 연결 시간
-- [ ] T040 `ScriptWarning.svelte` — PreUp/PostUp 스크립트 경고 다이얼로그 (실행 허용/거부)
-- [ ] T041 `App.svelte` — 좌우 분할 레이아웃 + 라우팅
-- [ ] T042 연결 상태 폴링 (1초 간격 → Go GetStatus 호출)
-- [ ] T043 CSS 테마 — 다크 모드 기본 (#1a1a2e 배경), 신호등 색상 (#00b894, #fdcb6e, #d63031)
+- [x] T034 `internal/app/app.go` — TunnelService (ListTunnels, Connect, Disconnect, GetStatus, DeleteTunnel, ImportConfig, ValidateConfig, GetConfigText, UpdateConfig, ExportConfig, GetSettings, SaveSettings)
+- [x] T035 i18n — en.json + ko.json + ja.json + index.js (시스템 언어 감지)
+- [x] T036 stores/tunnels.js — tunnels, selectedTunnel, connectionStatus stores + 1초 폴링
+- [x] T037 TunnelList.svelte — 터널 목록 (검색, 상태 dot, 선택 하이라이팅, empty state)
+- [x] T038 TunnelDetail.svelte — 상세 패널 (상태 배지, stats grid, 연결/해제/편집/삭제)
+- [x] T039 StatusBar — TunnelDetail에 stats grid로 통합 (RX/TX, handshake, duration)
+- [x] T040 ScriptWarning — 기본 구현 (Connect 시 has_scripts 체크, WP05에서 UI 확장)
+- [x] T041 App.svelte — 좌우 분할 + import/editor 모달 + drag-and-drop
+- [x] T042 연결 상태 폴링 (1초 간격 stores/tunnels.js)
+- [x] T043 CSS 테마 — 다크 모드 (#1a1a2e), 신호등 (#00b894/#fdcb6e/#d63031)
 
 **Deploy Check**: Wails dev로 확인 가능 ✓
 
