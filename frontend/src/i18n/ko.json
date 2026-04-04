@@ -1,0 +1,91 @@
+{
+  "app": {
+    "name": "WireGuide",
+    "disconnected": "연결 안 됨",
+    "connecting": "연결 중...",
+    "connected": "연결됨",
+    "error": "오류"
+  },
+  "tunnel": {
+    "list_title": "터널",
+    "search": "검색...",
+    "no_tunnels": "구성된 터널이 없습니다",
+    "drop_hint": ".conf 파일을 여기에 드래그하거나 Import를 클릭하세요",
+    "import": "Import",
+    "new_tunnel": "새 터널",
+    "connect": "연결",
+    "disconnect": "연결 해제",
+    "edit": "편집",
+    "delete": "삭제",
+    "export": "내보내기",
+    "status": "상태",
+    "endpoint": "엔드포인트",
+    "allowed_ips": "허용된 IP",
+    "public_key": "공개 키",
+    "handshake": "핸드셰이크",
+    "duration": "연결 시간",
+    "rx": "다운로드",
+    "tx": "업로드",
+    "kill_switch": "킬 스위치",
+    "dns_protection": "DNS 보호",
+    "details": "상세 정보"
+  },
+  "import": {
+    "title": "터널 가져오기",
+    "drop_file": ".conf 파일을 여기에 드래그하세요",
+    "or": "또는",
+    "select_file": "파일 선택",
+    "from_clipboard": "클립보드에서 붙여넣기",
+    "preview_title": "미리보기",
+    "tunnel_name": "터널 이름",
+    "confirm": "가져오기",
+    "cancel": "취소",
+    "success": "터널을 가져왔습니다",
+    "exists": "터널 \"{name}\"이(가) 이미 있습니다. 덮어쓰시겠습니까?",
+    "overwrite": "덮어쓰기"
+  },
+  "editor": {
+    "title": "터널 편집: {name}",
+    "save": "저장",
+    "cancel": "취소",
+    "validation_error": "유효성 검사 오류"
+  },
+  "scripts": {
+    "warning_title": "스크립트 경고",
+    "warning_message": "이 설정에 시스템 명령 실행 스크립트가 포함되어 있습니다:",
+    "allow": "허용",
+    "deny": "거부",
+    "denied_note": "이 터널의 스크립트는 실행되지 않습니다."
+  },
+  "settings": {
+    "title": "설정",
+    "general": "일반",
+    "auto_start": "시작 시 자동 실행",
+    "theme": "테마",
+    "language": "언어",
+    "connection": "연결",
+    "auto_reconnect": "자동 재연결",
+    "advanced": "고급",
+    "log_level": "로그 레벨"
+  },
+  "confirm": {
+    "delete_title": "터널 삭제",
+    "delete_message": "\"{name}\"을(를) 삭제하시겠습니까?",
+    "yes": "삭제",
+    "no": "취소",
+    "disconnect_first": "먼저 연결을 해제하세요"
+  },
+  "error": {
+    "connection_failed": "연결 실패",
+    "network_error": "네트워크 오류 — 인터넷 연결을 확인하세요",
+    "key_mismatch": "키 불일치 — 설정을 확인하세요",
+    "permission_denied": "관리자 권한이 필요합니다",
+    "invalid_config": "유효하지 않은 설정",
+    "file_read_error": "파일을 읽을 수 없습니다 — 파일 권한을 확인하세요",
+    "empty_file": "빈 파일입니다"
+  },
+  "time": {
+    "seconds_ago": "{n}초 전",
+    "just_now": "방금"
+  }
+}

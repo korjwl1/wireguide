@@ -1,0 +1,91 @@
+{
+  "app": {
+    "name": "WireGuide",
+    "disconnected": "Disconnected",
+    "connecting": "Connecting...",
+    "connected": "Connected",
+    "error": "Error"
+  },
+  "tunnel": {
+    "list_title": "Tunnels",
+    "search": "Search...",
+    "no_tunnels": "No tunnels configured",
+    "drop_hint": "Drop a .conf file here or click Import",
+    "import": "Import",
+    "new_tunnel": "New Tunnel",
+    "connect": "Connect",
+    "disconnect": "Disconnect",
+    "edit": "Edit",
+    "delete": "Delete",
+    "export": "Export",
+    "status": "Status",
+    "endpoint": "Endpoint",
+    "allowed_ips": "Allowed IPs",
+    "public_key": "Public Key",
+    "handshake": "Handshake",
+    "duration": "Duration",
+    "rx": "Download",
+    "tx": "Upload",
+    "kill_switch": "Kill Switch",
+    "dns_protection": "DNS Protection",
+    "details": "Details"
+  },
+  "import": {
+    "title": "Import Tunnel",
+    "drop_file": "Drop .conf file here",
+    "or": "or",
+    "select_file": "Select File",
+    "from_clipboard": "Paste from Clipboard",
+    "preview_title": "Preview",
+    "tunnel_name": "Tunnel Name",
+    "confirm": "Import",
+    "cancel": "Cancel",
+    "success": "Tunnel imported successfully",
+    "exists": "Tunnel \"{name}\" already exists. Overwrite?",
+    "overwrite": "Overwrite"
+  },
+  "editor": {
+    "title": "Edit Tunnel: {name}",
+    "save": "Save",
+    "cancel": "Cancel",
+    "validation_error": "Validation Error"
+  },
+  "scripts": {
+    "warning_title": "Script Warning",
+    "warning_message": "This configuration contains system commands that will be executed:",
+    "allow": "Allow",
+    "deny": "Deny",
+    "denied_note": "Scripts will not be executed for this tunnel."
+  },
+  "settings": {
+    "title": "Settings",
+    "general": "General",
+    "auto_start": "Launch at startup",
+    "theme": "Theme",
+    "language": "Language",
+    "connection": "Connection",
+    "auto_reconnect": "Auto Reconnect",
+    "advanced": "Advanced",
+    "log_level": "Log Level"
+  },
+  "confirm": {
+    "delete_title": "Delete Tunnel",
+    "delete_message": "Are you sure you want to delete \"{name}\"?",
+    "yes": "Delete",
+    "no": "Cancel",
+    "disconnect_first": "Disconnect the tunnel first"
+  },
+  "error": {
+    "connection_failed": "Connection failed",
+    "network_error": "Network error — check your internet connection",
+    "key_mismatch": "Key mismatch — verify your configuration",
+    "permission_denied": "Administrator privileges required",
+    "invalid_config": "Invalid configuration",
+    "file_read_error": "Cannot read file — check file permissions",
+    "empty_file": "Empty file"
+  },
+  "time": {
+    "seconds_ago": "{n}s ago",
+    "just_now": "just now"
+  }
+}
