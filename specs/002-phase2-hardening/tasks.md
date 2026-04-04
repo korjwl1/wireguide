@@ -1,0 +1,124 @@
+# Tasks: WireGuide Phase 2 — Hardening & UX
+
+**Input**: `specs/002-phase2-hardening/plan.md`
+
+---
+
+## Phase 1: Daemon + gRPC IPC
+
+**Description**: GUI ↔ 데몬 권한 분리. gRPC over UDS로 통신.
+**Deliverables**: proto/, internal/daemon/, internal/ipc/, cmd/wireguided/
+**Acceptance**: 일반 사용자로 GUI 실행 → 데몬 통해 터널 연결/해제 동작
+
+**Tasks**:
+- [ ] T001 `proto/wireguide.proto` — gRPC 서비스 정의 (Connect, Disconnect, Status stream, ListTunnels, ImportConfig, etc.)
+- [ ] T002 protobuf 코드 생성 (`protoc` + `protoc-gen-go-grpc`)
+- [ ] T003 `internal/daemon/daemon.go` — 데몬 메인: gRPC 서버 + Unix Socket 리스닝
+- [ ] T004 `internal/daemon/service.go` — gRPC 서비스 구현 (기존 tunnel.Manager 래핑)
+- [ ] T005 `internal/daemon/service.go` — Status 서버 스트리밍 (1초 간격 push)
+- [ ] T006 `internal/ipc/client.go` — gRPC 클라이언트 (GUI에서 사용)
+- [ ] T007 `internal/app/app.go` — TunnelService를 gRPC 클라이언트 기반으로 전환
+- [ ] T008 `cmd/wireguided/main.go` — 데몬 바이너리 진입점
+- [ ] T009 `cmd/wireguide/main.go` — GUI 바이너리 (기존 main.go 이동)
+- [ ] T010 `internal/daemon/install.go` — macOS LaunchDaemon plist 설치/제거
+- [ ] T011 `internal/daemon/install.go` — Linux systemd unit 설치/제거
+- [ ] T012 `internal/daemon/install.go` — Windows SCM 서비스 설치/제거
+- [ ] T013 `frontend/src/stores/tunnels.js` — gRPC 스트리밍 기반으로 전환 (폴링 제거)
+- [ ] T014 데몬 미실행 시 GUI에 에러 표시 + 설치 안내
+- [ ] T015 테스트: 데몬 시작 → GUI 연결 → 터널 연결/해제 → 상태 스트리밍
+
+---
+
+## Phase 2: Kill Switch + DNS Leak Protection
+
+**Description**: OS 방화벽으로 킬 스위치 + DNS 보호. 데몬에서 관리.
+**Deliverables**: internal/firewall/
+**Acceptance**: 킬 스위치 ON + VPN 강제 종료 → 인터넷 차단 확인
+
+**Tasks**:
+- [ ] T016 `internal/firewall/interface.go` — Firewall 인터페이스 (Enable/Disable Kill Switch, Enable/Disable DNS Protection)
+- [ ] T017 `internal/firewall/darwin.go` — macOS pf: WG 인터페이스 + 엔드포인트 외 차단, 포트 53 필터링
+- [ ] T018 `internal/firewall/linux.go` — Linux nftables: OUTPUT 체인 WG 외 DROP, DNS 필터링
+- [ ] T019 `internal/firewall/windows.go` — Windows WFP: 동적 세션 기반 필터, DNS 필터링
+- [ ] T020 `internal/daemon/service.go` — 킬 스위치/DNS 보호 gRPC 메서드 추가
+- [ ] T021 `frontend/src/lib/TunnelDetail.svelte` — 킬 스위치/DNS 보호 토글 UI
+- [ ] T022 크래시 복구: 데몬 종료 시 방화벽 규칙 자동 정리 (WFP 동적 세션 / pf anchor 삭제)
+- [ ] T023 테스트: 킬 스위치 ON → VPN 강제 종료 → 인터넷 차단 확인
+
+---
+
+## Phase 3: Auto-reconnect + Sleep/Wake
+
+**Description**: 자동 재연결 (지수 백오프) + 죽은 연결 감지 + sleep/wake 복구.
+**Deliverables**: internal/reconnect/
+**Acceptance**: 네트워크 끊김 후 60초 이내 자동 재연결
+
+**Tasks**:
+- [ ] T024 `internal/reconnect/monitor.go` — 핸드셰이크 모니터 (120초 타임아웃 → 재연결)
+- [ ] T025 `internal/reconnect/monitor.go` — 지수 백오프 재연결 (5s, 10s, 20s, 40s, max 60s, 최대 10회)
+- [ ] T026 `internal/reconnect/sleep_darwin.go` — macOS sleep/wake 감지
+- [ ] T027 `internal/reconnect/sleep_linux.go` — Linux sleep/wake 감지 (systemd)
+- [ ] T028 `internal/reconnect/sleep_windows.go` — Windows sleep/wake 감지
+- [ ] T029 데몬에 reconnect 모듈 통합 (연결 끊김 → 자동 재연결 → 상태 push)
+- [ ] T030 frontend: 재연결 중 상태 표시 ("재연결 중... (3/10)")
+- [ ] T031 테스트: 네트워크 끊김 → 자동 재연결 → sleep/wake → 재연결
+
+---
+
+## Phase 4: CodeMirror 6 + Dark/Light Mode + Auto-start
+
+**Description**: 에디터 업그레이드, 테마 시스템, 자동 시작.
+**Deliverables**: ConfigEditor.svelte, Settings.svelte, 테마 CSS
+**Acceptance**: CodeMirror로 .conf 편집 + 시스템 테마 추종 + 부팅 시 자동 시작
+
+**Tasks**:
+- [ ] T032 CodeMirror 6 npm 설치 + Svelte 래퍼 컴포넌트
+- [ ] T033 WireGuard .conf 커스텀 language mode (섹션 헤더, 키워드, 값 하이라이팅)
+- [ ] T034 키워드 자동완성 (PrivateKey, PublicKey, Endpoint, AllowedIPs, DNS, MTU 등)
+- [ ] T035 `ConfigEditor.svelte` — CodeMirror 6 통합 (textarea 교체)
+- [ ] T036 다크/라이트 테마 CSS 변수 시스템 + 시스템 테마 감지 (`prefers-color-scheme`)
+- [ ] T037 `Settings.svelte` — 테마 선택 (시스템/다크/라이트) + 언어 선택 + 자동 시작 토글
+- [ ] T038 자동 시작: macOS LaunchAgent plist
+- [ ] T039 자동 시작: Linux XDG autostart desktop entry
+- [ ] T040 자동 시작: Windows Registry Run key
+
+---
+
+## Phase 5: Log Viewer + OS Notifications + Polish
+
+**Description**: 로그 뷰어, OS 알림, 전체 통합 테스트.
+**Deliverables**: LogViewer.svelte, 알림 시스템
+**Acceptance**: 로그 필터링 + 연결 끊김 시 OS 알림
+
+**Tasks**:
+- [ ] T041 `internal/daemon/logger.go` — 구조화된 로그 시스템 (gRPC로 GUI에 스트리밍)
+- [ ] T042 `LogViewer.svelte` — 로그 뷰어 (레벨 필터: debug/info/warn/error, 자동 스크롤)
+- [ ] T043 OS 알림: macOS (NSUserNotification / UNUserNotificationCenter)
+- [ ] T044 OS 알림: Linux (libnotify / D-Bus)
+- [ ] T045 OS 알림: Windows (toast notification)
+- [ ] T046 알림 이벤트: 연결 끊김, 재연결 성공, 킬 스위치 활성화, 에러
+- [ ] T047 i18n: 새 UI 문자열 3개 언어 추가 (킬 스위치, 재연결, 로그 등)
+- [ ] T048 macOS E2E 테스트 (데몬 설치 → GUI 실행 → 연결 → 킬 스위치 → sleep/wake)
+- [ ] T049 전체 빌드 + README 업데이트
+
+---
+
+## Dependency Map
+
+```
+Phase 1 (Daemon + IPC)
+ │
+ ├──→ Phase 2 (Kill Switch) — 데몬 필요
+ ├──→ Phase 3 (Reconnect) — 데몬 필요
+ │
+ └──→ Phase 4 (CodeMirror + Theme + Autostart) — 독립적
+      │
+      └──→ Phase 5 (Log + Notifications + Polish) — 전체 통합
+```
+
+## Notes
+
+- **gRPC over UDS**: `google.golang.org/grpc` + Unix Socket (macOS/Linux), Named Pipe (Windows)
+- **킬 스위치 기본 OFF**: 설정에서 토글, 터널별 오버라이드 가능
+- **CodeMirror 6 풀 통합**: textarea 완전 교체
+- **Phase 4는 Phase 2/3과 병렬 가능**: CodeMirror/테마는 데몬과 무관
