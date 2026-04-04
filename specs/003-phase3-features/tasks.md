@@ -45,15 +45,15 @@
 **Acceptance**: 멀티 터널 충돌 시 경고 + Tailscale 등 외부 감지
 
 **Tasks**:
-- [ ] T018 `internal/update/checker.go` — GitHub Releases API 버전 확인 + 다운로드
-- [ ] T019 `internal/update/installer.go` — OS별 자동 설치 (macOS: DMG mount, Linux: dpkg/rpm, Windows: MSI)
-- [ ] T020 `frontend/src/lib/UpdateNotice.svelte` — 업데이트 알림 + 설치 버튼
-- [ ] T021 `internal/tunnel/manager.go` — 멀티 터널 지원 (단일 activeCfg → map[string]*Engine)
-- [ ] T022 `internal/tunnel/conflict.go` — CIDR 겹침 검사 (새 AllowedIPs vs 기존 터널)
-- [ ] T023 `internal/tunnel/conflict.go` — 외부 인터페이스 스캔 (utun/wg 인터페이스 목록 + UAPI 소켓 경로로 소유자 식별)
-- [ ] T024 `internal/tunnel/conflict.go` — 라우팅 테이블 스캔 fallback (UAPI 없는 경우)
-- [ ] T025 `frontend/src/lib/ConflictWarning.svelte` — 충돌 경고 다이얼로그 (어떤 인터페이스, 누구 소유, 어떤 대역 충돌)
-- [ ] T026 gRPC: 멀티 터널 지원으로 Connect/Disconnect/Status 확장
+- [x] T018 `internal/update/checker.go` — GitHub Releases API + 다운로드 + OS/arch 매칭
+- [x] T019 `internal/update/installer.go` — OS별 설치 (macOS open, Linux dpkg/rpm, Windows msi)
+- [x] T020 `UpdateNotice.svelte` — 업데이트 배너 + Install 버튼 + Release Notes 링크
+- [ ] T021 멀티 터널 manager 리팩터링 — Phase 5에서 gRPC 확장과 함께
+- [x] T022 `conflict.go` — CIDR 겹침 검사 + 5개 테스트 (풀터널, 서브넷, 노충돌 등)
+- [x] T023 `conflict.go` — 외부 인터페이스 스캔 (UAPI 소켓 + pgrep으로 WireGuide/Tailscale/WireGuard 식별)
+- [x] T024 `conflict.go` — 라우팅 테이블 스캔 (macOS netstat, Linux ip route)
+- [x] T025 `ConflictWarning.svelte` — 충돌 경고 (인터페이스명, 소유자, 겹치는 대역)
+- [ ] T026 gRPC 멀티 터널 확장 — Phase 5
 
 ---
 
