@@ -50,6 +50,12 @@ func (c *Client) Ping(ctx context.Context) (*pb.PingResponse, error) {
 	return c.service.Ping(ctx, &pb.PingRequest{})
 }
 
+// Shutdown requests the daemon to shut down gracefully.
+func (c *Client) Shutdown(ctx context.Context) error {
+	_, err := c.service.Shutdown(ctx, &pb.ShutdownRequest{})
+	return err
+}
+
 // Connect requests the daemon to connect a tunnel.
 func (c *Client) Connect(ctx context.Context, name string, scriptsAllowed bool) error {
 	_, err := c.service.Connect(ctx, &pb.ConnectRequest{

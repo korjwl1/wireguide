@@ -34,6 +34,7 @@ service WireGuideService {
 
   // Daemon management
   rpc Ping(PingRequest) returns (PingResponse);
+  rpc Shutdown(ShutdownRequest) returns (ShutdownResponse);
 }
 
 // --- Tunnel ---
@@ -190,3 +191,6 @@ message PingResponse {
   string version = 1;
   string status = 2;
 }
+
+message ShutdownRequest {}
+message ShutdownResponse {}

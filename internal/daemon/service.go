@@ -21,6 +21,7 @@ type Service struct {
 	settingsStore *storage.SettingsStore
 	manager       *tunnel.Manager
 	firewall      firewall.FirewallManager
+	shutdownFn    func()
 }
 
 // NewService creates a new gRPC service.
@@ -33,8 +34,22 @@ func NewService(ts *storage.TunnelStore, ss *storage.SettingsStore, mgr *tunnel.
 	}
 }
 
+// SetShutdownFunc sets the function called when GUI requests shutdown.
+func (s *Service) SetShutdownFunc(fn func()) {
+	s.shutdownFn = fn
+}
+
 func (s *Service) Ping(ctx context.Context, req *pb.PingRequest) (*pb.PingResponse, error) {
 	return &pb.PingResponse{Version: "0.2.0", Status: "running"}, nil
+}
+
+func (s *Service) Shutdown(ctx context.Context, req *pb.ShutdownRequest) (*pb.ShutdownResponse, error) {
+	slog.Info("shutdown requested by GUI")
+	// Signal daemon to shut down gracefully
+	if s.shutdownFn != nil {
+		go s.shutdownFn() // run async so response can be sent first
+	}
+	return &pb.ShutdownResponse{}, nil
 }
 
 func (s *Service) Connect(ctx context.Context, req *pb.ConnectRequest) (*pb.ConnectResponse, error) {

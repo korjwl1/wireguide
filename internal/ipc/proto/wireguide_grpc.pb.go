@@ -36,6 +36,7 @@ const (
 	WireGuideService_SetKillSwitch_FullMethodName    = "/wireguide.WireGuideService/SetKillSwitch"
 	WireGuideService_SetDNSProtection_FullMethodName = "/wireguide.WireGuideService/SetDNSProtection"
 	WireGuideService_Ping_FullMethodName             = "/wireguide.WireGuideService/Ping"
+	WireGuideService_Shutdown_FullMethodName         = "/wireguide.WireGuideService/Shutdown"
 )
 
 // WireGuideServiceClient is the client API for WireGuideService service.
@@ -67,6 +68,7 @@ type WireGuideServiceClient interface {
 	SetDNSProtection(ctx context.Context, in *SetDNSProtectionRequest, opts ...grpc.CallOption) (*SetDNSProtectionResponse, error)
 	// Daemon management
 	Ping(ctx context.Context, in *PingRequest, opts ...grpc.CallOption) (*PingResponse, error)
+	Shutdown(ctx context.Context, in *ShutdownRequest, opts ...grpc.CallOption) (*ShutdownResponse, error)
 }
 
 type wireGuideServiceClient struct {
@@ -256,6 +258,16 @@ func (c *wireGuideServiceClient) Ping(ctx context.Context, in *PingRequest, opts
 	return out, nil
 }
 
+func (c *wireGuideServiceClient) Shutdown(ctx context.Context, in *ShutdownRequest, opts ...grpc.CallOption) (*ShutdownResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ShutdownResponse)
+	err := c.cc.Invoke(ctx, WireGuideService_Shutdown_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // WireGuideServiceServer is the server API for WireGuideService service.
 // All implementations must embed UnimplementedWireGuideServiceServer
 // for forward compatibility.
@@ -285,6 +297,7 @@ type WireGuideServiceServer interface {
 	SetDNSProtection(context.Context, *SetDNSProtectionRequest) (*SetDNSProtectionResponse, error)
 	// Daemon management
 	Ping(context.Context, *PingRequest) (*PingResponse, error)
+	Shutdown(context.Context, *ShutdownRequest) (*ShutdownResponse, error)
 	mustEmbedUnimplementedWireGuideServiceServer()
 }
 
@@ -345,6 +358,9 @@ func (UnimplementedWireGuideServiceServer) SetDNSProtection(context.Context, *Se
 }
 func (UnimplementedWireGuideServiceServer) Ping(context.Context, *PingRequest) (*PingResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Ping not implemented")
+}
+func (UnimplementedWireGuideServiceServer) Shutdown(context.Context, *ShutdownRequest) (*ShutdownResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method Shutdown not implemented")
 }
 func (UnimplementedWireGuideServiceServer) mustEmbedUnimplementedWireGuideServiceServer() {}
 func (UnimplementedWireGuideServiceServer) testEmbeddedByValue()                          {}
@@ -666,6 +682,24 @@ func _WireGuideService_Ping_Handler(srv interface{}, ctx context.Context, dec fu
 	return interceptor(ctx, in, info, handler)
 }
 
+func _WireGuideService_Shutdown_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ShutdownRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WireGuideServiceServer).Shutdown(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WireGuideService_Shutdown_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WireGuideServiceServer).Shutdown(ctx, req.(*ShutdownRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // WireGuideService_ServiceDesc is the grpc.ServiceDesc for WireGuideService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -736,6 +770,10 @@ var WireGuideService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Ping",
 			Handler:    _WireGuideService_Ping_Handler,
+		},
+		{
+			MethodName: "Shutdown",
+			Handler:    _WireGuideService_Shutdown_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

@@ -8,6 +8,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"sync"
 	"syscall"
 
 	pb "github.com/korjwl1/wireguide/internal/ipc/proto"
@@ -91,18 +92,29 @@ func Run() error {
 	}, rcfg)
 	monitor.Start()
 
-	// Graceful shutdown
+	// Graceful shutdown (from signal or GUI request)
+	shutdownOnce := sync.Once{}
+	doShutdown := func() {
+		shutdownOnce.Do(func() {
+			slog.Info("shutting down daemon")
+			monitor.Stop()
+			service.firewall.Cleanup()
+			if manager.IsConnected() {
+				manager.Disconnect()
+			}
+			grpcServer.GracefulStop()
+		})
+	}
+
+	// Allow GUI to trigger shutdown via gRPC
+	service.SetShutdownFunc(doShutdown)
+
+	// Also handle OS signals (SIGINT, SIGTERM, force kill)
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
 		<-sigCh
-		slog.Info("shutting down daemon")
-		monitor.Stop()
-		service.firewall.Cleanup()
-		if manager.IsConnected() {
-			manager.Disconnect()
-		}
-		grpcServer.GracefulStop()
+		doShutdown()
 	}()
 
 	return grpcServer.Serve(listener)

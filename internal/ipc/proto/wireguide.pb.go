@@ -1805,6 +1805,78 @@ func (x *PingResponse) GetStatus() string {
 	return ""
 }
 
+type ShutdownRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ShutdownRequest) Reset() {
+	*x = ShutdownRequest{}
+	mi := &file_proto_wireguide_proto_msgTypes[36]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ShutdownRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ShutdownRequest) ProtoMessage() {}
+
+func (x *ShutdownRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_wireguide_proto_msgTypes[36]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ShutdownRequest.ProtoReflect.Descriptor instead.
+func (*ShutdownRequest) Descriptor() ([]byte, []int) {
+	return file_proto_wireguide_proto_rawDescGZIP(), []int{36}
+}
+
+type ShutdownResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ShutdownResponse) Reset() {
+	*x = ShutdownResponse{}
+	mi := &file_proto_wireguide_proto_msgTypes[37]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ShutdownResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ShutdownResponse) ProtoMessage() {}
+
+func (x *ShutdownResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_wireguide_proto_msgTypes[37]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ShutdownResponse.ProtoReflect.Descriptor instead.
+func (*ShutdownResponse) Descriptor() ([]byte, []int) {
+	return file_proto_wireguide_proto_rawDescGZIP(), []int{37}
+}
+
 var File_proto_wireguide_proto protoreflect.FileDescriptor
 
 const file_proto_wireguide_proto_rawDesc = "" +
@@ -1917,8 +1989,9 @@ const file_proto_wireguide_proto_rawDesc = "" +
 	"\vPingRequest\"@\n" +
 	"\fPingResponse\x12\x18\n" +
 	"\aversion\x18\x01 \x01(\tR\aversion\x12\x16\n" +
-	"\x06status\x18\x02 \x01(\tR\x06status2\xbe\n" +
-	"\n" +
+	"\x06status\x18\x02 \x01(\tR\x06status\"\x11\n" +
+	"\x0fShutdownRequest\"\x12\n" +
+	"\x10ShutdownResponse2\x83\v\n" +
 	"\x10WireGuideService\x12@\n" +
 	"\aConnect\x12\x19.wireguide.ConnectRequest\x1a\x1a.wireguide.ConnectResponse\x12I\n" +
 	"\n" +
@@ -1937,7 +2010,8 @@ const file_proto_wireguide_proto_rawDesc = "" +
 	"\fSaveSettings\x12\x13.wireguide.Settings\x1a\x1f.wireguide.SaveSettingsResponse\x12R\n" +
 	"\rSetKillSwitch\x12\x1f.wireguide.SetKillSwitchRequest\x1a .wireguide.SetKillSwitchResponse\x12[\n" +
 	"\x10SetDNSProtection\x12\".wireguide.SetDNSProtectionRequest\x1a#.wireguide.SetDNSProtectionResponse\x127\n" +
-	"\x04Ping\x12\x16.wireguide.PingRequest\x1a\x17.wireguide.PingResponseB1Z/github.com/korjwl1/wireguide/internal/ipc/protob\x06proto3"
+	"\x04Ping\x12\x16.wireguide.PingRequest\x1a\x17.wireguide.PingResponse\x12C\n" +
+	"\bShutdown\x12\x1a.wireguide.ShutdownRequest\x1a\x1b.wireguide.ShutdownResponseB1Z/github.com/korjwl1/wireguide/internal/ipc/protob\x06proto3"
 
 var (
 	file_proto_wireguide_proto_rawDescOnce sync.Once
@@ -1951,7 +2025,7 @@ func file_proto_wireguide_proto_rawDescGZIP() []byte {
 	return file_proto_wireguide_proto_rawDescData
 }
 
-var file_proto_wireguide_proto_msgTypes = make([]protoimpl.MessageInfo, 36)
+var file_proto_wireguide_proto_msgTypes = make([]protoimpl.MessageInfo, 38)
 var file_proto_wireguide_proto_goTypes = []any{
 	(*ConnectRequest)(nil),           // 0: wireguide.ConnectRequest
 	(*ConnectResponse)(nil),          // 1: wireguide.ConnectResponse
@@ -1989,6 +2063,8 @@ var file_proto_wireguide_proto_goTypes = []any{
 	(*SetDNSProtectionResponse)(nil), // 33: wireguide.SetDNSProtectionResponse
 	(*PingRequest)(nil),              // 34: wireguide.PingRequest
 	(*PingResponse)(nil),             // 35: wireguide.PingResponse
+	(*ShutdownRequest)(nil),          // 36: wireguide.ShutdownRequest
+	(*ShutdownResponse)(nil),         // 37: wireguide.ShutdownResponse
 }
 var file_proto_wireguide_proto_depIdxs = []int32{
 	6,  // 0: wireguide.ListTunnelsResponse.tunnels:type_name -> wireguide.TunnelInfo
@@ -2012,25 +2088,27 @@ var file_proto_wireguide_proto_depIdxs = []int32{
 	30, // 18: wireguide.WireGuideService.SetKillSwitch:input_type -> wireguide.SetKillSwitchRequest
 	32, // 19: wireguide.WireGuideService.SetDNSProtection:input_type -> wireguide.SetDNSProtectionRequest
 	34, // 20: wireguide.WireGuideService.Ping:input_type -> wireguide.PingRequest
-	1,  // 21: wireguide.WireGuideService.Connect:output_type -> wireguide.ConnectResponse
-	3,  // 22: wireguide.WireGuideService.Disconnect:output_type -> wireguide.DisconnectResponse
-	5,  // 23: wireguide.WireGuideService.ListTunnels:output_type -> wireguide.ListTunnelsResponse
-	8,  // 24: wireguide.WireGuideService.GetTunnelDetail:output_type -> wireguide.TunnelDetail
-	12, // 25: wireguide.WireGuideService.StreamStatus:output_type -> wireguide.ConnectionStatus
-	14, // 26: wireguide.WireGuideService.ImportConfig:output_type -> wireguide.ImportConfigResponse
-	16, // 27: wireguide.WireGuideService.ValidateConfig:output_type -> wireguide.ValidateConfigResponse
-	18, // 28: wireguide.WireGuideService.GetConfigText:output_type -> wireguide.GetConfigTextResponse
-	20, // 29: wireguide.WireGuideService.UpdateConfig:output_type -> wireguide.UpdateConfigResponse
-	22, // 30: wireguide.WireGuideService.DeleteTunnel:output_type -> wireguide.DeleteTunnelResponse
-	24, // 31: wireguide.WireGuideService.ExportConfig:output_type -> wireguide.ExportConfigResponse
-	26, // 32: wireguide.WireGuideService.TunnelExists:output_type -> wireguide.TunnelExistsResponse
-	27, // 33: wireguide.WireGuideService.GetSettings:output_type -> wireguide.Settings
-	29, // 34: wireguide.WireGuideService.SaveSettings:output_type -> wireguide.SaveSettingsResponse
-	31, // 35: wireguide.WireGuideService.SetKillSwitch:output_type -> wireguide.SetKillSwitchResponse
-	33, // 36: wireguide.WireGuideService.SetDNSProtection:output_type -> wireguide.SetDNSProtectionResponse
-	35, // 37: wireguide.WireGuideService.Ping:output_type -> wireguide.PingResponse
-	21, // [21:38] is the sub-list for method output_type
-	4,  // [4:21] is the sub-list for method input_type
+	36, // 21: wireguide.WireGuideService.Shutdown:input_type -> wireguide.ShutdownRequest
+	1,  // 22: wireguide.WireGuideService.Connect:output_type -> wireguide.ConnectResponse
+	3,  // 23: wireguide.WireGuideService.Disconnect:output_type -> wireguide.DisconnectResponse
+	5,  // 24: wireguide.WireGuideService.ListTunnels:output_type -> wireguide.ListTunnelsResponse
+	8,  // 25: wireguide.WireGuideService.GetTunnelDetail:output_type -> wireguide.TunnelDetail
+	12, // 26: wireguide.WireGuideService.StreamStatus:output_type -> wireguide.ConnectionStatus
+	14, // 27: wireguide.WireGuideService.ImportConfig:output_type -> wireguide.ImportConfigResponse
+	16, // 28: wireguide.WireGuideService.ValidateConfig:output_type -> wireguide.ValidateConfigResponse
+	18, // 29: wireguide.WireGuideService.GetConfigText:output_type -> wireguide.GetConfigTextResponse
+	20, // 30: wireguide.WireGuideService.UpdateConfig:output_type -> wireguide.UpdateConfigResponse
+	22, // 31: wireguide.WireGuideService.DeleteTunnel:output_type -> wireguide.DeleteTunnelResponse
+	24, // 32: wireguide.WireGuideService.ExportConfig:output_type -> wireguide.ExportConfigResponse
+	26, // 33: wireguide.WireGuideService.TunnelExists:output_type -> wireguide.TunnelExistsResponse
+	27, // 34: wireguide.WireGuideService.GetSettings:output_type -> wireguide.Settings
+	29, // 35: wireguide.WireGuideService.SaveSettings:output_type -> wireguide.SaveSettingsResponse
+	31, // 36: wireguide.WireGuideService.SetKillSwitch:output_type -> wireguide.SetKillSwitchResponse
+	33, // 37: wireguide.WireGuideService.SetDNSProtection:output_type -> wireguide.SetDNSProtectionResponse
+	35, // 38: wireguide.WireGuideService.Ping:output_type -> wireguide.PingResponse
+	37, // 39: wireguide.WireGuideService.Shutdown:output_type -> wireguide.ShutdownResponse
+	22, // [22:40] is the sub-list for method output_type
+	4,  // [4:22] is the sub-list for method input_type
 	4,  // [4:4] is the sub-list for extension type_name
 	4,  // [4:4] is the sub-list for extension extendee
 	0,  // [0:4] is the sub-list for field type_name
@@ -2047,7 +2125,7 @@ func file_proto_wireguide_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_proto_wireguide_proto_rawDesc), len(file_proto_wireguide_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   36,
+			NumMessages:   38,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

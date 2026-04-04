@@ -26,6 +26,7 @@ func main() {
 	if err != nil {
 		slog.Error("failed to start daemon", "error", err)
 	}
+	daemonStartedByUs := err == nil && client != nil // track if we started the daemon
 
 	tunnelService := wgapp.NewTunnelService(client)
 
@@ -91,9 +92,7 @@ func main() {
 		})
 		trayMenu.AddSeparator()
 		trayMenu.Add("Quit").OnClick(func(ctx *application.Context) {
-			if client != nil {
-				client.Close()
-			}
+			shutdownDaemon(client, daemonStartedByUs)
 			app.Quit()
 		})
 		tray.SetMenu(trayMenu)
@@ -111,6 +110,21 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+}
+
+// shutdownDaemon gracefully stops the daemon if we started it.
+func shutdownDaemon(client *ipc.Client, weStartedIt bool) {
+	if client == nil {
+		return
+	}
+	if weStartedIt {
+		// We started the daemon, so we should stop it
+		slog.Info("shutting down daemon (started by GUI)")
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		client.Shutdown(ctx)
+	}
+	client.Close()
 }
 
 // ensureDaemon checks if the daemon is running, and starts it if not.
