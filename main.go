@@ -23,7 +23,9 @@ var assets embed.FS
 
 func main() {
 	// Step 1: Check privileges — relaunch with OS permission prompt if needed
-	if !isElevated() {
+	// --elevated flag prevents infinite re-elevation loop
+	elevated := len(os.Args) > 1 && os.Args[1] == "--elevated"
+	if !elevated && !isElevated() {
 		slog.Info("not running as root, requesting elevation...")
 		if err := relaunchElevated(); err != nil {
 			slog.Error("elevation failed", "error", err)
@@ -189,8 +191,13 @@ func relaunchElevated() error {
 
 	switch runtime.GOOS {
 	case "darwin":
-		// macOS: osascript shows native password dialog
-		script := fmt.Sprintf(`do shell script "open '%s'" with administrator privileges`, exe)
+		// macOS: "do shell script ... with administrator privileges" shows
+		// the native macOS padlock password dialog. No terminal window.
+		// The binary is run directly as root with --elevated flag.
+		script := fmt.Sprintf(
+			`do shell script "nohup '%s' --elevated >/dev/null 2>&1 &" with administrator privileges with prompt "WireGuide needs administrator privileges to create VPN tunnels."`,
+			exe,
+		)
 		cmd := exec.Command("osascript", "-e", script)
 		out, err := cmd.CombinedOutput()
 		if err != nil {
@@ -200,13 +207,13 @@ func relaunchElevated() error {
 
 	case "linux":
 		// Linux: pkexec shows PolicyKit dialog
-		cmd := exec.Command("pkexec", exe)
+		cmd := exec.Command("pkexec", exe, "--elevated")
 		return cmd.Start()
 
 	case "windows":
-		// Windows: runas triggers UAC dialog
+		// Windows: Start-Process -Verb RunAs triggers UAC dialog
 		cmd := exec.Command("powershell", "-Command",
-			fmt.Sprintf("Start-Process '%s' -Verb RunAs", exe))
+			fmt.Sprintf("Start-Process '%s' -ArgumentList '--elevated' -Verb RunAs", exe))
 		return cmd.Start()
 
 	default:
