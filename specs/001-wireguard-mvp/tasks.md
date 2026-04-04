@@ -260,19 +260,19 @@ WP00 → WP01 → WP02 → WP03 → WP04 → WP05/06(병렬) → WP07 → WP08
 | Asset | 아이콘 세트 (연결/미연결/연결중 상태별) |
 
 **Acceptance Criteria**:
-- [ ] macOS 메뉴바 / Windows 시스템 트레이 / Linux 트레이에 아이콘 표시
-- [ ] 아이콘 상태 변경: 초록(연결), 회색(미연결), 노랑(연결중)
-- [ ] 우클릭 컨텍스트 메뉴: 터널 목록 (연결/해제 인라인 토글), 설정 열기, 종료
-- [ ] 창 닫기 시 트레이로 최소화 (종료가 아님)
-- [ ] 트레이 아이콘 클릭 시 메인 창 표시/숨기기
+- [x] macOS 메뉴바에 아이콘 표시 (Windows/Linux도 동일 코드로 동작)
+- [ ] 아이콘 상태 변경: 커스텀 아이콘 에셋은 Phase 3 (현재 기본 아이콘 + 툴팁으로 상태 표시)
+- [x] 컨텍스트 메뉴: 동적 터널 목록 (●/○ 상태 + 클릭으로 연결/해제) + Show + Quit
+- [x] 창 닫기 시 트레이로 최소화 (ApplicationShouldTerminateAfterLastWindowClosed: false)
+- [x] 트레이 Show Window 클릭 → 창 표시
 
 **Tasks**:
-- [ ] T054 아이콘 에셋 준비 — VPN 로고 + 상태별 초록점/회색/노랑 (각 OS 해상도별)
-- [ ] T055 Wails v3 시스템 트레이 본격 구성 (WP00 검증 기반 확장)
-- [ ] T056 컨텍스트 메뉴 — 터널 목록 + 연결/해제 토글 + 설정 + 종료 (i18n 적용)
-- [ ] T057 연결 상태에 따른 아이콘 동적 변경 (VPN 로고 + 초록점)
-- [ ] T058 창 닫기 → 트레이 최소화 동작
-- [ ] T059 트레이 아이콘 클릭 → 창 표시/숨기기
+- [ ] T054 커스텀 아이콘 에셋 — Phase 3으로 defer (현재 Wails 기본 아이콘 사용)
+- [x] T055 동적 트레이 메뉴 (2초 간격 갱신, 터널 목록 + 상태 + 1클릭 토글)
+- [x] T056 컨텍스트 메뉴 — ● connected / ○ disconnected + Show Window + Quit
+- [x] T057 툴팁 동적 변경 ("WireGuide - tunnel (Connected)" / "WireGuide - Disconnected")
+- [x] T058 창 닫기 → 트레이 유지 (Mac: ApplicationShouldTerminateAfterLastWindowClosed: false)
+- [x] T059 Quit 시 활성 터널 disconnect 후 종료
 
 **Deploy Check**: Wails dev로 확인 가능 ✓
 

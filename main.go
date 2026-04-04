@@ -4,6 +4,7 @@ import (
 	"embed"
 	"log"
 	"log/slog"
+	"time"
 
 	wgapp "github.com/korjwl1/wireguide/internal/app"
 	"github.com/korjwl1/wireguide/internal/storage"
@@ -68,21 +69,69 @@ func main() {
 	tray := app.SystemTray.New()
 	tray.SetTooltip("WireGuide - Disconnected")
 
-	trayMenu := app.NewMenu()
-	trayMenu.Add("WireGuide").SetEnabled(false)
-	trayMenu.AddSeparator()
-	trayMenu.Add("Show Window").OnClick(func(ctx *application.Context) {
-		app.Show()
-	})
-	trayMenu.AddSeparator()
-	trayMenu.Add("Quit").OnClick(func(ctx *application.Context) {
-		// Disconnect active tunnel before quitting
-		if manager.IsConnected() {
-			manager.Disconnect()
+	// Build tray menu with tunnel list
+	buildTrayMenu := func() {
+		trayMenu := app.NewMenu()
+		trayMenu.Add("WireGuide").SetEnabled(false)
+		trayMenu.AddSeparator()
+
+		// Dynamic tunnel list
+		names, _ := tunnelStore.List()
+		activeName := manager.ActiveTunnel()
+		for _, name := range names {
+			tunnelName := name // capture for closure
+			isActive := tunnelName == activeName
+			label := "  " + tunnelName
+			if isActive {
+				label = "● " + tunnelName
+			} else {
+				label = "○ " + tunnelName
+			}
+			trayMenu.Add(label).OnClick(func(ctx *application.Context) {
+				if isActive {
+					manager.Disconnect()
+				} else {
+					if manager.IsConnected() {
+						manager.Disconnect()
+					}
+					cfg, err := tunnelStore.Load(tunnelName)
+					if err == nil {
+						manager.Connect(cfg, false)
+					}
+				}
+			})
 		}
-		app.Quit()
-	})
-	tray.SetMenu(trayMenu)
+
+		trayMenu.AddSeparator()
+		trayMenu.Add("Show Window").OnClick(func(ctx *application.Context) {
+			app.Show()
+		})
+		trayMenu.AddSeparator()
+		trayMenu.Add("Quit").OnClick(func(ctx *application.Context) {
+			if manager.IsConnected() {
+				manager.Disconnect()
+			}
+			app.Quit()
+		})
+		tray.SetMenu(trayMenu)
+
+		// Update tooltip based on connection state
+		if activeName != "" {
+			tray.SetTooltip("WireGuide - " + activeName + " (Connected)")
+		} else {
+			tray.SetTooltip("WireGuide - Disconnected")
+		}
+	}
+
+	buildTrayMenu()
+
+	// Refresh tray menu periodically
+	go func() {
+		for {
+			time.Sleep(2 * time.Second)
+			buildTrayMenu()
+		}
+	}()
 
 	err = app.Run()
 	if err != nil {
