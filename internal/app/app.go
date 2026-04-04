@@ -1,23 +1,35 @@
-// Package app provides Wails bindings bridging Svelte frontend and daemon via gRPC.
+// Package app provides Wails bindings bridging Svelte frontend and Go backend directly.
 package app
 
 import (
-	"context"
 	"fmt"
+	"strings"
 
-	"github.com/korjwl1/wireguide/internal/ipc"
-	pb "github.com/korjwl1/wireguide/internal/ipc/proto"
+	"github.com/korjwl1/wireguide/internal/config"
+	"github.com/korjwl1/wireguide/internal/firewall"
+	"github.com/korjwl1/wireguide/internal/storage"
+	"github.com/korjwl1/wireguide/internal/tunnel"
 )
 
-// TunnelService exposes daemon operations to the Svelte frontend via Wails bindings.
+// TunnelService exposes tunnel operations to Svelte frontend via Wails bindings.
 type TunnelService struct {
-	client *ipc.Client
+	tunnelStore   *storage.TunnelStore
+	settingsStore *storage.SettingsStore
+	manager       *tunnel.Manager
+	firewall      firewall.FirewallManager
 }
 
-// NewTunnelService creates a service connected to the daemon.
-func NewTunnelService(client *ipc.Client) *TunnelService {
-	return &TunnelService{client: client}
+// NewTunnelService creates a service with direct access to manager and storage.
+func NewTunnelService(ts *storage.TunnelStore, ss *storage.SettingsStore, mgr *tunnel.Manager, fw firewall.FirewallManager) *TunnelService {
+	return &TunnelService{
+		tunnelStore:   ts,
+		settingsStore: ss,
+		manager:       mgr,
+		firewall:      fw,
+	}
 }
+
+// --- Types for frontend ---
 
 type TunnelInfo struct {
 	Name        string `json:"name"`
@@ -27,99 +39,177 @@ type TunnelInfo struct {
 }
 
 type ConnectionStatus struct {
-	State            string `json:"state"`
-	TunnelName       string `json:"tunnel_name"`
-	RxBytes          int64  `json:"rx_bytes"`
-	TxBytes          int64  `json:"tx_bytes"`
-	LastHandshake    string `json:"last_handshake"`
-	Duration         string `json:"duration"`
-	Endpoint         string `json:"endpoint"`
-	ErrorMessage     string `json:"error_message"`
+	State         string `json:"state"`
+	TunnelName    string `json:"tunnel_name"`
+	InterfaceName string `json:"interface_name"`
+	RxBytes       int64  `json:"rx_bytes"`
+	TxBytes       int64  `json:"tx_bytes"`
+	LastHandshake string `json:"last_handshake"`
+	Duration      string `json:"duration"`
+	Endpoint      string `json:"endpoint"`
 }
 
+// --- Tunnel operations ---
+
 func (s *TunnelService) ListTunnels() ([]TunnelInfo, error) {
-	tunnels, err := s.client.ListTunnels(context.Background())
+	names, err := s.tunnelStore.List()
 	if err != nil {
 		return nil, err
 	}
+	activeName := s.manager.ActiveTunnel()
 	var result []TunnelInfo
-	for _, t := range tunnels {
+	for _, name := range names {
+		cfg, err := s.tunnelStore.Load(name)
+		if err != nil {
+			continue
+		}
+		endpoint := ""
+		if len(cfg.Peers) > 0 {
+			endpoint = cfg.Peers[0].Endpoint
+		}
 		result = append(result, TunnelInfo{
-			Name:        t.Name,
-			IsConnected: t.IsConnected,
-			Endpoint:    t.Endpoint,
-			HasScripts:  t.HasScripts,
+			Name:        name,
+			IsConnected: name == activeName,
+			Endpoint:    endpoint,
+			HasScripts:  cfg.HasScripts(),
 		})
 	}
 	return result, nil
 }
 
-func (s *TunnelService) GetTunnelDetail(name string) (*pb.TunnelDetail, error) {
-	return s.client.GetTunnelDetail(context.Background(), name)
-}
-
 func (s *TunnelService) Connect(name string, scriptsAllowed bool) error {
-	return s.client.Connect(context.Background(), name, scriptsAllowed)
+	cfg, err := s.tunnelStore.Load(name)
+	if err != nil {
+		return fmt.Errorf("loading tunnel %s: %w", name, err)
+	}
+	return s.manager.Connect(cfg, scriptsAllowed)
 }
 
 func (s *TunnelService) Disconnect() error {
-	return s.client.Disconnect(context.Background())
+	return s.manager.Disconnect()
 }
 
-func (s *TunnelService) GetStatus() (*ConnectionStatus, error) {
-	tunnels, err := s.client.ListTunnels(context.Background())
-	if err != nil {
-		return &ConnectionStatus{State: "error", ErrorMessage: err.Error()}, nil
+func (s *TunnelService) GetStatus() *ConnectionStatus {
+	status := s.manager.Status()
+	return &ConnectionStatus{
+		State:         string(status.State),
+		TunnelName:    status.TunnelName,
+		InterfaceName: status.InterfaceName,
+		RxBytes:       status.RxBytes,
+		TxBytes:       status.TxBytes,
+		LastHandshake: status.HandshakeAge,
+		Duration:      status.Duration,
+		Endpoint:      status.Endpoint,
 	}
-	for _, t := range tunnels {
-		if t.IsConnected {
-			return &ConnectionStatus{State: "connected", TunnelName: t.Name, Endpoint: t.Endpoint}, nil
-		}
-	}
-	return &ConnectionStatus{State: "disconnected"}, nil
+}
+
+func (s *TunnelService) GetTunnelDetail(name string) (*config.WireGuardConfig, error) {
+	return s.tunnelStore.Load(name)
 }
 
 func (s *TunnelService) DeleteTunnel(name string) error {
-	return s.client.DeleteTunnel(context.Background(), name)
+	if s.manager.ActiveTunnel() == name {
+		return fmt.Errorf("cannot delete connected tunnel %q — disconnect first", name)
+	}
+	return s.tunnelStore.Delete(name)
 }
 
+// --- Config management ---
+
 func (s *TunnelService) ImportConfig(name, content string) (*TunnelInfo, error) {
-	t, err := s.client.ImportConfig(context.Background(), name, content)
+	cfg, err := s.tunnelStore.ImportFromContent(name, content)
 	if err != nil {
 		return nil, err
 	}
-	return &TunnelInfo{Name: t.Name, Endpoint: t.Endpoint, HasScripts: t.HasScripts}, nil
+	endpoint := ""
+	if len(cfg.Peers) > 0 {
+		endpoint = cfg.Peers[0].Endpoint
+	}
+	return &TunnelInfo{
+		Name:       cfg.Name,
+		Endpoint:   endpoint,
+		HasScripts: cfg.HasScripts(),
+	}, nil
 }
 
 func (s *TunnelService) ValidateConfig(content string) ([]string, error) {
-	return s.client.ValidateConfig(context.Background(), content)
+	cfg, err := config.Parse(content)
+	if err != nil {
+		return []string{err.Error()}, nil
+	}
+	result := config.Validate(cfg)
+	if result.IsValid() {
+		return nil, nil
+	}
+	return result.ErrorMessages(), nil
 }
 
 func (s *TunnelService) GetConfigText(name string) (string, error) {
-	return s.client.GetConfigText(context.Background(), name)
+	cfg, err := s.tunnelStore.Load(name)
+	if err != nil {
+		return "", err
+	}
+	return config.Serialize(cfg), nil
 }
 
 func (s *TunnelService) UpdateConfig(name, content string) error {
-	return s.client.UpdateConfig(context.Background(), name, content)
+	if s.manager.ActiveTunnel() == name {
+		return fmt.Errorf("cannot edit connected tunnel %q — disconnect first", name)
+	}
+	cfg, err := config.Parse(content)
+	if err != nil {
+		return err
+	}
+	result := config.Validate(cfg)
+	if !result.IsValid() {
+		return fmt.Errorf("validation failed: %s", strings.Join(result.ErrorMessages(), "; "))
+	}
+	cfg.Name = name
+	return s.tunnelStore.Save(cfg)
 }
 
 func (s *TunnelService) ExportConfig(name string) (string, error) {
-	return s.client.ExportConfig(context.Background(), name)
+	return s.GetConfigText(name)
 }
 
-func (s *TunnelService) TunnelExists(name string) (bool, error) {
-	return s.client.TunnelExists(context.Background(), name)
+func (s *TunnelService) TunnelExists(name string) bool {
+	return s.tunnelStore.Exists(name)
 }
 
-func (s *TunnelService) IsDaemonRunning() bool {
-	_, err := s.client.Ping(context.Background())
-	return err == nil
+// --- Settings ---
+
+func (s *TunnelService) GetSettings() (*storage.Settings, error) {
+	return s.settingsStore.Load()
 }
 
-func (s *TunnelService) DaemonError() string {
-	_, err := s.client.Ping(context.Background())
-	if err != nil {
-		return fmt.Sprintf("Cannot connect to WireGuide daemon: %v", err)
+func (s *TunnelService) SaveSettings(settings *storage.Settings) error {
+	return s.settingsStore.Save(settings)
+}
+
+// --- Firewall ---
+
+func (s *TunnelService) SetKillSwitch(enabled bool) error {
+	if enabled {
+		status := s.manager.Status()
+		if status.State != tunnel.StateConnected {
+			return fmt.Errorf("cannot enable kill switch: no active tunnel")
+		}
+		return s.firewall.EnableKillSwitch(status.InterfaceName, status.Endpoint)
 	}
-	return ""
+	return s.firewall.DisableKillSwitch()
+}
+
+func (s *TunnelService) SetDNSProtection(enabled bool) error {
+	if enabled {
+		status := s.manager.Status()
+		if status.State != tunnel.StateConnected {
+			return fmt.Errorf("cannot enable DNS protection: no active tunnel")
+		}
+		cfg, err := s.tunnelStore.Load(s.manager.ActiveTunnel())
+		if err != nil {
+			return err
+		}
+		return s.firewall.EnableDNSProtection(status.InterfaceName, cfg.Interface.DNS)
+	}
+	return s.firewall.DisableDNSProtection()
 }

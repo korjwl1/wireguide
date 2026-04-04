@@ -26,6 +26,13 @@ export class ConnectionStatus {
              */
             this["tunnel_name"] = "";
         }
+        if (!("interface_name" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["interface_name"] = "";
+        }
         if (!("rx_bytes" in $$source)) {
             /**
              * @member
@@ -60,13 +67,6 @@ export class ConnectionStatus {
              * @type {string}
              */
             this["endpoint"] = "";
-        }
-        if (!("error_message" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["error_message"] = "";
         }
 
         Object.assign(this, $$source);

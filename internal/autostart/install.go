@@ -1,4 +1,4 @@
-package daemon
+package autostart
 
 import (
 	"fmt"

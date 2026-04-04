@@ -1,19 +1,20 @@
 package main
 
 import (
-	"context"
 	"embed"
 	"fmt"
 	"log"
 	"log/slog"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"runtime"
 	"time"
 
 	wgapp "github.com/korjwl1/wireguide/internal/app"
-	"github.com/korjwl1/wireguide/internal/ipc"
+	"github.com/korjwl1/wireguide/internal/firewall"
+	"github.com/korjwl1/wireguide/internal/reconnect"
+	"github.com/korjwl1/wireguide/internal/storage"
+	"github.com/korjwl1/wireguide/internal/tunnel"
 	"github.com/wailsapp/wails/v3/pkg/application"
 )
 
@@ -21,15 +22,56 @@ import (
 var assets embed.FS
 
 func main() {
-	// Ensure daemon is running, start it if needed
-	client, err := ensureDaemon()
-	if err != nil {
-		slog.Error("failed to start daemon", "error", err)
+	// Step 1: Check privileges — relaunch with OS permission prompt if needed
+	if !isElevated() {
+		slog.Info("not running as root, requesting elevation...")
+		if err := relaunchElevated(); err != nil {
+			slog.Error("elevation failed", "error", err)
+			// Continue without elevation — tunnel operations will fail but UI works
+		} else {
+			return // elevated process takes over
+		}
 	}
-	daemonStartedByUs := err == nil && client != nil // track if we started the daemon
 
-	tunnelService := wgapp.NewTunnelService(client)
+	// Step 2: Initialize everything directly (no IPC, no daemon)
+	paths, err := storage.GetPaths()
+	if err != nil {
+		log.Fatal("failed to get paths:", err)
+	}
+	if err := paths.EnsureDirs(); err != nil {
+		log.Fatal("failed to create directories:", err)
+	}
 
+	tunnelStore := storage.NewTunnelStore(paths.TunnelsDir)
+	settingsStore := storage.NewSettingsStore(paths.ConfigDir)
+	manager := tunnel.NewManager(paths.DataDir)
+	fw := firewall.NewPlatformFirewall()
+
+	// Crash recovery
+	if recovered := tunnel.RecoverFromCrash(paths.DataDir); recovered != "" {
+		slog.Warn("recovered from previous crash", "tunnel", recovered)
+	}
+
+	// Reconnect monitor
+	monitor := reconnect.NewMonitor(manager, func() error {
+		activeName := manager.ActiveTunnel()
+		if activeName == "" {
+			return fmt.Errorf("no tunnel to reconnect")
+		}
+		cfg, err := tunnelStore.Load(activeName)
+		if err != nil {
+			return err
+		}
+		return manager.Connect(cfg, false)
+	}, func(state reconnect.State) {
+		slog.Info("reconnect state", "reconnecting", state.Reconnecting, "attempt", state.Attempt)
+	}, reconnect.DefaultConfig())
+	monitor.Start()
+
+	// Step 3: Create Wails service — direct access, no IPC
+	tunnelService := wgapp.NewTunnelService(tunnelStore, settingsStore, manager, fw)
+
+	// Step 4: Wails application
 	app := application.New(application.Options{
 		Name:        "WireGuide",
 		Description: "Cross-platform WireGuard desktop client",
@@ -66,24 +108,20 @@ func main() {
 		trayMenu.Add("WireGuide").SetEnabled(false)
 		trayMenu.AddSeparator()
 
-		if client != nil {
-			tunnels, _ := tunnelService.ListTunnels()
-			for _, t := range tunnels {
-				tun := t
-				label := "○ " + tun.Name
-				if tun.IsConnected {
-					label = "● " + tun.Name
-				}
-				trayMenu.Add(label).OnClick(func(ctx *application.Context) {
-					if tun.IsConnected {
-						tunnelService.Disconnect()
-					} else {
-						tunnelService.Connect(tun.Name, false)
-					}
-				})
+		tunnels, _ := tunnelService.ListTunnels()
+		for _, t := range tunnels {
+			tun := t
+			label := "○ " + tun.Name
+			if tun.IsConnected {
+				label = "● " + tun.Name
 			}
-		} else {
-			trayMenu.Add("Daemon not running").SetEnabled(false)
+			trayMenu.Add(label).OnClick(func(ctx *application.Context) {
+				if tun.IsConnected {
+					tunnelService.Disconnect()
+				} else {
+					tunnelService.Connect(tun.Name, false)
+				}
+			})
 		}
 
 		trayMenu.AddSeparator()
@@ -92,10 +130,22 @@ func main() {
 		})
 		trayMenu.AddSeparator()
 		trayMenu.Add("Quit").OnClick(func(ctx *application.Context) {
-			shutdownDaemon(client, daemonStartedByUs)
+			// Clean shutdown
+			monitor.Stop()
+			fw.Cleanup()
+			if manager.IsConnected() {
+				manager.Disconnect()
+			}
 			app.Quit()
 		})
 		tray.SetMenu(trayMenu)
+
+		// Update tooltip
+		if active := manager.ActiveTunnel(); active != "" {
+			tray.SetTooltip("WireGuide - " + active + " (Connected)")
+		} else {
+			tray.SetTooltip("WireGuide - Disconnected")
+		}
 	}
 
 	buildTrayMenu()
@@ -106,111 +156,57 @@ func main() {
 		}
 	}()
 
-	err = app.Run()
-	if err != nil {
+	// Run app
+	if err := app.Run(); err != nil {
 		log.Fatal(err)
 	}
 }
 
-// shutdownDaemon gracefully stops the daemon if we started it.
-func shutdownDaemon(client *ipc.Client, weStartedIt bool) {
-	if client == nil {
-		return
+// isElevated checks if the process has root/admin privileges.
+func isElevated() bool {
+	switch runtime.GOOS {
+	case "darwin", "linux":
+		return os.Geteuid() == 0
+	case "windows":
+		// On Windows, try writing to a privileged path
+		f, err := os.CreateTemp(`C:\Windows\Temp`, "wireguide-check-*")
+		if err != nil {
+			return false
+		}
+		f.Close()
+		os.Remove(f.Name())
+		return true
 	}
-	if weStartedIt {
-		// We started the daemon, so we should stop it
-		slog.Info("shutting down daemon (started by GUI)")
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		defer cancel()
-		client.Shutdown(ctx)
-	}
-	client.Close()
+	return false
 }
 
-// ensureDaemon checks if the daemon is running, and starts it if not.
-func ensureDaemon() (*ipc.Client, error) {
-	// Try connecting to existing daemon
-	client, err := ipc.NewClient()
-	if err == nil {
-		// Daemon already running
-		_, pingErr := client.Ping(context.Background())
-		if pingErr == nil {
-			slog.Info("connected to existing daemon")
-			return client, nil
-		}
-		client.Close()
-	}
-
-	slog.Info("daemon not running, starting...")
-
-	// Find daemon binary next to this executable
-	daemonPath := findDaemonBinary()
-	if daemonPath == "" {
-		return nil, fmt.Errorf("wireguided binary not found")
-	}
-
-	// Start daemon with privilege escalation
-	if err := startDaemonWithPrivilege(daemonPath); err != nil {
-		return nil, fmt.Errorf("starting daemon: %w", err)
-	}
-
-	// Wait for daemon to be ready
-	for i := 0; i < 10; i++ {
-		time.Sleep(500 * time.Millisecond)
-		client, err = ipc.NewClient()
-		if err == nil {
-			_, pingErr := client.Ping(context.Background())
-			if pingErr == nil {
-				slog.Info("daemon started successfully")
-				return client, nil
-			}
-			client.Close()
-		}
-	}
-
-	return nil, fmt.Errorf("daemon failed to start within 5 seconds")
-}
-
-// findDaemonBinary locates wireguided next to the GUI binary.
-func findDaemonBinary() string {
+// relaunchElevated restarts this binary with OS-native privilege escalation.
+func relaunchElevated() error {
 	exe, err := os.Executable()
 	if err != nil {
-		return ""
+		return err
 	}
-	dir := filepath.Dir(exe)
 
-	candidates := []string{
-		filepath.Join(dir, "wireguided"),
-		filepath.Join(dir, "..", "wireguided"), // for development
-	}
-	for _, p := range candidates {
-		if _, err := os.Stat(p); err == nil {
-			return p
-		}
-	}
-	return ""
-}
-
-// startDaemonWithPrivilege starts the daemon with root privileges.
-func startDaemonWithPrivilege(daemonPath string) error {
 	switch runtime.GOOS {
 	case "darwin":
-		// Use osascript to prompt for admin password
-		script := fmt.Sprintf(
-			`do shell script "%s &> /dev/null &" with administrator privileges`,
-			daemonPath,
-		)
+		// macOS: osascript shows native password dialog
+		script := fmt.Sprintf(`do shell script "open '%s'" with administrator privileges`, exe)
 		cmd := exec.Command("osascript", "-e", script)
-		return cmd.Run()
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("osascript: %w (%s)", err, string(out))
+		}
+		return nil
 
 	case "linux":
-		// Use pkexec (PolicyKit)
-		cmd := exec.Command("pkexec", daemonPath)
+		// Linux: pkexec shows PolicyKit dialog
+		cmd := exec.Command("pkexec", exe)
 		return cmd.Start()
 
 	case "windows":
-		// On Windows, the daemon binary has requireAdministrator manifest
-		cmd := exec.Command(daemonPath)
+		// Windows: runas triggers UAC dialog
+		cmd := exec.Command("powershell", "-Command",
+			fmt.Sprintf("Start-Process '%s' -Verb RunAs", exe))
 		return cmd.Start()
 
 	default:
