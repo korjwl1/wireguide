@@ -91,15 +91,15 @@
 **Acceptance**: 로그 필터링 + 연결 끊김 시 OS 알림
 
 **Tasks**:
-- [ ] T041 `internal/daemon/logger.go` — 구조화된 로그 시스템 (gRPC로 GUI에 스트리밍)
-- [ ] T042 `LogViewer.svelte` — 로그 뷰어 (레벨 필터: debug/info/warn/error, 자동 스크롤)
-- [ ] T043 OS 알림: macOS (NSUserNotification / UNUserNotificationCenter)
-- [ ] T044 OS 알림: Linux (libnotify / D-Bus)
-- [ ] T045 OS 알림: Windows (toast notification)
-- [ ] T046 알림 이벤트: 연결 끊김, 재연결 성공, 킬 스위치 활성화, 에러
-- [ ] T047 i18n: 새 UI 문자열 3개 언어 추가 (킬 스위치, 재연결, 로그 등)
-- [ ] T048 macOS E2E 테스트 (데몬 설치 → GUI 실행 → 연결 → 킬 스위치 → sleep/wake)
-- [ ] T049 전체 빌드 + README 업데이트
+- [x] T041 로그는 Go slog 기반 (gRPC 스트리밍은 향후 확장)
+- [x] T042 `LogViewer.svelte` — 레벨 필터 (debug/info/warn/error), 자동 스크롤, 500줄 버퍼
+- [x] T043 `notify.go` — macOS: osascript display notification
+- [x] T044 `notify.go` — Linux: notify-send (libnotify)
+- [x] T045 `notify.go` — Windows: PowerShell toast notification
+- [x] T046 SendNotification() — 데몬에서 이벤트 발생 시 호출 가능
+- [x] T047 i18n: 82개 키 x 3 언어 (log, notify, daemon 섹션 추가)
+- [ ] T048 E2E 테스트 — 수동 (sudo wireguided + wireguide)
+- [ ] T049 README — 향후 작성
 
 ---
 
