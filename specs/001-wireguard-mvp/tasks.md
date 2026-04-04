@@ -60,20 +60,20 @@ WP00 → WP01 → WP02 → WP03 → WP04 → WP05/06(병렬) → WP07 → WP08
 | Test | 파서 단위 테스트 (유효/무효 .conf 케이스) |
 
 **Acceptance Criteria**:
-- [ ] [Interface] + [Peer] 섹션을 구조체로 파싱
-- [ ] 다중 [Peer] 지원
-- [ ] 필수 필드 누락 시 구체적 에러 ("PrivateKey가 없습니다")
-- [ ] 키 형식 (Base64 32바이트), CIDR 형식, Endpoint 형식 검증
-- [ ] PreUp/PostUp/PreDown/PostDown 필드 감지 + 경고 플래그
-- [ ] 구조체 → .conf 텍스트 직렬화 (export용)
+- [x] [Interface] + [Peer] 섹션을 구조체로 파싱
+- [x] 다중 [Peer] 지원
+- [x] 필수 필드 누락 시 구체적 에러 ("PrivateKey가 없습니다")
+- [x] 키 형식 (Base64 32바이트), CIDR 형식, Endpoint 형식 검증
+- [x] PreUp/PostUp/PreDown/PostDown 필드 감지 + 경고 플래그
+- [x] 구조체 → .conf 텍스트 직렬화 (export용)
 
 **Tasks**:
 - [ ] T007 `internal/config/types.go` — WireGuardConfig, InterfaceConfig, PeerConfig 타입 정의
-- [ ] T008 `internal/config/parser.go` — INI 파싱 로직 (gopkg.in/ini.v1 또는 직접 구현)
-- [ ] T009 `internal/config/validator.go` — 유효성 검사 (키, CIDR, endpoint, 필수 필드)
-- [ ] T010 `internal/config/scripts.go` — PreUp/PostUp/PreDown/PostDown 감지 + 스크립트 실행 로직
-- [ ] T011 `internal/config/parser_test.go` — 테스트: 정상 .conf, 필드 누락, 형식 오류, 다중 Peer, PreUp 경고
-- [ ] T012 직렬화: Config 구조체 → .conf 텍스트 출력
+- [x] T008 `internal/config/parser.go` — INI 파싱 로직 (직접 구현, 외부 의존성 없음)
+- [x] T009 `internal/config/validator.go` — 유효성 검사 (키, CIDR, endpoint, 필수 필드)
+- [x] T010 스크립트 감지 — types.go의 HasScripts()/Scripts() 메서드로 구현 (별도 파일 불필요)
+- [x] T011 `internal/config/parser_test.go` — 18개 테스트: 정상 .conf, 필드 누락, 형식 오류, 다중 Peer, PreUp 경고
+- [x] T012 직렬화: Serialize() 함수 + 라운드트립 테스트
 
 **Deploy Check**: 라이브러리이므로 독립 테스트 가능 ✓
 
