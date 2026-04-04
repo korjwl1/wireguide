@@ -36,14 +36,14 @@
 **Acceptance**: 킬 스위치 ON + VPN 강제 종료 → 인터넷 차단 확인
 
 **Tasks**:
-- [ ] T016 `internal/firewall/interface.go` — Firewall 인터페이스 (Enable/Disable Kill Switch, Enable/Disable DNS Protection)
-- [ ] T017 `internal/firewall/darwin.go` — macOS pf: WG 인터페이스 + 엔드포인트 외 차단, 포트 53 필터링
-- [ ] T018 `internal/firewall/linux.go` — Linux nftables: OUTPUT 체인 WG 외 DROP, DNS 필터링
-- [ ] T019 `internal/firewall/windows.go` — Windows WFP: 동적 세션 기반 필터, DNS 필터링
-- [ ] T020 `internal/daemon/service.go` — 킬 스위치/DNS 보호 gRPC 메서드 추가
-- [ ] T021 `frontend/src/lib/TunnelDetail.svelte` — 킬 스위치/DNS 보호 토글 UI
-- [ ] T022 크래시 복구: 데몬 종료 시 방화벽 규칙 자동 정리 (WFP 동적 세션 / pf anchor 삭제)
-- [ ] T023 테스트: 킬 스위치 ON → VPN 강제 종료 → 인터넷 차단 확인
+- [x] T016 `internal/firewall/interface.go` — FirewallManager 인터페이스
+- [x] T017 `internal/firewall/darwin.go` — macOS pf anchor (com.wireguide) + DNS sub-anchor
+- [x] T018 `internal/firewall/linux.go` — Linux nftables (inet wireguide table) + DNS table
+- [x] T019 `internal/firewall/windows.go` — Windows netsh advfirewall rules
+- [x] T020 `internal/daemon/service.go` — SetKillSwitch/SetDNSProtection 실제 구현
+- [ ] T021 `frontend/src/lib/TunnelDetail.svelte` — 킬 스위치/DNS 토글 UI (Phase 5 polish)
+- [x] T022 daemon.go graceful shutdown에서 firewall.Cleanup() 호출
+- [ ] T023 E2E 테스트: 수동 (sudo 데몬 + 킬 스위치 활성화 + VPN 강제 종료)
 
 ---
 

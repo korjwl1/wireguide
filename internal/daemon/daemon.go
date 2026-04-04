@@ -79,6 +79,8 @@ func Run() error {
 	go func() {
 		<-sigCh
 		slog.Info("shutting down daemon")
+		// Cleanup firewall rules
+		service.firewall.Cleanup()
 		if manager.IsConnected() {
 			manager.Disconnect()
 		}

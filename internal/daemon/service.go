@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/korjwl1/wireguide/internal/config"
+	"github.com/korjwl1/wireguide/internal/firewall"
 	pb "github.com/korjwl1/wireguide/internal/ipc/proto"
 	"github.com/korjwl1/wireguide/internal/storage"
 	"github.com/korjwl1/wireguide/internal/tunnel"
@@ -19,6 +20,7 @@ type Service struct {
 	tunnelStore   *storage.TunnelStore
 	settingsStore *storage.SettingsStore
 	manager       *tunnel.Manager
+	firewall      firewall.FirewallManager
 }
 
 // NewService creates a new gRPC service.
@@ -27,6 +29,7 @@ func NewService(ts *storage.TunnelStore, ss *storage.SettingsStore, mgr *tunnel.
 		tunnelStore:   ts,
 		settingsStore: ss,
 		manager:       mgr,
+		firewall:      firewall.NewPlatformFirewall(),
 	}
 }
 
@@ -219,13 +222,43 @@ func (s *Service) SaveSettings(ctx context.Context, pbSettings *pb.Settings) (*p
 
 func (s *Service) SetKillSwitch(ctx context.Context, req *pb.SetKillSwitchRequest) (*pb.SetKillSwitchResponse, error) {
 	slog.Info("kill switch", "enabled", req.Enabled)
-	// Phase 2 implementation
+	if req.Enabled {
+		status := s.manager.Status()
+		if status.State != tunnel.StateConnected {
+			return nil, fmt.Errorf("cannot enable kill switch: no active tunnel")
+		}
+		if err := s.firewall.EnableKillSwitch(status.InterfaceName, status.Endpoint); err != nil {
+			return nil, fmt.Errorf("enabling kill switch: %w", err)
+		}
+	} else {
+		if err := s.firewall.DisableKillSwitch(); err != nil {
+			return nil, fmt.Errorf("disabling kill switch: %w", err)
+		}
+	}
 	return &pb.SetKillSwitchResponse{}, nil
 }
 
 func (s *Service) SetDNSProtection(ctx context.Context, req *pb.SetDNSProtectionRequest) (*pb.SetDNSProtectionResponse, error) {
 	slog.Info("DNS protection", "enabled", req.Enabled)
-	// Phase 2 implementation
+	if req.Enabled {
+		status := s.manager.Status()
+		if status.State != tunnel.StateConnected {
+			return nil, fmt.Errorf("cannot enable DNS protection: no active tunnel")
+		}
+		// Get DNS servers from active tunnel config
+		activeName := s.manager.ActiveTunnel()
+		cfg, err := s.tunnelStore.Load(activeName)
+		if err != nil {
+			return nil, err
+		}
+		if err := s.firewall.EnableDNSProtection(status.InterfaceName, cfg.Interface.DNS); err != nil {
+			return nil, fmt.Errorf("enabling DNS protection: %w", err)
+		}
+	} else {
+		if err := s.firewall.DisableDNSProtection(); err != nil {
+			return nil, fmt.Errorf("disabling DNS protection: %w", err)
+		}
+	}
 	return &pb.SetDNSProtectionResponse{}, nil
 }
 
