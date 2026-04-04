@@ -89,17 +89,17 @@ WP00 → WP01 → WP02 → WP03 → WP04 → WP05/06(병렬) → WP07 → WP08
 | Test | 저장/로드/삭제 단위 테스트 |
 
 **Acceptance Criteria**:
-- [ ] OS별 올바른 경로에 저장 (macOS: ~/Library/..., Windows: %APPDATA%/..., Linux: ~/.config/...)
-- [ ] .conf 파일 퍼미션 0600 적용
-- [ ] 터널 CRUD (Create, Read, Update, Delete)
-- [ ] 앱 설정 JSON 로드/저장
-- [ ] 터널 목록 조회
+- [x] OS별 올바른 경로에 저장 (macOS: ~/Library/..., Windows: %APPDATA%/..., Linux: ~/.config/...)
+- [x] .conf 파일 퍼미션 0600 적용
+- [x] 터널 CRUD (Create, Read, Update, Delete)
+- [x] 앱 설정 JSON 로드/저장
+- [x] 터널 목록 조회
 
 **Tasks**:
-- [ ] T013 `internal/storage/paths.go` — OS별 경로 헬퍼 (config dir, tunnels dir, logs dir) — 앱명 "wireguide"
-- [ ] T014 `internal/storage/tunnels.go` — 터널 CRUD (Save, Load, Delete, List) + 파일 퍼미션
-- [ ] T015 `internal/storage/settings.go` — 앱 설정 JSON 로드/저장 (기본값 포함, 언어 설정 포함)
-- [ ] T016 단위 테스트: CRUD 동작, 파일 퍼미션, 경로 정확성
+- [x] T013 `internal/storage/paths.go` — OS별 경로 헬퍼 + EnsureDirs()
+- [x] T014 `internal/storage/tunnels.go` — 터널 CRUD + ImportFromContent + 파일 퍼미션 0600
+- [x] T015 `internal/storage/settings.go` — 앱 설정 JSON + DefaultSettings() (언어, 테마 등)
+- [x] T016 단위 테스트: 13개 테스트 (CRUD, 퍼미션, 경로, import, 설정 기본값)
 
 **Deploy Check**: 라이브러리이므로 독립 테스트 가능 ✓
 
