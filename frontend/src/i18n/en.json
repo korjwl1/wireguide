@@ -87,5 +87,22 @@
   "time": {
     "seconds_ago": "{n}s ago",
     "just_now": "just now"
+  },
+  "log": {
+    "title": "Logs",
+    "clear": "Clear",
+    "auto_scroll": "Auto-scroll",
+    "no_entries": "No log entries"
+  },
+  "notify": {
+    "disconnected": "VPN connection lost",
+    "reconnecting": "Reconnecting to {name}...",
+    "reconnected": "Reconnected to {name}",
+    "kill_switch_active": "Kill switch active — internet blocked",
+    "error": "VPN error: {message}"
+  },
+  "daemon": {
+    "not_running": "WireGuide daemon is not running",
+    "install_hint": "Start the daemon with: sudo wireguided"
   }
 }

@@ -6,9 +6,83 @@
 // @ts-ignore: Unused imports
 import { Create as $Create } from "@wailsio/runtime";
 
-/**
- * TunnelInfo is a summary of a tunnel for the UI list.
- */
+export class ConnectionStatus {
+    /**
+     * Creates a new ConnectionStatus instance.
+     * @param {Partial<ConnectionStatus>} [$$source = {}] - The source object to create the ConnectionStatus.
+     */
+    constructor($$source = {}) {
+        if (!("state" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["state"] = "";
+        }
+        if (!("tunnel_name" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["tunnel_name"] = "";
+        }
+        if (!("rx_bytes" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["rx_bytes"] = 0;
+        }
+        if (!("tx_bytes" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["tx_bytes"] = 0;
+        }
+        if (!("last_handshake" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["last_handshake"] = "";
+        }
+        if (!("duration" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["duration"] = "";
+        }
+        if (!("endpoint" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["endpoint"] = "";
+        }
+        if (!("error_message" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["error_message"] = "";
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new ConnectionStatus instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {ConnectionStatus}
+     */
+    static createFrom($$source = {}) {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new ConnectionStatus(/** @type {Partial<ConnectionStatus>} */($$parsedSource));
+    }
+}
+
 export class TunnelInfo {
     /**
      * Creates a new TunnelInfo instance.

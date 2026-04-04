@@ -8,5 +8,6 @@ export {
 };
 
 export {
+    ConnectionStatus,
     TunnelInfo
 } from "./models.js";

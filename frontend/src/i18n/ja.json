@@ -87,5 +87,22 @@
   "time": {
     "seconds_ago": "{n}秒前",
     "just_now": "たった今"
+  },
+  "log": {
+    "title": "ログ",
+    "clear": "クリア",
+    "auto_scroll": "自動スクロール",
+    "no_entries": "ログエントリなし"
+  },
+  "notify": {
+    "disconnected": "VPN接続が切断されました",
+    "reconnecting": "{name}に再接続中...",
+    "reconnected": "{name}に再接続しました",
+    "kill_switch_active": "キルスイッチ有効 — インターネット遮断中",
+    "error": "VPNエラー: {message}"
+  },
+  "daemon": {
+    "not_running": "WireGuideデーモンが実行されていません",
+    "install_hint": "デーモン起動: sudo wireguided"
   }
 }

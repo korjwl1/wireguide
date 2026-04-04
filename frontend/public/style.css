@@ -1,22 +1,79 @@
+/* WireGuide Theme System */
 :root {
-    font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", "Roboto",
-    "Oxygen", "Ubuntu", "Cantarell", "Fira Sans", "Droid Sans", "Helvetica Neue",
-    sans-serif;
-    font-size: 16px;
-    line-height: 24px;
+    /* Dark theme (default) */
+    --bg-primary: #1a1a2e;
+    --bg-secondary: #12122a;
+    --bg-card: #16213e;
+    --bg-input: #16213e;
+    --bg-hover: #16213e;
+    --bg-active: #0f3460;
+    --border: #2a2a4a;
+    --text-primary: #e0e0e0;
+    --text-secondary: #8888aa;
+    --text-muted: #555;
+    --accent: #0f3460;
+    --green: #00b894;
+    --yellow: #fdcb6e;
+    --red: #d63031;
+    --blue: #74b9ff;
+    --error-bg: rgba(214, 48, 49, 0.13);
+
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Inter", sans-serif;
+    font-size: 14px;
+    line-height: 1.5;
     font-weight: 400;
-    color-scheme: light dark;
-    color: rgba(255, 255, 255, 0.87);
-    background-color: rgba(27, 38, 54, 1);
+    color-scheme: dark;
+    color: var(--text-primary);
+    background-color: var(--bg-primary);
     font-synthesis: none;
     text-rendering: optimizeLegibility;
     -webkit-font-smoothing: antialiased;
-    -moz-osx-font-smoothing: grayscale;
-    -webkit-text-size-adjust: 100%;
     user-select: none;
     -webkit-user-select: none;
-    -moz-user-select: none;
-    -ms-user-select: none;
+}
+
+/* Light theme */
+[data-theme="light"] {
+    --bg-primary: #f5f5f5;
+    --bg-secondary: #ffffff;
+    --bg-card: #ffffff;
+    --bg-input: #f0f0f0;
+    --bg-hover: #e8e8e8;
+    --bg-active: #d0d8e8;
+    --border: #d0d0d0;
+    --text-primary: #1a1a2e;
+    --text-secondary: #666;
+    --text-muted: #999;
+    --accent: #3366cc;
+    --green: #00a884;
+    --yellow: #e6a700;
+    --red: #c0392b;
+    --blue: #2980b9;
+    --error-bg: rgba(214, 48, 49, 0.08);
+    color-scheme: light;
+}
+
+/* System theme detection */
+@media (prefers-color-scheme: light) {
+    [data-theme="system"] {
+        --bg-primary: #f5f5f5;
+        --bg-secondary: #ffffff;
+        --bg-card: #ffffff;
+        --bg-input: #f0f0f0;
+        --bg-hover: #e8e8e8;
+        --bg-active: #d0d8e8;
+        --border: #d0d0d0;
+        --text-primary: #1a1a2e;
+        --text-secondary: #666;
+        --text-muted: #999;
+        --accent: #3366cc;
+        --green: #00a884;
+        --yellow: #e6a700;
+        --red: #c0392b;
+        --blue: #2980b9;
+        --error-bg: rgba(214, 48, 49, 0.08);
+        color-scheme: light;
+    }
 }
 
 @font-face {
@@ -27,131 +84,15 @@
     url("./Inter-Medium.ttf") format("truetype");
 }
 
-h3 {
-    font-size: 3em;
-    line-height: 1.1;
-}
-
-a {
-    font-weight: 500;
-    color: #646cff;
-    text-decoration: inherit;
-}
-
-a:hover {
-    color: #535bf2;
-}
-
-button {
-    width: 60px;
-    height: 30px;
-    line-height: 30px;
-    border-radius: 3px;
-    border: none;
-    margin: 0 0 0 20px;
-    padding: 0 8px;
-    cursor: pointer;
-}
-
-.result {
-    height: 20px;
-    line-height: 20px;
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
 }
 
 body {
     margin: 0;
-    display: flex;
-    place-items: center;
-    place-content: center;
-    min-width: 320px;
-    min-height: 100vh;
-}
-
-.container {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-}
-
-h1 {
-    font-size: 3.2em;
-    line-height: 1.1;
-}
-
-#app {
-    max-width: 1280px;
-    margin: 0 auto;
-    padding: 2rem;
-    text-align: center;
-}
-
-.logo {
-    height: 6em;
-    padding: 1.5em;
-    will-change: filter;
-}
-
-.logo:hover {
-    filter: drop-shadow(0 0 2em #e80000aa);
-}
-
-.logo.vanilla:hover {
-    filter: drop-shadow(0 0 2em #f7df1eaa);
-}
-
-.result {
-    height: 20px;
-    line-height: 20px;
-    margin: 1.5rem auto;
-    text-align: center;
-}
-
-.footer {
-    margin-top: 1rem;
-    align-content: center;
-    text-align: center;
-}
-
-@media (prefers-color-scheme: light) {
-    :root {
-        color: #213547;
-        background-color: #ffffff;
-    }
-
-    a:hover {
-        color: #747bff;
-    }
-
-    button {
-        background-color: #f9f9f9;
-    }
-}
-
-
-.input-box .btn:hover {
-    background-image: linear-gradient(to top, #cfd9df 0%, #e2ebf0 100%);
-    color: #333333;
-}
-
-.input-box .input {
-    border: none;
-    border-radius: 3px;
-    outline: none;
-    height: 30px;
-    line-height: 30px;
-    padding: 0 10px;
-    color: black;
-    background-color: rgba(240, 240, 240, 1);
-    -webkit-font-smoothing: antialiased;
-}
-
-.input-box .input:hover {
-    border: none;
-    background-color: rgba(255, 255, 255, 1);
-}
-
-.input-box .input:focus {
-    border: none;
-    background-color: rgba(255, 255, 255, 1);
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    overflow: hidden;
 }

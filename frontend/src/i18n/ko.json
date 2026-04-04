@@ -87,5 +87,22 @@
   "time": {
     "seconds_ago": "{n}초 전",
     "just_now": "방금"
+  },
+  "log": {
+    "title": "로그",
+    "clear": "지우기",
+    "auto_scroll": "자동 스크롤",
+    "no_entries": "로그 항목 없음"
+  },
+  "notify": {
+    "disconnected": "VPN 연결이 끊겼습니다",
+    "reconnecting": "{name}에 재연결 중...",
+    "reconnected": "{name}에 재연결되었습니다",
+    "kill_switch_active": "킬 스위치 활성화 — 인터넷 차단됨",
+    "error": "VPN 오류: {message}"
+  },
+  "daemon": {
+    "not_running": "WireGuide 데몬이 실행되지 않고 있습니다",
+    "install_hint": "데몬 시작: sudo wireguided"
   }
 }

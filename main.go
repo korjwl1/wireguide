@@ -7,8 +7,7 @@ import (
 	"time"
 
 	wgapp "github.com/korjwl1/wireguide/internal/app"
-	"github.com/korjwl1/wireguide/internal/storage"
-	"github.com/korjwl1/wireguide/internal/tunnel"
+	"github.com/korjwl1/wireguide/internal/ipc"
 	"github.com/wailsapp/wails/v3/pkg/application"
 )
 
@@ -16,27 +15,13 @@ import (
 var assets embed.FS
 
 func main() {
-	// Initialize storage paths
-	paths, err := storage.GetPaths()
+	// Connect to daemon via gRPC
+	client, err := ipc.NewClient()
 	if err != nil {
-		log.Fatal("failed to get paths:", err)
-	}
-	if err := paths.EnsureDirs(); err != nil {
-		log.Fatal("failed to create directories:", err)
+		slog.Warn("daemon not running, some features may not work", "error", err)
 	}
 
-	// Initialize stores and tunnel manager
-	tunnelStore := storage.NewTunnelStore(paths.TunnelsDir)
-	settingsStore := storage.NewSettingsStore(paths.ConfigDir)
-	manager := tunnel.NewManager(paths.DataDir)
-
-	// Check for crash recovery
-	if recovered := tunnel.RecoverFromCrash(paths.DataDir); recovered != "" {
-		slog.Warn("recovered from previous crash", "tunnel", recovered)
-	}
-
-	// Create service for Wails bindings
-	tunnelService := wgapp.NewTunnelService(tunnelStore, settingsStore, manager)
+	tunnelService := wgapp.NewTunnelService(client)
 
 	app := application.New(application.Options{
 		Name:        "WireGuide",
@@ -69,37 +54,29 @@ func main() {
 	tray := app.SystemTray.New()
 	tray.SetTooltip("WireGuide - Disconnected")
 
-	// Build tray menu with tunnel list
 	buildTrayMenu := func() {
 		trayMenu := app.NewMenu()
 		trayMenu.Add("WireGuide").SetEnabled(false)
 		trayMenu.AddSeparator()
 
-		// Dynamic tunnel list
-		names, _ := tunnelStore.List()
-		activeName := manager.ActiveTunnel()
-		for _, name := range names {
-			tunnelName := name // capture for closure
-			isActive := tunnelName == activeName
-			label := "  " + tunnelName
-			if isActive {
-				label = "● " + tunnelName
-			} else {
-				label = "○ " + tunnelName
-			}
-			trayMenu.Add(label).OnClick(func(ctx *application.Context) {
-				if isActive {
-					manager.Disconnect()
-				} else {
-					if manager.IsConnected() {
-						manager.Disconnect()
-					}
-					cfg, err := tunnelStore.Load(tunnelName)
-					if err == nil {
-						manager.Connect(cfg, false)
-					}
+		if client != nil {
+			tunnels, _ := tunnelService.ListTunnels()
+			for _, t := range tunnels {
+				tun := t
+				label := "○ " + tun.Name
+				if tun.IsConnected {
+					label = "● " + tun.Name
 				}
-			})
+				trayMenu.Add(label).OnClick(func(ctx *application.Context) {
+					if tun.IsConnected {
+						tunnelService.Disconnect()
+					} else {
+						tunnelService.Connect(tun.Name, false)
+					}
+				})
+			}
+		} else {
+			trayMenu.Add("Daemon not running").SetEnabled(false)
 		}
 
 		trayMenu.AddSeparator()
@@ -108,24 +85,15 @@ func main() {
 		})
 		trayMenu.AddSeparator()
 		trayMenu.Add("Quit").OnClick(func(ctx *application.Context) {
-			if manager.IsConnected() {
-				manager.Disconnect()
+			if client != nil {
+				client.Close()
 			}
 			app.Quit()
 		})
 		tray.SetMenu(trayMenu)
-
-		// Update tooltip based on connection state
-		if activeName != "" {
-			tray.SetTooltip("WireGuide - " + activeName + " (Connected)")
-		} else {
-			tray.SetTooltip("WireGuide - Disconnected")
-		}
 	}
 
 	buildTrayMenu()
-
-	// Refresh tray menu periodically
 	go func() {
 		for {
 			time.Sleep(2 * time.Second)
