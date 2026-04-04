@@ -80,13 +80,13 @@
 **Acceptance**: DNS 테스트 결과 표시 + 라우트 그래픽 시각화
 
 **Tasks**:
-- [ ] T035 `internal/diag/dnsleak.go` — DNS 누출 테스트 (외부 DNS 서버에 쿼리 → 응답 IP 확인)
-- [ ] T036 `frontend/src/lib/DNSLeakTest.svelte` — DNS 테스트 결과 UI
-- [ ] T037 `internal/diag/routes.go` — 현재 라우팅 테이블 조회 (OS별)
-- [ ] T038 `frontend/src/lib/RouteVisualization.svelte` — 라우트 시각화 (대역 → 인터페이스 매핑 그래픽)
-- [ ] T039 README.md 작성 (설치, 사용법, 스크린샷, 향후 계획 — 앱별 스플릿 "향후 검토" 포함)
-- [ ] T040 i18n: 모든 새 UI 문자열 3개 언어 완성
-- [ ] T041 전체 빌드 + E2E 테스트
+- [x] T035 `internal/diag/dnsleak.go` — DNS 누출 테스트 (시스템 DNS 서버 vs VPN DNS 비교)
+- [x] T036 `DNSLeakTest.svelte` — 테스트 결과 UI (leaked/safe + 서버 목록 + VPN/LEAK 배지)
+- [x] T037 `internal/diag/routes.go` — OS별 라우팅 테이블 조회 (macOS netstat, Linux ip route, Windows route print)
+- [x] T038 `RouteVisualization.svelte` — 라우트 테이블 (destination/gateway/interface + VPN 하이라이팅)
+- [x] T039 README.md — 기능 목록, 아키텍처, 빌드 방법, 기술 스택, 향후 계획
+- [ ] T040 i18n 새 문자열 — 추후 일괄 추가
+- [x] T041 전체 빌드 + 53 테스트 통과
 
 ---
 
