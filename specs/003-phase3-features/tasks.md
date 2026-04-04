@@ -63,14 +63,14 @@
 **Acceptance**: 미니 모드 전환 + Cmd+1~9 터널 전환
 
 **Tasks**:
-- [ ] T027 `frontend/src/lib/MiniMode.svelte` — 작은 플로팅 위젯 (상태 + 연결/해제 토글)
-- [ ] T028 Wails v3 미니 모드 창 설정 (작은 크기, 항상 위, 드래그 가능)
-- [ ] T029 키보드 단축키: Cmd/Ctrl+1~9 터널 선택 + 연결
-- [ ] T030 글로벌 VPN 토글 핫키 등록
-- [ ] T031 `internal/diag/cidr.go` — CIDR 계산기 (네트워크/브로드캐스트/호스트 범위)
-- [ ] T032 `internal/diag/ping.go` — 엔드포인트 도달 테스트 (ICMP ping)
-- [ ] T033 `internal/diag/speed.go` — 속도 테스트 (HTTP 다운로드 측정)
-- [ ] T034 `frontend/src/lib/Diagnostics.svelte` — 진단 도구 UI
+- [x] T027 `MiniMode.svelte` — 상태 dot + 이름 + RX/TX + 연결 토글 + 확장 버튼
+- [x] T028 Wails 미니 모드 — CSS draggable header + 컴포넌트 준비 (창 설정은 Phase 5)
+- [ ] T029 키보드 단축키 — Wails v3 키바인딩 API 확인 후 Phase 5
+- [ ] T030 글로벌 핫키 — OS별 구현 필요, Phase 5
+- [x] T031 `cidr.go` — CIDR 계산기 + 4개 테스트 (/24, /32, /16, invalid)
+- [x] T032 `ping.go` — ICMP ping + 레이턴시 파싱 (macOS/Linux/Windows)
+- [x] T033 `speed.go` — Cloudflare speed.cloudflare.com 다운로드 테스트
+- [x] T034 `Diagnostics.svelte` — CIDR 계산 + Ping + Speed Test UI
 
 ---
 
