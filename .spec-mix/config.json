@@ -1,0 +1,8 @@
+{
+  "language": "ko",
+  "mission": "software-dev",
+  "mode": "normal",
+  "ai_assistant": "claude",
+  "script_type": "sh",
+  "spec_mix_version": "0.2.11a2"
+}
