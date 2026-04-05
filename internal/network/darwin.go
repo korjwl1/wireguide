@@ -103,7 +103,7 @@ func (m *DarwinManager) AddRoutes(ifaceName string, allowedIPs []string, fullTun
 		if isV6 {
 			family = "-inet6"
 		}
-		if existing, _ := exec.Command("route", "-n", "get", family, cidr).CombinedOutput(); strings.Contains(string(existing), "interface: "+ifaceName) {
+		if existing, _ := runOut("route", "-n", "get", family, cidr); routeUsesInterface(existing, ifaceName) {
 			continue
 		}
 		if err := run("route", "-q", "-n", "add", family, cidr, "-interface", ifaceName); err != nil {
@@ -205,33 +205,47 @@ func (m *DarwinManager) RemoveRoutes(ifaceName string, allowedIPs []string, full
 }
 
 // deleteInterfaceRoutes walks netstat for the given family and deletes
-// every route whose interface matches ifaceName.
+// every route whose interface (Netif column) matches ifaceName.
+// Also handles the wg-quick IPv6 edge case where Netif=lo0 but Gateway=utunN.
 func (m *DarwinManager) deleteInterfaceRoutes(ifaceName, family string) {
-	out, err := exec.Command("netstat", "-nr", "-f", family).CombinedOutput()
+	out, err := runOut("netstat", "-nr", "-f", family)
 	if err != nil {
 		return
 	}
+	// Parse header to find Destination / Gateway / Netif column positions.
+	netifIdx, destIdx, gwIdx := -1, 0, 1
 	for _, line := range strings.Split(string(out), "\n") {
 		fields := strings.Fields(line)
-		if len(fields) < 4 {
-			continue
-		}
-		// Columns: Destination, Gateway, Flags, ... Netif
-		// Netif is typically the last or near-last field
-		var netif string
-		for _, f := range fields {
-			if f == ifaceName {
-				netif = f
-				break
+		if netifIdx < 0 {
+			// Look for header row
+			for i, f := range fields {
+				switch f {
+				case "Destination":
+					destIdx = i
+				case "Gateway":
+					gwIdx = i
+				case "Netif":
+					netifIdx = i
+				}
 			}
-		}
-		if netif != ifaceName {
 			continue
 		}
-		dest := fields[0]
-		if dest == "Destination" || dest == "Internet:" || dest == "Internet6:" {
+		if len(fields) <= netifIdx {
 			continue
 		}
+		dest := fields[destIdx]
+		gw := fields[gwIdx]
+		netif := fields[netifIdx]
+
+		// Match: Netif is our interface, OR (IPv6 only) Netif is lo* and Gateway is our interface
+		match := netif == ifaceName
+		if !match && family == "inet6" && strings.HasPrefix(netif, "lo") && gw == ifaceName {
+			match = true
+		}
+		if !match {
+			continue
+		}
+
 		if dest == "default" {
 			dest = "0.0.0.0/0"
 			if family == "inet6" {
@@ -244,6 +258,19 @@ func (m *DarwinManager) deleteInterfaceRoutes(ifaceName, family string) {
 		}
 		_ = run("route", "-q", "-n", "delete", famFlag, dest)
 	}
+}
+
+// routeUsesInterface checks `route get` output for an exact match on the
+// interface field. Prevents false matches between utun3 / utun33.
+func routeUsesInterface(routeOutput []byte, ifaceName string) bool {
+	for _, line := range strings.Split(string(routeOutput), "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "interface:") {
+			name := strings.TrimSpace(strings.TrimPrefix(line, "interface:"))
+			return name == ifaceName
+		}
+	}
+	return false
 }
 
 // SetDNS sets DNS on ALL network services (matching wg-quick).
@@ -324,11 +351,22 @@ func (m *DarwinManager) Cleanup(ifaceName string) error {
 
 func run(name string, args ...string) error {
 	cmd := exec.Command(name, args...)
+	// Force C locale so parsing English sentinels like "There aren't any DNS Servers"
+	// works on non-English macOS systems. wg-quick uses `export LC_ALL=C` at script top.
+	cmd.Env = append(cmd.Environ(), "LC_ALL=C", "LANG=C")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("%s %s: %w (%s)", name, strings.Join(args, " "), err, strings.TrimSpace(string(out)))
 	}
 	return nil
+}
+
+// runOut runs a command with LC_ALL=C and returns combined output.
+// Use for commands where we parse the output.
+func runOut(name string, args ...string) ([]byte, error) {
+	cmd := exec.Command(name, args...)
+	cmd.Env = append(cmd.Environ(), "LC_ALL=C", "LANG=C")
+	return cmd.CombinedOutput()
 }
 
 // getDefaultGatewayFor returns the IPv4 or IPv6 default gateway, skipping
@@ -338,7 +376,7 @@ func getDefaultGatewayFor(ipv6 bool) (string, error) {
 	if ipv6 {
 		family = "inet6"
 	}
-	out, err := exec.Command("netstat", "-nr", "-f", family).CombinedOutput()
+	out, err := runOut("netstat", "-nr", "-f", family)
 	if err != nil {
 		return "", err
 	}
@@ -361,18 +399,30 @@ func getDefaultGatewayFor(ipv6 bool) (string, error) {
 }
 
 // getDefaultInterface returns the name of the default route's interface.
+// macOS netstat -nr -f inet has columns: Destination Gateway Flags Netif Expire
+// The default row may have 4 columns (no Expire). We use the LAST field.
 func getDefaultInterface() string {
-	out, err := exec.Command("netstat", "-nr", "-f", "inet").CombinedOutput()
+	out, err := runOut("netstat", "-nr", "-f", "inet")
 	if err != nil {
 		return ""
 	}
 	for _, line := range strings.Split(string(out), "\n") {
 		fields := strings.Fields(line)
-		if len(fields) < 6 {
+		if len(fields) < 4 {
 			continue
 		}
-		if fields[0] == "default" {
-			return fields[len(fields)-1]
+		if fields[0] != "default" {
+			continue
+		}
+		// Netif is typically index 3 (4th column) on the default row,
+		// or 5 if Refs/Use columns are present. Use a heuristic: it's
+		// the first field that looks like an interface name (utun, en, ...).
+		for i := 3; i < len(fields); i++ {
+			f := fields[i]
+			// Interface names on macOS: en0, utun3, bridge0, awdl0, etc.
+			if len(f) > 0 && (f[0] >= 'a' && f[0] <= 'z') && !strings.Contains(f, ":") && !strings.Contains(f, ".") {
+				return f
+			}
 		}
 	}
 	return ""
@@ -380,7 +430,7 @@ func getDefaultInterface() string {
 
 // getInterfaceMTU reads the MTU from ifconfig output.
 func getInterfaceMTU(ifaceName string) int {
-	out, err := exec.Command("ifconfig", ifaceName).CombinedOutput()
+	out, err := runOut("ifconfig", ifaceName)
 	if err != nil {
 		return 0
 	}
@@ -395,29 +445,39 @@ func getInterfaceMTU(ifaceName string) int {
 	return mtu
 }
 
-// getAllNetworkServices returns all non-disabled network services.
+// getAllNetworkServices returns all network services, including disabled ones.
+// wg-quick includes disabled services (strips the "*" prefix) so DNS is
+// applied/restored uniformly regardless of current enabled state.
 func getAllNetworkServices() []string {
-	out, err := exec.Command("networksetup", "-listallnetworkservices").CombinedOutput()
+	out, err := runOut("networksetup", "-listallnetworkservices")
 	if err != nil {
 		return nil
 	}
 	var services []string
+	firstLine := true
 	for _, line := range strings.Split(string(out), "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
 		}
-		// Skip header and disabled services (prefixed with *)
-		if strings.HasPrefix(line, "An asterisk") || strings.HasPrefix(line, "*") {
+		if firstLine {
+			// First non-empty line is the header ("An asterisk...")
+			firstLine = false
 			continue
 		}
-		services = append(services, line)
+		// Strip leading "*" from disabled services (don't skip them)
+		if strings.HasPrefix(line, "*") {
+			line = strings.TrimSpace(line[1:])
+		}
+		if line != "" {
+			services = append(services, line)
+		}
 	}
 	return services
 }
 
 func getCurrentDNS(service string) ([]string, error) {
-	out, err := exec.Command("networksetup", "-getdnsservers", service).CombinedOutput()
+	out, err := runOut("networksetup", "-getdnsservers", service)
 	if err != nil {
 		return nil, err
 	}
@@ -436,7 +496,7 @@ func getCurrentDNS(service string) ([]string, error) {
 }
 
 func getCurrentSearchDomains(service string) ([]string, error) {
-	out, err := exec.Command("networksetup", "-getsearchdomains", service).CombinedOutput()
+	out, err := runOut("networksetup", "-getsearchdomains", service)
 	if err != nil {
 		return nil, err
 	}
