@@ -27,12 +27,13 @@ func main() {
 	elevated := len(os.Args) > 1 && os.Args[1] == "--elevated"
 	if !elevated && !isElevated() {
 		slog.Info("not running as root, requesting elevation...")
+		// This BLOCKS until the elevated process exits. The elevated
+		// GUI app runs inside osascript's process tree, inheriting the
+		// user's GUI session (so window server access works).
 		if err := relaunchElevated(); err != nil {
-			slog.Error("elevation failed", "error", err)
-			// Continue without elevation — tunnel operations will fail but UI works
-		} else {
-			return // elevated process takes over
+			log.Fatal("elevation failed:", err)
 		}
+		return // elevated process has exited, we're done
 	}
 
 	// Step 2: Initialize everything directly (no IPC, no daemon)
@@ -192,18 +193,16 @@ func relaunchElevated() error {
 	switch runtime.GOOS {
 	case "darwin":
 		// macOS: "do shell script ... with administrator privileges" shows
-		// the native macOS padlock password dialog. No terminal window.
-		// The binary is run directly as root with --elevated flag.
+		// the native macOS padlock dialog. The binary runs inside osascript's
+		// process tree, inheriting GUI session access. Blocks until app exits.
 		script := fmt.Sprintf(
-			`do shell script "nohup '%s' --elevated >/dev/null 2>&1 &" with administrator privileges with prompt "WireGuide needs administrator privileges to create VPN tunnels."`,
+			`do shell script "'%s' --elevated" with administrator privileges with prompt "WireGuide needs administrator privileges to create VPN tunnels."`,
 			exe,
 		)
 		cmd := exec.Command("osascript", "-e", script)
-		out, err := cmd.CombinedOutput()
-		if err != nil {
-			return fmt.Errorf("osascript: %w (%s)", err, string(out))
-		}
-		return nil
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		return cmd.Run()
 
 	case "linux":
 		// Linux: pkexec shows PolicyKit dialog

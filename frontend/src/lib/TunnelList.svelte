@@ -46,8 +46,11 @@
   </div>
 
   <div class="list-footer">
+    <button class="btn-new" on:click={() => dispatch('new')}>
+      + New Tunnel
+    </button>
     <button class="btn-import" on:click={() => dispatch('import')}>
-      + {t('tunnel.import')}
+      ↓ {t('tunnel.import')}
     </button>
   </div>
 </div>
@@ -143,16 +146,26 @@
   .list-footer {
     padding: 12px;
     border-top: 1px solid #2a2a4a;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
   }
-  .btn-import {
+  .btn-new, .btn-import {
     width: 100%;
     padding: 8px;
-    background: #0f3460;
     border: none;
     border-radius: 6px;
     color: #e0e0e0;
     font-size: 13px;
     cursor: pointer;
+  }
+  .btn-new {
+    background: #00b894;
+    color: #fff;
+  }
+  .btn-new:hover { background: #00a884; }
+  .btn-import {
+    background: #0f3460;
   }
   .btn-import:hover {
     background: #1a4a80;
