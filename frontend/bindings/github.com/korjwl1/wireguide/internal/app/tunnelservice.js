@@ -25,6 +25,15 @@ import * as storage$0 from "../storage/models.js";
 import * as $models from "./models.js";
 
 /**
+ * BaseName extracts the filename without extension from a path.
+ * @param {string} path
+ * @returns {$CancellablePromise<string>}
+ */
+export function BaseName(path) {
+    return $Call.ByID(3469363575, path);
+}
+
+/**
  * @param {string} name
  * @param {boolean} scriptsAllowed
  * @returns {$CancellablePromise<void>}
@@ -104,24 +113,22 @@ export function ImportConfig(name, content) {
 }
 
 /**
- * ImportFromPath reads a .conf file from disk and imports it.
- * Used by native file drop events (Wails v3 passes file paths, not contents).
- * @param {string} path
- * @returns {$CancellablePromise<$models.TunnelInfo | null>}
- */
-export function ImportFromPath(path) {
-    return $Call.ByID(2423395919, path).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType7($result);
-    }));
-}
-
-/**
  * @returns {$CancellablePromise<$models.TunnelInfo[]>}
  */
 export function ListTunnels() {
     return $Call.ByID(3587038916).then(/** @type {($result: any) => any} */(($result) => {
         return $$createType8($result);
     }));
+}
+
+/**
+ * ReadFile reads a file from disk (for native file drop).
+ * Returns the content as string so the frontend can handle name conflicts.
+ * @param {string} path
+ * @returns {$CancellablePromise<string>}
+ */
+export function ReadFile(path) {
+    return $Call.ByID(1950850135, path);
 }
 
 /**

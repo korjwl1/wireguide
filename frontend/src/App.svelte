@@ -61,15 +61,29 @@
     setTimeout(() => { toast = ''; }, 3000);
   }
 
+  // Generate a unique tunnel name by appending -1, -2, etc. if needed.
+  async function uniqueName(baseName) {
+    if (!(await TunnelService.TunnelExists(baseName))) return baseName;
+    for (let i = 1; i < 1000; i++) {
+      const candidate = `${baseName}-${i}`;
+      if (!(await TunnelService.TunnelExists(candidate))) return candidate;
+    }
+    return baseName + '-' + Date.now();
+  }
+
   // Import from a file path (used by native file drop).
   async function importFromPath(path) {
     try {
-      const name = path.split('/').pop().replace(/\.conf$/i, '');
-      if (await TunnelService.TunnelExists(name)) {
-        if (!confirm(`Tunnel "${name}" already exists. Overwrite?`)) return;
+      const content = await TunnelService.ReadFile(path);
+      const errors = await TunnelService.ValidateConfig(content);
+      if (errors && errors.length > 0) {
+        showToast('Invalid config: ' + errors[0]);
+        return;
       }
-      const info = await TunnelService.ImportFromPath(path);
-      showToast(`Imported "${info.name}"`);
+      const baseName = await TunnelService.BaseName(path);
+      const name = await uniqueName(baseName);
+      await TunnelService.ImportConfig(name, content);
+      showToast(`Imported "${name}"`);
       await refreshTunnels(TunnelService);
     } catch (e) {
       showToast('Import failed: ' + e.toString());
@@ -79,7 +93,7 @@
   // Import from a browser File object (used by file picker button).
   async function importFile(file) {
     if (!file) return;
-    const name = file.name.replace(/\.conf$/i, '');
+    const baseName = file.name.replace(/\.conf$/i, '');
     const content = await file.text();
     try {
       const errors = await TunnelService.ValidateConfig(content);
@@ -87,9 +101,7 @@
         showToast('Invalid config: ' + errors[0]);
         return;
       }
-      if (await TunnelService.TunnelExists(name)) {
-        if (!confirm(`Tunnel "${name}" already exists. Overwrite?`)) return;
-      }
+      const name = await uniqueName(baseName);
       await TunnelService.ImportConfig(name, content);
       showToast(`Imported "${name}"`);
       await refreshTunnels(TunnelService);
@@ -216,6 +228,14 @@
 </script>
 
 <div class="app" data-file-drop-target>
+  <!-- Wails adds .file-drop-target-active class to .app when dragging files -->
+  <div class="drop-overlay">
+    <div class="drop-overlay-content">
+      <div class="drop-icon">↓</div>
+      <div class="drop-text">Drop .conf file to import</div>
+    </div>
+  </div>
+
   {#if toast}
     <div class="toast">{toast}</div>
   {/if}
@@ -341,22 +361,42 @@
     height: 100vh;
     position: relative;
   }
-  /* Wails adds this class automatically when dragging files over the target */
-  :global(.file-drop-target-active) {
-    box-shadow: inset 0 0 0 4px var(--green);
-  }
-  :global(.file-drop-target-active::after) {
-    content: 'Drop .conf file to import';
+  /* Drop overlay — hidden by default, shown when Wails adds .file-drop-target-active */
+  .drop-overlay {
     position: fixed;
     inset: 0;
+    background: rgba(15, 52, 96, 0.75);
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
     display: flex;
     align-items: center;
     justify-content: center;
-    font-size: 20px;
-    color: var(--green);
-    background: rgba(0, 184, 148, 0.1);
     pointer-events: none;
-    z-index: 500;
+    z-index: 1000;
+    opacity: 0;
+    transition: opacity 150ms ease;
+  }
+  :global(.file-drop-target-active) > .drop-overlay {
+    opacity: 1;
+  }
+  .drop-overlay-content {
+    padding: 48px 64px;
+    background: var(--bg-primary);
+    border: 3px dashed var(--green);
+    border-radius: 16px;
+    text-align: center;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+  }
+  .drop-icon {
+    font-size: 48px;
+    color: var(--green);
+    margin-bottom: 12px;
+    line-height: 1;
+  }
+  .drop-text {
+    font-size: 18px;
+    color: var(--text-primary);
+    font-weight: 500;
   }
   .layout {
     display: flex;

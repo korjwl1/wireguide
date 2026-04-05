@@ -146,15 +146,19 @@ func (s *TunnelService) ImportConfig(name, content string) (*TunnelInfo, error) 
 	}, nil
 }
 
-// ImportFromPath reads a .conf file from disk and imports it.
-// Used by native file drop events (Wails v3 passes file paths, not contents).
-func (s *TunnelService) ImportFromPath(path string) (*TunnelInfo, error) {
+// ReadFile reads a file from disk (for native file drop).
+// Returns the content as string so the frontend can handle name conflicts.
+func (s *TunnelService) ReadFile(path string) (string, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("reading %s: %w", path, err)
+		return "", fmt.Errorf("reading %s: %w", path, err)
 	}
-	name := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
-	return s.ImportConfig(name, string(data))
+	return string(data), nil
+}
+
+// BaseName extracts the filename without extension from a path.
+func (s *TunnelService) BaseName(path string) string {
+	return strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
 }
 
 func (s *TunnelService) ValidateConfig(content string) ([]string, error) {
