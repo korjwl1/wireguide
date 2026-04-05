@@ -12,8 +12,8 @@ import type * as main$0 from "../../../../korjwl1/wireguide/models.js";
 declare module "@wailsio/runtime" {
     namespace Events {
         interface CustomEvents {
+            "reconnect": main$0.ReconnectEvent;
             "status": main$0.StatusEvent;
-            "tunnels": main$0.TunnelsEvent;
         }
     }
 }

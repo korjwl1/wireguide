@@ -1,20 +1,22 @@
 package main
 
 import (
+	"context"
 	"embed"
+	"encoding/json"
+	"flag"
 	"fmt"
 	"log"
 	"log/slog"
 	"os"
-	"os/exec"
 	"runtime"
 	"time"
 
 	wgapp "github.com/korjwl1/wireguide/internal/app"
-	"github.com/korjwl1/wireguide/internal/firewall"
-	"github.com/korjwl1/wireguide/internal/reconnect"
+	"github.com/korjwl1/wireguide/internal/elevate"
+	"github.com/korjwl1/wireguide/internal/helper"
+	"github.com/korjwl1/wireguide/internal/ipc"
 	"github.com/korjwl1/wireguide/internal/storage"
-	"github.com/korjwl1/wireguide/internal/tunnel"
 	"github.com/wailsapp/wails/v3/pkg/application"
 	"github.com/wailsapp/wails/v3/pkg/icons"
 )
@@ -22,11 +24,10 @@ import (
 //go:embed all:frontend/dist
 var assets embed.FS
 
-// StatusEvent is broadcast to the frontend whenever tunnel status changes.
+// StatusEvent mirrors ipc.ConnectionStatusDTO for Wails event emission.
 type StatusEvent struct {
 	State         string `json:"state"`
 	TunnelName    string `json:"tunnel_name"`
-	InterfaceName string `json:"interface_name"`
 	RxBytes       int64  `json:"rx_bytes"`
 	TxBytes       int64  `json:"tx_bytes"`
 	LastHandshake string `json:"last_handshake"`
@@ -34,70 +35,65 @@ type StatusEvent struct {
 	Endpoint      string `json:"endpoint"`
 }
 
-// TunnelsEvent is broadcast when the tunnel list changes.
-type TunnelsEvent struct {
-	Tunnels []wgapp.TunnelInfo `json:"tunnels"`
+type ReconnectEvent struct {
+	Reconnecting bool   `json:"reconnecting"`
+	Attempt      int    `json:"attempt"`
+	MaxAttempts  int    `json:"max_attempts"`
 }
 
 func init() {
 	application.RegisterEvent[StatusEvent]("status")
-	application.RegisterEvent[TunnelsEvent]("tunnels")
+	application.RegisterEvent[ReconnectEvent]("reconnect")
 }
 
 func main() {
-	// Step 1: Check privileges — relaunch with OS permission prompt if needed
-	// --elevated flag prevents infinite re-elevation loop
-	elevated := len(os.Args) > 1 && os.Args[1] == "--elevated"
-	if !elevated && !isElevated() {
-		slog.Info("not running as root, requesting elevation...")
-		// This BLOCKS until the elevated process exits. The elevated
-		// GUI app runs inside osascript's process tree, inheriting the
-		// user's GUI session (so window server access works).
-		if err := relaunchElevated(); err != nil {
-			log.Fatal("elevation failed:", err)
+	// Flags
+	helperMode := flag.Bool("helper", false, "run as privileged helper")
+	socketPath := flag.String("socket", "", "socket path for IPC")
+	socketUID := flag.Int("uid", -1, "socket owner UID (Unix only)")
+	dataDir := flag.String("data-dir", "", "data directory for crash recovery")
+	flag.Parse()
+
+	if *helperMode {
+		// Helper mode: run as root, listen on socket
+		if *socketPath == "" {
+			log.Fatal("--socket required in helper mode")
 		}
-		return // elevated process has exited, we're done
+		if *dataDir == "" {
+			*dataDir = defaultDataDir()
+		}
+		log.Println("WireGuide helper starting...")
+		if err := helper.Run(*socketPath, *socketUID, *dataDir); err != nil {
+			log.Fatal("helper error:", err)
+		}
+		return
 	}
 
-	// Step 2: Initialize everything directly (no IPC, no daemon)
+	// GUI mode
+	runGUI()
+}
+
+func runGUI() {
+	// Initialize storage
 	paths, err := storage.GetPaths()
 	if err != nil {
-		log.Fatal("failed to get paths:", err)
+		log.Fatal("paths:", err)
 	}
 	if err := paths.EnsureDirs(); err != nil {
-		log.Fatal("failed to create directories:", err)
+		log.Fatal("create dirs:", err)
 	}
-
 	tunnelStore := storage.NewTunnelStore(paths.TunnelsDir)
 	settingsStore := storage.NewSettingsStore(paths.ConfigDir)
-	manager := tunnel.NewManager(paths.DataDir)
-	fw := firewall.NewPlatformFirewall()
 
-	// Crash recovery
-	if recovered := tunnel.RecoverFromCrash(paths.DataDir); recovered != "" {
-		slog.Warn("recovered from previous crash", "tunnel", recovered)
+	// Connect to helper (spawn if needed)
+	client, err := ensureHelper()
+	if err != nil {
+		log.Fatal("helper connection failed:", err)
 	}
+	defer client.Close()
 
-	// Reconnect monitor
-	monitor := reconnect.NewMonitor(manager, func() error {
-		activeName := manager.ActiveTunnel()
-		if activeName == "" {
-			return fmt.Errorf("no tunnel to reconnect")
-		}
-		cfg, err := tunnelStore.Load(activeName)
-		if err != nil {
-			return err
-		}
-		return manager.Connect(cfg, false)
-	}, func(state reconnect.State) {
-		slog.Info("reconnect state", "reconnecting", state.Reconnecting, "attempt", state.Attempt)
-	}, reconnect.DefaultConfig())
-	monitor.Start()
+	tunnelService := wgapp.NewTunnelService(tunnelStore, settingsStore, client)
 
-	// Step 3: Create Wails service — direct access, no IPC
-	tunnelService := wgapp.NewTunnelService(tunnelStore, settingsStore, manager, fw)
-
-	// Step 4: Wails application
 	app := application.New(application.Options{
 		Name:        "WireGuide",
 		Description: "Cross-platform WireGuard desktop client",
@@ -132,13 +128,12 @@ func main() {
 	} else {
 		tray.SetLabel("WireGuide")
 	}
-	tray.SetTooltip("WireGuide - Disconnected")
+	tray.SetTooltip("WireGuide")
 
 	buildTrayMenu := func() {
-		trayMenu := app.NewMenu()
-		trayMenu.Add("WireGuide").SetEnabled(false)
-		trayMenu.AddSeparator()
-
+		m := app.NewMenu()
+		m.Add("WireGuide").SetEnabled(false)
+		m.AddSeparator()
 		tunnels, _ := tunnelService.ListTunnels()
 		for _, t := range tunnels {
 			tun := t
@@ -146,7 +141,7 @@ func main() {
 			if tun.IsConnected {
 				label = "● " + tun.Name
 			}
-			trayMenu.Add(label).OnClick(func(ctx *application.Context) {
+			m.Add(label).OnClick(func(ctx *application.Context) {
 				if tun.IsConnected {
 					tunnelService.Disconnect()
 				} else {
@@ -154,132 +149,126 @@ func main() {
 				}
 			})
 		}
-
-		trayMenu.AddSeparator()
-		trayMenu.Add("Show Window").OnClick(func(ctx *application.Context) {
-			app.Show()
-		})
-		trayMenu.AddSeparator()
-		trayMenu.Add("Quit").OnClick(func(ctx *application.Context) {
-			// Clean shutdown
-			monitor.Stop()
-			fw.Cleanup()
-			if manager.IsConnected() {
-				manager.Disconnect()
-			}
+		m.AddSeparator()
+		m.Add("Show Window").OnClick(func(ctx *application.Context) { app.Show() })
+		m.AddSeparator()
+		m.Add("Quit").OnClick(func(ctx *application.Context) {
+			tunnelService.Disconnect()
+			client.Call(ipc.MethodShutdown, nil, nil)
+			client.Close()
 			app.Quit()
 		})
-		tray.SetMenu(trayMenu)
-
-		// Update tooltip
-		if active := manager.ActiveTunnel(); active != "" {
-			tray.SetTooltip("WireGuide - " + active + " (Connected)")
-		} else {
-			tray.SetTooltip("WireGuide - Disconnected")
-		}
+		tray.SetMenu(m)
 	}
-
 	buildTrayMenu()
 
-	// Event emitter: push status + tunnel list changes to frontend.
-	// Only emits when data actually changed (no spam).
+	// Subscribe to helper events and forward to Wails
+	if err := client.Subscribe(func(method string, params json.RawMessage) {
+		switch method {
+		case ipc.EventStatus:
+			var dto ipc.ConnectionStatusDTO
+			if json.Unmarshal(params, &dto) == nil {
+				app.Event.Emit("status", StatusEvent{
+					State:         dto.State,
+					TunnelName:    dto.TunnelName,
+					RxBytes:       dto.RxBytes,
+					TxBytes:       dto.TxBytes,
+					LastHandshake: dto.LastHandshake,
+					Duration:      dto.Duration,
+					Endpoint:      dto.Endpoint,
+				})
+			}
+		case ipc.EventReconnect:
+			var dto ipc.ReconnectStateDTO
+			if json.Unmarshal(params, &dto) == nil {
+				app.Event.Emit("reconnect", ReconnectEvent{
+					Reconnecting: dto.Reconnecting,
+					Attempt:      dto.Attempt,
+					MaxAttempts:  dto.MaxAttempts,
+				})
+			}
+		}
+	}); err != nil {
+		slog.Warn("event subscription failed", "error", err)
+	}
+
+	// Rebuild tray menu periodically to reflect tunnel list changes
 	go func() {
-		var lastStatusKey, lastTunnelsKey string
-		ticker := time.NewTicker(1 * time.Second)
+		ticker := time.NewTicker(2 * time.Second)
 		defer ticker.Stop()
 		for range ticker.C {
-			// Status event
-			status := manager.Status()
-			statusEvt := StatusEvent{
-				State:         string(status.State),
-				TunnelName:    status.TunnelName,
-				InterfaceName: status.InterfaceName,
-				RxBytes:       status.RxBytes,
-				TxBytes:       status.TxBytes,
-				LastHandshake: status.HandshakeAge,
-				Duration:      status.Duration,
-				Endpoint:      status.Endpoint,
-			}
-			statusKey := fmt.Sprintf("%s|%s|%d|%d|%s", statusEvt.State, statusEvt.TunnelName,
-				statusEvt.RxBytes, statusEvt.TxBytes, statusEvt.LastHandshake)
-			if statusKey != lastStatusKey {
-				lastStatusKey = statusKey
-				app.Event.Emit("status", statusEvt)
-			}
-
-			// Tunnels list event
-			tunnels, err := tunnelService.ListTunnels()
-			if err == nil {
-				tunnelsKey := fmt.Sprintf("%d", len(tunnels))
-				for _, t := range tunnels {
-					tunnelsKey += "|" + t.Name + "|" + fmt.Sprintf("%v", t.IsConnected)
-				}
-				if tunnelsKey != lastTunnelsKey {
-					lastTunnelsKey = tunnelsKey
-					app.Event.Emit("tunnels", TunnelsEvent{Tunnels: tunnels})
-					buildTrayMenu() // update tray when tunnels change
-				}
-			}
+			buildTrayMenu()
 		}
 	}()
 
-	// Run app
 	if err := app.Run(); err != nil {
 		log.Fatal(err)
 	}
 }
 
-// isElevated checks if the process has root/admin privileges.
-func isElevated() bool {
-	switch runtime.GOOS {
-	case "darwin", "linux":
-		return os.Geteuid() == 0
-	case "windows":
-		// On Windows, try writing to a privileged path
-		f, err := os.CreateTemp(`C:\Windows\Temp`, "wireguide-check-*")
-		if err != nil {
-			return false
+// ensureHelper connects to an existing helper or spawns one with elevation.
+func ensureHelper() (*ipc.Client, error) {
+	addr := ipc.DefaultSocketPath()
+
+	// Try existing helper first
+	if client, err := ipc.NewClient(addr); err == nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+		defer cancel()
+		_ = ctx
+		var resp ipc.PingResponse
+		if err := client.Call(ipc.MethodPing, nil, &resp); err == nil {
+			slog.Info("connected to existing helper", "version", resp.Version)
+			return client, nil
 		}
-		f.Close()
-		os.Remove(f.Name())
-		return true
+		client.Close()
 	}
-	return false
+
+	// Spawn new helper
+	slog.Info("spawning helper with elevation...")
+	dataDir := systemDataDir()
+	args := elevate.Args{
+		SocketPath: addr,
+		SocketUID:  os.Getuid(),
+		DataDir:    dataDir,
+	}
+	if err := elevate.SpawnHelper(args); err != nil {
+		return nil, fmt.Errorf("spawn helper: %w", err)
+	}
+
+	// Poll for helper readiness (up to 30 seconds)
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		time.Sleep(200 * time.Millisecond)
+		client, err := ipc.NewClient(addr)
+		if err != nil {
+			continue
+		}
+		var resp ipc.PingResponse
+		if err := client.Call(ipc.MethodPing, nil, &resp); err == nil {
+			slog.Info("helper ready", "version", resp.Version)
+			return client, nil
+		}
+		client.Close()
+	}
+	return nil, fmt.Errorf("helper did not become ready within 30s")
 }
 
-// relaunchElevated restarts this binary with OS-native privilege escalation.
-func relaunchElevated() error {
-	exe, err := os.Executable()
-	if err != nil {
-		return err
-	}
-
+// systemDataDir returns the system-level data dir for helper state.
+func systemDataDir() string {
 	switch runtime.GOOS {
 	case "darwin":
-		// macOS: "do shell script ... with administrator privileges" shows
-		// the native macOS padlock dialog. The binary runs inside osascript's
-		// process tree, inheriting GUI session access. Blocks until app exits.
-		script := fmt.Sprintf(
-			`do shell script "'%s' --elevated" with administrator privileges with prompt "WireGuide needs administrator privileges to create VPN tunnels."`,
-			exe,
-		)
-		cmd := exec.Command("osascript", "-e", script)
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
-		return cmd.Run()
-
+		return "/Library/Application Support/wireguide"
 	case "linux":
-		// Linux: pkexec shows PolicyKit dialog
-		cmd := exec.Command("pkexec", exe, "--elevated")
-		return cmd.Start()
-
+		return "/var/lib/wireguide"
 	case "windows":
-		// Windows: Start-Process -Verb RunAs triggers UAC dialog
-		cmd := exec.Command("powershell", "-Command",
-			fmt.Sprintf("Start-Process '%s' -ArgumentList '--elevated' -Verb RunAs", exe))
-		return cmd.Start()
-
-	default:
-		return fmt.Errorf("unsupported OS: %s", runtime.GOOS)
+		if pd := os.Getenv("PROGRAMDATA"); pd != "" {
+			return pd + `\wireguide`
+		}
+		return `C:\ProgramData\wireguide`
 	}
+	return "/tmp/wireguide"
+}
+
+func defaultDataDir() string {
+	return systemDataDir()
 }

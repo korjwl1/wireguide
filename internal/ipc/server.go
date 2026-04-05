@@ -1,0 +1,229 @@
+package ipc
+
+import (
+	"encoding/json"
+	"log/slog"
+	"net"
+	"sync"
+)
+
+// Handler processes an RPC request and returns a result or error.
+type Handler func(params json.RawMessage) (interface{}, error)
+
+// Server is an IPC server that dispatches RPC requests to handlers
+// and broadcasts events to subscribed clients.
+type Server struct {
+	listener net.Listener
+	handlers map[string]Handler
+
+	mu             sync.Mutex
+	eventSubs      map[*subscriber]struct{} // active event subscribers
+	shutdownCh     chan struct{}
+	onDisconnect   func()           // called when the last control conn closes
+	controlConns   map[net.Conn]struct{}
+}
+
+type subscriber struct {
+	conn net.Conn
+	ch   chan []byte
+}
+
+// NewServer creates a server.
+func NewServer(listener net.Listener) *Server {
+	return &Server{
+		listener:     listener,
+		handlers:     make(map[string]Handler),
+		eventSubs:    make(map[*subscriber]struct{}),
+		shutdownCh:   make(chan struct{}),
+		controlConns: make(map[net.Conn]struct{}),
+	}
+}
+
+// Handle registers an RPC handler for the given method.
+func (s *Server) Handle(method string, h Handler) {
+	s.handlers[method] = h
+}
+
+// OnDisconnect sets a callback fired when the last control connection closes.
+func (s *Server) OnDisconnect(fn func()) {
+	s.onDisconnect = fn
+}
+
+// Serve accepts connections until the listener is closed.
+func (s *Server) Serve() error {
+	for {
+		conn, err := s.listener.Accept()
+		if err != nil {
+			select {
+			case <-s.shutdownCh:
+				return nil
+			default:
+				return err
+			}
+		}
+		go s.handleConn(conn)
+	}
+}
+
+// Shutdown stops the server.
+func (s *Server) Shutdown() {
+	select {
+	case <-s.shutdownCh:
+	default:
+		close(s.shutdownCh)
+	}
+	s.listener.Close()
+
+	s.mu.Lock()
+	for sub := range s.eventSubs {
+		sub.conn.Close()
+	}
+	for c := range s.controlConns {
+		c.Close()
+	}
+	s.mu.Unlock()
+}
+
+// Broadcast sends an event notification to all subscribers.
+func (s *Server) Broadcast(method string, params interface{}) {
+	notif, err := NewNotification(method, params)
+	if err != nil {
+		slog.Warn("failed to build notification", "error", err)
+		return
+	}
+	data, err := json.Marshal(notif)
+	if err != nil {
+		return
+	}
+
+	s.mu.Lock()
+	subs := make([]*subscriber, 0, len(s.eventSubs))
+	for sub := range s.eventSubs {
+		subs = append(subs, sub)
+	}
+	s.mu.Unlock()
+
+	for _, sub := range subs {
+		select {
+		case sub.ch <- data:
+		default:
+			// Drop event if subscriber is slow (prevents helper from blocking)
+		}
+	}
+}
+
+// handleConn processes one connection. The first request determines if this
+// is a control connection (regular RPC) or an event stream (after Subscribe).
+func (s *Server) handleConn(conn net.Conn) {
+	defer conn.Close()
+
+	isControl := false
+	defer func() {
+		if isControl {
+			s.mu.Lock()
+			delete(s.controlConns, conn)
+			remaining := len(s.controlConns)
+			s.mu.Unlock()
+			if remaining == 0 && s.onDisconnect != nil {
+				s.onDisconnect()
+			}
+		}
+	}()
+
+	for {
+		var req Request
+		if err := ReadFrame(conn, &req); err != nil {
+			return // connection closed
+		}
+
+		if req.Method == MethodSubscribe {
+			// Upgrade this connection to an event stream
+			s.handleSubscribe(conn, req.ID)
+			return // handleSubscribe takes over the connection
+		}
+
+		if !isControl {
+			isControl = true
+			s.mu.Lock()
+			s.controlConns[conn] = struct{}{}
+			s.mu.Unlock()
+		}
+
+		// Dispatch RPC
+		resp := s.dispatch(&req)
+		if resp != nil && !req.IsNotification() {
+			if err := WriteFrame(conn, resp); err != nil {
+				return
+			}
+		}
+	}
+}
+
+func (s *Server) dispatch(req *Request) *Response {
+	handler, ok := s.handlers[req.Method]
+	if !ok {
+		return NewErrorResponse(req.ID, ErrCodeMethodNotFound, "method not found: "+req.Method)
+	}
+
+	result, err := handler(req.Params)
+	if err != nil {
+		return NewErrorResponse(req.ID, ErrCodeAppError, err.Error())
+	}
+
+	resp, marshalErr := NewResponse(req.ID, result)
+	if marshalErr != nil {
+		return NewErrorResponse(req.ID, ErrCodeInternalError, marshalErr.Error())
+	}
+	return resp
+}
+
+// handleSubscribe takes over a connection as an event stream.
+func (s *Server) handleSubscribe(conn net.Conn, reqID uint64) {
+	sub := &subscriber{
+		conn: conn,
+		ch:   make(chan []byte, 32),
+	}
+
+	s.mu.Lock()
+	s.eventSubs[sub] = struct{}{}
+	s.mu.Unlock()
+
+	defer func() {
+		s.mu.Lock()
+		delete(s.eventSubs, sub)
+		s.mu.Unlock()
+		close(sub.ch)
+	}()
+
+	// Acknowledge subscription
+	ack, _ := NewResponse(reqID, Empty{})
+	if err := WriteFrame(conn, ack); err != nil {
+		return
+	}
+
+	// Pump events to this subscriber
+	for {
+		select {
+		case <-s.shutdownCh:
+			return
+		case data, ok := <-sub.ch:
+			if !ok {
+				return
+			}
+			if _, err := conn.Write(frameBytes(data)); err != nil {
+				return
+			}
+		}
+	}
+}
+
+// frameBytes prepends the 4-byte length prefix.
+func frameBytes(data []byte) []byte {
+	buf := make([]byte, 4+len(data))
+	buf[0] = byte(len(data) >> 24)
+	buf[1] = byte(len(data) >> 16)
+	buf[2] = byte(len(data) >> 8)
+	buf[3] = byte(len(data))
+	copy(buf[4:], data)
+	return buf
+}

@@ -1,4 +1,5 @@
-// Package app provides Wails bindings bridging Svelte frontend and Go backend directly.
+// Package app provides Wails bindings bridging Svelte frontend to the
+// IPC helper client and local storage.
 package app
 
 import (
@@ -6,26 +7,25 @@ import (
 	"strings"
 
 	"github.com/korjwl1/wireguide/internal/config"
-	"github.com/korjwl1/wireguide/internal/firewall"
+	"github.com/korjwl1/wireguide/internal/ipc"
 	"github.com/korjwl1/wireguide/internal/storage"
-	"github.com/korjwl1/wireguide/internal/tunnel"
 )
 
-// TunnelService exposes tunnel operations to Svelte frontend via Wails bindings.
+// TunnelService is the Wails-bound service.
+// Storage (tunnel files, settings) stays in the GUI process.
+// Tunnel operations go through the helper via IPC.
 type TunnelService struct {
 	tunnelStore   *storage.TunnelStore
 	settingsStore *storage.SettingsStore
-	manager       *tunnel.Manager
-	firewall      firewall.FirewallManager
+	client        *ipc.Client
 }
 
-// NewTunnelService creates a service with direct access to manager and storage.
-func NewTunnelService(ts *storage.TunnelStore, ss *storage.SettingsStore, mgr *tunnel.Manager, fw firewall.FirewallManager) *TunnelService {
+// NewTunnelService creates a service.
+func NewTunnelService(ts *storage.TunnelStore, ss *storage.SettingsStore, client *ipc.Client) *TunnelService {
 	return &TunnelService{
 		tunnelStore:   ts,
 		settingsStore: ss,
-		manager:       mgr,
-		firewall:      fw,
+		client:        client,
 	}
 }
 
@@ -49,14 +49,18 @@ type ConnectionStatus struct {
 	Endpoint      string `json:"endpoint"`
 }
 
-// --- Tunnel operations ---
+// --- Tunnel operations (storage is local, tunnel ops go through helper) ---
 
 func (s *TunnelService) ListTunnels() ([]TunnelInfo, error) {
 	names, err := s.tunnelStore.List()
 	if err != nil {
 		return nil, err
 	}
-	activeName := s.manager.ActiveTunnel()
+
+	// Ask helper for currently active tunnel
+	var active ipc.StringResponse
+	_ = s.client.Call(ipc.MethodActiveName, nil, &active)
+
 	var result []TunnelInfo
 	for _, name := range names {
 		cfg, err := s.tunnelStore.Load(name)
@@ -69,7 +73,7 @@ func (s *TunnelService) ListTunnels() ([]TunnelInfo, error) {
 		}
 		result = append(result, TunnelInfo{
 			Name:        name,
-			IsConnected: name == activeName,
+			IsConnected: name == active.Value,
 			Endpoint:    endpoint,
 			HasScripts:  cfg.HasScripts(),
 		})
@@ -82,25 +86,31 @@ func (s *TunnelService) Connect(name string, scriptsAllowed bool) error {
 	if err != nil {
 		return fmt.Errorf("loading tunnel %s: %w", name, err)
 	}
-	return s.manager.Connect(cfg, scriptsAllowed)
+	return s.client.Call(ipc.MethodConnect, ipc.ConnectRequest{
+		Config:         cfg,
+		ScriptsAllowed: scriptsAllowed,
+	}, nil)
 }
 
 func (s *TunnelService) Disconnect() error {
-	return s.manager.Disconnect()
+	return s.client.Call(ipc.MethodDisconnect, nil, nil)
 }
 
-func (s *TunnelService) GetStatus() *ConnectionStatus {
-	status := s.manager.Status()
-	return &ConnectionStatus{
-		State:         string(status.State),
-		TunnelName:    status.TunnelName,
-		InterfaceName: status.InterfaceName,
-		RxBytes:       status.RxBytes,
-		TxBytes:       status.TxBytes,
-		LastHandshake: status.HandshakeAge,
-		Duration:      status.Duration,
-		Endpoint:      status.Endpoint,
+func (s *TunnelService) GetStatus() (*ConnectionStatus, error) {
+	var dto ipc.ConnectionStatusDTO
+	if err := s.client.Call(ipc.MethodStatus, nil, &dto); err != nil {
+		return &ConnectionStatus{State: "error"}, nil
 	}
+	return &ConnectionStatus{
+		State:         dto.State,
+		TunnelName:    dto.TunnelName,
+		InterfaceName: dto.InterfaceName,
+		RxBytes:       dto.RxBytes,
+		TxBytes:       dto.TxBytes,
+		LastHandshake: dto.LastHandshake,
+		Duration:      dto.Duration,
+		Endpoint:      dto.Endpoint,
+	}, nil
 }
 
 func (s *TunnelService) GetTunnelDetail(name string) (*config.WireGuardConfig, error) {
@@ -108,13 +118,15 @@ func (s *TunnelService) GetTunnelDetail(name string) (*config.WireGuardConfig, e
 }
 
 func (s *TunnelService) DeleteTunnel(name string) error {
-	if s.manager.ActiveTunnel() == name {
+	var active ipc.StringResponse
+	_ = s.client.Call(ipc.MethodActiveName, nil, &active)
+	if active.Value == name {
 		return fmt.Errorf("cannot delete connected tunnel %q — disconnect first", name)
 	}
 	return s.tunnelStore.Delete(name)
 }
 
-// --- Config management ---
+// --- Config management (all local) ---
 
 func (s *TunnelService) ImportConfig(name, content string) (*TunnelInfo, error) {
 	cfg, err := s.tunnelStore.ImportFromContent(name, content)
@@ -153,7 +165,9 @@ func (s *TunnelService) GetConfigText(name string) (string, error) {
 }
 
 func (s *TunnelService) UpdateConfig(name, content string) error {
-	if s.manager.ActiveTunnel() == name {
+	var active ipc.StringResponse
+	_ = s.client.Call(ipc.MethodActiveName, nil, &active)
+	if active.Value == name {
 		return fmt.Errorf("cannot edit connected tunnel %q — disconnect first", name)
 	}
 	cfg, err := config.Parse(content)
@@ -176,7 +190,7 @@ func (s *TunnelService) TunnelExists(name string) bool {
 	return s.tunnelStore.Exists(name)
 }
 
-// --- Settings ---
+// --- Settings (all local) ---
 
 func (s *TunnelService) GetSettings() (*storage.Settings, error) {
 	return s.settingsStore.Load()
@@ -186,30 +200,27 @@ func (s *TunnelService) SaveSettings(settings *storage.Settings) error {
 	return s.settingsStore.Save(settings)
 }
 
-// --- Firewall ---
+// --- Firewall (goes through helper) ---
 
 func (s *TunnelService) SetKillSwitch(enabled bool) error {
-	if enabled {
-		status := s.manager.Status()
-		if status.State != tunnel.StateConnected {
-			return fmt.Errorf("cannot enable kill switch: no active tunnel")
-		}
-		return s.firewall.EnableKillSwitch(status.InterfaceName, status.Endpoint)
-	}
-	return s.firewall.DisableKillSwitch()
+	return s.client.Call(ipc.MethodSetKillSwitch, ipc.KillSwitchRequest{Enabled: enabled}, nil)
 }
 
 func (s *TunnelService) SetDNSProtection(enabled bool) error {
+	// Frontend passes empty DNS list; helper uses active tunnel's DNS
+	// We need to fetch the active tunnel's DNS servers from local storage
+	dnsServers := []string{}
 	if enabled {
-		status := s.manager.Status()
-		if status.State != tunnel.StateConnected {
-			return fmt.Errorf("cannot enable DNS protection: no active tunnel")
+		var active ipc.StringResponse
+		_ = s.client.Call(ipc.MethodActiveName, nil, &active)
+		if active.Value != "" {
+			if cfg, err := s.tunnelStore.Load(active.Value); err == nil {
+				dnsServers = cfg.Interface.DNS
+			}
 		}
-		cfg, err := s.tunnelStore.Load(s.manager.ActiveTunnel())
-		if err != nil {
-			return err
-		}
-		return s.firewall.EnableDNSProtection(status.InterfaceName, cfg.Interface.DNS)
 	}
-	return s.firewall.DisableDNSProtection()
+	return s.client.Call(ipc.MethodSetDNSProtection, ipc.DNSProtectionRequest{
+		Enabled:    enabled,
+		DNSServers: dnsServers,
+	}, nil)
 }

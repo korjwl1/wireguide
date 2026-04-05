@@ -6,12 +6,50 @@
 // @ts-ignore: Unused imports
 import { Create as $Create } from "@wailsio/runtime";
 
-// eslint-disable-next-line @typescript-eslint/ban-ts-comment
-// @ts-ignore: Unused imports
-import * as app$0 from "./internal/app/models.js";
+export class ReconnectEvent {
+    /**
+     * Creates a new ReconnectEvent instance.
+     * @param {Partial<ReconnectEvent>} [$$source = {}] - The source object to create the ReconnectEvent.
+     */
+    constructor($$source = {}) {
+        if (!("reconnecting" in $$source)) {
+            /**
+             * @member
+             * @type {boolean}
+             */
+            this["reconnecting"] = false;
+        }
+        if (!("attempt" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["attempt"] = 0;
+        }
+        if (!("max_attempts" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["max_attempts"] = 0;
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new ReconnectEvent instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {ReconnectEvent}
+     */
+    static createFrom($$source = {}) {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new ReconnectEvent(/** @type {Partial<ReconnectEvent>} */($$parsedSource));
+    }
+}
 
 /**
- * StatusEvent is broadcast to the frontend whenever tunnel status changes.
+ * StatusEvent mirrors ipc.ConnectionStatusDTO for Wails event emission.
  */
 export class StatusEvent {
     /**
@@ -32,13 +70,6 @@ export class StatusEvent {
              * @type {string}
              */
             this["tunnel_name"] = "";
-        }
-        if (!("interface_name" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["interface_name"] = "";
         }
         if (!("rx_bytes" in $$source)) {
             /**
@@ -89,42 +120,3 @@ export class StatusEvent {
         return new StatusEvent(/** @type {Partial<StatusEvent>} */($$parsedSource));
     }
 }
-
-/**
- * TunnelsEvent is broadcast when the tunnel list changes.
- */
-export class TunnelsEvent {
-    /**
-     * Creates a new TunnelsEvent instance.
-     * @param {Partial<TunnelsEvent>} [$$source = {}] - The source object to create the TunnelsEvent.
-     */
-    constructor($$source = {}) {
-        if (!("tunnels" in $$source)) {
-            /**
-             * @member
-             * @type {app$0.TunnelInfo[]}
-             */
-            this["tunnels"] = [];
-        }
-
-        Object.assign(this, $$source);
-    }
-
-    /**
-     * Creates a new TunnelsEvent instance from a string or object.
-     * @param {any} [$$source = {}]
-     * @returns {TunnelsEvent}
-     */
-    static createFrom($$source = {}) {
-        const $$createField0_0 = $$createType1;
-        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
-        if ("tunnels" in $$parsedSource) {
-            $$parsedSource["tunnels"] = $$createField0_0($$parsedSource["tunnels"]);
-        }
-        return new TunnelsEvent(/** @type {Partial<TunnelsEvent>} */($$parsedSource));
-    }
-}
-
-// Private type creation functions
-const $$createType0 = app$0.TunnelInfo.createFrom;
-const $$createType1 = $Create.Array($$createType0);

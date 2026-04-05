@@ -3,6 +3,7 @@ module github.com/korjwl1/wireguide
 go 1.25.0
 
 require (
+	github.com/Microsoft/go-winio v0.6.2
 	github.com/wailsapp/wails/v3 v3.0.0-alpha.74
 	golang.org/x/crypto v0.49.0
 	golang.zx2c4.com/wireguard v0.0.0-20250521234502-f333402bd9cb
@@ -11,7 +12,6 @@ require (
 
 require (
 	dario.cat/mergo v1.0.2 // indirect
-	github.com/Microsoft/go-winio v0.6.2 // indirect
 	github.com/ProtonMail/go-crypto v1.3.0 // indirect
 	github.com/adrg/xdg v0.5.3 // indirect
 	github.com/bep/debounce v1.2.1 // indirect
