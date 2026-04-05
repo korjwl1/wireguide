@@ -64,6 +64,36 @@
 
   $: isConnected = $selectedTunnel?.is_connected;
   $: status = $connectionStatus;
+
+  let renaming = false;
+  let renameValue = '';
+
+  function startRename() {
+    if (isConnected) {
+      error = t('confirm.disconnect_first');
+      return;
+    }
+    renameValue = $selectedTunnel.name;
+    renaming = true;
+  }
+
+  async function commitRename() {
+    const oldName = $selectedTunnel.name;
+    const newName = renameValue.trim();
+    renaming = false;
+    if (!newName || newName === oldName) return;
+    try {
+      await TunnelService.RenameTunnel(oldName, newName);
+      selectedTunnel.set({ ...$selectedTunnel, name: newName });
+      dispatch('refresh');
+    } catch (e) {
+      error = e.toString();
+    }
+  }
+
+  function cancelRename() {
+    renaming = false;
+  }
 </script>
 
 <div class="detail-panel">
@@ -73,7 +103,22 @@
     </div>
   {:else}
     <div class="detail-header" class:connected={isConnected}>
-      <h2>{$selectedTunnel.name}</h2>
+      {#if renaming}
+        <input
+          class="rename-input"
+          type="text"
+          bind:value={renameValue}
+          on:blur={commitRename}
+          on:keydown={(e) => {
+            if (e.key === 'Enter') commitRename();
+            if (e.key === 'Escape') cancelRename();
+          }}
+          autofocus
+        />
+      {:else}
+        <h2 on:dblclick={startRename} title="Double-click to rename">{$selectedTunnel.name}</h2>
+        <button class="btn-rename" on:click={startRename} title="Rename">✎</button>
+      {/if}
       <span class="state-badge" class:on={isConnected} class:connecting={status.state === 'connecting'}>
         {#if isConnected}
           {t('app.connected')}
@@ -186,6 +231,32 @@
     margin: 0;
     font-size: 20px;
     color: var(--text-primary);
+    cursor: pointer;
+  }
+  .btn-rename {
+    background: transparent;
+    border: none;
+    color: var(--text-secondary);
+    cursor: pointer;
+    padding: 4px 8px;
+    border-radius: 4px;
+    font-size: 14px;
+    opacity: 0.6;
+  }
+  .btn-rename:hover {
+    background: var(--bg-hover);
+    opacity: 1;
+  }
+  .rename-input {
+    font-size: 20px;
+    padding: 4px 8px;
+    background: var(--bg-input);
+    border: 1px solid var(--accent);
+    border-radius: 4px;
+    color: var(--text-primary);
+    outline: none;
+    flex: 1;
+    max-width: 300px;
   }
   .state-badge {
     padding: 4px 10px;

@@ -128,6 +128,28 @@ func (s *TunnelService) DeleteTunnel(name string) error {
 	return s.tunnelStore.Delete(name)
 }
 
+// RenameTunnel changes a tunnel's name.
+func (s *TunnelService) RenameTunnel(oldName, newName string) error {
+	if newName == "" {
+		return fmt.Errorf("new name cannot be empty")
+	}
+	// Cannot rename connected tunnel — interface state tracks name
+	var active ipc.StringResponse
+	_ = s.client.Call(ipc.MethodActiveName, nil, &active)
+	if active.Value == oldName {
+		return fmt.Errorf("cannot rename connected tunnel %q — disconnect first", oldName)
+	}
+	// Sanitize: only allow alphanumeric + dash + underscore
+	for _, r := range newName {
+		valid := (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') ||
+			(r >= '0' && r <= '9') || r == '-' || r == '_'
+		if !valid {
+			return fmt.Errorf("name can only contain letters, digits, dashes, and underscores")
+		}
+	}
+	return s.tunnelStore.Rename(oldName, newName)
+}
+
 // --- Config management (all local) ---
 
 func (s *TunnelService) ImportConfig(name, content string) (*TunnelInfo, error) {

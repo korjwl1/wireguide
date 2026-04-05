@@ -50,6 +50,17 @@ func (s *TunnelStore) Delete(name string) error {
 	return os.Remove(path)
 }
 
+// Rename renames a tunnel from oldName to newName.
+func (s *TunnelStore) Rename(oldName, newName string) error {
+	if oldName == newName {
+		return nil
+	}
+	if s.Exists(newName) {
+		return fmt.Errorf("tunnel %q already exists", newName)
+	}
+	return os.Rename(s.path(oldName), s.path(newName))
+}
+
 // List returns all tunnel names (without .conf extension).
 func (s *TunnelStore) List() ([]string, error) {
 	entries, err := os.ReadDir(s.dir)

@@ -7,29 +7,30 @@
 
   let settings = {
     language: getLanguage(),
-    theme: 'dark',
+    theme: 'system',
     autoReconnect: true,
     killSwitch: false,
     dnsProtection: false,
     logLevel: 'info',
     autoStart: false,
   };
+  let loaded = false;
 
   async function load() {
     try {
       const s = await TunnelService.GetSettings();
       if (s) {
-        settings.language = s.language || 'auto';
-        settings.theme = s.theme || 'dark';
-        settings.autoReconnect = s.auto_reconnect ?? true;
-        settings.killSwitch = s.kill_switch ?? false;
-        settings.dnsProtection = s.dns_protection ?? false;
-        settings.logLevel = s.log_level || 'info';
-        settings.autoStart = s.auto_start ?? false;
+        settings.language = s.Language || 'auto';
+        settings.theme = s.Theme || 'system';
+        settings.autoReconnect = s.AutoReconnect ?? true;
+        settings.killSwitch = s.KillSwitch ?? false;
+        settings.dnsProtection = s.DNSProtection ?? false;
+        settings.logLevel = s.LogLevel || 'info';
       }
     } catch (e) {
       console.error('load settings:', e);
     }
+    loaded = true;
   }
   load();
 
@@ -37,12 +38,31 @@
     document.documentElement.setAttribute('data-theme', theme);
   }
 
+  async function save() {
+    try {
+      await TunnelService.SaveSettings({
+        Language: settings.language,
+        Theme: settings.theme,
+        TrayIconStyle: 'color',
+        AutoReconnect: settings.autoReconnect,
+        KillSwitch: settings.killSwitch,
+        DNSProtection: settings.dnsProtection,
+        LogLevel: settings.logLevel,
+      });
+    } catch (e) {
+      console.error('save settings:', e);
+    }
+  }
+
+  // Reactive: apply theme whenever it changes
   $: applyTheme(settings.theme);
 
-  $: {
+  // Reactive: set language + save whenever settings change (after initial load)
+  $: if (loaded) {
     if (settings.language && settings.language !== 'auto') {
       setLanguage(settings.language);
     }
+    save();
   }
 
   function close() {

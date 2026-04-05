@@ -20,13 +20,13 @@ type Settings struct {
 // DefaultSettings returns settings with sensible defaults.
 func DefaultSettings() *Settings {
 	return &Settings{
-		Language:       "auto",
-		Theme:          "dark",
-		TrayIconStyle:  "color",
-		AutoReconnect:  true,
-		KillSwitch:     false,
-		DNSProtection:  false,
-		LogLevel:       "info",
+		Language:      "auto",
+		Theme:         "system", // follows OS dark/light mode
+		TrayIconStyle: "color",
+		AutoReconnect: true,
+		KillSwitch:    false,
+		DNSProtection: false,
+		LogLevel:      "info",
 	}
 }
 

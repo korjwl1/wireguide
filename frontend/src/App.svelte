@@ -33,6 +33,15 @@
   let filesDroppedUnsub = null;
 
   onMount(async () => {
+    // Load and apply saved theme before loading other data
+    try {
+      const s = await TunnelService.GetSettings();
+      const theme = s?.Theme || 'system';
+      document.documentElement.setAttribute('data-theme', theme);
+    } catch (e) {
+      document.documentElement.setAttribute('data-theme', 'system');
+    }
+
     await initialLoad(TunnelService);
     subscribeToEvents();
 

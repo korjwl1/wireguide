@@ -132,6 +132,16 @@ export function ReadFile(path) {
 }
 
 /**
+ * RenameTunnel changes a tunnel's name.
+ * @param {string} oldName
+ * @param {string} newName
+ * @returns {$CancellablePromise<void>}
+ */
+export function RenameTunnel(oldName, newName) {
+    return $Call.ByID(576069505, oldName, newName);
+}
+
+/**
  * @param {storage$0.Settings | null} settings
  * @returns {$CancellablePromise<void>}
  */
