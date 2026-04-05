@@ -24,9 +24,27 @@ func (s *TunnelStore) Save(cfg *config.WireGuardConfig) error {
 	if cfg.Name == "" {
 		return fmt.Errorf("tunnel name is empty")
 	}
+	// Validate name to prevent path traversal
+	for _, r := range cfg.Name {
+		valid := (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') ||
+			(r >= '0' && r <= '9') || r == '-' || r == '_' || r == '.'
+		if !valid {
+			return fmt.Errorf("invalid character in tunnel name: %q", cfg.Name)
+		}
+	}
+	if cfg.Name == "." || cfg.Name == ".." {
+		return fmt.Errorf("invalid tunnel name: %q", cfg.Name)
+	}
+
 	content := config.Serialize(cfg)
 	path := s.path(cfg.Name)
-	return os.WriteFile(path, []byte(content), 0600)
+
+	// Atomic write: temp file + rename (prevents partial writes on crash)
+	tmpPath := path + ".tmp"
+	if err := os.WriteFile(tmpPath, []byte(content), 0600); err != nil {
+		return err
+	}
+	return os.Rename(tmpPath, path)
 }
 
 // Load reads a tunnel config from disk by name.

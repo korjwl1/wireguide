@@ -43,10 +43,17 @@ type ReconnectEvent struct {
 	MaxAttempts  int    `json:"max_attempts"`
 }
 
+// HelperEvent notifies the frontend about helper process health.
+type HelperEvent struct {
+	Alive   bool   `json:"alive"`
+	Message string `json:"message"`
+}
+
 func init() {
 	application.RegisterEvent[StatusEvent]("status")
 	application.RegisterEvent[ReconnectEvent]("reconnect")
 	application.RegisterEvent[map[string]any]("files-dropped")
+	application.RegisterEvent[HelperEvent]("helper")
 }
 
 func main() {
@@ -235,6 +242,34 @@ func runGUI() {
 		}
 	}()
 
+	// Helper health check — detects helper crashes and notifies frontend.
+	go func() {
+		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
+		wasAlive := true
+		for range ticker.C {
+			if client.IsClosed() {
+				return
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			var resp ipc.PingResponse
+			err := client.CallWithContext(ctx, ipc.MethodPing, nil, &resp)
+			cancel()
+			alive := err == nil
+			if alive != wasAlive {
+				wasAlive = alive
+				msg := ""
+				if !alive {
+					msg = "Helper process not responding: " + err.Error()
+					slog.Warn("helper disconnected", "error", err)
+				} else {
+					slog.Info("helper reconnected")
+				}
+				app.Event.Emit("helper", HelperEvent{Alive: alive, Message: msg})
+			}
+		}
+	}()
+
 	if err := app.Run(); err != nil {
 		log.Fatal(err)
 	}
@@ -244,13 +279,12 @@ func runGUI() {
 func ensureHelper() (*ipc.Client, error) {
 	addr := ipc.DefaultSocketPath()
 
-	// Try existing helper first
+	// Try existing helper first (short timeout via dedicated context)
 	if client, err := ipc.NewClient(addr); err == nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 		defer cancel()
-		_ = ctx
 		var resp ipc.PingResponse
-		if err := client.Call(ipc.MethodPing, nil, &resp); err == nil {
+		if err := client.CallWithContext(ctx, ipc.MethodPing, nil, &resp); err == nil {
 			slog.Info("connected to existing helper", "version", resp.Version)
 			return client, nil
 		}

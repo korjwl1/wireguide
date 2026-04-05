@@ -207,8 +207,8 @@ func TestSettingsStoreDefaultsOnMissing(t *testing.T) {
 	if settings.Language != "auto" {
 		t.Errorf("expected default language 'auto', got %s", settings.Language)
 	}
-	if settings.Theme != "dark" {
-		t.Errorf("expected default theme 'dark', got %s", settings.Theme)
+	if settings.Theme != "system" {
+		t.Errorf("expected default theme 'system', got %s", settings.Theme)
 	}
 	if !settings.AutoReconnect {
 		t.Error("expected AutoReconnect to be true by default")

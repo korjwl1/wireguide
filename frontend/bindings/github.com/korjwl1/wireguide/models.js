@@ -6,6 +6,44 @@
 // @ts-ignore: Unused imports
 import { Create as $Create } from "@wailsio/runtime";
 
+/**
+ * HelperEvent notifies the frontend about helper process health.
+ */
+export class HelperEvent {
+    /**
+     * Creates a new HelperEvent instance.
+     * @param {Partial<HelperEvent>} [$$source = {}] - The source object to create the HelperEvent.
+     */
+    constructor($$source = {}) {
+        if (!("alive" in $$source)) {
+            /**
+             * @member
+             * @type {boolean}
+             */
+            this["alive"] = false;
+        }
+        if (!("message" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["message"] = "";
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new HelperEvent instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {HelperEvent}
+     */
+    static createFrom($$source = {}) {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new HelperEvent(/** @type {Partial<HelperEvent>} */($$parsedSource));
+    }
+}
+
 export class ReconnectEvent {
     /**
      * Creates a new ReconnectEvent instance.

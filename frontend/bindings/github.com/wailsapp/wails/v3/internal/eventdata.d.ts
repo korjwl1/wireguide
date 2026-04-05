@@ -13,6 +13,7 @@ declare module "@wailsio/runtime" {
     namespace Events {
         interface CustomEvents {
             "files-dropped": { [_ in string]?: any };
+            "helper": main$0.HelperEvent;
             "reconnect": main$0.ReconnectEvent;
             "status": main$0.StatusEvent;
         }

@@ -1,20 +1,25 @@
 package ipc
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 // EventHandler is called when an event notification is received.
 type EventHandler func(method string, params json.RawMessage)
 
+// DefaultCallTimeout is the default timeout for RPC calls when no context is provided.
+const DefaultCallTimeout = 10 * time.Second
+
 // Client is an IPC client with a control connection and optional event stream.
 type Client struct {
-	addr       string
-	controlMu  sync.Mutex
+	addr        string
+	controlMu   sync.Mutex
 	controlConn net.Conn
 
 	eventConn net.Conn
@@ -24,9 +29,9 @@ type Client struct {
 	pendingMu sync.Mutex
 	pending   map[uint64]chan *Response
 
-	// Reader state
-	readerOnce sync.Once
-	closed     chan struct{}
+	// Lifecycle
+	closeOnce sync.Once
+	closed    chan struct{}
 
 	onEvent EventHandler
 }
@@ -49,27 +54,44 @@ func NewClient(addr string) (*Client, error) {
 	return c, nil
 }
 
-// Close terminates all connections.
+// Close terminates all connections. Safe to call multiple times.
 func (c *Client) Close() error {
-	select {
-	case <-c.closed:
-		return nil
-	default:
+	c.closeOnce.Do(func() {
 		close(c.closed)
-	}
-	if c.controlConn != nil {
-		c.controlConn.Close()
-	}
-	if c.eventConn != nil {
-		c.eventConn.Close()
-	}
+		if c.controlConn != nil {
+			c.controlConn.Close()
+		}
+		if c.eventConn != nil {
+			c.eventConn.Close()
+		}
+	})
 	return nil
 }
 
-// Call makes an RPC call and waits for response.
-func (c *Client) Call(method string, params interface{}, result interface{}) error {
-	id := atomic.AddUint64(&c.nextID, 1)
+// IsClosed reports whether the client has been closed.
+func (c *Client) IsClosed() bool {
+	select {
+	case <-c.closed:
+		return true
+	default:
+		return false
+	}
+}
 
+// Call makes an RPC call with the default timeout.
+func (c *Client) Call(method string, params interface{}, result interface{}) error {
+	ctx, cancel := context.WithTimeout(context.Background(), DefaultCallTimeout)
+	defer cancel()
+	return c.CallWithContext(ctx, method, params, result)
+}
+
+// CallWithContext makes an RPC call with explicit context for cancellation/timeout.
+func (c *Client) CallWithContext(ctx context.Context, method string, params interface{}, result interface{}) error {
+	if c.IsClosed() {
+		return fmt.Errorf("client closed")
+	}
+
+	id := atomic.AddUint64(&c.nextID, 1)
 	req, err := NewRequest(id, method, params)
 	if err != nil {
 		return err
@@ -94,9 +116,14 @@ func (c *Client) Call(method string, params interface{}, result interface{}) err
 	}
 
 	select {
+	case <-ctx.Done():
+		return ctx.Err()
 	case <-c.closed:
 		return fmt.Errorf("client closed")
-	case resp := <-respCh:
+	case resp, ok := <-respCh:
+		if !ok {
+			return fmt.Errorf("client closed")
+		}
 		if resp.Error != nil {
 			return resp.Error
 		}
@@ -146,7 +173,7 @@ func (c *Client) readLoop() {
 		for _, ch := range c.pending {
 			close(ch)
 		}
-		c.pending = nil
+		c.pending = make(map[uint64]chan *Response) // reset, don't set to nil
 		c.pendingMu.Unlock()
 	}()
 
@@ -161,7 +188,11 @@ func (c *Client) readLoop() {
 		c.pendingMu.Unlock()
 		if ok {
 			respCopy := resp
-			ch <- &respCopy
+			select {
+			case ch <- &respCopy:
+			default:
+				// Receiver gave up (timeout); drop
+			}
 		}
 	}
 }

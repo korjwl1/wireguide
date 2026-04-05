@@ -58,6 +58,16 @@
         }
       }
     });
+
+    // Helper health events (crash detection)
+    Events.On('helper', (event) => {
+      const { alive, message } = event.data || {};
+      if (!alive) {
+        showToast('⚠ ' + (message || 'Helper process disconnected'));
+      } else {
+        showToast('Helper reconnected');
+      }
+    });
   });
 
   onDestroy(() => {

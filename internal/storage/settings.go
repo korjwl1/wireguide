@@ -59,11 +59,15 @@ func (s *SettingsStore) Load() (*Settings, error) {
 	return settings, nil
 }
 
-// Save writes settings to disk.
+// Save writes settings to disk atomically.
 func (s *SettingsStore) Save(settings *Settings) error {
 	data, err := json.MarshalIndent(settings, "", "  ")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(s.path, data, 0644)
+	tmp := s.path + ".tmp"
+	if err := os.WriteFile(tmp, data, 0644); err != nil {
+		return err
+	}
+	return os.Rename(tmp, s.path)
 }

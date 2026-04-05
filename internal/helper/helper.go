@@ -3,6 +3,7 @@
 package helper
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -123,6 +124,22 @@ func (h *Helper) registerHandlers() {
 		if result := config.Validate(req.Config); !result.IsValid() {
 			return nil, fmt.Errorf("invalid config: %s", result.ErrorMessages()[0])
 		}
+
+		// Check for routing conflicts with existing interfaces (Tailscale etc).
+		// Log warnings but don't block — users can override via UI.
+		var allowedIPs []string
+		for _, peer := range req.Config.Peers {
+			allowedIPs = append(allowedIPs, peer.AllowedIPs...)
+		}
+		if conflicts, err := tunnel.CheckConflicts(allowedIPs); err == nil && len(conflicts) > 0 {
+			for _, c := range conflicts {
+				slog.Warn("routing conflict detected",
+					"interface", c.InterfaceName,
+					"owner", c.Owner,
+					"overlaps", c.OverlappingIPs)
+			}
+		}
+
 		if err := h.manager.Connect(req.Config, req.ScriptsAllowed); err != nil {
 			return nil, err
 		}
@@ -213,21 +230,24 @@ func (h *Helper) statusDTO() ipc.ConnectionStatusDTO {
 }
 
 // eventLoop periodically broadcasts status changes.
+// Uses JSON serialization for change detection (robust against field swaps).
 func (h *Helper) eventLoop() {
 	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
 
-	var lastKey string
+	var lastJSON []byte
 	for {
 		select {
 		case <-h.done:
 			return
 		case <-ticker.C:
 			dto := h.statusDTO()
-			key := fmt.Sprintf("%s|%s|%d|%d|%s", dto.State, dto.TunnelName,
-				dto.RxBytes, dto.TxBytes, dto.LastHandshake)
-			if key != lastKey {
-				lastKey = key
+			currentJSON, err := json.Marshal(dto)
+			if err != nil {
+				continue
+			}
+			if !bytes.Equal(lastJSON, currentJSON) {
+				lastJSON = currentJSON
 				h.server.Broadcast(ipc.EventStatus, dto)
 			}
 		}

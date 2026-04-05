@@ -5,7 +5,6 @@ import (
 	"net"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"runtime"
 	"strings"
 )
@@ -232,5 +231,3 @@ func normalizeCIDR(s string) string {
 	return s
 }
 
-// Unused but required to resolve import
-var _ = filepath.Join
