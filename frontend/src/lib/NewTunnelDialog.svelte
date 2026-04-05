@@ -1,13 +1,16 @@
 <script>
   import { createEventDispatcher } from 'svelte';
   import SplitTunnelUI from './SplitTunnelUI.svelte';
+  import ConfigEditor from './ConfigEditor.svelte';
 
   export let TunnelService;
   const dispatch = createEventDispatcher();
 
+  let mode = 'form'; // 'form' or 'text'
+
+  // Form fields
   let name = '';
   let privateKey = '';
-  let publicKeyHint = '';
   let address = '10.0.0.2/24';
   let dns = '1.1.1.1';
   let mtu = '';
@@ -16,31 +19,31 @@
   let peerPSK = '';
   let allowedIPs = ['0.0.0.0/0', '::/0'];
   let keepalive = '';
+
+  // Text mode: raw .conf
+  let textContent = '';
+
   let errors = [];
   let generating = false;
 
-  async function generateKey() {
+  function generateKey() {
     generating = true;
     errors = [];
     try {
-      // Use Web Crypto to generate a random 32-byte key (placeholder)
-      // Proper Curve25519 is done server-side, but we need the private key here
-      // For now, we'll build the .conf with a placeholder and let validation guide
       const bytes = new Uint8Array(32);
       crypto.getRandomValues(bytes);
-      // WireGuard key clamping
+      // Curve25519 clamping
       bytes[0] &= 248;
       bytes[31] &= 127;
       bytes[31] |= 64;
       privateKey = btoa(String.fromCharCode(...bytes));
-      publicKeyHint = '(computed on save)';
     } catch (e) {
       errors = ['Key generation failed: ' + e.toString()];
     }
     generating = false;
   }
 
-  function buildConfText() {
+  function buildConfFromForm() {
     let conf = '[Interface]\n';
     conf += `PrivateKey = ${privateKey}\n`;
     conf += `Address = ${address}\n`;
@@ -55,22 +58,34 @@
     return conf;
   }
 
+  // When switching from form → text, populate text with current form values
+  function switchToText() {
+    if (privateKey || peerPublicKey) {
+      textContent = buildConfFromForm();
+    } else if (!textContent) {
+      textContent = `[Interface]
+PrivateKey =
+Address = 10.0.0.2/24
+DNS = 1.1.1.1
+
+[Peer]
+PublicKey =
+Endpoint =
+AllowedIPs = 0.0.0.0/0, ::/0
+`;
+    }
+    mode = 'text';
+  }
+
   async function save() {
     errors = [];
     if (!name.trim()) {
       errors = ['Tunnel name is required'];
       return;
     }
-    if (!privateKey) {
-      errors = ['Private key is required (generate one or paste)'];
-      return;
-    }
-    if (!peerPublicKey) {
-      errors = ['Peer public key is required'];
-      return;
-    }
 
-    const content = buildConfText();
+    const content = mode === 'form' ? buildConfFromForm() : textContent;
+
     try {
       const validationErrors = await TunnelService.ValidateConfig(content);
       if (validationErrors && validationErrors.length > 0) {
@@ -91,55 +106,69 @@
 
 <div class="modal-backdrop" on:click={() => dispatch('close')}>
   <div class="modal" on:click|stopPropagation>
-    <h3>New Tunnel</h3>
+    <div class="modal-header">
+      <h3>New Tunnel</h3>
+      <div class="mode-tabs">
+        <button class:active={mode === 'form'} on:click={() => mode = 'form'}>Form</button>
+        <button class:active={mode === 'text'} on:click={switchToText}>Text</button>
+      </div>
+    </div>
 
     <section>
       <label>Tunnel Name *</label>
       <input type="text" bind:value={name} placeholder="my-vpn" />
     </section>
 
-    <section>
-      <h4>Interface</h4>
+    {#if mode === 'form'}
+      <section>
+        <h4>Interface</h4>
 
-      <label>Private Key *</label>
-      <div class="key-row">
-        <input type="text" bind:value={privateKey} placeholder="Generate or paste base64 key" />
-        <button class="btn-gen" on:click={generateKey} disabled={generating}>Generate</button>
-      </div>
-
-      <label>Address *</label>
-      <input type="text" bind:value={address} placeholder="10.0.0.2/24" />
-
-      <div class="row-2">
-        <div>
-          <label>DNS</label>
-          <input type="text" bind:value={dns} placeholder="1.1.1.1" />
+        <label>Private Key *</label>
+        <div class="key-row">
+          <input type="text" bind:value={privateKey} placeholder="Generate or paste base64 key" />
+          <button class="btn-gen" on:click={generateKey} disabled={generating}>Generate</button>
         </div>
-        <div>
-          <label>MTU</label>
-          <input type="text" bind:value={mtu} placeholder="1420" />
+
+        <label>Address *</label>
+        <input type="text" bind:value={address} placeholder="10.0.0.2/24" />
+
+        <div class="row-2">
+          <div>
+            <label>DNS</label>
+            <input type="text" bind:value={dns} placeholder="1.1.1.1" />
+          </div>
+          <div>
+            <label>MTU</label>
+            <input type="text" bind:value={mtu} placeholder="1420" />
+          </div>
         </div>
-      </div>
-    </section>
+      </section>
 
-    <section>
-      <h4>Peer</h4>
+      <section>
+        <h4>Peer</h4>
 
-      <label>Public Key *</label>
-      <input type="text" bind:value={peerPublicKey} placeholder="base64 peer public key" />
+        <label>Public Key *</label>
+        <input type="text" bind:value={peerPublicKey} placeholder="base64 peer public key" />
 
-      <label>Endpoint</label>
-      <input type="text" bind:value={peerEndpoint} placeholder="vpn.example.com:51820" />
+        <label>Endpoint</label>
+        <input type="text" bind:value={peerEndpoint} placeholder="vpn.example.com:51820" />
 
-      <label>Preshared Key (optional)</label>
-      <input type="text" bind:value={peerPSK} placeholder="base64 preshared key" />
+        <label>Preshared Key (optional)</label>
+        <input type="text" bind:value={peerPSK} placeholder="base64 preshared key" />
 
-      <label>AllowedIPs</label>
-      <SplitTunnelUI {allowedIPs} on:change={updateAllowedIPs} />
+        <label>AllowedIPs</label>
+        <SplitTunnelUI {allowedIPs} on:change={updateAllowedIPs} />
 
-      <label>Persistent Keepalive (seconds, optional)</label>
-      <input type="text" bind:value={keepalive} placeholder="25" />
-    </section>
+        <label>Persistent Keepalive (seconds, optional)</label>
+        <input type="text" bind:value={keepalive} placeholder="25" />
+      </section>
+    {:else}
+      <section class="text-mode">
+        <div class="text-editor-wrapper">
+          <ConfigEditor bind:content={textContent} errors={[]} on:save={() => save()} on:cancel={() => dispatch('close')} />
+        </div>
+      </section>
+    {/if}
 
     {#if errors.length > 0}
       <div class="errors">
@@ -169,11 +198,37 @@
     border: 1px solid var(--border);
     border-radius: 12px;
     padding: 24px;
-    width: 520px;
+    width: 560px;
     max-height: 85vh;
     overflow-y: auto;
   }
-  h3 { margin: 0 0 16px; }
+  .modal-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 16px;
+  }
+  h3 { margin: 0; color: var(--text-primary); }
+  .mode-tabs {
+    display: flex;
+    gap: 4px;
+    background: var(--bg-card);
+    border-radius: 6px;
+    padding: 2px;
+  }
+  .mode-tabs button {
+    padding: 4px 12px;
+    background: transparent;
+    border: none;
+    border-radius: 4px;
+    color: var(--text-secondary);
+    font-size: 12px;
+    cursor: pointer;
+  }
+  .mode-tabs button.active {
+    background: var(--accent);
+    color: var(--text-primary);
+  }
   h4 {
     margin: 16px 0 8px;
     font-size: 11px;
@@ -184,6 +239,15 @@
     border-bottom: 1px solid var(--border);
   }
   section { margin-bottom: 12px; }
+  .text-mode {
+    margin-top: 12px;
+  }
+  .text-editor-wrapper {
+    height: 400px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    overflow: hidden;
+  }
   label {
     display: block;
     margin: 10px 0 4px;
@@ -209,9 +273,7 @@
     display: flex;
     gap: 4px;
   }
-  .key-row input {
-    flex: 1;
-  }
+  .key-row input { flex: 1; }
   .btn-gen {
     padding: 6px 12px;
     background: var(--accent);
@@ -234,7 +296,7 @@
     border: 1px solid var(--red);
     border-radius: 6px;
   }
-  .errors p { margin: 2px 0; color: #ff7675; font-size: 12px; }
+  .errors p { margin: 2px 0; color: var(--red); font-size: 12px; }
   .modal-footer {
     display: flex;
     gap: 8px;
@@ -249,6 +311,5 @@
     font-size: 13px;
   }
   .btn-save { background: var(--green); color: #fff; }
-  .btn-save:hover { background: #00a884; }
-  .btn-cancel { background: var(--bg-card); color: var(--text-primary); }
+  .btn-cancel { background: var(--bg-card); color: var(--text-primary); border: 1px solid var(--border); }
 </style>

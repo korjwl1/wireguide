@@ -68,7 +68,7 @@
   async function handleFileSelect() {
     const input = document.createElement('input');
     input.type = 'file';
-    input.accept = '.conf';
+    // Don't set accept — macOS file dialogs are unreliable with custom extensions
     input.onchange = async (e) => {
       const file = e.target.files[0];
       if (!file) return;
@@ -77,16 +77,6 @@
       importErrors = [];
     };
     input.click();
-  }
-
-  async function handleClipboard() {
-    try {
-      importContent = await navigator.clipboard.readText();
-      importName = 'clipboard-import';
-      importErrors = [];
-    } catch (e) {
-      importErrors = ['Cannot read clipboard'];
-    }
   }
 
   async function doImport() {
@@ -299,11 +289,9 @@
   {#if showImport}
     <div class="modal-backdrop" on:click={() => showImport = false}>
       <div class="modal" on:click|stopPropagation>
-        <h3>Import Tunnel</h3>
-        <div class="import-actions">
-          <button class="btn-sm" on:click={handleFileSelect}>Select File</button>
-          <button class="btn-sm" on:click={handleClipboard}>From Clipboard</button>
-        </div>
+        <h3>Import .conf File</h3>
+        <p class="hint">Drop a .conf file anywhere on the window, or select one below.</p>
+        <button class="btn-file-select" on:click={handleFileSelect}>Select File...</button>
         <label>
           Tunnel Name
           <input type="text" bind:value={importName} placeholder="my-vpn" />
@@ -568,21 +556,26 @@
     font-size: 14px;
     box-sizing: border-box;
   }
-  .import-actions {
-    display: flex;
-    gap: 8px;
-    margin-bottom: 12px;
+  .hint {
+    font-size: 12px;
+    color: var(--text-secondary);
+    margin: 0 0 12px;
   }
-  .btn-sm {
-    padding: 6px 12px;
+  .btn-file-select {
+    width: 100%;
+    padding: 10px;
     background: var(--bg-card);
-    border: 1px solid var(--border);
+    border: 1px dashed var(--border);
     border-radius: 6px;
     color: var(--text-primary);
-    font-size: 12px;
+    font-size: 13px;
     cursor: pointer;
+    margin-bottom: 8px;
   }
-  .btn-sm:hover { background: var(--bg-hover); }
+  .btn-file-select:hover {
+    background: var(--bg-hover);
+    border-color: var(--accent);
+  }
   .preview {
     margin: 12px 0;
     padding: 12px;

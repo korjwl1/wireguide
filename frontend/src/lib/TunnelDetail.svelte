@@ -172,7 +172,7 @@
     align-items: center;
     justify-content: center;
     height: 100%;
-    color: #555;
+    color: var(--text-muted);
   }
   .detail-header {
     display: flex;
@@ -180,28 +180,28 @@
     gap: 12px;
     margin-bottom: 20px;
     padding-bottom: 16px;
-    border-bottom: 1px solid #2a2a4a;
+    border-bottom: 1px solid var(--border);
   }
   .detail-header h2 {
     margin: 0;
     font-size: 20px;
-    color: #e0e0e0;
+    color: var(--text-primary);
   }
   .state-badge {
     padding: 4px 10px;
     border-radius: 12px;
     font-size: 12px;
-    background: #333;
-    color: #888;
+    background: var(--bg-card);
+    color: var(--text-muted);
     transition: background 300ms ease, color 300ms ease;
   }
   .state-badge.on {
-    background: #00b89422;
-    color: #00b894;
+    background: rgba(0, 184, 148, 0.15);
+    color: var(--green);
   }
   .state-badge.connecting {
-    background: #fdcb6e22;
-    color: #fdcb6e;
+    background: rgba(253, 203, 110, 0.15);
+    color: var(--yellow);
     animation: pulse 1.5s ease-in-out infinite;
   }
   @keyframes pulse {
@@ -215,24 +215,24 @@
     margin-bottom: 20px;
   }
   .stat {
-    background: #16213e;
+    background: var(--bg-card);
     border-radius: 8px;
     padding: 12px;
   }
   .stat-label {
     display: block;
     font-size: 11px;
-    color: #8888aa;
+    color: var(--text-secondary);
     text-transform: uppercase;
     margin-bottom: 4px;
   }
   .stat-value {
     font-size: 18px;
     font-weight: 600;
-    color: #e0e0e0;
+    color: var(--text-primary);
   }
-  .stat-value.down { color: #00b894; }
-  .stat-value.up { color: #74b9ff; }
+  .stat-value.down { color: var(--green); }
+  .stat-value.up { color: var(--blue); }
   .detail-info {
     margin-bottom: 20px;
   }
@@ -240,19 +240,19 @@
     display: flex;
     justify-content: space-between;
     padding: 8px 0;
-    border-bottom: 1px solid #1a1a3a;
+    border-bottom: 1px solid var(--border);
     font-size: 13px;
   }
-  .label { color: #8888aa; }
-  .value { color: #e0e0e0; text-align: right; }
+  .label { color: var(--text-secondary); }
+  .value { color: var(--text-primary); text-align: right; }
   .value.mono { font-family: monospace; font-size: 12px; }
   .error-msg {
     padding: 8px 12px;
     margin-bottom: 12px;
-    background: #d6303122;
-    border: 1px solid #d63031;
+    background: var(--error-bg);
+    border: 1px solid var(--red);
     border-radius: 6px;
-    color: #ff7675;
+    color: var(--red);
     font-size: 13px;
   }
   .actions {
@@ -266,15 +266,15 @@
     border-radius: 6px;
     font-size: 13px;
     cursor: pointer;
-    color: #e0e0e0;
+    color: var(--text-primary);
   }
   .btn:disabled { opacity: 0.5; cursor: not-allowed; }
-  .btn-connect { background: #00b894; color: #fff; }
-  .btn-connect:hover:not(:disabled) { background: #00a884; }
-  .btn-disconnect { background: #d63031; color: #fff; }
-  .btn-disconnect:hover:not(:disabled) { background: #c0392b; }
-  .btn-secondary { background: #2a2a4a; }
-  .btn-secondary:hover { background: #3a3a5a; }
-  .btn-danger { background: transparent; color: #d63031; border: 1px solid #d63031; }
-  .btn-danger:hover { background: #d6303122; }
+  .btn-connect { background: var(--green); color: #fff; }
+  .btn-connect:hover:not(:disabled) { opacity: 0.9; }
+  .btn-disconnect { background: var(--red); color: #fff; }
+  .btn-disconnect:hover:not(:disabled) { opacity: 0.9; }
+  .btn-secondary { background: var(--bg-card); border: 1px solid var(--border); }
+  .btn-secondary:hover { background: var(--bg-hover); }
+  .btn-danger { background: transparent; color: var(--red); border: 1px solid var(--red); }
+  .btn-danger:hover { background: var(--error-bg); }
 </style>
