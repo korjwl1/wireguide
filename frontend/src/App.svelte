@@ -19,7 +19,6 @@
   let toolsTab = 'diagnostics'; // 'diagnostics' | 'dnsleak' | 'routes'
 
   // Modal state
-  let showImport = false;
   let showNewTunnel = false;
   let showEditor = false;
   let showSettings = false;
@@ -27,12 +26,11 @@
   let scriptWarningScripts = [];
   let pendingConnectName = '';
   let editName = '';
-  let importName = '';
-  let importContent = '';
-  let importErrors = [];
   let editorContent = '';
   let editorErrors = [];
   let dragOver = false;
+  let dragCounter = 0;
+  let toast = '';
 
   onMount(async () => {
     await initialLoad(TunnelService);
@@ -43,57 +41,73 @@
     unsubscribe();
   });
 
+  function showToast(msg) {
+    toast = msg;
+    setTimeout(() => { toast = ''; }, 3000);
+  }
+
+  // Import a file directly — no modal, just do it.
+  async function importFile(file) {
+    if (!file) return;
+    const name = file.name.replace(/\.conf$/i, '');
+    const content = await file.text();
+    try {
+      const errors = await TunnelService.ValidateConfig(content);
+      if (errors && errors.length > 0) {
+        showToast('Invalid config: ' + errors[0]);
+        return;
+      }
+      if (await TunnelService.TunnelExists(name)) {
+        if (!confirm(`Tunnel "${name}" already exists. Overwrite?`)) return;
+      }
+      await TunnelService.ImportConfig(name, content);
+      showToast(`Imported "${name}"`);
+      await refreshTunnels(TunnelService);
+    } catch (e) {
+      showToast('Import failed: ' + e.toString());
+    }
+  }
+
   async function handleImportOpen() {
-    showImport = true;
-    importName = '';
-    importContent = '';
-    importErrors = [];
+    // Directly open the native file picker — no modal needed.
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.onchange = async (e) => {
+      const file = e.target.files[0];
+      await importFile(file);
+    };
+    input.click();
   }
 
   async function handleNewTunnelOpen() {
     showNewTunnel = true;
   }
 
+  // Drag counter prevents overlay flickering when hovering over child elements.
+  function handleDragEnter(e) {
+    e.preventDefault();
+    if (e.dataTransfer && Array.from(e.dataTransfer.types || []).includes('Files')) {
+      dragCounter++;
+      if (dragCounter === 1) dragOver = true;
+    }
+  }
+  function handleDragLeave(e) {
+    e.preventDefault();
+    dragCounter--;
+    if (dragCounter <= 0) {
+      dragCounter = 0;
+      dragOver = false;
+    }
+  }
+  function handleDragOver(e) {
+    e.preventDefault();
+  }
   async function handleFileDrop(e) {
     e.preventDefault();
+    dragCounter = 0;
     dragOver = false;
     const file = e.dataTransfer?.files?.[0];
-    if (!file) return;
-    importName = file.name.replace(/\.conf$/, '');
-    importContent = await file.text();
-    showImport = true;
-    importErrors = [];
-  }
-
-  async function handleFileSelect() {
-    const input = document.createElement('input');
-    input.type = 'file';
-    // Don't set accept — macOS file dialogs are unreliable with custom extensions
-    input.onchange = async (e) => {
-      const file = e.target.files[0];
-      if (!file) return;
-      importName = file.name.replace(/\.conf$/, '');
-      importContent = await file.text();
-      importErrors = [];
-    };
-    input.click();
-  }
-
-  async function doImport() {
-    if (!importName || !importContent) return;
-    importErrors = [];
-    try {
-      const errors = await TunnelService.ValidateConfig(importContent);
-      if (errors && errors.length > 0) {
-        importErrors = errors;
-        return;
-      }
-      await TunnelService.ImportConfig(importName, importContent);
-      showImport = false;
-      await refreshTunnels(TunnelService);
-    } catch (e) {
-      importErrors = [e.toString()];
-    }
+    await importFile(file);
   }
 
   async function handleNewTunnelSave(e) {
@@ -199,14 +213,19 @@
 </script>
 
 <div class="app"
-  on:dragover|preventDefault={() => dragOver = true}
-  on:dragleave={() => dragOver = false}
+  on:dragenter={handleDragEnter}
+  on:dragleave={handleDragLeave}
+  on:dragover={handleDragOver}
   on:drop={handleFileDrop}
 >
   {#if dragOver}
     <div class="drop-overlay">
       <p>Drop .conf file to import</p>
     </div>
+  {/if}
+
+  {#if toast}
+    <div class="toast">{toast}</div>
   {/if}
 
   <div class="layout">
@@ -286,32 +305,6 @@
   </div>
 
   <!-- Modals -->
-  {#if showImport}
-    <div class="modal-backdrop" on:click={() => showImport = false}>
-      <div class="modal" on:click|stopPropagation>
-        <h3>Import .conf File</h3>
-        <p class="hint">Drop a .conf file anywhere on the window, or select one below.</p>
-        <button class="btn-file-select" on:click={handleFileSelect}>Select File...</button>
-        <label>
-          Tunnel Name
-          <input type="text" bind:value={importName} placeholder="my-vpn" />
-        </label>
-        {#if importContent}
-          <pre class="preview">{importContent.substring(0, 300)}{importContent.length > 300 ? '...' : ''}</pre>
-        {/if}
-        {#if importErrors.length > 0}
-          <div class="errors">
-            {#each importErrors as err}<p>{err}</p>{/each}
-          </div>
-        {/if}
-        <div class="modal-footer">
-          <button class="btn btn-connect" on:click={doImport} disabled={!importContent || !importName}>Import</button>
-          <button class="btn btn-secondary" on:click={() => showImport = false}>Cancel</button>
-        </div>
-      </div>
-    </div>
-  {/if}
-
   {#if showNewTunnel}
     <NewTunnelDialog {TunnelService}
       on:save={handleNewTunnelSave}
@@ -517,6 +510,24 @@
   .drop-overlay p {
     font-size: 18px;
     color: var(--green);
+    pointer-events: none;
+  }
+  .drop-overlay {
+    pointer-events: none;
+  }
+  .toast {
+    position: fixed;
+    bottom: 24px;
+    left: 50%;
+    transform: translateX(-50%);
+    padding: 12px 20px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    color: var(--text-primary);
+    font-size: 13px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+    z-index: 300;
   }
 
   /* Modal */
