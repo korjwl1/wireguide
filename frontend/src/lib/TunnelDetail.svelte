@@ -1,5 +1,5 @@
 <script>
-  import { selectedTunnel, connectionStatus } from '../stores/tunnels.js';
+  import { selectedTunnel, connectionStatus, refreshTunnels, refreshStatus } from '../stores/tunnels.js';
   import { t } from '../i18n/index.js';
   import { createEventDispatcher } from 'svelte';
 
@@ -32,6 +32,9 @@
     loading = true;
     try {
       await TunnelService.Disconnect();
+      // Don't wait for event stream — refresh immediately.
+      await refreshTunnels(TunnelService);
+      await refreshStatus(TunnelService);
     } catch (e) {
       error = e.toString();
     }

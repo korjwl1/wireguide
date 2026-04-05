@@ -56,7 +56,22 @@ export async function refreshTunnels(TunnelService) {
   try {
     const list = (await TunnelService.ListTunnels()) || [];
     tunnels.set(list);
+    const sel = get(selectedTunnel);
+    if (sel) {
+      const updated = list.find((t) => t.name === sel.name);
+      if (updated) selectedTunnel.set(updated);
+    }
   } catch (e) {
     console.error('refresh error:', e);
+  }
+}
+
+// Immediate status fetch (after Connect/Disconnect)
+export async function refreshStatus(TunnelService) {
+  try {
+    const status = await TunnelService.GetStatus();
+    if (status) connectionStatus.set(status);
+  } catch (e) {
+    console.error('status error:', e);
   }
 }

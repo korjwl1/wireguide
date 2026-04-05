@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"os"
 	"runtime"
+	"sync"
 	"time"
 
 	wgapp "github.com/korjwl1/wireguide/internal/app"
@@ -109,6 +110,7 @@ func runGUI() {
 			ApplicationShouldTerminateAfterLastWindowClosed: false,
 		},
 	})
+	tunnelService.SetApp(app)
 
 	win := app.Window.NewWithOptions(application.WebviewWindowOptions{
 		Title:          "WireGuide",
@@ -141,6 +143,21 @@ func runGUI() {
 	}
 	tray.SetTooltip("WireGuide")
 
+	// Unified shutdown — declared upfront so closures can reference it.
+	var (
+		shutdownOnce sync.Once
+		doShutdown   func()
+	)
+	doShutdown = func() {
+		shutdownOnce.Do(func() {
+			slog.Info("shutting down GUI + helper")
+			_ = client.Call(ipc.MethodDisconnect, nil, nil)
+			_ = client.Call(ipc.MethodShutdown, nil, nil)
+			time.Sleep(200 * time.Millisecond)
+			client.Close()
+		})
+	}
+
 	buildTrayMenu := func() {
 		m := app.NewMenu()
 		m.Add("WireGuide").SetEnabled(false)
@@ -164,14 +181,20 @@ func runGUI() {
 		m.Add("Show Window").OnClick(func(ctx *application.Context) { app.Show() })
 		m.AddSeparator()
 		m.Add("Quit").OnClick(func(ctx *application.Context) {
-			tunnelService.Disconnect()
-			client.Call(ipc.MethodShutdown, nil, nil)
-			client.Close()
+			doShutdown()
 			app.Quit()
 		})
 		tray.SetMenu(m)
 	}
+
 	buildTrayMenu()
+
+	// Register shutdown handler for macOS Cmd+Q, Dock quit, etc.
+	if runtime.GOOS == "darwin" {
+		app.Event.OnApplicationEvent(events.Mac.ApplicationWillTerminate, func(_ *application.ApplicationEvent) {
+			doShutdown()
+		})
+	}
 
 	// Subscribe to helper events and forward to Wails
 	if err := client.Subscribe(func(method string, params json.RawMessage) {

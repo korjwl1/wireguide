@@ -12,7 +12,7 @@
   import RouteVisualization from './lib/RouteVisualization.svelte';
   import StatsDashboard from './lib/StatsDashboard.svelte';
   import NewTunnelDialog from './lib/NewTunnelDialog.svelte';
-  import { tunnels, selectedTunnel, refreshTunnels, subscribeToEvents, unsubscribe, initialLoad, connectionStatus } from './stores/tunnels.js';
+  import { tunnels, selectedTunnel, refreshTunnels, refreshStatus, subscribeToEvents, unsubscribe, initialLoad, connectionStatus } from './stores/tunnels.js';
   import { TunnelService } from '../bindings/github.com/korjwl1/wireguide/internal/app';
 
   // View state
@@ -183,16 +183,23 @@
   async function handleExport(e) {
     const name = e.detail;
     try {
-      const content = await TunnelService.ExportConfig(name);
-      const blob = new Blob([content], { type: 'text/plain' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = name + '.conf';
-      a.click();
-      URL.revokeObjectURL(url);
+      const path = await TunnelService.ExportTunnel(name);
+      if (path) {
+        showToast(`Exported to ${path}`);
+      }
     } catch (err) {
-      console.error('export error:', err);
+      showToast('Export failed: ' + err.toString());
+    }
+  }
+
+  async function doConnect(name, scriptsAllowed) {
+    try {
+      await TunnelService.Connect(name, scriptsAllowed);
+      // Don't rely on event stream — refresh state immediately.
+      await refreshTunnels(TunnelService);
+      await refreshStatus(TunnelService);
+    } catch (e) {
+      showToast('Connect failed: ' + e.toString());
     }
   }
 
@@ -214,25 +221,18 @@
         console.error(err);
       }
     } else {
-      await TunnelService.Connect(name, false);
-      await refreshTunnels(TunnelService);
+      await doConnect(name, false);
     }
   }
 
   async function handleScriptAllow() {
     showScriptWarning = false;
-    try {
-      await TunnelService.Connect(pendingConnectName, true);
-      await refreshTunnels(TunnelService);
-    } catch (e) { console.error(e); }
+    await doConnect(pendingConnectName, true);
   }
 
   async function handleScriptDeny() {
     showScriptWarning = false;
-    try {
-      await TunnelService.Connect(pendingConnectName, false);
-      await refreshTunnels(TunnelService);
-    } catch (e) { console.error(e); }
+    await doConnect(pendingConnectName, false);
   }
 </script>
 

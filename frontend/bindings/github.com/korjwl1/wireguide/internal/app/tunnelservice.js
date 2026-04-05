@@ -19,6 +19,9 @@ import * as config$0 from "../config/models.js";
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
 import * as storage$0 from "../storage/models.js";
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore: Unused imports
+import * as application$0 from "../../../../wailsapp/wails/v3/pkg/application/models.js";
 
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
@@ -63,6 +66,16 @@ export function Disconnect() {
  */
 export function ExportConfig(name) {
     return $Call.ByID(1684823973, name);
+}
+
+/**
+ * ExportTunnel shows a native save dialog and writes the .conf file.
+ * Returns the saved path, or empty string if user cancelled.
+ * @param {string} name
+ * @returns {$CancellablePromise<string>}
+ */
+export function ExportTunnel(name) {
+    return $Call.ByID(686002857, name);
 }
 
 /**
@@ -147,6 +160,15 @@ export function RenameTunnel(oldName, newName) {
  */
 export function SaveSettings(settings) {
     return $Call.ByID(3676285513, settings);
+}
+
+/**
+ * SetApp injects the Wails app for dialog access.
+ * @param {application$0.App | null} app
+ * @returns {$CancellablePromise<void>}
+ */
+export function SetApp(app) {
+    return $Call.ByID(1760917394, app);
 }
 
 /**

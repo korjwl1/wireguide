@@ -11,6 +11,7 @@ import (
 	"github.com/korjwl1/wireguide/internal/config"
 	"github.com/korjwl1/wireguide/internal/ipc"
 	"github.com/korjwl1/wireguide/internal/storage"
+	"github.com/wailsapp/wails/v3/pkg/application"
 )
 
 // TunnelService is the Wails-bound service.
@@ -20,15 +21,22 @@ type TunnelService struct {
 	tunnelStore   *storage.TunnelStore
 	settingsStore *storage.SettingsStore
 	client        *ipc.Client
+	app           *application.App
 }
 
-// NewTunnelService creates a service.
+// NewTunnelService creates a service. Set the app reference via SetApp()
+// after application.New() for dialog support.
 func NewTunnelService(ts *storage.TunnelStore, ss *storage.SettingsStore, client *ipc.Client) *TunnelService {
 	return &TunnelService{
 		tunnelStore:   ts,
 		settingsStore: ss,
 		client:        client,
 	}
+}
+
+// SetApp injects the Wails app for dialog access.
+func (s *TunnelService) SetApp(app *application.App) {
+	s.app = app
 }
 
 // --- Types for frontend ---
@@ -223,6 +231,34 @@ func (s *TunnelService) UpdateConfig(name, content string) error {
 
 func (s *TunnelService) ExportConfig(name string) (string, error) {
 	return s.GetConfigText(name)
+}
+
+// ExportTunnel shows a native save dialog and writes the .conf file.
+// Returns the saved path, or empty string if user cancelled.
+func (s *TunnelService) ExportTunnel(name string) (string, error) {
+	content, err := s.GetConfigText(name)
+	if err != nil {
+		return "", err
+	}
+	if s.app == nil {
+		return "", fmt.Errorf("app not initialized")
+	}
+
+	path, err := s.app.Dialog.SaveFile().
+		SetFilename(name + ".conf").
+		AddFilter("WireGuard Config", "*.conf").
+		PromptForSingleSelection()
+	if err != nil {
+		return "", err
+	}
+	if path == "" {
+		return "", nil // user cancelled
+	}
+
+	if err := os.WriteFile(path, []byte(content), 0600); err != nil {
+		return "", err
+	}
+	return path, nil
 }
 
 func (s *TunnelService) TunnelExists(name string) bool {
