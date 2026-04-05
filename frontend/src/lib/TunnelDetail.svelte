@@ -38,20 +38,29 @@
     loading = false;
   }
 
-  async function deleteTunnel() {
+  let showDeleteConfirm = false;
+
+  function askDelete() {
     if ($selectedTunnel.is_connected) {
       error = t('confirm.disconnect_first');
       return;
     }
-    if (confirm(t('confirm.delete_message', { name: $selectedTunnel.name }))) {
-      try {
-        await TunnelService.DeleteTunnel($selectedTunnel.name);
-        selectedTunnel.set(null);
-        dispatch('refresh');
-      } catch (e) {
-        error = e.toString();
-      }
+    showDeleteConfirm = true;
+  }
+
+  async function confirmDelete() {
+    showDeleteConfirm = false;
+    try {
+      await TunnelService.DeleteTunnel($selectedTunnel.name);
+      selectedTunnel.set(null);
+      dispatch('refresh');
+    } catch (e) {
+      error = e.toString();
     }
+  }
+
+  function cancelDelete() {
+    showDeleteConfirm = false;
   }
 
   function formatBytes(bytes) {
@@ -198,12 +207,25 @@
       <button class="btn btn-secondary" on:click={() => dispatch('export', $selectedTunnel.name)}>
         {t('tunnel.export')}
       </button>
-      <button class="btn btn-danger" on:click={deleteTunnel}>
+      <button class="btn btn-danger" on:click={askDelete}>
         {t('tunnel.delete')}
       </button>
     </div>
   {/if}
 </div>
+
+{#if showDeleteConfirm}
+  <div class="confirm-backdrop" on:click={cancelDelete}>
+    <div class="confirm-dialog" on:click|stopPropagation>
+      <h3>{t('confirm.delete_title')}</h3>
+      <p>{t('confirm.delete_message', { name: $selectedTunnel.name })}</p>
+      <div class="confirm-footer">
+        <button class="btn btn-disconnect" on:click={confirmDelete}>{t('confirm.yes')}</button>
+        <button class="btn btn-secondary" on:click={cancelDelete}>{t('confirm.no')}</button>
+      </div>
+    </div>
+  </div>
+{/if}
 
 <style>
   .detail-panel {
@@ -348,4 +370,38 @@
   .btn-secondary:hover { background: var(--bg-hover); }
   .btn-danger { background: transparent; color: var(--red); border: 1px solid var(--red); }
   .btn-danger:hover { background: var(--error-bg); }
+
+  /* Delete confirmation dialog */
+  .confirm-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.6);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 400;
+  }
+  .confirm-dialog {
+    background: var(--bg-primary);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 24px;
+    width: 360px;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+  }
+  .confirm-dialog h3 {
+    margin: 0 0 8px;
+    color: var(--text-primary);
+    font-size: 16px;
+  }
+  .confirm-dialog p {
+    margin: 0 0 16px;
+    color: var(--text-secondary);
+    font-size: 13px;
+  }
+  .confirm-footer {
+    display: flex;
+    gap: 8px;
+    justify-content: flex-end;
+  }
 </style>
