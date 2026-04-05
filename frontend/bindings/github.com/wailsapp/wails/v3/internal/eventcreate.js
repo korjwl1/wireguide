@@ -6,4 +6,19 @@
 // @ts-ignore: Unused imports
 import { Create as $Create } from "@wailsio/runtime";
 
-Object.freeze($Create.Events);
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore: Unused imports
+import * as main$0 from "../../../../korjwl1/wireguide/models.js";
+
+function configure() {
+    Object.freeze(Object.assign($Create.Events, {
+        "status": $$createType0,
+        "tunnels": $$createType1,
+    }));
+}
+
+// Private type creation functions
+const $$createType0 = main$0.StatusEvent.createFrom;
+const $$createType1 = main$0.TunnelsEvent.createFrom;
+
+configure();

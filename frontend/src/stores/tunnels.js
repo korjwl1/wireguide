@@ -1,53 +1,60 @@
 import { writable, get } from 'svelte/store';
+import { Events } from '@wailsio/runtime';
 
 export const tunnels = writable([]);
 export const selectedTunnel = writable(null);
 export const connectionStatus = writable({ state: 'disconnected' });
 
-let pollInterval = null;
-let lastTunnelsJSON = '';
-let lastStatusJSON = '';
+let statusUnsub = null;
+let tunnelsUnsub = null;
 
-export function startPolling(TunnelService) {
-  stopPolling();
-  pollInterval = setInterval(async () => {
-    try {
-      const status = await TunnelService.GetStatus();
-      const statusJSON = JSON.stringify(status);
-      if (statusJSON !== lastStatusJSON) {
-        lastStatusJSON = statusJSON;
-        connectionStatus.set(status);
-      }
+// Subscribe to backend events — no polling.
+// The Go backend pushes updates whenever state changes.
+export function subscribeToEvents() {
+  unsubscribe();
 
-      const list = (await TunnelService.ListTunnels()) || [];
-      const listJSON = JSON.stringify(list);
-      if (listJSON !== lastTunnelsJSON) {
-        lastTunnelsJSON = listJSON;
-        tunnels.set(list);
-        // Refresh selectedTunnel reference to match new list
-        const sel = get(selectedTunnel);
-        if (sel) {
-          const updated = list.find(t => t.name === sel.name);
-          if (updated) selectedTunnel.set(updated);
-        }
-      }
-    } catch (e) {
-      console.error('polling error:', e);
+  statusUnsub = Events.On('status', (event) => {
+    connectionStatus.set(event.data);
+  });
+
+  tunnelsUnsub = Events.On('tunnels', (event) => {
+    const list = event.data.tunnels || [];
+    tunnels.set(list);
+
+    // Keep selectedTunnel reference in sync with new list
+    const sel = get(selectedTunnel);
+    if (sel) {
+      const updated = list.find((t) => t.name === sel.name);
+      if (updated) selectedTunnel.set(updated);
     }
-  }, 2000); // 2s instead of 1s to reduce re-render pressure
+  });
 }
 
-export function stopPolling() {
-  if (pollInterval) {
-    clearInterval(pollInterval);
-    pollInterval = null;
+export function unsubscribe() {
+  if (statusUnsub) {
+    statusUnsub();
+    statusUnsub = null;
+  }
+  if (tunnelsUnsub) {
+    tunnelsUnsub();
+    tunnelsUnsub = null;
   }
 }
 
+// Initial load — one-time fetch to populate before first event arrives
+export async function initialLoad(TunnelService) {
+  try {
+    const list = (await TunnelService.ListTunnels()) || [];
+    tunnels.set(list);
+  } catch (e) {
+    console.error('initial load failed:', e);
+  }
+}
+
+// Manual refresh (after create/delete/import actions)
 export async function refreshTunnels(TunnelService) {
   try {
     const list = (await TunnelService.ListTunnels()) || [];
-    lastTunnelsJSON = JSON.stringify(list);
     tunnels.set(list);
   } catch (e) {
     console.error('refresh error:', e);

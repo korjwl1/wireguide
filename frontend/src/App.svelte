@@ -11,7 +11,7 @@
   import RouteVisualization from './lib/RouteVisualization.svelte';
   import StatsDashboard from './lib/StatsDashboard.svelte';
   import NewTunnelDialog from './lib/NewTunnelDialog.svelte';
-  import { tunnels, selectedTunnel, refreshTunnels, startPolling, stopPolling, connectionStatus } from './stores/tunnels.js';
+  import { tunnels, selectedTunnel, refreshTunnels, subscribeToEvents, unsubscribe, initialLoad, connectionStatus } from './stores/tunnels.js';
   import { TunnelService } from '../bindings/github.com/korjwl1/wireguide/internal/app';
 
   // View state
@@ -35,12 +35,12 @@
   let dragOver = false;
 
   onMount(async () => {
-    await refreshTunnels(TunnelService);
-    startPolling(TunnelService);
+    await initialLoad(TunnelService);
+    subscribeToEvents();
   });
 
   onDestroy(() => {
-    stopPolling();
+    unsubscribe();
   });
 
   async function handleImportOpen() {

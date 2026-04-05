@@ -16,10 +16,33 @@ import (
 	"github.com/korjwl1/wireguide/internal/storage"
 	"github.com/korjwl1/wireguide/internal/tunnel"
 	"github.com/wailsapp/wails/v3/pkg/application"
+	"github.com/wailsapp/wails/v3/pkg/icons"
 )
 
 //go:embed all:frontend/dist
 var assets embed.FS
+
+// StatusEvent is broadcast to the frontend whenever tunnel status changes.
+type StatusEvent struct {
+	State         string `json:"state"`
+	TunnelName    string `json:"tunnel_name"`
+	InterfaceName string `json:"interface_name"`
+	RxBytes       int64  `json:"rx_bytes"`
+	TxBytes       int64  `json:"tx_bytes"`
+	LastHandshake string `json:"last_handshake"`
+	Duration      string `json:"duration"`
+	Endpoint      string `json:"endpoint"`
+}
+
+// TunnelsEvent is broadcast when the tunnel list changes.
+type TunnelsEvent struct {
+	Tunnels []wgapp.TunnelInfo `json:"tunnels"`
+}
+
+func init() {
+	application.RegisterEvent[StatusEvent]("status")
+	application.RegisterEvent[TunnelsEvent]("tunnels")
+}
 
 func main() {
 	// Step 1: Check privileges — relaunch with OS permission prompt if needed
@@ -104,6 +127,11 @@ func main() {
 
 	// System tray
 	tray := app.SystemTray.New()
+	if runtime.GOOS == "darwin" {
+		tray.SetTemplateIcon(icons.SystrayMacTemplate)
+	} else {
+		tray.SetLabel("WireGuide")
+	}
 	tray.SetTooltip("WireGuide - Disconnected")
 
 	buildTrayMenu := func() {
@@ -152,10 +180,46 @@ func main() {
 	}
 
 	buildTrayMenu()
+
+	// Event emitter: push status + tunnel list changes to frontend.
+	// Only emits when data actually changed (no spam).
 	go func() {
-		for {
-			time.Sleep(2 * time.Second)
-			buildTrayMenu()
+		var lastStatusKey, lastTunnelsKey string
+		ticker := time.NewTicker(1 * time.Second)
+		defer ticker.Stop()
+		for range ticker.C {
+			// Status event
+			status := manager.Status()
+			statusEvt := StatusEvent{
+				State:         string(status.State),
+				TunnelName:    status.TunnelName,
+				InterfaceName: status.InterfaceName,
+				RxBytes:       status.RxBytes,
+				TxBytes:       status.TxBytes,
+				LastHandshake: status.HandshakeAge,
+				Duration:      status.Duration,
+				Endpoint:      status.Endpoint,
+			}
+			statusKey := fmt.Sprintf("%s|%s|%d|%d|%s", statusEvt.State, statusEvt.TunnelName,
+				statusEvt.RxBytes, statusEvt.TxBytes, statusEvt.LastHandshake)
+			if statusKey != lastStatusKey {
+				lastStatusKey = statusKey
+				app.Event.Emit("status", statusEvt)
+			}
+
+			// Tunnels list event
+			tunnels, err := tunnelService.ListTunnels()
+			if err == nil {
+				tunnelsKey := fmt.Sprintf("%d", len(tunnels))
+				for _, t := range tunnels {
+					tunnelsKey += "|" + t.Name + "|" + fmt.Sprintf("%v", t.IsConnected)
+				}
+				if tunnelsKey != lastTunnelsKey {
+					lastTunnelsKey = tunnelsKey
+					app.Event.Emit("tunnels", TunnelsEvent{Tunnels: tunnels})
+					buildTrayMenu() // update tray when tunnels change
+				}
+			}
 		}
 	}()
 
