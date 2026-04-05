@@ -10,6 +10,7 @@ package helper
 import (
 	"fmt"
 	"log/slog"
+	"runtime/debug"
 	"sync"
 	"time"
 
@@ -19,6 +20,25 @@ import (
 	"github.com/korjwl1/wireguide/internal/reconnect"
 	"github.com/korjwl1/wireguide/internal/tunnel"
 )
+
+// goSafe runs fn in a goroutine with panic recovery. Without this, a panic
+// in ANY helper goroutine crashes the whole process — which is exactly what
+// we've been unable to diagnose because the helper dies silently with no log
+// trail. Every background goroutine in the helper should be started via this
+// wrapper so panics are captured, logged, and surfaced instead of vanishing.
+func goSafe(name string, fn func()) {
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				slog.Error("goroutine panic",
+					"where", name,
+					"panic", fmt.Sprintf("%v", r),
+					"stack", string(debug.Stack()))
+			}
+		}()
+		fn()
+	}()
+}
 
 // shutdownGrace is the window the helper waits after a GUI disconnect before
 // terminating itself. Short enough to prevent orphan processes, long enough to
@@ -97,7 +117,17 @@ func Run(addr string, ownerUID int, dataDir string) error {
 	h.server.OnDisconnect(h.startShutdownTimer)
 
 	// Start event emitter (diff loop)
-	go h.eventLoop()
+	goSafe("eventLoop", h.eventLoop)
+
+	// Top-level panic recovery for the Serve loop itself. If Accept or any
+	// per-conn handler panics unrecovered, we at least want a stack trace.
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Error("helper Run panic",
+				"panic", fmt.Sprintf("%v", r),
+				"stack", string(debug.Stack()))
+		}
+	}()
 
 	slog.Info("helper listening", "addr", addr, "pid", "daemon")
 
@@ -135,9 +165,21 @@ func (h *Helper) onReconnectState(state reconnect.State) {
 // startShutdownTimer begins (or re-begins) the grace-window countdown. Called
 // when the GUI's control connection drops.
 func (h *Helper) startShutdownTimer() {
+	// DIAGNOSTIC: if the helper is currently running a tunnel, a shutdown
+	// timer fire will tear the tunnel down. The user has been seeing this
+	// 22–32s after a successful connect, and we need to know whether it's
+	// a spurious OnDisconnect (control conn mis-closed) or a legit quit.
+	// Log stack trace at the trigger point so we can see what invoked it.
+	active := ""
+	if h.manager != nil {
+		active = h.manager.ActiveTunnel()
+	}
+	slog.Info("control connection lost, starting shutdown grace window",
+		"grace", shutdownGrace,
+		"active_tunnel", active,
+		"call_stack", string(debug.Stack()))
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	slog.Info("control connection lost, starting shutdown grace window", "grace", shutdownGrace)
 	if h.shutdownTimer != nil {
 		h.shutdownTimer.Stop()
 	}
@@ -165,9 +207,16 @@ func (h *Helper) shutdown() {
 }
 
 func (h *Helper) cleanup() {
+	slog.Info("helper cleanup starting",
+		"connected", h.manager.IsConnected(),
+		"call_stack", string(debug.Stack()))
 	close(h.done)
-	if h.shutdownTimer != nil {
-		h.shutdownTimer.Stop()
+	h.mu.Lock()
+	t := h.shutdownTimer
+	h.shutdownTimer = nil
+	h.mu.Unlock()
+	if t != nil {
+		t.Stop()
 	}
 	h.monitor.Stop()
 	h.firewall.Cleanup()

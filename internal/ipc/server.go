@@ -2,6 +2,7 @@ package ipc
 
 import (
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net"
 	"sync"
@@ -125,6 +126,7 @@ func (s *Server) Broadcast(method string, params interface{}) {
 func (s *Server) handleConn(conn net.Conn) {
 	defer conn.Close()
 
+	remoteDesc := fmt.Sprintf("%p", conn)
 	isControl := false
 	defer func() {
 		if isControl {
@@ -132,20 +134,30 @@ func (s *Server) handleConn(conn net.Conn) {
 			delete(s.controlConns, conn)
 			remaining := len(s.controlConns)
 			s.mu.Unlock()
+			slog.Info("ipc: control conn closed",
+				"conn", remoteDesc,
+				"remaining", remaining)
 			if remaining == 0 && s.onDisconnect != nil {
 				s.onDisconnect()
 			}
+		} else {
+			slog.Debug("ipc: non-control conn closed", "conn", remoteDesc)
 		}
 	}()
 
 	for {
 		var req Request
 		if err := ReadFrame(conn, &req); err != nil {
+			slog.Debug("ipc: ReadFrame error, closing conn",
+				"conn", remoteDesc,
+				"is_control", isControl,
+				"error", err)
 			return // connection closed
 		}
 
 		if req.Method == MethodSubscribe {
 			// Upgrade this connection to an event stream
+			slog.Debug("ipc: upgrading to event stream", "conn", remoteDesc)
 			s.handleSubscribe(conn, req.ID)
 			return // handleSubscribe takes over the connection
 		}
@@ -154,7 +166,12 @@ func (s *Server) handleConn(conn net.Conn) {
 			isControl = true
 			s.mu.Lock()
 			s.controlConns[conn] = struct{}{}
+			count := len(s.controlConns)
 			s.mu.Unlock()
+			slog.Info("ipc: new control conn",
+				"conn", remoteDesc,
+				"count", count,
+				"first_method", req.Method)
 			if s.onConnect != nil {
 				s.onConnect()
 			}
@@ -164,6 +181,9 @@ func (s *Server) handleConn(conn net.Conn) {
 		resp := s.dispatch(&req)
 		if resp != nil && !req.IsNotification() {
 			if err := WriteFrame(conn, resp); err != nil {
+				slog.Debug("ipc: WriteFrame error, closing conn",
+					"conn", remoteDesc,
+					"error", err)
 				return
 			}
 		}

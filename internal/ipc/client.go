@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -62,6 +63,9 @@ func NewClient(addr string) (*Client, error) {
 // Close terminates all connections. Safe to call multiple times.
 func (c *Client) Close() error {
 	c.closeOnce.Do(func() {
+		// Log caller so we can tell WHY a client was closed — shutdown,
+		// health-monitor swap, or something unexpected.
+		slog.Info("ipc client: Close() called", "addr", c.addr)
 		close(c.closed)
 		if c.controlConn != nil {
 			c.controlConn.Close()
@@ -175,7 +179,9 @@ func (c *Client) Subscribe(handler EventHandler) error {
 }
 
 func (c *Client) readLoop() {
+	var exitErr error
 	defer func() {
+		slog.Debug("ipc client: readLoop exiting", "addr", c.addr, "error", exitErr)
 		c.pendingMu.Lock()
 		for _, ch := range c.pending {
 			close(ch)
@@ -187,6 +193,7 @@ func (c *Client) readLoop() {
 	for {
 		var resp Response
 		if err := ReadFrame(c.controlConn, &resp); err != nil {
+			exitErr = err
 			return
 		}
 

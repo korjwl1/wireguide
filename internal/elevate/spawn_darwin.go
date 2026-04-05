@@ -19,10 +19,13 @@ func SpawnHelper(args Args) error {
 
 	// Run the helper in the background via do shell script with privileges.
 	// Using "& disown" to detach so osascript returns immediately.
-	// Redirect output to log file for debugging.
+	// Redirect output to log file for debugging. IMPORTANT: use >> (append)
+	// not > (truncate) so logs from prior runs are preserved — otherwise
+	// every respawn wipes the crash/shutdown evidence from the previous
+	// helper instance, which is exactly what we need to diagnose why it died.
 	logPath := "/tmp/wireguide-helper.log"
 	cmd := fmt.Sprintf(
-		`'%s' --helper --socket='%s' --uid=%d --data-dir='%s' > '%s' 2>&1 & disown`,
+		`(echo ''; echo '==== helper spawn ====' ; date ; '%s' --helper --socket='%s' --uid=%d --data-dir='%s') >> '%s' 2>&1 & disown`,
 		exe, args.SocketPath, args.SocketUID, args.DataDir, logPath,
 	)
 	script := fmt.Sprintf(
