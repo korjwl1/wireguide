@@ -4,6 +4,7 @@ package network
 
 import (
 	"fmt"
+	"log/slog"
 	"net"
 	"os/exec"
 	"strings"
@@ -13,6 +14,9 @@ import (
 type DarwinManager struct {
 	origDNS     []string
 	origService string
+	// Endpoint bypass route state — tracked so we can remove it on disconnect.
+	bypassEndpointIP string
+	bypassGateway    string
 }
 
 func NewPlatformManager() NetworkManager {
@@ -64,24 +68,40 @@ func (m *DarwinManager) AddRoutes(ifaceName string, allowedIPs []string, fullTun
 }
 
 func (m *DarwinManager) addFullTunnelRoutes(ifaceName string, endpoint string) error {
-	// Get default gateway for endpoint bypass route
+	// Get default gateway for endpoint bypass route.
+	// This MUST succeed — without the bypass, WireGuard handshake packets
+	// would be routed through the tunnel itself (infinite loop), killing
+	// all connectivity.
 	gw, err := getDefaultGateway()
 	if err != nil {
 		return fmt.Errorf("getting default gateway: %w", err)
 	}
 
-	// Add bypass route for WireGuard endpoint via original gateway
+	// Add bypass route for WireGuard endpoint via original gateway.
+	// Critical for full tunnel: encrypted WG packets must reach the server
+	// via the real network interface, not the tunnel.
 	if endpoint != "" {
 		host, _, _ := net.SplitHostPort(endpoint)
 		if host != "" {
 			ips, err := net.LookupHost(host)
 			if err == nil && len(ips) > 0 {
-				_ = run("route", "-n", "add", "-host", ips[0], gw)
+				endpointIP := ips[0]
+				// Try -add first; if route exists, use -change
+				if err := run("route", "-n", "add", "-host", endpointIP, gw); err != nil {
+					slog.Warn("endpoint bypass add failed, trying change", "error", err)
+					if err2 := run("route", "-n", "change", "-host", endpointIP, gw); err2 != nil {
+						return fmt.Errorf("endpoint bypass route failed: add=%v, change=%v", err, err2)
+					}
+				}
+				// Remember for cleanup on disconnect
+				m.bypassEndpointIP = endpointIP
+				m.bypassGateway = gw
 			}
 		}
 	}
 
-	// Split route: 0.0.0.0/1 + 128.0.0.0/1 (covers all IPv4 without replacing default route)
+	// Split route: 0.0.0.0/1 + 128.0.0.0/1 covers all IPv4 without
+	// replacing the system default route.
 	if err := run("route", "-n", "add", "-net", "0.0.0.0/1", "-interface", ifaceName); err != nil {
 		return fmt.Errorf("adding 0.0.0.0/1 route: %w", err)
 	}
@@ -95,6 +115,13 @@ func (m *DarwinManager) RemoveRoutes(ifaceName string, allowedIPs []string, full
 	if fullTunnel {
 		_ = run("route", "-n", "delete", "-net", "0.0.0.0/1", "-interface", ifaceName)
 		_ = run("route", "-n", "delete", "-net", "128.0.0.0/1", "-interface", ifaceName)
+		// Remove endpoint bypass route so it doesn't leak across reconnects
+		// or affect other apps.
+		if m.bypassEndpointIP != "" {
+			_ = run("route", "-n", "delete", "-host", m.bypassEndpointIP)
+			m.bypassEndpointIP = ""
+			m.bypassGateway = ""
+		}
 		return nil
 	}
 	for _, cidr := range allowedIPs {
@@ -132,13 +159,24 @@ func (m *DarwinManager) RestoreDNS(ifaceName string) error {
 		return run("networksetup", "-setdnsservers", m.origService, "Empty")
 	}
 	args := append([]string{"-setdnsservers", m.origService}, m.origDNS...)
-	return run("networksetup", args...)
+	err := run("networksetup", args...)
+	// Clear state after successful restore so a second Disconnect is a no-op
+	if err == nil {
+		m.origService = ""
+		m.origDNS = nil
+	}
+	return err
 }
 
 func (m *DarwinManager) Cleanup(ifaceName string) error {
 	// utun interfaces are removed when the TUN device is closed.
-	// Just clean up routes and DNS.
-	m.RestoreDNS(ifaceName)
+	// Clean up any residual state.
+	_ = m.RestoreDNS(ifaceName)
+	// Defensive: remove bypass route if somehow still set
+	if m.bypassEndpointIP != "" {
+		_ = run("route", "-n", "delete", "-host", m.bypassEndpointIP)
+		m.bypassEndpointIP = ""
+	}
 	return nil
 }
 
