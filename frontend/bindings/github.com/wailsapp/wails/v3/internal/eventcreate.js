@@ -12,13 +12,15 @@ import * as main$0 from "../../../../korjwl1/wireguide/models.js";
 
 function configure() {
     Object.freeze(Object.assign($Create.Events, {
-        "reconnect": $$createType0,
-        "status": $$createType1,
+        "files-dropped": $$createType0,
+        "reconnect": $$createType1,
+        "status": $$createType2,
     }));
 }
 
 // Private type creation functions
-const $$createType0 = main$0.ReconnectEvent.createFrom;
-const $$createType1 = main$0.StatusEvent.createFrom;
+const $$createType0 = $Create.Array($Create.Any);
+const $$createType1 = main$0.ReconnectEvent.createFrom;
+const $$createType2 = main$0.StatusEvent.createFrom;
 
 configure();

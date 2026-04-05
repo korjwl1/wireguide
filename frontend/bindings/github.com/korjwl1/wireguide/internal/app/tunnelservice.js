@@ -104,6 +104,18 @@ export function ImportConfig(name, content) {
 }
 
 /**
+ * ImportFromPath reads a .conf file from disk and imports it.
+ * Used by native file drop events (Wails v3 passes file paths, not contents).
+ * @param {string} path
+ * @returns {$CancellablePromise<$models.TunnelInfo | null>}
+ */
+export function ImportFromPath(path) {
+    return $Call.ByID(2423395919, path).then(/** @type {($result: any) => any} */(($result) => {
+        return $$createType7($result);
+    }));
+}
+
+/**
  * @returns {$CancellablePromise<$models.TunnelInfo[]>}
  */
 export function ListTunnels() {

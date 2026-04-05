@@ -1,5 +1,6 @@
 <script>
   import { onMount, onDestroy } from 'svelte';
+  import { Events } from '@wailsio/runtime';
   import TunnelList from './lib/TunnelList.svelte';
   import TunnelDetail from './lib/TunnelDetail.svelte';
   import ScriptWarning from './lib/ScriptWarning.svelte';
@@ -28,17 +29,29 @@
   let editName = '';
   let editorContent = '';
   let editorErrors = [];
-  let dragOver = false;
-  let dragCounter = 0;
   let toast = '';
+  let filesDroppedUnsub = null;
 
   onMount(async () => {
     await initialLoad(TunnelService);
     subscribeToEvents();
+
+    // Wails v3 native file drop — HTML5 dragdrop doesn't work in WebKit.
+    filesDroppedUnsub = Events.On('files-dropped', async (event) => {
+      const paths = event.data || [];
+      for (const path of paths) {
+        if (path.toLowerCase().endsWith('.conf')) {
+          await importFromPath(path);
+        } else {
+          showToast('Only .conf files are supported');
+        }
+      }
+    });
   });
 
   onDestroy(() => {
     unsubscribe();
+    if (filesDroppedUnsub) filesDroppedUnsub();
   });
 
   function showToast(msg) {
@@ -46,7 +59,22 @@
     setTimeout(() => { toast = ''; }, 3000);
   }
 
-  // Import a file directly — no modal, just do it.
+  // Import from a file path (used by native file drop).
+  async function importFromPath(path) {
+    try {
+      const name = path.split('/').pop().replace(/\.conf$/i, '');
+      if (await TunnelService.TunnelExists(name)) {
+        if (!confirm(`Tunnel "${name}" already exists. Overwrite?`)) return;
+      }
+      const info = await TunnelService.ImportFromPath(path);
+      showToast(`Imported "${info.name}"`);
+      await refreshTunnels(TunnelService);
+    } catch (e) {
+      showToast('Import failed: ' + e.toString());
+    }
+  }
+
+  // Import from a browser File object (used by file picker button).
   async function importFile(file) {
     if (!file) return;
     const name = file.name.replace(/\.conf$/i, '');
@@ -81,33 +109,6 @@
 
   async function handleNewTunnelOpen() {
     showNewTunnel = true;
-  }
-
-  // Drag counter prevents overlay flickering when hovering over child elements.
-  function handleDragEnter(e) {
-    e.preventDefault();
-    if (e.dataTransfer && Array.from(e.dataTransfer.types || []).includes('Files')) {
-      dragCounter++;
-      if (dragCounter === 1) dragOver = true;
-    }
-  }
-  function handleDragLeave(e) {
-    e.preventDefault();
-    dragCounter--;
-    if (dragCounter <= 0) {
-      dragCounter = 0;
-      dragOver = false;
-    }
-  }
-  function handleDragOver(e) {
-    e.preventDefault();
-  }
-  async function handleFileDrop(e) {
-    e.preventDefault();
-    dragCounter = 0;
-    dragOver = false;
-    const file = e.dataTransfer?.files?.[0];
-    await importFile(file);
   }
 
   async function handleNewTunnelSave(e) {
@@ -212,18 +213,7 @@
   }
 </script>
 
-<div class="app"
-  on:dragenter={handleDragEnter}
-  on:dragleave={handleDragLeave}
-  on:dragover={handleDragOver}
-  on:drop={handleFileDrop}
->
-  {#if dragOver}
-    <div class="drop-overlay">
-      <p>Drop .conf file to import</p>
-    </div>
-  {/if}
-
+<div class="app">
   {#if toast}
     <div class="toast">{toast}</div>
   {/if}

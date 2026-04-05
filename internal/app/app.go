@@ -4,6 +4,8 @@ package app
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/korjwl1/wireguide/internal/config"
@@ -142,6 +144,17 @@ func (s *TunnelService) ImportConfig(name, content string) (*TunnelInfo, error) 
 		Endpoint:   endpoint,
 		HasScripts: cfg.HasScripts(),
 	}, nil
+}
+
+// ImportFromPath reads a .conf file from disk and imports it.
+// Used by native file drop events (Wails v3 passes file paths, not contents).
+func (s *TunnelService) ImportFromPath(path string) (*TunnelInfo, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("reading %s: %w", path, err)
+	}
+	name := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
+	return s.ImportConfig(name, string(data))
 }
 
 func (s *TunnelService) ValidateConfig(content string) ([]string, error) {

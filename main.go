@@ -18,6 +18,7 @@ import (
 	"github.com/korjwl1/wireguide/internal/ipc"
 	"github.com/korjwl1/wireguide/internal/storage"
 	"github.com/wailsapp/wails/v3/pkg/application"
+	"github.com/wailsapp/wails/v3/pkg/events"
 	"github.com/wailsapp/wails/v3/pkg/icons"
 )
 
@@ -44,6 +45,7 @@ type ReconnectEvent struct {
 func init() {
 	application.RegisterEvent[StatusEvent]("status")
 	application.RegisterEvent[ReconnectEvent]("reconnect")
+	application.RegisterEvent[[]string]("files-dropped")
 }
 
 func main() {
@@ -108,10 +110,11 @@ func runGUI() {
 		},
 	})
 
-	app.Window.NewWithOptions(application.WebviewWindowOptions{
-		Title:  "WireGuide",
-		Width:  900,
-		Height: 600,
+	win := app.Window.NewWithOptions(application.WebviewWindowOptions{
+		Title:          "WireGuide",
+		Width:          900,
+		Height:         600,
+		EnableFileDrop: true,
 		Mac: application.MacWindow{
 			InvisibleTitleBarHeight: 50,
 			Backdrop:                application.MacBackdropTranslucent,
@@ -119,6 +122,12 @@ func runGUI() {
 		},
 		BackgroundColour: application.NewRGB(26, 26, 46),
 		URL:              "/",
+	})
+
+	// Register native file drop handler — HTML5 drag-drop doesn't work in WebKit.
+	win.OnWindowEvent(events.Common.WindowFilesDropped, func(event *application.WindowEvent) {
+		files := event.Context().DroppedFiles()
+		app.Event.Emit("files-dropped", files)
 	})
 
 	// System tray

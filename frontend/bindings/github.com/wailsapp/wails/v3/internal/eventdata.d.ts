@@ -12,6 +12,7 @@ import type * as main$0 from "../../../../korjwl1/wireguide/models.js";
 declare module "@wailsio/runtime" {
     namespace Events {
         interface CustomEvents {
+            "files-dropped": string[];
             "reconnect": main$0.ReconnectEvent;
             "status": main$0.StatusEvent;
         }
