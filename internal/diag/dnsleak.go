@@ -9,10 +9,10 @@ import (
 
 // DNSLeakResult holds the DNS leak test results.
 type DNSLeakResult struct {
-	Leaked     bool          `json:"leaked"`
-	DNSServers []DNSServer   `json:"dns_servers"`
-	TestDomain string        `json:"test_domain"`
-	Error      string        `json:"error,omitempty"`
+	Leaked     bool        `json:"leaked"`
+	DNSServers []DNSServer `json:"dns_servers"`
+	TestDomain string      `json:"test_domain"`
+	Error      string      `json:"error,omitempty"`
 }
 
 // DNSServer represents a detected DNS resolver.

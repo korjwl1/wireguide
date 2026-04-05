@@ -21,30 +21,24 @@ func NewTunnelStore(tunnelsDir string) *TunnelStore {
 
 // Save writes a tunnel config to disk with 0600 permissions.
 func (s *TunnelStore) Save(cfg *config.WireGuardConfig) error {
-	if cfg.Name == "" {
-		return fmt.Errorf("tunnel name is empty")
-	}
-	// Validate name to prevent path traversal
-	for _, r := range cfg.Name {
-		valid := (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') ||
-			(r >= '0' && r <= '9') || r == '-' || r == '_' || r == '.'
-		if !valid {
-			return fmt.Errorf("invalid character in tunnel name: %q", cfg.Name)
-		}
-	}
-	if cfg.Name == "." || cfg.Name == ".." {
-		return fmt.Errorf("invalid tunnel name: %q", cfg.Name)
+	if err := ValidateTunnelName(cfg.Name); err != nil {
+		return err
 	}
 
 	content := config.Serialize(cfg)
 	path := s.path(cfg.Name)
 
-	// Atomic write: temp file + rename (prevents partial writes on crash)
+	// Atomic write: temp file + rename (prevents partial writes on crash).
+	// On rename failure, clean up the orphan tmpfile.
 	tmpPath := path + ".tmp"
 	if err := os.WriteFile(tmpPath, []byte(content), 0600); err != nil {
 		return err
 	}
-	return os.Rename(tmpPath, path)
+	if err := os.Rename(tmpPath, path); err != nil {
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	return nil
 }
 
 // Load reads a tunnel config from disk by name.
@@ -69,9 +63,25 @@ func (s *TunnelStore) Delete(name string) error {
 }
 
 // Rename renames a tunnel from oldName to newName.
+//
+// Only `newName` is validated — `oldName` must already correspond to an
+// existing file on disk, and filesystem escaping is handled by s.path().
+// Validating oldName would strand users who have legacy files with
+// characters the current ValidateTunnelName rejects (e.g. dots from the
+// pre-Phase-0 era: `work.vpn.conf`), with no way to rename them out.
+//
+// Note: there is an intentional TOCTOU between Exists() and Rename() — this
+// is a single-user desktop app and the window is microseconds. If this ever
+// becomes a multi-user service, switch to os.Link + os.Remove.
 func (s *TunnelStore) Rename(oldName, newName string) error {
+	if err := ValidateTunnelName(newName); err != nil {
+		return err
+	}
 	if oldName == newName {
 		return nil
+	}
+	if !s.Exists(oldName) {
+		return fmt.Errorf("tunnel %q does not exist", oldName)
 	}
 	if s.Exists(newName) {
 		return fmt.Errorf("tunnel %q already exists", newName)

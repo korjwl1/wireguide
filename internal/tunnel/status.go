@@ -4,31 +4,24 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/korjwl1/wireguide/internal/domain"
 	"golang.zx2c4.com/wireguard/wgctrl"
 )
 
-// ConnectionStatus represents the current state of a tunnel connection.
-type ConnectionStatus struct {
-	State            State     `json:"state"`
-	TunnelName       string    `json:"tunnel_name"`
-	InterfaceName    string    `json:"interface_name"`
-	ConnectedAt      time.Time `json:"connected_at"`
-	Duration         string    `json:"duration"`
-	RxBytes          int64     `json:"rx_bytes"`
-	TxBytes          int64     `json:"tx_bytes"`
-	LastHandshake    time.Time `json:"last_handshake"`
-	HandshakeAge     string    `json:"handshake_age"`
-	Endpoint         string    `json:"endpoint"`
-}
-
-// State represents the tunnel connection state.
-type State string
+// Re-export the canonical connection status + state types from the domain
+// package so existing callers (`tunnel.ConnectionStatus`, `tunnel.StateConnected`)
+// keep compiling. There is a single underlying type — methods defined on the
+// domain type work transparently through these aliases.
+type (
+	ConnectionStatus = domain.ConnectionStatus
+	State            = domain.State
+)
 
 const (
-	StateDisconnected State = "disconnected"
-	StateConnecting   State = "connecting"
-	StateConnected    State = "connected"
-	StateError        State = "error"
+	StateDisconnected = domain.StateDisconnected
+	StateConnecting   = domain.StateConnecting
+	StateConnected    = domain.StateConnected
+	StateError        = domain.StateError
 )
 
 // GetStatus queries the current status of a WireGuard interface.
@@ -49,7 +42,7 @@ func GetStatus(ifaceName string, tunnelName string, connectedAt time.Time) (*Con
 		TunnelName:    tunnelName,
 		InterfaceName: ifaceName,
 		ConnectedAt:   connectedAt,
-		Duration:      formatDuration(time.Since(connectedAt)),
+		Duration:      domain.FormatDuration(time.Since(connectedAt)),
 	}
 
 	// Aggregate stats from all peers
@@ -58,8 +51,8 @@ func GetStatus(ifaceName string, tunnelName string, connectedAt time.Time) (*Con
 		status.TxBytes += peer.TransmitBytes
 
 		if !peer.LastHandshakeTime.IsZero() {
-			if status.LastHandshake.IsZero() || peer.LastHandshakeTime.After(status.LastHandshake) {
-				status.LastHandshake = peer.LastHandshakeTime
+			if status.LastHandshakeTime.IsZero() || peer.LastHandshakeTime.After(status.LastHandshakeTime) {
+				status.LastHandshakeTime = peer.LastHandshakeTime
 			}
 		}
 
@@ -68,24 +61,9 @@ func GetStatus(ifaceName string, tunnelName string, connectedAt time.Time) (*Con
 		}
 	}
 
-	if !status.LastHandshake.IsZero() {
-		status.HandshakeAge = formatDuration(time.Since(status.LastHandshake))
+	if !status.LastHandshakeTime.IsZero() {
+		status.LastHandshake = domain.FormatDuration(time.Since(status.LastHandshakeTime))
 	}
 
 	return status, nil
-}
-
-func formatDuration(d time.Duration) string {
-	d = d.Round(time.Second)
-	h := int(d.Hours())
-	m := int(d.Minutes()) % 60
-	s := int(d.Seconds()) % 60
-
-	if h > 0 {
-		return fmt.Sprintf("%dh %dm %ds", h, m, s)
-	}
-	if m > 0 {
-		return fmt.Sprintf("%dm %ds", m, s)
-	}
-	return fmt.Sprintf("%ds", s)
 }

@@ -19,7 +19,7 @@ func testConfig() *config.WireGuardConfig {
 		},
 		Peers: []config.PeerConfig{
 			{
-				PublicKey:   "xTIBA5rboUvnH4htodjb6e697QjLERt1NAB4mZqp8Dg=",
+				PublicKey:  "xTIBA5rboUvnH4htodjb6e697QjLERt1NAB4mZqp8Dg=",
 				Endpoint:   "vpn.example.com:51820",
 				AllowedIPs: []string{"0.0.0.0/0"},
 			},
@@ -209,9 +209,6 @@ func TestSettingsStoreDefaultsOnMissing(t *testing.T) {
 	}
 	if settings.Theme != "system" {
 		t.Errorf("expected default theme 'system', got %s", settings.Theme)
-	}
-	if !settings.AutoReconnect {
-		t.Error("expected AutoReconnect to be true by default")
 	}
 }
 

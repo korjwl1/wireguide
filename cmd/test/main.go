@@ -59,7 +59,7 @@ func main() {
 		status := manager.Status()
 		fmt.Printf("  [%d] State=%s RX=%d TX=%d Handshake=%s Duration=%s\n",
 			i+1, status.State, status.RxBytes, status.TxBytes,
-			status.HandshakeAge, status.Duration)
+			status.LastHandshake, status.Duration)
 	}
 
 	// Step 5: Disconnect

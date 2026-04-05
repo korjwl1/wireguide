@@ -5,6 +5,7 @@ package network
 import (
 	"fmt"
 	"net"
+	"os"
 	"os/exec"
 	"strings"
 )
@@ -38,9 +39,9 @@ func (m *LinuxManager) BringUp(ifaceName string) error {
 	return runCmd("ip", "link", "set", "dev", ifaceName, "up")
 }
 
-func (m *LinuxManager) AddRoutes(ifaceName string, allowedIPs []string, fullTunnel bool, endpoint string) error {
+func (m *LinuxManager) AddRoutes(ifaceName string, allowedIPs []string, fullTunnel bool, endpoints []string) error {
 	if fullTunnel {
-		return m.addFullTunnelRoutes(ifaceName, endpoint)
+		return m.addFullTunnelRoutes(ifaceName, endpoints)
 	}
 	for _, cidr := range allowedIPs {
 		if err := runCmd("ip", "route", "add", cidr, "dev", ifaceName); err != nil {
@@ -50,7 +51,8 @@ func (m *LinuxManager) AddRoutes(ifaceName string, allowedIPs []string, fullTunn
 	return nil
 }
 
-func (m *LinuxManager) addFullTunnelRoutes(ifaceName string, endpoint string) error {
+func (m *LinuxManager) addFullTunnelRoutes(ifaceName string, endpoints []string) error {
+	_ = endpoints // TODO: add bypass routes for each endpoint; see plan Phase 3/Linux rewrite
 	// Use fwmark-based policy routing (similar to wg-quick)
 	// 1. Set fwmark on WireGuard interface
 	// 2. Add policy rule: packets NOT marked -> use WG table
@@ -96,8 +98,10 @@ func (m *LinuxManager) SetDNS(ifaceName string, servers []string) error {
 	if err := runCmd("resolvectl", args...); err == nil {
 		return nil
 	}
-	// Fallback: write to /etc/resolv.conf (save original first)
-	origData, _ := exec.Command("cat", "/etc/resolv.conf").Output()
+	// Fallback: rewrite /etc/resolv.conf directly. NEVER use `sh -c "echo ..."`
+	// here — server strings are attacker-influenced and would allow shell
+	// injection. Use os.WriteFile with atomic rename.
+	origData, _ := os.ReadFile("/etc/resolv.conf")
 	m.origDNS = strings.Split(strings.TrimSpace(string(origData)), "\n")
 
 	var lines []string
@@ -105,7 +109,21 @@ func (m *LinuxManager) SetDNS(ifaceName string, servers []string) error {
 		lines = append(lines, "nameserver "+s)
 	}
 	content := strings.Join(lines, "\n") + "\n"
-	return exec.Command("sh", "-c", fmt.Sprintf("echo '%s' > /etc/resolv.conf", content)).Run()
+	return writeResolvConf(content)
+}
+
+// ResetDNSToSystemDefault clears DNS overrides without relying on in-memory
+// state. Used by crash recovery. On Linux with systemd-resolved this reverts
+// the interface; on the resolv.conf fallback path it leaves the file alone
+// (we have no record of what was there before).
+func (m *LinuxManager) ResetDNSToSystemDefault() error {
+	if err := runCmd("resolvectl", "revert", "default"); err == nil {
+		return nil
+	}
+	// resolv.conf fallback path — no safe way to recover without the
+	// original snapshot, so skip. Matches wg-quick's behaviour (user must
+	// run `wg-quick down` manually after an unclean crash).
+	return nil
 }
 
 func (m *LinuxManager) RestoreDNS(ifaceName string) error {
@@ -113,7 +131,21 @@ func (m *LinuxManager) RestoreDNS(ifaceName string) error {
 		return nil
 	}
 	content := strings.Join(m.origDNS, "\n") + "\n"
-	return exec.Command("sh", "-c", fmt.Sprintf("echo '%s' > /etc/resolv.conf", content)).Run()
+	return writeResolvConf(content)
+}
+
+// writeResolvConf atomically rewrites /etc/resolv.conf. Used only as a fallback
+// when resolvectl is unavailable.
+func writeResolvConf(content string) error {
+	tmp := "/etc/resolv.conf.wireguide.tmp"
+	if err := os.WriteFile(tmp, []byte(content), 0644); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, "/etc/resolv.conf"); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	return nil
 }
 
 func (m *LinuxManager) Cleanup(ifaceName string) error {

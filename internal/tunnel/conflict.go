@@ -11,8 +11,8 @@ import (
 
 // ConflictInfo describes a routing conflict with an existing interface.
 type ConflictInfo struct {
-	InterfaceName string   `json:"interface_name"`
-	Owner         string   `json:"owner"`          // "WireGuide", "Tailscale", "WireGuard", "Unknown"
+	InterfaceName  string   `json:"interface_name"`
+	Owner          string   `json:"owner"`           // "WireGuide", "Tailscale", "WireGuard", "Unknown"
 	OverlappingIPs []string `json:"overlapping_ips"` // CIDRs that overlap
 }
 
@@ -122,7 +122,10 @@ func socketExists(path string) bool {
 	if err != nil {
 		return false
 	}
-	return info.Mode()&os.ModeSocket != 0 || info.Mode().IsRegular()
+	// Only accept actual sockets — regular files with similar names do NOT
+	// indicate a running peer. Previously we OR'd with IsRegular() which
+	// produced false positives on stale leftover files.
+	return info.Mode()&os.ModeSocket != 0
 }
 
 func processExists(name string) bool {
@@ -156,20 +159,44 @@ func getInterfaceRoutes(ifaceName string) []string {
 }
 
 func getRoutesDarwin(ifaceName string) []string {
-	out, err := exec.Command("netstat", "-rn", "-f", "inet").CombinedOutput()
+	cmd := exec.Command("netstat", "-rn", "-f", "inet")
+	cmd.Env = append(cmd.Environ(), "LC_ALL=C", "LANG=C")
+	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return nil
 	}
+
+	// Parse header dynamically. netstat column order is stable in practice,
+	// but hardcoding index 3 has broken in the past when flags shifted.
+	destIdx, netifIdx := -1, -1
 	var routes []string
 	for _, line := range strings.Split(string(out), "\n") {
 		fields := strings.Fields(line)
-		if len(fields) >= 4 && fields[3] == ifaceName {
-			route := fields[0]
-			if route != "default" {
-				routes = append(routes, route)
-			} else {
-				routes = append(routes, "0.0.0.0/0")
+		if len(fields) == 0 {
+			continue
+		}
+		if netifIdx < 0 {
+			for i, f := range fields {
+				switch f {
+				case "Destination":
+					destIdx = i
+				case "Netif":
+					netifIdx = i
+				}
 			}
+			continue
+		}
+		if len(fields) <= netifIdx || destIdx < 0 {
+			continue
+		}
+		if fields[netifIdx] != ifaceName {
+			continue
+		}
+		route := fields[destIdx]
+		if route == "default" {
+			routes = append(routes, "0.0.0.0/0")
+		} else {
+			routes = append(routes, route)
 		}
 	}
 	return routes
@@ -230,4 +257,3 @@ func normalizeCIDR(s string) string {
 	}
 	return s
 }
-

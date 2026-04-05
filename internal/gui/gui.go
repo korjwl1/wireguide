@@ -1,0 +1,186 @@
+// Package gui contains the GUI-mode runtime for the WireGuide app.
+//
+// The package is split so each file has a single reason to change:
+//   - gui.go              (this file)  — Run() entry, Wails app + window setup
+//   - tray.go                           — system tray menu (event-driven rebuild)
+//   - event_bridge.go                   — IPC event forwarding + subscription
+//   - helper_lifecycle.go               — helper spawn, health check, auto-reconnect
+package gui
+
+import (
+	"log"
+	"log/slog"
+	"net/http"
+	"runtime"
+	"sync"
+	"time"
+
+	wgapp "github.com/korjwl1/wireguide/internal/app"
+	"github.com/korjwl1/wireguide/internal/domain"
+	"github.com/korjwl1/wireguide/internal/ipc"
+	"github.com/korjwl1/wireguide/internal/storage"
+	"github.com/wailsapp/wails/v3/pkg/application"
+	"github.com/wailsapp/wails/v3/pkg/events"
+	"github.com/wailsapp/wails/v3/pkg/icons"
+)
+
+// ReconnectEvent mirrors ipc.ReconnectStateDTO for Wails event emission.
+type ReconnectEvent struct {
+	Reconnecting bool `json:"reconnecting"`
+	Attempt      int  `json:"attempt"`
+	MaxAttempts  int  `json:"max_attempts"`
+}
+
+// HelperEvent notifies the frontend about helper process health changes.
+type HelperEvent struct {
+	Alive   bool   `json:"alive"`
+	Message string `json:"message"`
+}
+
+// Register Wails event payload types. Called once per process from init.
+func init() {
+	application.RegisterEvent[domain.ConnectionStatus]("status")
+	application.RegisterEvent[ReconnectEvent]("reconnect")
+	application.RegisterEvent[map[string]any]("files-dropped")
+	application.RegisterEvent[HelperEvent]("helper")
+	application.RegisterEvent[struct{}]("helper_reset")
+}
+
+// Run starts the GUI process. Blocks until the Wails app exits.
+func Run(assetsHandler http.Handler, dataDir string) error {
+	// 0. Install the slog handler that broadcasts to the LogViewer. Do this
+	// first so every subsequent log call (path init, helper spawn, etc.) is
+	// captured. The Wails app isn't built yet; bindAppToLogHandler wires
+	// the app reference later once application.New returns.
+	installGUILogHandler()
+	// Expose the level mutator to the Wails-bound service layer so
+	// Settings changes can reach us without an import cycle.
+	wgapp.SetGUILogLevelSetter(setGUILogLevel)
+
+	// 1. Local storage
+	paths, err := storage.GetPaths()
+	if err != nil {
+		log.Fatal("paths:", err)
+	}
+	if err := paths.EnsureDirs(); err != nil {
+		log.Fatal("create dirs:", err)
+	}
+	tunnelStore := storage.NewTunnelStore(paths.TunnelsDir)
+	settingsStore := storage.NewSettingsStore(paths.ConfigDir)
+
+	// Apply persisted log level to the GUI side immediately (helper-side
+	// gets it after ensureHelper + the SaveSettings path).
+	if s, err := settingsStore.Load(); err == nil && s != nil && s.LogLevel != "" {
+		setGUILogLevel(s.LogLevel)
+	}
+
+	// 2. Helper process (spawn if needed)
+	initialClient, err := ensureHelper(dataDir)
+	if err != nil {
+		log.Fatal("helper connection failed:", err)
+	}
+	clients := ipc.NewClientHolder(initialClient)
+
+	// 3. Wails service
+	tunnelService := wgapp.NewTunnelService(tunnelStore, settingsStore, clients)
+
+	// 4. Wails app
+	app := application.New(application.Options{
+		Name:        "WireGuide",
+		Description: "Cross-platform WireGuard desktop client",
+		Services: []application.Service{
+			application.NewService(tunnelService),
+		},
+		Assets: application.AssetOptions{
+			Handler: assetsHandler,
+		},
+		Mac: application.MacOptions{
+			ApplicationShouldTerminateAfterLastWindowClosed: false,
+		},
+	})
+	tunnelService.SetApp(app)
+	bindAppToLogHandler(app)
+
+	// Register the log event shape so Wails knows how to marshal it.
+	application.RegisterEvent[ipc.LogEntry]("log")
+
+	// 5. Main window
+	win := app.Window.NewWithOptions(application.WebviewWindowOptions{
+		Title:          "WireGuide",
+		Width:          900,
+		Height:         600,
+		EnableFileDrop: true,
+		Mac: application.MacWindow{
+			InvisibleTitleBarHeight: 50,
+			Backdrop:                application.MacBackdropTranslucent,
+			TitleBar:                application.MacTitleBarHiddenInset,
+		},
+		BackgroundColour: application.NewRGB(30, 30, 30), // matches --bg-primary dark (#1E1E1E)
+		URL:              "/",
+	})
+
+	// Native file drop forwarded to frontend
+	win.OnWindowEvent(events.Common.WindowFilesDropped, func(event *application.WindowEvent) {
+		files := event.Context().DroppedFiles()
+		app.Event.Emit("files-dropped", map[string]any{"files": files})
+	})
+
+	// 6. System tray
+	tray := app.SystemTray.New()
+	if runtime.GOOS == "darwin" {
+		tray.SetTemplateIcon(icons.SystrayMacTemplate)
+	} else {
+		tray.SetLabel("WireGuide")
+	}
+	tray.SetTooltip("WireGuide")
+
+	// 7. Shutdown coordination (declared upfront so closures can reference it)
+	var (
+		shutdownOnce sync.Once
+		doShutdown   func()
+	)
+	doShutdown = func() {
+		shutdownOnce.Do(func() {
+			slog.Info("shutting down GUI + helper")
+			c := clients.Get()
+			if c != nil {
+				_ = c.Call(ipc.MethodDisconnect, nil, nil)
+				_ = c.Call(ipc.MethodShutdown, nil, nil)
+				time.Sleep(200 * time.Millisecond)
+			}
+			clients.Close()
+		})
+	}
+
+	trayMgr := newTrayManager(app, tray, tunnelService, doShutdown)
+	trayMgr.initialBuild()
+
+	if runtime.GOOS == "darwin" {
+		app.Event.OnApplicationEvent(events.Mac.ApplicationWillTerminate, func(_ *application.ApplicationEvent) {
+			doShutdown()
+		})
+	}
+
+	// 8. IPC event bridge + helper health monitor.
+	// The bridge owns the subscription and re-subscribes when the helper
+	// process restarts. The health monitor swaps the client in the holder.
+	// Pass the tray's cheap icon-update hook — NOT the full menu rebuild —
+	// so the 1 Hz status stream doesn't trigger IPC round-trips on every event.
+	bridge := newEventBridge(app, clients, trayMgr.setIconState)
+	bridge.start()
+
+	// Push the persisted log level to the helper now that the event
+	// subscription is live — ensures DEBUG from Settings takes effect
+	// on helper-side records immediately after app launch, not only
+	// after the user opens and saves Settings.
+	if s, err := settingsStore.Load(); err == nil && s != nil && s.LogLevel != "" {
+		if c := clients.Get(); c != nil {
+			_ = c.Call(ipc.MethodSetLogLevel, ipc.SetLogLevelRequest{Level: s.LogLevel}, nil)
+		}
+	}
+
+	startHelperHealthMonitor(app, clients, dataDir, bridge)
+
+	// 9. Run (blocks)
+	return app.Run()
+}

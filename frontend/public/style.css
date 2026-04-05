@@ -1,26 +1,141 @@
-/* WireGuide Theme System */
-:root {
-    /* Dark theme (default) */
-    --bg-primary: #1a1a2e;
-    --bg-secondary: #12122a;
-    --bg-card: #16213e;
-    --bg-input: #16213e;
-    --bg-hover: #16213e;
-    --bg-active: #0f3460;
-    --border: #2a2a4a;
-    --text-primary: #e0e0e0;
-    --text-secondary: #8888aa;
-    --text-muted: #555;
-    --accent: #0f3460;
-    --green: #00b894;
-    --yellow: #fdcb6e;
-    --red: #d63031;
-    --blue: #74b9ff;
-    --error-bg: rgba(214, 48, 49, 0.13);
+/* WireGuide Theme System — macOS Human Interface Guidelines aligned
+ *
+ * All tokens follow the macos-native-ui skill:
+ *   - Colors use Apple's semantic system palette (systemBlue, labelColor, etc.)
+ *     with the hex values Apple ships in AppKit, for both light and dark mode.
+ *   - Text hierarchy uses percentage alphas over black/white, matching
+ *     NSColor.labelColor / .secondaryLabelColor dynamic behaviour.
+ *   - Separators use the exact alphas from AppKit's separatorColor.
+ *   - Spacing follows the 8pt grid; typography uses macOS's 13pt body default;
+ *     radii and shadows are subtler than web design trends (HIG).
+ *
+ * Three theme roots:
+ *   :root                                         — dark (default)
+ *   [data-theme="light"]                          — light explicit
+ *   @media (prefers-color-scheme: X) [data-theme="system"]  — follows OS
+ */
 
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Inter", sans-serif;
-    font-size: 14px;
-    line-height: 1.5;
+/* ============================================================
+   DARK THEME (default :root)
+   Values match macOS dark appearance (System Settings → Appearance → Dark)
+   ============================================================ */
+:root {
+    /* --- Surface (macOS dark window chrome) --- */
+    --bg-primary:   #1E1E1E;                          /* window background */
+    --bg-secondary: #2A2A2E;                          /* sidebar, grouped content */
+    --bg-card:      #323236;                          /* raised card / popover */
+    --bg-input:     #1C1C1E;                          /* text field bg */
+    --bg-hover:     rgba(255, 255, 255, 0.08);        /* hover overlay */
+    --bg-active:    rgba(255, 255, 255, 0.12);        /* pressed state */
+    --bg-selected:  rgba(10, 132, 255, 0.22);         /* accent-tinted row */
+    --border:       rgba(84, 84, 88, 0.65);           /* AppKit separatorColor */
+
+    /* --- Text (alphas over white, matches NSColor.labelColor dynamic) --- */
+    --text-primary:   rgba(255, 255, 255, 0.90);      /* labelColor */
+    --text-secondary: rgba(255, 255, 255, 0.55);      /* secondaryLabelColor */
+    --text-muted:     rgba(255, 255, 255, 0.40);      /* tertiaryLabelColor */
+    --text-inverse:   #FFFFFF;                        /* on accent buttons */
+
+    /* --- Apple system accent colors (dark variants) --- */
+    --accent:      #0A84FF;   /* systemBlue dark */
+    --blue:        #0A84FF;   /* alias */
+    --green:       #30D158;   /* systemGreen dark — connected state */
+    --yellow:      #FFD60A;   /* systemYellow dark — connecting state */
+    --red:         #FF453A;   /* systemRed dark — errors, disconnect */
+    --orange:      #FF9F0A;   /* systemOrange dark */
+    --purple:      #BF5AF2;   /* systemPurple dark */
+
+    /* --- Semantic state tints (accent + low alpha) --- */
+    --green-tint:  rgba(48, 209, 88, 0.18);
+    --yellow-tint: rgba(255, 214, 10, 0.18);
+    --blue-tint:   rgba(10, 132, 255, 0.22);
+
+    --error-bg:    rgba(255, 69, 58, 0.18);
+    --error-text:  #FF6961;                           /* readable on error-bg */
+
+    /* --- Modals, overlays, shadows --- */
+    --overlay-bg:       rgba(0, 0, 0, 0.55);
+    --drop-overlay-bg:  rgba(10, 132, 255, 0.24);
+    --shadow-xs:        0 0 0 0.5px rgba(255, 255, 255, 0.08),
+                        0 1px 1px rgba(0, 0, 0, 0.40);
+    --shadow-sm:        0 1px 2px rgba(0, 0, 0, 0.30),
+                        0 2px 6px rgba(0, 0, 0, 0.40);
+    --shadow-md:        0 4px 12px rgba(0, 0, 0, 0.40),
+                        0 16px 48px rgba(0, 0, 0, 0.30);
+    --shadow-lg:        0 20px 60px rgba(0, 0, 0, 0.55);
+
+    /* --- Code editor palette --- */
+    --editor-bg:         #1E1E1E;
+    --editor-gutter-bg:  #252528;
+    --editor-border:     rgba(84, 84, 88, 0.65);
+
+    /* --- Stats / graph --- */
+    --graph-bg:      #252528;
+    --stats-rx:      #30D158;
+    --stats-tx:      #0A84FF;
+    --stats-rx-fill: rgba(48, 209, 88, 0.22);
+    --stats-tx-fill: rgba(10, 132, 255, 0.22);
+
+    /* --- Log viewer --- */
+    --log-bg:     #1C1C1E;
+    --log-border: rgba(84, 84, 88, 0.40);
+
+    /* --- Conflict / script warning item --- */
+    --warn-item-bg: rgba(255, 255, 255, 0.04);
+
+    /* ============ Non-color tokens (shared across themes) ============ */
+
+    /* Typography: macOS system font stack — SF Pro Text/Display auto-selected */
+    --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display",
+                 "Helvetica Neue", Helvetica, Arial, sans-serif;
+    --font-mono: ui-monospace, "SF Mono", Menlo, Monaco, "Cascadia Mono",
+                 Consolas, monospace;
+
+    /* macOS AppKit text style scale */
+    --text-large-title: 700 26px/32px var(--font-sans);
+    --text-title-1:     700 22px/28px var(--font-sans);
+    --text-title-2:     700 17px/22px var(--font-sans);
+    --text-title-3:     600 15px/20px var(--font-sans);
+    --text-headline:    600 13px/18px var(--font-sans);
+    --text-body:        400 13px/18px var(--font-sans);
+    --text-callout:     400 12px/16px var(--font-sans);
+    --text-subheadline: 400 11px/14px var(--font-sans);
+    --text-footnote:    400 10px/13px var(--font-sans);
+
+    /* Spacing (8pt grid + 4pt half-steps) */
+    --space-1:  4px;
+    --space-2:  8px;
+    --space-3:  12px;
+    --space-4:  16px;
+    --space-5:  20px;
+    --space-6:  24px;
+    --space-8:  32px;
+    --space-10: 40px;
+    --space-12: 48px;
+
+    /* Row heights (AppKit conventions) */
+    --row-compact: 24px;
+    --row-std:     28px;   /* NSTableView default */
+    --row-comfy:   36px;
+
+    /* Corner radius (macOS uses smaller radii than modern web) */
+    --radius-xs: 4px;
+    --radius-sm: 6px;
+    --radius-md: 8px;
+    --radius-lg: 10px;   /* matches NSWindow corner radius */
+
+    /* Motion timing + duration */
+    --ease-out:    cubic-bezier(0.2, 0, 0.1, 1);
+    --ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
+    --ease-sheet:  cubic-bezier(0.32, 0.72, 0, 1);
+    --dur-fast: 120ms;
+    --dur-base: 220ms;
+    --dur-slow: 320ms;
+
+    /* Typography base applied to <html> */
+    font-family: var(--font-sans);
+    font-size: 13px;              /* macOS body default — NOT 14/16 */
+    line-height: 1.38;
     font-weight: 400;
     color-scheme: dark;
     color: var(--text-primary);
@@ -28,62 +143,146 @@
     font-synthesis: none;
     text-rendering: optimizeLegibility;
     -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
     user-select: none;
     -webkit-user-select: none;
 }
 
-/* Light theme */
+/* ============================================================
+   LIGHT THEME
+   Values match macOS light appearance
+   ============================================================ */
 [data-theme="light"] {
-    --bg-primary: #f5f5f5;
-    --bg-secondary: #ffffff;
-    --bg-card: #ffffff;
-    --bg-input: #f0f0f0;
-    --bg-hover: #e8e8e8;
-    --bg-active: #d0d8e8;
-    --border: #d0d0d0;
-    --text-primary: #1a1a2e;
-    --text-secondary: #666;
-    --text-muted: #999;
-    --accent: #3366cc;
-    --green: #00a884;
-    --yellow: #e6a700;
-    --red: #c0392b;
-    --blue: #2980b9;
-    --error-bg: rgba(214, 48, 49, 0.08);
+    --bg-primary:   #FFFFFF;
+    --bg-secondary: #F5F5F7;
+    --bg-card:      #FFFFFF;
+    --bg-input:     #FFFFFF;
+    --bg-hover:     rgba(0, 0, 0, 0.06);
+    --bg-active:    rgba(0, 0, 0, 0.10);
+    --bg-selected:  rgba(0, 122, 255, 0.12);
+    --border:       rgba(60, 60, 67, 0.29);           /* AppKit separator light */
+
+    --text-primary:   rgba(0, 0, 0, 0.88);
+    --text-secondary: rgba(0, 0, 0, 0.56);
+    --text-muted:     rgba(0, 0, 0, 0.40);
+    --text-inverse:   #FFFFFF;
+
+    --accent:      #007AFF;   /* systemBlue light */
+    --blue:        #007AFF;
+    --green:       #34C759;   /* systemGreen light */
+    --yellow:      #FFCC00;   /* systemYellow light */
+    --red:         #FF3B30;   /* systemRed light */
+    --orange:      #FF9500;
+    --purple:      #AF52DE;
+
+    --green-tint:  rgba(52, 199, 89, 0.14);
+    --yellow-tint: rgba(255, 204, 0, 0.18);
+    --blue-tint:   rgba(0, 122, 255, 0.14);
+
+    --error-bg:    rgba(255, 59, 48, 0.12);
+    --error-text:  #B3261E;   /* darker red for 4.5:1 on error-bg */
+
+    --overlay-bg:       rgba(0, 0, 0, 0.35);
+    --drop-overlay-bg:  rgba(0, 122, 255, 0.18);
+    --shadow-xs:        0 0 0 0.5px rgba(0, 0, 0, 0.08),
+                        0 1px 1px rgba(0, 0, 0, 0.04);
+    --shadow-sm:        0 1px 2px rgba(0, 0, 0, 0.06),
+                        0 2px 6px rgba(0, 0, 0, 0.08);
+    --shadow-md:        0 4px 12px rgba(0, 0, 0, 0.12),
+                        0 16px 48px rgba(0, 0, 0, 0.08);
+    --shadow-lg:        0 20px 60px rgba(0, 0, 0, 0.15);
+
+    --editor-bg:        #FFFFFF;
+    --editor-gutter-bg: #F5F5F7;
+    --editor-border:    rgba(60, 60, 67, 0.29);
+
+    --graph-bg:      #F5F5F7;
+    --stats-rx:      #34C759;
+    --stats-tx:      #007AFF;
+    --stats-rx-fill: rgba(52, 199, 89, 0.18);
+    --stats-tx-fill: rgba(0, 122, 255, 0.18);
+
+    --log-bg:     #FFFFFF;
+    --log-border: rgba(60, 60, 67, 0.18);
+
+    --warn-item-bg: rgba(0, 0, 0, 0.03);
+
     color-scheme: light;
 }
 
-/* System theme detection */
+/* ============================================================
+   SYSTEM THEME — follows OS via prefers-color-scheme
+   Must mirror the explicit light/dark blocks exactly.
+   ============================================================ */
 @media (prefers-color-scheme: light) {
     [data-theme="system"] {
-        --bg-primary: #f5f5f5;
-        --bg-secondary: #ffffff;
-        --bg-card: #ffffff;
-        --bg-input: #f0f0f0;
-        --bg-hover: #e8e8e8;
-        --bg-active: #d0d8e8;
-        --border: #d0d0d0;
-        --text-primary: #1a1a2e;
-        --text-secondary: #666;
-        --text-muted: #999;
-        --accent: #3366cc;
-        --green: #00a884;
-        --yellow: #e6a700;
-        --red: #c0392b;
-        --blue: #2980b9;
-        --error-bg: rgba(214, 48, 49, 0.08);
+        --bg-primary:   #FFFFFF;
+        --bg-secondary: #F5F5F7;
+        --bg-card:      #FFFFFF;
+        --bg-input:     #FFFFFF;
+        --bg-hover:     rgba(0, 0, 0, 0.06);
+        --bg-active:    rgba(0, 0, 0, 0.10);
+        --bg-selected:  rgba(0, 122, 255, 0.12);
+        --border:       rgba(60, 60, 67, 0.29);
+
+        --text-primary:   rgba(0, 0, 0, 0.88);
+        --text-secondary: rgba(0, 0, 0, 0.56);
+        --text-muted:     rgba(0, 0, 0, 0.40);
+        --text-inverse:   #FFFFFF;
+
+        --accent: #007AFF;
+        --blue:   #007AFF;
+        --green:  #34C759;
+        --yellow: #FFCC00;
+        --red:    #FF3B30;
+        --orange: #FF9500;
+        --purple: #AF52DE;
+
+        --green-tint:  rgba(52, 199, 89, 0.14);
+        --yellow-tint: rgba(255, 204, 0, 0.18);
+        --blue-tint:   rgba(0, 122, 255, 0.14);
+
+        --error-bg:   rgba(255, 59, 48, 0.12);
+        --error-text: #B3261E;
+
+        --overlay-bg:      rgba(0, 0, 0, 0.35);
+        --drop-overlay-bg: rgba(0, 122, 255, 0.18);
+        --shadow-xs: 0 0 0 0.5px rgba(0, 0, 0, 0.08),
+                     0 1px 1px rgba(0, 0, 0, 0.04);
+        --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.06),
+                     0 2px 6px rgba(0, 0, 0, 0.08);
+        --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.12),
+                     0 16px 48px rgba(0, 0, 0, 0.08);
+        --shadow-lg: 0 20px 60px rgba(0, 0, 0, 0.15);
+
+        --editor-bg:        #FFFFFF;
+        --editor-gutter-bg: #F5F5F7;
+        --editor-border:    rgba(60, 60, 67, 0.29);
+
+        --graph-bg:      #F5F5F7;
+        --stats-rx:      #34C759;
+        --stats-tx:      #007AFF;
+        --stats-rx-fill: rgba(52, 199, 89, 0.18);
+        --stats-tx-fill: rgba(0, 122, 255, 0.18);
+
+        --log-bg:     #FFFFFF;
+        --log-border: rgba(60, 60, 67, 0.18);
+
+        --warn-item-bg: rgba(0, 0, 0, 0.03);
+
         color-scheme: light;
     }
 }
 
-@font-face {
-    font-family: "Inter";
-    font-style: normal;
-    font-weight: 400;
-    src: local(""),
-    url("./Inter-Medium.ttf") format("truetype");
+@media (prefers-color-scheme: dark) {
+    [data-theme="system"] {
+        color-scheme: dark;
+    }
 }
 
+/* ============================================================
+   Resets and base element styles
+   ============================================================ */
 * {
     margin: 0;
     padding: 0;
@@ -95,4 +294,47 @@ body {
     background: var(--bg-primary);
     color: var(--text-primary);
     overflow: hidden;
+    font-family: var(--font-sans);
+    font-size: 13px;
+    line-height: 1.38;
+}
+
+/* Global button reset — kills macOS WebKit's default Aqua bezel
+ * (rounded outline + drop shadow + gradient) that otherwise shows through
+ * any component that only sets `background: transparent; border: 0`.
+ * Every .svelte component still styles its own buttons on top of this
+ * baseline; the reset just removes the UA-styled halo. */
+button {
+    appearance: none;
+    -webkit-appearance: none;
+    background: none;
+    border: 0;
+    padding: 0;
+    margin: 0;
+    font: inherit;
+    color: inherit;
+    cursor: pointer;
+    line-height: inherit;
+}
+button::-moz-focus-inner {
+    border: 0;
+    padding: 0;
+}
+
+/* Keyboard focus indicator — never disable without replacement.
+ * Uses :focus-visible so mouse clicks don't trigger rings on buttons. */
+:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+    border-radius: var(--radius-sm);
+}
+
+/* Reduced motion — disable all non-essential transitions */
+@media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+        scroll-behavior: auto !important;
+    }
 }

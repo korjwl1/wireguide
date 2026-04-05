@@ -10,14 +10,14 @@ import (
 
 // CIDRInfo describes a CIDR block.
 type CIDRInfo struct {
-	CIDR        string `json:"cidr"`
-	Network     string `json:"network"`
-	Broadcast   string `json:"broadcast"`
-	FirstHost   string `json:"first_host"`
-	LastHost    string `json:"last_host"`
-	TotalHosts  int64  `json:"total_hosts"`
-	Netmask     string `json:"netmask"`
-	PrefixLen   int    `json:"prefix_len"`
+	CIDR       string `json:"cidr"`
+	Network    string `json:"network"`
+	Broadcast  string `json:"broadcast"`
+	FirstHost  string `json:"first_host"`
+	LastHost   string `json:"last_host"`
+	TotalHosts int64  `json:"total_hosts"`
+	Netmask    string `json:"netmask"`
+	PrefixLen  int    `json:"prefix_len"`
 }
 
 // CalculateCIDR computes network details for a CIDR string.

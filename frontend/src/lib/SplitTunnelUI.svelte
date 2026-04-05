@@ -55,10 +55,10 @@
 <div class="split-tunnel">
   <div class="mode-selector">
     <button class:active={mode === 'all'} on:click={() => setMode('all')}>
-      All Traffic (0.0.0.0/0)
+      0.0.0.0/0, ::/0
     </button>
     <button class:active={mode === 'custom'} on:click={() => setMode('custom')}>
-      Custom Subnets
+      {$t('split_tunnel.title')}
     </button>
   </div>
 
@@ -67,17 +67,17 @@
       {#each customIPs as ip}
         <div class="subnet-item">
           <code>{ip}</code>
-          <button class="remove-btn" on:click={() => removeSubnet(ip)}>x</button>
+          <button class="remove-btn" on:click={() => removeSubnet(ip)}>✕</button>
         </div>
       {/each}
       {#if customIPs.length === 0}
-        <p class="empty">No subnets added</p>
+        <p class="empty">{$t('split_tunnel.no_subnets')}</p>
       {/if}
     </div>
     <div class="add-subnet">
-      <input type="text" bind:value={newIP} placeholder="10.0.0.0/24"
+      <input type="text" bind:value={newIP} placeholder={$t('split_tunnel.subnet_placeholder')}
         on:keydown={handleKeydown} />
-      <button on:click={addSubnet}>Add</button>
+      <button on:click={addSubnet}>{$t('split_tunnel.add')}</button>
     </div>
   {/if}
 </div>

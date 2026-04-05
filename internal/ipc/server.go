@@ -16,11 +16,12 @@ type Server struct {
 	listener net.Listener
 	handlers map[string]Handler
 
-	mu             sync.Mutex
-	eventSubs      map[*subscriber]struct{} // active event subscribers
-	shutdownCh     chan struct{}
-	onDisconnect   func()           // called when the last control conn closes
-	controlConns   map[net.Conn]struct{}
+	mu           sync.Mutex
+	eventSubs    map[*subscriber]struct{} // active event subscribers
+	shutdownCh   chan struct{}
+	onConnect    func() // called when a control conn attaches (any)
+	onDisconnect func() // called when the last control conn closes
+	controlConns map[net.Conn]struct{}
 }
 
 type subscriber struct {
@@ -42,6 +43,13 @@ func NewServer(listener net.Listener) *Server {
 // Handle registers an RPC handler for the given method.
 func (s *Server) Handle(method string, h Handler) {
 	s.handlers[method] = h
+}
+
+// OnConnect sets a callback fired whenever a control connection attaches.
+// Used by the helper to cancel a pending grace-window shutdown when the GUI
+// reconnects within the window.
+func (s *Server) OnConnect(fn func()) {
+	s.onConnect = fn
 }
 
 // OnDisconnect sets a callback fired when the last control connection closes.
@@ -147,6 +155,9 @@ func (s *Server) handleConn(conn net.Conn) {
 			s.mu.Lock()
 			s.controlConns[conn] = struct{}{}
 			s.mu.Unlock()
+			if s.onConnect != nil {
+				s.onConnect()
+			}
 		}
 
 		// Dispatch RPC

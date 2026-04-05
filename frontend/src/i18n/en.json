@@ -6,11 +6,19 @@
     "connected": "Connected",
     "error": "Error"
   },
+  "nav": {
+    "tunnels": "Tunnels",
+    "tools": "Tools",
+    "logs": "Logs",
+    "settings": "Settings"
+  },
   "tunnel": {
     "list_title": "Tunnels",
     "search": "Search...",
     "no_tunnels": "No tunnels configured",
+    "no_selection": "Select a tunnel or create a new one",
     "drop_hint": "Drop a .conf file here or click Import",
+    "drop_overlay": "Drop .conf file to import",
     "import": "Import",
     "new_tunnel": "New Tunnel",
     "connect": "Connect",
@@ -28,7 +36,8 @@
     "tx": "Upload",
     "kill_switch": "Kill Switch",
     "dns_protection": "DNS Protection",
-    "details": "Details"
+    "details": "Details",
+    "rename_hint": "Double-click to rename"
   },
   "import": {
     "title": "Import Tunnel",
@@ -62,11 +71,18 @@
     "general": "General",
     "auto_start": "Launch at startup",
     "theme": "Theme",
+    "theme_dark": "Dark",
+    "theme_light": "Light",
+    "theme_system": "System",
     "language": "Language",
-    "connection": "Connection",
-    "auto_reconnect": "Auto Reconnect",
+    "lang_auto": "Auto",
+    "close": "Close",
     "advanced": "Advanced",
-    "log_level": "Log Level"
+    "log_level": "Log Level",
+    "log_level_debug": "Debug",
+    "log_level_info": "Info",
+    "log_level_warn": "Warning",
+    "log_level_error": "Error"
   },
   "confirm": {
     "delete_title": "Delete Tunnel",
@@ -92,7 +108,8 @@
     "title": "Logs",
     "clear": "Clear",
     "auto_scroll": "Auto-scroll",
-    "no_entries": "No log entries"
+    "no_entries": "No log entries",
+    "filter_all": "All"
   },
   "notify": {
     "disconnected": "VPN connection lost",
@@ -104,5 +121,102 @@
   "daemon": {
     "not_running": "WireGuide daemon is not running",
     "install_hint": "Start the daemon with: sudo wireguided"
+  },
+  "tools": {
+    "tab_diagnostics": "Diagnostics",
+    "tab_dns_leak": "DNS Leak Test",
+    "tab_routes": "Routes",
+    "net_diag_title": "Network Diagnostics",
+    "cidr_calc_title": "CIDR Calculator",
+    "cidr_placeholder": "e.g. 10.0.0.0/24",
+    "calculate": "Calculate",
+    "network": "Network",
+    "prefix": "Prefix",
+    "hosts": "Hosts",
+    "endpoint_reach_title": "Endpoint Reachability",
+    "endpoint_placeholder": "host:port",
+    "ping": "Ping",
+    "pinging": "Pinging...",
+    "host": "Host",
+    "reachable": "Reachable",
+    "latency": "Latency",
+    "speed_test_title": "Speed Test",
+    "run_speed_test": "Run Test",
+    "download_speed": "Download",
+    "note": "Note",
+    "dns_leak_title": "DNS Leak Test",
+    "dns_leak_run": "Run Test",
+    "dns_leak_checking": "Checking DNS configuration...",
+    "dns_leak_safe": "No DNS leaks detected",
+    "dns_leak_leaked": "DNS leak detected",
+    "dns_servers_detected": "DNS Servers Detected",
+    "route_title": "Route Table",
+    "route_reload": "Reload",
+    "route_header_dest": "Destination",
+    "route_header_gateway": "Gateway",
+    "route_header_iface": "Interface",
+    "route_vpn_badge": "VPN",
+    "route_legend_vpn": "VPN route",
+    "route_legend_direct": "Direct route"
+  },
+  "new_tunnel": {
+    "title": "New Tunnel",
+    "mode_form": "Form",
+    "mode_text": "Text",
+    "section_interface": "Interface",
+    "name_label": "Name",
+    "name_placeholder": "my-tunnel",
+    "private_key_label": "Private Key",
+    "generate": "Generate",
+    "address_label": "Address",
+    "dns_label": "DNS",
+    "mtu_label": "MTU",
+    "section_peer": "Peer",
+    "peer_public_key_label": "Public Key",
+    "peer_psk_label": "Preshared Key (optional)",
+    "peer_endpoint_label": "Endpoint",
+    "peer_allowed_ips_label": "Allowed IPs",
+    "peer_keepalive_label": "Persistent Keepalive",
+    "create": "Create",
+    "cancel": "Cancel"
+  },
+  "keygen": {
+    "private_key": "Private Key",
+    "public_key": "Public Key",
+    "generate": "Generate New Keypair",
+    "copy": "Copy"
+  },
+  "split_tunnel": {
+    "title": "Split Tunnel",
+    "no_subnets": "No subnets added",
+    "add": "Add",
+    "subnet_placeholder": "10.0.0.0/24"
+  },
+  "stats": {
+    "speed_graph": "Speed Graph",
+    "waiting": "Waiting for data...",
+    "rx": "Download",
+    "tx": "Upload"
+  },
+  "conflict": {
+    "title": "Routing Conflict Detected",
+    "message": "Connecting may affect traffic routing for the above interfaces. The more specific route will take priority.",
+    "proceed": "Connect Anyway",
+    "cancel": "Cancel"
+  },
+  "update": {
+    "available": "Update available: v{version}",
+    "current": "current: v{version}",
+    "update_now": "Update Now",
+    "release_notes": "Release Notes"
+  },
+  "wifi_rules": {
+    "title": "Wi-Fi Rules",
+    "connect_untrusted": "Connect on untrusted Wi-Fi",
+    "trusted_ssids": "Trusted Networks",
+    "ssid_tunnel_map": "Auto-connect per SSID",
+    "add_trusted": "Add",
+    "ssid_placeholder": "Network name (SSID)",
+    "select_tunnel": "Choose tunnel..."
   }
 }

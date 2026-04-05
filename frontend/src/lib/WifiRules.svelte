@@ -47,58 +47,58 @@
 
 <div class="wifi-rules">
   <div class="setting-row">
-    <label>WiFi Auto-connect</label>
+    <label>{$t('wifi_rules.title')}</label>
     <input type="checkbox" bind:checked={rules.enabled} on:change={() => dispatch('change', rules)} />
   </div>
 
   {#if rules.enabled}
     <div class="setting-row">
-      <label>Connect on untrusted WiFi</label>
+      <label>{$t('wifi_rules.connect_untrusted')}</label>
       <input type="checkbox" bind:checked={rules.auto_connect_untrusted} on:change={() => dispatch('change', rules)} />
     </div>
 
     <div class="setting-row">
-      <label>Default tunnel</label>
+      <label>{$t('tunnel.new_tunnel')}</label>
       <select bind:value={rules.default_tunnel} on:change={() => dispatch('change', rules)}>
-        <option value="">None</option>
+        <option value="">—</option>
         {#each tunnelNames as name}
           <option value={name}>{name}</option>
         {/each}
       </select>
     </div>
 
-    <h5>Trusted SSIDs (VPN off)</h5>
+    <h5>{$t('wifi_rules.trusted_ssids')}</h5>
     <div class="list">
       {#each rules.trusted_ssids as ssid}
         <div class="list-item">
           <span>{ssid}</span>
-          <button class="remove" on:click={() => removeTrusted(ssid)}>x</button>
+          <button class="remove" on:click={() => removeTrusted(ssid)}>✕</button>
         </div>
       {/each}
     </div>
     <div class="add-row">
-      <input placeholder="SSID name" bind:value={newTrusted} on:keydown={(e) => e.key === 'Enter' && addTrusted()} />
-      <button on:click={addTrusted}>Add</button>
+      <input placeholder={$t('wifi_rules.ssid_placeholder')} bind:value={newTrusted} on:keydown={(e) => e.key === 'Enter' && addTrusted()} />
+      <button on:click={addTrusted}>{$t('wifi_rules.add_trusted')}</button>
     </div>
 
-    <h5>SSID → Tunnel mapping</h5>
+    <h5>{$t('wifi_rules.ssid_tunnel_map')}</h5>
     <div class="list">
       {#each Object.entries(rules.ssid_tunnel_map) as [ssid, tunnel]}
         <div class="list-item">
           <span>{ssid} → {tunnel}</span>
-          <button class="remove" on:click={() => removeMapping(ssid)}>x</button>
+          <button class="remove" on:click={() => removeMapping(ssid)}>✕</button>
         </div>
       {/each}
     </div>
     <div class="add-row">
-      <input placeholder="SSID" bind:value={newSSID} />
+      <input placeholder={$t('wifi_rules.ssid_placeholder')} bind:value={newSSID} />
       <select bind:value={newSSIDTunnel}>
-        <option value="">Tunnel</option>
+        <option value="">{$t('wifi_rules.select_tunnel')}</option>
         {#each tunnelNames as name}
           <option value={name}>{name}</option>
         {/each}
       </select>
-      <button on:click={addMapping}>Add</button>
+      <button on:click={addMapping}>{$t('wifi_rules.add_trusted')}</button>
     </div>
   {/if}
 </div>

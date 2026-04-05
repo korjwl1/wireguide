@@ -1,4 +1,6 @@
 <script>
+  import { t } from '../i18n/index.js';
+
   let routes = [];
   let loading = false;
 
@@ -21,17 +23,17 @@
 </script>
 
 <div class="route-viz">
-  <h4>Route Visualization</h4>
+  <h4>{$t('tools.route_title')}</h4>
   <button class="btn-load" on:click={loadRoutes} disabled={loading}>
-    {loading ? 'Loading...' : 'Load Routing Table'}
+    {loading ? '…' : $t('tools.route_reload')}
   </button>
 
   {#if routes.length > 0}
     <div class="route-table">
       <div class="route-header">
-        <span>Destination</span>
-        <span>Gateway</span>
-        <span>Interface</span>
+        <span>{$t('tools.route_header_dest')}</span>
+        <span>{$t('tools.route_header_gateway')}</span>
+        <span>{$t('tools.route_header_iface')}</span>
       </div>
       {#each routes as route}
         <div class="route-row" class:vpn={isVPN(route.interface)}>
@@ -40,7 +42,7 @@
           <span class="iface" class:vpn-iface={isVPN(route.interface)}>
             {route.interface}
             {#if isVPN(route.interface)}
-              <span class="vpn-badge">VPN</span>
+              <span class="vpn-badge">{$t('tools.route_vpn_badge')}</span>
             {/if}
           </span>
         </div>
@@ -48,8 +50,8 @@
     </div>
 
     <div class="legend">
-      <span class="legend-item"><span class="dot vpn-dot"></span> VPN tunnel</span>
-      <span class="legend-item"><span class="dot direct-dot"></span> Direct</span>
+      <span class="legend-item"><span class="dot vpn-dot"></span> {$t('tools.route_legend_vpn')}</span>
+      <span class="legend-item"><span class="dot direct-dot"></span> {$t('tools.route_legend_direct')}</span>
     </div>
   {/if}
 </div>
@@ -75,16 +77,16 @@
   .route-row {
     display: grid; grid-template-columns: 1fr 1fr 1fr;
     padding: 6px 12px; font-size: 13px; font-family: monospace;
-    border-bottom: 1px solid #1a1a2a;
+    border-bottom: 1px solid var(--border);
   }
-  .route-row.vpn { background: rgba(0,184,148,0.05); }
+  .route-row.vpn { background: var(--green-tint); }
   .dest { color: var(--text-primary); }
   .gw { color: var(--text-secondary); }
   .iface { color: var(--text-secondary); display: flex; align-items: center; gap: 4px; }
   .vpn-iface { color: var(--green); }
   .vpn-badge {
     font-size: 9px; padding: 1px 4px; background: var(--green);
-    color: #fff; border-radius: 3px; font-family: sans-serif;
+    color: var(--text-inverse); border-radius: 3px; font-family: sans-serif;
   }
   .legend {
     display: flex; gap: 16px; margin-top: 8px; font-size: 12px; color: var(--text-secondary);

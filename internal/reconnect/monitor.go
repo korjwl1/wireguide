@@ -2,6 +2,7 @@
 package reconnect
 
 import (
+	"context"
 	"log/slog"
 	"sync"
 	"time"
@@ -52,6 +53,12 @@ type Monitor struct {
 	running       bool
 	attempt       int
 	sleepDetector SleepDetector
+
+	// retryCancel cancels the current reconnectWithBackoff goroutine.
+	// Called from Stop() and from CancelRetry() (manual Disconnect) so that a
+	// pending exponential-backoff sleep returns immediately instead of waiting
+	// out the full delay.
+	retryCancel context.CancelFunc
 }
 
 // NewMonitor creates a reconnection monitor.
@@ -90,10 +97,27 @@ func (m *Monitor) Stop() {
 	}
 	m.running = false
 	close(m.stopCh)
+	if m.retryCancel != nil {
+		m.retryCancel()
+		m.retryCancel = nil
+	}
 	if m.sleepDetector != nil {
 		m.sleepDetector.Stop()
 	}
 	slog.Info("reconnect monitor stopped")
+}
+
+// CancelRetry aborts any in-flight reconnection attempt. Called by the helper
+// when the user manually disconnects — we don't want a backoff sleep to wake
+// up seconds later and re-connect against the user's wishes.
+func (m *Monitor) CancelRetry() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.retryCancel != nil {
+		m.retryCancel()
+		m.retryCancel = nil
+	}
+	m.attempt = 0
 }
 
 // GetState returns the current reconnection state.
@@ -131,27 +155,49 @@ func (m *Monitor) checkHealth() {
 		return
 	}
 
-	// Check handshake timeout
-	if !status.LastHandshake.IsZero() {
-		age := time.Since(status.LastHandshake)
+	// NOTE: we used to call triggerReconnect() on stale handshake age, but
+	// that was catastrophically wrong — it tears down the TUN device, clears
+	// routes, and rebuilds the tunnel, which severs every in-flight TCP
+	// session on top of it (ssh dies with "Connection reset by peer",
+	// browsers lose long-polling sockets, etc).
+	//
+	// WireGuard has its own rekey mechanism (rekey-after-time = 120s) that
+	// handles stale sessions without touching the TUN or the route table.
+	// Racing it with a full Disconnect+Connect on our side is worse than
+	// doing nothing: wg-quick specifically does NOT do this either.
+	//
+	// We keep the health check alive purely for logging / future hooks, but
+	// stale handshake is no longer a trigger for full reconnect. The only
+	// legitimate full-reconnect path is sleepWakeLoop — when the laptop
+	// wakes from sleep, the network state has genuinely changed and WG's
+	// own rekey won't see the new interfaces.
+	if !status.LastHandshakeTime.IsZero() {
+		age := time.Since(status.LastHandshakeTime)
 		if age > m.cfg.HandshakeTimeout {
-			slog.Warn("dead connection detected",
+			slog.Debug("handshake is stale — letting WireGuard rekey itself",
 				"tunnel", status.TunnelName,
 				"handshake_age", age.Round(time.Second))
-			m.triggerReconnect()
 		}
 	}
 }
 
 func (m *Monitor) triggerReconnect() {
 	m.mu.Lock()
+	// If a previous retry goroutine is still alive, cancel it before starting
+	// a new one — otherwise we'd double-dispatch reconnects on overlapping
+	// health-check failures.
+	if m.retryCancel != nil {
+		m.retryCancel()
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	m.retryCancel = cancel
 	m.attempt = 0
 	m.mu.Unlock()
 
-	go m.reconnectWithBackoff()
+	go m.reconnectWithBackoff(ctx)
 }
 
-func (m *Monitor) reconnectWithBackoff() {
+func (m *Monitor) reconnectWithBackoff(ctx context.Context) {
 	delay := m.cfg.InitialDelay
 
 	for {
@@ -173,6 +219,7 @@ func (m *Monitor) reconnectWithBackoff() {
 			})
 			m.mu.Lock()
 			m.attempt = 0
+			m.retryCancel = nil
 			m.mu.Unlock()
 			return
 		}
@@ -185,14 +232,38 @@ func (m *Monitor) reconnectWithBackoff() {
 			NextRetry:    delay.String(),
 		})
 
+		// Cancelable backoff — responds immediately to CancelRetry()/Stop()
+		// instead of waiting out the full delay.
+		timer := time.NewTimer(delay)
 		select {
-		case <-m.stopCh:
+		case <-ctx.Done():
+			timer.Stop()
+			slog.Info("reconnection cancelled", "attempt", attempt)
 			return
-		case <-time.After(delay):
+		case <-m.stopCh:
+			timer.Stop()
+			return
+		case <-timer.C:
+		}
+
+		// Recheck cancellation after the sleep returned normally — the user
+		// may have clicked Disconnect between the timer firing and this line.
+		// Without this check a final reconnectFn() would run against the
+		// user's explicit wish and silently bring the tunnel back up.
+		if ctx.Err() != nil {
+			slog.Info("reconnection cancelled before attempt", "attempt", attempt)
+			return
 		}
 
 		// Disconnect first (ignore errors — might already be disconnected)
-		m.manager.Disconnect()
+		_ = m.manager.Disconnect()
+
+		// One more cancellation check before the actual reconnect — manager
+		// Disconnect can take a moment and the user's cancel may land here.
+		if ctx.Err() != nil {
+			slog.Info("reconnection cancelled before reconnectFn", "attempt", attempt)
+			return
+		}
 
 		// Attempt reconnection
 		if err := m.reconnectFn(); err != nil {
@@ -209,6 +280,7 @@ func (m *Monitor) reconnectWithBackoff() {
 		m.notifyStatus(State{Reconnecting: false})
 		m.mu.Lock()
 		m.attempt = 0
+		m.retryCancel = nil
 		m.mu.Unlock()
 		return
 	}

@@ -33,6 +33,11 @@ type Client struct {
 	closeOnce sync.Once
 	closed    chan struct{}
 
+	// eventMu guards onEvent so that Subscribe (writer) and eventLoop (reader)
+	// can't race if Subscribe is ever called more than once on the same Client
+	// (shouldn't happen in current usage — helper reconnect creates a fresh
+	// Client — but defensive).
+	eventMu sync.Mutex
 	onEvent EventHandler
 }
 
@@ -137,7 +142,9 @@ func (c *Client) CallWithContext(ctx context.Context, method string, params inte
 // Subscribe opens a second connection and subscribes to events.
 // The handler is called for each event notification received.
 func (c *Client) Subscribe(handler EventHandler) error {
+	c.eventMu.Lock()
 	c.onEvent = handler
+	c.eventMu.Unlock()
 
 	conn, err := Dial(c.addr)
 	if err != nil {
@@ -207,8 +214,11 @@ func (c *Client) eventLoop() {
 		if err := json.Unmarshal(data, &notif); err != nil {
 			continue
 		}
-		if c.onEvent != nil {
-			c.onEvent(notif.Method, notif.Params)
+		c.eventMu.Lock()
+		handler := c.onEvent
+		c.eventMu.Unlock()
+		if handler != nil {
+			handler(notif.Method, notif.Params)
 		}
 	}
 }

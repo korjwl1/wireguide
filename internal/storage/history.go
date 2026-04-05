@@ -66,5 +66,15 @@ func (h *HistoryStore) save(records []SessionRecord) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(h.path, data, 0644)
+	// Atomic write + private permissions (history may include tunnel names
+	// and timestamps that are user-sensitive on multi-user systems).
+	tmp := h.path + ".tmp"
+	if err := os.WriteFile(tmp, data, 0600); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, h.path); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	return nil
 }

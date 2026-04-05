@@ -42,24 +42,24 @@
 </script>
 
 <div class="diag">
-  <h3>Network Diagnostics</h3>
+  <h3>{$t('tools.net_diag_title')}</h3>
 
   <!-- CIDR Calculator -->
   <section>
-    <h4>CIDR Calculator</h4>
+    <h4>{$t('tools.cidr_calc_title')}</h4>
     <div class="input-row">
-      <input type="text" bind:value={cidrInput} placeholder="192.168.1.0/24"
+      <input type="text" bind:value={cidrInput} placeholder={$t('tools.cidr_placeholder')}
         on:keydown={(e) => e.key === 'Enter' && calcCIDR()} />
-      <button on:click={calcCIDR}>Calculate</button>
+      <button on:click={calcCIDR}>{$t('tools.calculate')}</button>
     </div>
     {#if cidrResult}
       {#if cidrResult.error}
         <p class="error">{cidrResult.error}</p>
       {:else}
         <div class="result-grid">
-          <span class="label">Network</span><span>{cidrResult.network}</span>
-          <span class="label">Prefix</span><span>/{cidrResult.prefix_len}</span>
-          <span class="label">Hosts</span><span>{cidrResult.total_hosts?.toLocaleString()}</span>
+          <span class="label">{$t('tools.network')}</span><span>{cidrResult.network}</span>
+          <span class="label">{$t('tools.prefix')}</span><span>/{cidrResult.prefix_len}</span>
+          <span class="label">{$t('tools.hosts')}</span><span>{cidrResult.total_hosts?.toLocaleString()}</span>
         </div>
       {/if}
     {/if}
@@ -67,21 +67,21 @@
 
   <!-- Ping Test -->
   <section>
-    <h4>Endpoint Reachability</h4>
+    <h4>{$t('tools.endpoint_reach_title')}</h4>
     <div class="input-row">
-      <input type="text" bind:value={pingEndpoint} placeholder="vpn.example.com:51820"
+      <input type="text" bind:value={pingEndpoint} placeholder={$t('tools.endpoint_placeholder')}
         on:keydown={(e) => e.key === 'Enter' && runPing()} />
-      <button on:click={runPing} disabled={loading.ping}>Ping</button>
+      <button on:click={runPing} disabled={loading.ping}>{loading.ping ? $t('tools.pinging') : $t('tools.ping')}</button>
     </div>
     {#if pingResult}
       <div class="result-grid">
-        <span class="label">Host</span><span>{pingResult.host}</span>
-        <span class="label">Reachable</span>
+        <span class="label">{$t('tools.host')}</span><span>{pingResult.host}</span>
+        <span class="label">{$t('tools.reachable')}</span>
         <span class:green={pingResult.reachable} class:red={!pingResult.reachable}>
-          {pingResult.reachable ? 'Yes' : 'No'}
+          {pingResult.reachable ? '✓' : '✗'}
         </span>
         {#if pingResult.latency_ms}
-          <span class="label">Latency</span><span>{pingResult.latency_ms.toFixed(1)} ms</span>
+          <span class="label">{$t('tools.latency')}</span><span>{pingResult.latency_ms.toFixed(1)} ms</span>
         {/if}
       </div>
     {/if}
@@ -89,16 +89,16 @@
 
   <!-- Speed Test -->
   <section>
-    <h4>Speed Test</h4>
+    <h4>{$t('tools.speed_test_title')}</h4>
     <button class="btn-speed" on:click={runSpeed} disabled={loading.speed}>
-      {loading.speed ? 'Testing...' : 'Run Speed Test'}
+      {loading.speed ? '…' : $t('tools.run_speed_test')}
     </button>
     {#if speedResult}
       <div class="result-grid">
-        <span class="label">Download</span>
+        <span class="label">{$t('tools.download_speed')}</span>
         <span>{speedResult.download_mbps ? speedResult.download_mbps.toFixed(1) + ' Mbps' : '-'}</span>
         {#if speedResult.error}
-          <span class="label">Note</span><span class="muted">{speedResult.error}</span>
+          <span class="label">{$t('tools.note')}</span><span class="muted">{speedResult.error}</span>
         {/if}
       </div>
     {/if}

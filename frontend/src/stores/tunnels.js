@@ -6,27 +6,15 @@ export const selectedTunnel = writable(null);
 export const connectionStatus = writable({ state: 'disconnected' });
 
 let statusUnsub = null;
-let tunnelsUnsub = null;
 
-// Subscribe to backend events — no polling.
-// The Go backend pushes updates whenever state changes.
+// Subscribe to backend status events. The tunnel list is not event-driven
+// on the backend side — it's refreshed manually via `refreshTunnels()` after
+// each mutating operation (connect/disconnect/create/delete/rename).
 export function subscribeToEvents() {
   unsubscribe();
 
   statusUnsub = Events.On('status', (event) => {
     connectionStatus.set(event.data);
-  });
-
-  tunnelsUnsub = Events.On('tunnels', (event) => {
-    const list = event.data.tunnels || [];
-    tunnels.set(list);
-
-    // Keep selectedTunnel reference in sync with new list
-    const sel = get(selectedTunnel);
-    if (sel) {
-      const updated = list.find((t) => t.name === sel.name);
-      if (updated) selectedTunnel.set(updated);
-    }
   });
 }
 
@@ -34,10 +22,6 @@ export function unsubscribe() {
   if (statusUnsub) {
     statusUnsub();
     statusUnsub = null;
-  }
-  if (tunnelsUnsub) {
-    tunnelsUnsub();
-    tunnelsUnsub = null;
   }
 }
 

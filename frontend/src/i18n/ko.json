@@ -2,16 +2,24 @@
   "app": {
     "name": "WireGuide",
     "disconnected": "연결 안 됨",
-    "connecting": "연결 중...",
+    "connecting": "연결 중…",
     "connected": "연결됨",
     "error": "오류"
   },
+  "nav": {
+    "tunnels": "터널",
+    "tools": "도구",
+    "logs": "로그",
+    "settings": "설정"
+  },
   "tunnel": {
     "list_title": "터널",
-    "search": "검색...",
+    "search": "검색…",
     "no_tunnels": "구성된 터널이 없습니다",
-    "drop_hint": ".conf 파일을 여기에 드래그하거나 Import를 클릭하세요",
-    "import": "Import",
+    "no_selection": "왼쪽에서 터널을 선택하거나 새로 만드세요",
+    "drop_hint": ".conf 파일을 끌어다 놓거나 가져오기를 누르세요",
+    "drop_overlay": ".conf 파일을 놓으면 가져옵니다",
+    "import": "가져오기",
     "new_tunnel": "새 터널",
     "connect": "연결",
     "disconnect": "연결 해제",
@@ -20,7 +28,7 @@
     "export": "내보내기",
     "status": "상태",
     "endpoint": "엔드포인트",
-    "allowed_ips": "허용된 IP",
+    "allowed_ips": "허용 IP",
     "public_key": "공개 키",
     "handshake": "핸드셰이크",
     "duration": "연결 시간",
@@ -28,11 +36,12 @@
     "tx": "업로드",
     "kill_switch": "킬 스위치",
     "dns_protection": "DNS 보호",
-    "details": "상세 정보"
+    "details": "상세 정보",
+    "rename_hint": "두 번 클릭해서 이름 변경"
   },
   "import": {
     "title": "터널 가져오기",
-    "drop_file": ".conf 파일을 여기에 드래그하세요",
+    "drop_file": ".conf 파일을 여기에 놓으세요",
     "or": "또는",
     "select_file": "파일 선택",
     "from_clipboard": "클립보드에서 붙여넣기",
@@ -52,7 +61,7 @@
   },
   "scripts": {
     "warning_title": "스크립트 경고",
-    "warning_message": "이 설정에 시스템 명령 실행 스크립트가 포함되어 있습니다:",
+    "warning_message": "이 설정에는 실행될 시스템 명령이 포함되어 있습니다:",
     "allow": "허용",
     "deny": "거부",
     "denied_note": "이 터널의 스크립트는 실행되지 않습니다."
@@ -62,11 +71,18 @@
     "general": "일반",
     "auto_start": "시작 시 자동 실행",
     "theme": "테마",
+    "theme_dark": "어두움",
+    "theme_light": "밝음",
+    "theme_system": "시스템",
     "language": "언어",
-    "connection": "연결",
-    "auto_reconnect": "자동 재연결",
+    "lang_auto": "자동",
+    "close": "닫기",
     "advanced": "고급",
-    "log_level": "로그 레벨"
+    "log_level": "로그 수준",
+    "log_level_debug": "디버그",
+    "log_level_info": "정보",
+    "log_level_warn": "경고",
+    "log_level_error": "오류"
   },
   "confirm": {
     "delete_title": "터널 삭제",
@@ -92,11 +108,12 @@
     "title": "로그",
     "clear": "지우기",
     "auto_scroll": "자동 스크롤",
-    "no_entries": "로그 항목 없음"
+    "no_entries": "로그 항목 없음",
+    "filter_all": "전체"
   },
   "notify": {
     "disconnected": "VPN 연결이 끊겼습니다",
-    "reconnecting": "{name}에 재연결 중...",
+    "reconnecting": "{name}에 재연결 중…",
     "reconnected": "{name}에 재연결되었습니다",
     "kill_switch_active": "킬 스위치 활성화 — 인터넷 차단됨",
     "error": "VPN 오류: {message}"
@@ -104,5 +121,102 @@
   "daemon": {
     "not_running": "WireGuide 데몬이 실행되지 않고 있습니다",
     "install_hint": "데몬 시작: sudo wireguided"
+  },
+  "tools": {
+    "tab_diagnostics": "진단",
+    "tab_dns_leak": "DNS 유출 검사",
+    "tab_routes": "라우트",
+    "net_diag_title": "네트워크 진단",
+    "cidr_calc_title": "CIDR 계산기",
+    "cidr_placeholder": "예: 10.0.0.0/24",
+    "calculate": "계산",
+    "network": "네트워크",
+    "prefix": "프리픽스",
+    "hosts": "호스트 수",
+    "endpoint_reach_title": "엔드포인트 도달성",
+    "endpoint_placeholder": "호스트:포트",
+    "ping": "핑",
+    "pinging": "핑 보내는 중…",
+    "host": "호스트",
+    "reachable": "도달 가능",
+    "latency": "지연 시간",
+    "speed_test_title": "속도 테스트",
+    "run_speed_test": "실행",
+    "download_speed": "다운로드",
+    "note": "참고",
+    "dns_leak_title": "DNS 유출 검사",
+    "dns_leak_run": "검사 시작",
+    "dns_leak_checking": "DNS 설정 확인 중…",
+    "dns_leak_safe": "DNS 유출이 감지되지 않았습니다",
+    "dns_leak_leaked": "DNS 유출이 감지되었습니다",
+    "dns_servers_detected": "감지된 DNS 서버",
+    "route_title": "라우트 테이블",
+    "route_reload": "새로고침",
+    "route_header_dest": "목적지",
+    "route_header_gateway": "게이트웨이",
+    "route_header_iface": "인터페이스",
+    "route_vpn_badge": "VPN",
+    "route_legend_vpn": "VPN 경로",
+    "route_legend_direct": "직접 경로"
+  },
+  "new_tunnel": {
+    "title": "새 터널",
+    "mode_form": "폼",
+    "mode_text": "텍스트",
+    "section_interface": "인터페이스",
+    "name_label": "이름",
+    "name_placeholder": "my-tunnel",
+    "private_key_label": "개인 키",
+    "generate": "생성",
+    "address_label": "주소",
+    "dns_label": "DNS",
+    "mtu_label": "MTU",
+    "section_peer": "피어",
+    "peer_public_key_label": "공개 키",
+    "peer_psk_label": "사전 공유 키 (선택)",
+    "peer_endpoint_label": "엔드포인트",
+    "peer_allowed_ips_label": "허용 IP",
+    "peer_keepalive_label": "Persistent Keepalive",
+    "create": "만들기",
+    "cancel": "취소"
+  },
+  "keygen": {
+    "private_key": "개인 키",
+    "public_key": "공개 키",
+    "generate": "키 쌍 새로 생성",
+    "copy": "복사"
+  },
+  "split_tunnel": {
+    "title": "스플릿 터널",
+    "no_subnets": "추가된 서브넷이 없습니다",
+    "add": "추가",
+    "subnet_placeholder": "10.0.0.0/24"
+  },
+  "stats": {
+    "speed_graph": "속도 그래프",
+    "waiting": "데이터 대기 중…",
+    "rx": "다운로드",
+    "tx": "업로드"
+  },
+  "conflict": {
+    "title": "라우팅 충돌 감지",
+    "message": "연결하면 위 인터페이스들의 트래픽 라우팅에 영향이 있을 수 있습니다. 더 구체적인 경로가 우선 적용됩니다.",
+    "proceed": "그래도 연결",
+    "cancel": "취소"
+  },
+  "update": {
+    "available": "업데이트 있음: v{version}",
+    "current": "현재: v{version}",
+    "update_now": "지금 업데이트",
+    "release_notes": "릴리스 노트"
+  },
+  "wifi_rules": {
+    "title": "Wi-Fi 규칙",
+    "connect_untrusted": "신뢰하지 않는 Wi-Fi에서 자동 연결",
+    "trusted_ssids": "신뢰하는 네트워크",
+    "ssid_tunnel_map": "SSID별 자동 연결",
+    "add_trusted": "추가",
+    "ssid_placeholder": "네트워크 이름 (SSID)",
+    "select_tunnel": "터널 선택…"
   }
 }

@@ -2,6 +2,8 @@
   import { createEventDispatcher } from 'svelte';
   import SplitTunnelUI from './SplitTunnelUI.svelte';
   import ConfigEditor from './ConfigEditor.svelte';
+  import { errText } from './errors.js';
+  import { t } from '../i18n/index.js';
 
   export let TunnelService;
   const dispatch = createEventDispatcher();
@@ -38,7 +40,7 @@
       bytes[31] |= 64;
       privateKey = btoa(String.fromCharCode(...bytes));
     } catch (e) {
-      errors = ['Key generation failed: ' + e.toString()];
+      errors = ['Key generation failed: ' + errText(e)];
     }
     generating = false;
   }
@@ -95,7 +97,7 @@ AllowedIPs = 0.0.0.0/0, ::/0
       await TunnelService.ImportConfig(name, content);
       dispatch('save', { name, content });
     } catch (e) {
-      errors = [e.toString()];
+      errors = [errText(e)];
     }
   }
 
@@ -107,59 +109,59 @@ AllowedIPs = 0.0.0.0/0, ::/0
 <div class="modal-backdrop" on:click={() => dispatch('close')}>
   <div class="modal" on:click|stopPropagation>
     <div class="modal-header">
-      <h3>New Tunnel</h3>
+      <h3>{$t('new_tunnel.title')}</h3>
       <div class="mode-tabs">
-        <button class:active={mode === 'form'} on:click={() => mode = 'form'}>Form</button>
-        <button class:active={mode === 'text'} on:click={switchToText}>Text</button>
+        <button class:active={mode === 'form'} on:click={() => mode = 'form'}>{$t('new_tunnel.mode_form')}</button>
+        <button class:active={mode === 'text'} on:click={switchToText}>{$t('new_tunnel.mode_text')}</button>
       </div>
     </div>
 
     <section>
-      <label>Tunnel Name *</label>
-      <input type="text" bind:value={name} placeholder="my-vpn" />
+      <label>{$t('new_tunnel.name_label')} *</label>
+      <input type="text" bind:value={name} placeholder={$t('new_tunnel.name_placeholder')} />
     </section>
 
     {#if mode === 'form'}
       <section>
-        <h4>Interface</h4>
+        <h4>{$t('new_tunnel.section_interface')}</h4>
 
-        <label>Private Key *</label>
+        <label>{$t('new_tunnel.private_key_label')} *</label>
         <div class="key-row">
-          <input type="text" bind:value={privateKey} placeholder="Generate or paste base64 key" />
-          <button class="btn-gen" on:click={generateKey} disabled={generating}>Generate</button>
+          <input type="text" bind:value={privateKey} placeholder="base64" />
+          <button class="btn-gen" on:click={generateKey} disabled={generating}>{$t('new_tunnel.generate')}</button>
         </div>
 
-        <label>Address *</label>
+        <label>{$t('new_tunnel.address_label')} *</label>
         <input type="text" bind:value={address} placeholder="10.0.0.2/24" />
 
         <div class="row-2">
           <div>
-            <label>DNS</label>
+            <label>{$t('new_tunnel.dns_label')}</label>
             <input type="text" bind:value={dns} placeholder="1.1.1.1" />
           </div>
           <div>
-            <label>MTU</label>
+            <label>{$t('new_tunnel.mtu_label')}</label>
             <input type="text" bind:value={mtu} placeholder="1420" />
           </div>
         </div>
       </section>
 
       <section>
-        <h4>Peer</h4>
+        <h4>{$t('new_tunnel.section_peer')}</h4>
 
-        <label>Public Key *</label>
-        <input type="text" bind:value={peerPublicKey} placeholder="base64 peer public key" />
+        <label>{$t('new_tunnel.peer_public_key_label')} *</label>
+        <input type="text" bind:value={peerPublicKey} placeholder="base64" />
 
-        <label>Endpoint</label>
+        <label>{$t('new_tunnel.peer_endpoint_label')}</label>
         <input type="text" bind:value={peerEndpoint} placeholder="vpn.example.com:51820" />
 
-        <label>Preshared Key (optional)</label>
-        <input type="text" bind:value={peerPSK} placeholder="base64 preshared key" />
+        <label>{$t('new_tunnel.peer_psk_label')}</label>
+        <input type="text" bind:value={peerPSK} placeholder="base64" />
 
-        <label>AllowedIPs</label>
+        <label>{$t('new_tunnel.peer_allowed_ips_label')}</label>
         <SplitTunnelUI {allowedIPs} on:change={updateAllowedIPs} />
 
-        <label>Persistent Keepalive (seconds, optional)</label>
+        <label>{$t('new_tunnel.peer_keepalive_label')}</label>
         <input type="text" bind:value={keepalive} placeholder="25" />
       </section>
     {:else}
@@ -177,8 +179,8 @@ AllowedIPs = 0.0.0.0/0, ::/0
     {/if}
 
     <div class="modal-footer">
-      <button class="btn btn-save" on:click={save}>Create</button>
-      <button class="btn btn-cancel" on:click={() => dispatch('close')}>Cancel</button>
+      <button class="btn btn-save" on:click={save}>{$t('new_tunnel.create')}</button>
+      <button class="btn btn-cancel" on:click={() => dispatch('close')}>{$t('new_tunnel.cancel')}</button>
     </div>
   </div>
 </div>
@@ -187,7 +189,7 @@ AllowedIPs = 0.0.0.0/0, ::/0
   .modal-backdrop {
     position: fixed;
     inset: 0;
-    background: rgba(0,0,0,0.6);
+    background: var(--overlay-bg);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -310,6 +312,6 @@ AllowedIPs = 0.0.0.0/0, ::/0
     cursor: pointer;
     font-size: 13px;
   }
-  .btn-save { background: var(--green); color: #fff; }
+  .btn-save { background: var(--green); color: var(--text-inverse); }
   .btn-cancel { background: var(--bg-card); color: var(--text-primary); border: 1px solid var(--border); }
 </style>

@@ -14,8 +14,8 @@ import (
 )
 
 const (
-	githubRepo  = "korjwl1/wireguide"
-	apiEndpoint = "https://api.github.com/repos/" + githubRepo + "/releases/latest"
+	githubRepo     = "korjwl1/wireguide"
+	apiEndpoint    = "https://api.github.com/repos/" + githubRepo + "/releases/latest"
 	currentVersion = "0.2.0"
 )
 
@@ -38,14 +38,14 @@ type Asset struct {
 
 // UpdateInfo contains information about an available update.
 type UpdateInfo struct {
-	Available   bool   `json:"available"`
-	Version     string `json:"version"`
-	CurrentVer  string `json:"current_version"`
-	ReleaseURL  string `json:"release_url"`
-	DownloadURL string `json:"download_url"`
+	Available    bool   `json:"available"`
+	Version      string `json:"version"`
+	CurrentVer   string `json:"current_version"`
+	ReleaseURL   string `json:"release_url"`
+	DownloadURL  string `json:"download_url"`
 	ReleaseNotes string `json:"release_notes"`
-	AssetName   string `json:"asset_name"`
-	AssetSize   int64  `json:"asset_size"`
+	AssetName    string `json:"asset_name"`
+	AssetSize    int64  `json:"asset_size"`
 }
 
 // CheckForUpdate queries GitHub Releases API for newer version.

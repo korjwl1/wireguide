@@ -13,6 +13,10 @@
   import StatsDashboard from './lib/StatsDashboard.svelte';
   import NewTunnelDialog from './lib/NewTunnelDialog.svelte';
   import { tunnels, selectedTunnel, refreshTunnels, refreshStatus, subscribeToEvents, unsubscribe, initialLoad, connectionStatus } from './stores/tunnels.js';
+  import { applyTheme, initThemeWatcher } from './stores/theme.js';
+  import { startLogListener, stopLogListener } from './stores/logs.js';
+  import { errText } from './lib/errors.js';
+  import { t, setLanguage, detectLanguage } from './i18n/index.js';
   import { TunnelService } from '../bindings/github.com/korjwl1/wireguide/internal/app';
 
   // View state
@@ -30,17 +34,33 @@
   let editorContent = '';
   let editorErrors = [];
   let toast = '';
+  let toastTimer = null;
   let filesDroppedUnsub = null;
+  let helperUnsub = null;
+  let helperResetUnsub = null;
 
   onMount(async () => {
-    // Load and apply saved theme before loading other data
+    // Load and apply saved theme before loading other data.
+    // applyTheme sets the data-theme attribute AND the resolvedTheme store
+    // that CodeMirror subscribes to for its own light/dark swap.
     try {
       const s = await TunnelService.GetSettings();
-      const theme = s?.Theme || 'system';
-      document.documentElement.setAttribute('data-theme', theme);
+      applyTheme(s?.theme || 'system');
+      // Apply persisted language. 'auto' means "follow OS locale" — we
+      // resolve that via detectLanguage(). Without this, launching the
+      // app always showed the detected language even if the user had
+      // explicitly picked Korean before.
+      const lang = s?.language || 'auto';
+      setLanguage(lang === 'auto' ? detectLanguage() : lang);
     } catch (e) {
-      document.documentElement.setAttribute('data-theme', 'system');
+      applyTheme('system');
     }
+    initThemeWatcher();
+
+    // Start piping backend log events into the LogViewer store BEFORE
+    // initialLoad so the first slog records (tunnel list scan, etc.) are
+    // captured. Idempotent.
+    startLogListener();
 
     await initialLoad(TunnelService);
     subscribeToEvents();
@@ -60,7 +80,7 @@
     });
 
     // Helper health events (crash detection)
-    Events.On('helper', (event) => {
+    helperUnsub = Events.On('helper', (event) => {
       const { alive, message } = event.data || {};
       if (!alive) {
         showToast('⚠ ' + (message || 'Helper process disconnected'));
@@ -68,16 +88,28 @@
         showToast('Helper reconnected');
       }
     });
+
+    // Helper reset — the GUI's IPC client was swapped after a helper
+    // restart. Local caches may be stale; re-fetch everything.
+    helperResetUnsub = Events.On('helper_reset', async () => {
+      await initialLoad(TunnelService);
+      await refreshStatus(TunnelService);
+    });
   });
 
   onDestroy(() => {
     unsubscribe();
+    stopLogListener();
     if (filesDroppedUnsub) filesDroppedUnsub();
+    if (helperUnsub) helperUnsub();
+    if (helperResetUnsub) helperResetUnsub();
+    if (toastTimer) clearTimeout(toastTimer);
   });
 
   function showToast(msg) {
+    if (toastTimer) clearTimeout(toastTimer);
     toast = msg;
-    setTimeout(() => { toast = ''; }, 3000);
+    toastTimer = setTimeout(() => { toast = ''; toastTimer = null; }, 3000);
   }
 
   // Generate a unique tunnel name by appending -1, -2, etc. if needed.
@@ -105,7 +137,7 @@
       showToast(`Imported "${name}"`);
       await refreshTunnels(TunnelService);
     } catch (e) {
-      showToast('Import failed: ' + e.toString());
+      showToast("Import failed: " + errText(e));
     }
   }
 
@@ -125,7 +157,7 @@
       showToast(`Imported "${name}"`);
       await refreshTunnels(TunnelService);
     } catch (e) {
-      showToast('Import failed: ' + e.toString());
+      showToast("Import failed: " + errText(e));
     }
   }
 
@@ -209,7 +241,7 @@
       await refreshTunnels(TunnelService);
       await refreshStatus(TunnelService);
     } catch (e) {
-      showToast('Connect failed: ' + e.toString());
+      showToast("Connect failed: " + errText(e));
     }
   }
 
@@ -246,38 +278,51 @@
   }
 </script>
 
-<div class="app" data-file-drop-target>
-  <!-- Wails adds .file-drop-target-active class to .app when dragging files -->
-  <div class="drop-overlay">
-    <div class="drop-overlay-content">
-      <div class="drop-icon">↓</div>
-      <div class="drop-text">Drop .conf file to import</div>
+<!-- The `$: $locale` subscription in the script block lets every `$t(...)`
+     call inside this template re-evaluate on language change. Modals are
+     separate components mounted conditionally below; they pick up the new
+     language on their next open (deliberate — otherwise changing language
+     mid-interaction would destroy the modal). -->
+<div class="app" class:modal-open={showSettings || showEditor || showNewTunnel || showScriptWarning} data-file-drop-target={!(showSettings || showEditor || showNewTunnel || showScriptWarning) && currentView === 'tunnels' ? true : undefined}>
+  <!-- Wails adds .file-drop-target-active class to .app when dragging files.
+       We only render the overlay when drop-target is actually active — i.e.
+       on the tunnels view with no modal open — so it can never steal clicks
+       from modals. The data-file-drop-target attribute above also removes
+       the drop affordance entirely in those states so Wails doesn't even
+       detect the drag. -->
+  {#if currentView === 'tunnels' && !(showSettings || showEditor || showNewTunnel || showScriptWarning)}
+    <div class="drop-overlay">
+      <div class="drop-overlay-content">
+        <div class="drop-icon">↓</div>
+        <div class="drop-text">{$t('tunnel.drop_overlay')}</div>
+      </div>
     </div>
-  </div>
+  {/if}
 
   {#if toast}
     <div class="toast">{toast}</div>
   {/if}
 
   <div class="layout">
-    <!-- Sidebar navigation -->
     <nav class="sidebar">
       <div class="app-title">WireGuide</div>
       <button class="nav-item" class:active={currentView === 'tunnels'} on:click={() => currentView = 'tunnels'}>
-        <span class="nav-icon">◎</span> Tunnels
+        <span class="nav-icon">◎</span> {$t('nav.tunnels')}
       </button>
       <button class="nav-item" class:active={currentView === 'tools'} on:click={() => currentView = 'tools'}>
-        <span class="nav-icon">⚙</span> Tools
+        <span class="nav-icon">◈</span> {$t('nav.tools')}
       </button>
       <button class="nav-item" class:active={currentView === 'logs'} on:click={() => currentView = 'logs'}>
-        <span class="nav-icon">≡</span> Logs
+        <span class="nav-icon">≡</span> {$t('nav.logs')}
       </button>
 
       <div class="nav-spacer"></div>
 
-      <button class="nav-item" on:click={() => showSettings = true}>
-        <span class="nav-icon">⚙</span> Settings
-      </button>
+      <div class="nav-footer">
+        <button class="nav-item" on:click={() => showSettings = true}>
+          <span class="nav-icon">⚙</span> {$t('nav.settings')}
+        </button>
+      </div>
     </nav>
 
     <!-- Main content -->
@@ -294,17 +339,17 @@
                 on:export={handleExport}
                 on:connect={handleConnect}
                 on:refresh={handleRefresh} />
-              {#if $selectedTunnel?.is_connected && $connectionStatus?.state === 'connected'}
+              {#if $connectionStatus?.state === 'connected' && $connectionStatus?.tunnel_name === $selectedTunnel?.name}
                 <div class="stats-section">
                   <StatsDashboard />
                 </div>
               {/if}
             {:else}
               <div class="empty-detail">
-                <p>Select a tunnel or create a new one</p>
+                <p>{$t('tunnel.no_selection')}</p>
                 <div class="empty-actions">
-                  <button class="btn-primary" on:click={handleNewTunnelOpen}>+ New Tunnel</button>
-                  <button class="btn-secondary" on:click={handleImportOpen}>Import .conf</button>
+                  <button class="btn-primary" on:click={handleNewTunnelOpen}>+ {$t('tunnel.new_tunnel')}</button>
+                  <button class="btn-secondary" on:click={handleImportOpen}>↓ {$t('tunnel.import')}</button>
                 </div>
               </div>
             {/if}
@@ -313,9 +358,9 @@
       {:else if currentView === 'tools'}
         <div class="tools-view">
           <div class="tools-tabs">
-            <button class:active={toolsTab === 'diagnostics'} on:click={() => toolsTab = 'diagnostics'}>Diagnostics</button>
-            <button class:active={toolsTab === 'dnsleak'} on:click={() => toolsTab = 'dnsleak'}>DNS Leak Test</button>
-            <button class:active={toolsTab === 'routes'} on:click={() => toolsTab = 'routes'}>Routes</button>
+            <button class:active={toolsTab === 'diagnostics'} on:click={() => toolsTab = 'diagnostics'}>{$t('tools.tab_diagnostics')}</button>
+            <button class:active={toolsTab === 'dnsleak'} on:click={() => toolsTab = 'dnsleak'}>{$t('tools.tab_dns_leak')}</button>
+            <button class:active={toolsTab === 'routes'} on:click={() => toolsTab = 'routes'}>{$t('tools.tab_routes')}</button>
           </div>
           <div class="tools-content">
             {#if toolsTab === 'diagnostics'}
@@ -355,7 +400,7 @@
   {/if}
 
   {#if showSettings}
-    <Settings {TunnelService} on:close={() => showSettings = false} />
+    <Settings {TunnelService} onClose={() => showSettings = false} />
   {/if}
 
   {#if showScriptWarning}
@@ -372,7 +417,9 @@
     margin: 0;
     background: var(--bg-primary);
     color: var(--text-primary);
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    font-family: var(--font-sans);
+    font-size: 13px;
+    line-height: 1.38;
     overflow: hidden;
   }
   .app {
@@ -380,92 +427,148 @@
     height: 100vh;
     position: relative;
   }
-  /* Drop overlay — hidden by default, shown when Wails adds .file-drop-target-active */
+
+  /* ---------- Drop overlay ----------
+   * IMPORTANT: this sits at z-index 1000 and covers the full viewport.
+   * `pointer-events: none` is NOT enough on WebKit — a compositing layer
+   * created by `backdrop-filter` on a full-viewport element intercepts
+   * custom <button> clicks (form controls like <select>/<input> use a
+   * separate native event path and still work, which is why the bug
+   * looked inconsistent: modal selects worked, modal close buttons
+   * didn't). We use `visibility: hidden` by default so the element is
+   * completely removed from hit-testing until a drag is actually in
+   * progress. `visibility` still transitions with opacity because we
+   * only toggle it on the active class.
+   */
   .drop-overlay {
     position: fixed;
     inset: 0;
-    background: rgba(15, 52, 96, 0.75);
-    backdrop-filter: blur(4px);
-    -webkit-backdrop-filter: blur(4px);
+    background: var(--drop-overlay-bg);
     display: flex;
     align-items: center;
     justify-content: center;
     pointer-events: none;
     z-index: 1000;
     opacity: 0;
-    transition: opacity 150ms ease;
+    visibility: hidden;
+  }
+  @media (prefers-reduced-motion: no-preference) {
+    .drop-overlay { transition: opacity var(--dur-base) var(--ease-out); }
   }
   :global(.file-drop-target-active) > .drop-overlay {
     opacity: 1;
+    visibility: visible;
+    backdrop-filter: blur(10px) saturate(180%);
+    -webkit-backdrop-filter: blur(10px) saturate(180%);
   }
   .drop-overlay-content {
-    padding: 48px 64px;
+    padding: var(--space-10) var(--space-12);
     background: var(--bg-primary);
-    border: 3px dashed var(--green);
-    border-radius: 16px;
+    border: 2px dashed var(--accent);
+    border-radius: var(--radius-lg);
     text-align: center;
-    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+    box-shadow: var(--shadow-lg);
   }
   .drop-icon {
-    font-size: 48px;
-    color: var(--green);
-    margin-bottom: 12px;
+    font-size: 40px;
+    color: var(--accent);
+    margin-bottom: var(--space-2);
     line-height: 1;
   }
   .drop-text {
-    font-size: 18px;
+    font: var(--text-title-3);
     color: var(--text-primary);
-    font-weight: 500;
   }
+
+  /* ---------- Layout ---------- */
   .layout {
     display: flex;
     height: 100%;
   }
+
+  /* ---------- Sidebar (macOS source-list style) ---------- */
   .sidebar {
-    width: 180px;
+    width: 200px;
     background: var(--bg-secondary);
-    border-right: 1px solid var(--border);
+    border-right: 0.5px solid var(--border);
     display: flex;
     flex-direction: column;
-    padding-top: 52px; /* macOS titlebar space */
+    padding-top: 52px; /* traffic-light clearance */
   }
   .app-title {
-    padding: 8px 16px 16px;
-    font-size: 14px;
-    font-weight: 600;
-    color: var(--text-secondary);
+    padding: var(--space-2) var(--space-4) var(--space-4);
+    font: 500 10px/13px var(--font-sans);
+    color: var(--text-muted);
     text-transform: uppercase;
-    letter-spacing: 1px;
+    letter-spacing: 0.08em;
   }
   .nav-item {
     display: flex;
     align-items: center;
-    gap: 8px;
-    padding: 10px 16px;
+    gap: var(--space-2);
+    height: var(--row-std);
+    padding: 0 var(--space-2) 0 var(--space-4);
+    margin: 0 var(--space-2);
     background: transparent;
-    border: none;
+    border: 0;
+    border-radius: var(--radius-sm);
     color: var(--text-secondary);
-    font-size: 13px;
+    font: var(--text-body);
     cursor: pointer;
     text-align: left;
-    transition: background 150ms;
+  }
+  @media (prefers-reduced-motion: no-preference) {
+    .nav-item {
+      transition: background-color var(--dur-fast) var(--ease-out),
+                  color var(--dur-fast) var(--ease-out);
+    }
   }
   .nav-item:hover {
     background: var(--bg-hover);
     color: var(--text-primary);
   }
   .nav-item.active {
-    background: var(--bg-active);
+    background: var(--bg-selected);
     color: var(--text-primary);
+    font-weight: 500;
   }
   .nav-icon {
-    font-size: 14px;
-    width: 16px;
+    font-size: 13px;
+    width: 18px;
     text-align: center;
+    opacity: 0.9;
   }
   .nav-spacer {
     flex: 1;
   }
+
+  /* Sidebar footer — hairline divider defines a dedicated Settings region.
+   * The button inside fills the ENTIRE footer area (no horizontal margin,
+   * flush edges, taller height) so anywhere the user clicks below the
+   * separator line registers as a Settings tap. Drawing a separator and
+   * then making only a narrow pill clickable would be a broken affordance. */
+  .nav-footer {
+    border-top: 0.5px solid var(--border);
+    display: flex;
+    flex-direction: column;
+  }
+  .nav-footer .nav-item {
+    /* Override the default .nav-item pill treatment — in the footer the
+     * button IS the full-width bar, not a floating rounded item. */
+    margin: 0;
+    width: 100%;
+    height: 44px;
+    padding: 0 var(--space-4);
+    border-radius: 0;
+  }
+  .nav-footer .nav-item:hover {
+    background: var(--bg-hover);
+  }
+  .nav-footer .nav-item:active {
+    background: var(--bg-active);
+  }
+
+  /* ---------- Main content ---------- */
   .main-content {
     flex: 1;
     display: flex;
@@ -479,51 +582,68 @@
   }
   .tunnel-list-pane {
     width: 240px;
-    border-right: 1px solid var(--border);
+    border-right: 0.5px solid var(--border);
     overflow-y: auto;
+    background: var(--bg-secondary);
   }
   .tunnel-detail-pane {
     flex: 1;
     display: flex;
     flex-direction: column;
     overflow-y: auto;
+    background: var(--bg-primary);
   }
   .stats-section {
-    padding: 0 24px 16px;
+    padding: 0 var(--space-6) var(--space-4);
   }
+
+  /* ---------- Empty state ---------- */
   .empty-detail {
     display: flex;
     flex-direction: column;
     align-items: center;
     justify-content: center;
     flex: 1;
-    color: var(--text-muted);
-    gap: 16px;
+    color: var(--text-secondary);
+    gap: var(--space-4);
+    font: var(--text-body);
   }
   .empty-actions {
     display: flex;
-    gap: 8px;
+    gap: var(--space-2);
   }
   .btn-primary {
-    padding: 8px 16px;
-    background: var(--green);
-    border: none;
-    border-radius: 6px;
-    color: #fff;
+    height: 28px;
+    padding: 0 var(--space-4);
+    background: var(--accent);
+    border: 0;
+    border-radius: var(--radius-sm);
+    color: var(--text-inverse);
     cursor: pointer;
-    font-size: 13px;
+    font: var(--text-headline);
   }
+  .btn-primary:hover { filter: brightness(1.08); }
+  .btn-primary:active { filter: brightness(0.94); }
   .btn-secondary {
-    padding: 8px 16px;
+    height: 28px;
+    padding: 0 var(--space-4);
     background: var(--bg-card);
-    border: 1px solid var(--border);
-    border-radius: 6px;
+    border: 0.5px solid var(--border);
+    border-radius: var(--radius-sm);
     color: var(--text-primary);
     cursor: pointer;
-    font-size: 13px;
+    font: var(--text-headline);
+  }
+  .btn-secondary:hover { background: var(--bg-hover); }
+  .btn-secondary:active { background: var(--bg-active); }
+  @media (prefers-reduced-motion: no-preference) {
+    .btn-primary, .btn-secondary {
+      transition: background-color var(--dur-fast) var(--ease-out),
+                  filter var(--dur-fast) var(--ease-out);
+    }
   }
 
-  /* Tools view */
+  /* ---------- Tools view (tab bar + content) ---------- */
   .tools-view {
     flex: 1;
     display: flex;
@@ -532,27 +652,36 @@
   }
   .tools-tabs {
     display: flex;
-    gap: 4px;
-    padding: 0 16px;
-    border-bottom: 1px solid var(--border);
+    gap: var(--space-1);
+    padding: 0 var(--space-4);
+    border-bottom: 0.5px solid var(--border);
   }
   .tools-tabs button {
-    padding: 8px 16px;
+    height: 32px;
+    padding: 0 var(--space-3);
     background: transparent;
-    border: none;
+    border: 0;
     border-bottom: 2px solid transparent;
     color: var(--text-secondary);
     cursor: pointer;
-    font-size: 13px;
+    font: var(--text-body);
   }
+  @media (prefers-reduced-motion: no-preference) {
+    .tools-tabs button {
+      transition: color var(--dur-fast) var(--ease-out),
+                  border-color var(--dur-fast) var(--ease-out);
+    }
+  }
+  .tools-tabs button:hover { color: var(--text-primary); }
   .tools-tabs button.active {
     color: var(--text-primary);
     border-bottom-color: var(--accent);
+    font-weight: 500;
   }
   .tools-content {
     flex: 1;
     overflow-y: auto;
-    padding: 16px;
+    padding: var(--space-4);
   }
 
   .logs-view {
@@ -562,26 +691,33 @@
     flex-direction: column;
   }
 
+  /* ---------- Toast (bottom-centre) ---------- */
   .toast {
     position: fixed;
-    bottom: 24px;
+    bottom: var(--space-6);
     left: 50%;
     transform: translateX(-50%);
-    padding: 12px 20px;
+    padding: var(--space-3) var(--space-4);
     background: var(--bg-card);
-    border: 1px solid var(--border);
-    border-radius: 8px;
+    border: 0.5px solid var(--border);
+    border-radius: var(--radius-md);
     color: var(--text-primary);
-    font-size: 13px;
-    box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+    font: var(--text-body);
+    box-shadow: var(--shadow-md);
     z-index: 300;
   }
 
-  /* Modal */
+  /* ---------- Modal (shared) ---------- */
   .modal-backdrop {
     position: fixed;
     inset: 0;
-    background: rgba(0,0,0,0.6);
+    background: var(--overlay-bg);
+    /* NOTE: no backdrop-filter here. WebKit has a known compositing bug
+     * where a child element's box-shadow "bleeds" through the parent's
+     * backdrop-filter pass, producing a grey halo around the modal's
+     * rounded corners (especially visible at modal open/close transitions).
+     * The opaque overlay is enough to separate the modal from the app
+     * behind it — blur costs clarity for no visual gain here. */
     display: flex;
     align-items: center;
     justify-content: center;
@@ -589,86 +725,126 @@
   }
   .modal {
     background: var(--bg-primary);
-    border: 1px solid var(--border);
-    border-radius: 12px;
-    padding: 24px;
-    width: 420px;
+    border: 0.5px solid var(--border);
+    border-radius: var(--radius-lg);
+    padding: var(--space-5);
+    width: 440px;
     max-height: 80vh;
     overflow-y: auto;
+    box-shadow: var(--shadow-lg);
   }
-  .modal-editor { width: 600px; height: 500px; padding: 0; overflow: hidden; }
-  .modal h3 { margin: 0 0 16px; color: var(--text-primary); }
+  .modal-editor {
+    width: 640px;
+    height: 520px;
+    padding: 0;
+    overflow: hidden;
+  }
+  .modal h3 {
+    margin: 0 0 var(--space-4);
+    color: var(--text-primary);
+    font: var(--text-title-2);
+  }
   .modal label {
     display: block;
-    margin: 12px 0 4px;
-    font-size: 12px;
+    margin: var(--space-3) 0 var(--space-1);
+    font: var(--text-subheadline);
     color: var(--text-secondary);
   }
   .modal input[type="text"] {
     width: 100%;
-    padding: 8px 12px;
+    height: 24px;
+    padding: 0 var(--space-2);
     background: var(--bg-input);
-    border: 1px solid var(--border);
-    border-radius: 6px;
+    border: 0.5px solid var(--border);
+    border-radius: var(--radius-sm);
     color: var(--text-primary);
-    font-size: 14px;
+    font: var(--text-body);
     box-sizing: border-box;
+    outline: none;
+  }
+  .modal input[type="text"]:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--blue-tint);
   }
   .hint {
-    font-size: 12px;
+    font: var(--text-footnote);
     color: var(--text-secondary);
-    margin: 0 0 12px;
+    margin: 0 0 var(--space-3);
   }
   .btn-file-select {
     width: 100%;
-    padding: 10px;
+    padding: var(--space-3);
     background: var(--bg-card);
     border: 1px dashed var(--border);
-    border-radius: 6px;
+    border-radius: var(--radius-sm);
     color: var(--text-primary);
-    font-size: 13px;
+    font: var(--text-body);
     cursor: pointer;
-    margin-bottom: 8px;
+    margin-bottom: var(--space-2);
+  }
+  @media (prefers-reduced-motion: no-preference) {
+    .btn-file-select {
+      transition: background-color var(--dur-fast) var(--ease-out),
+                  border-color var(--dur-fast) var(--ease-out);
+    }
   }
   .btn-file-select:hover {
     background: var(--bg-hover);
     border-color: var(--accent);
   }
   .preview {
-    margin: 12px 0;
-    padding: 12px;
-    background: #0d0d1a;
-    border-radius: 6px;
-    font-size: 11px;
-    font-family: monospace;
-    color: #aaa;
+    margin: var(--space-3) 0;
+    padding: var(--space-3);
+    background: var(--editor-bg);
+    border: 0.5px solid var(--editor-border);
+    border-radius: var(--radius-sm);
+    font: 10px/14px var(--font-mono);
+    color: var(--text-secondary);
     max-height: 200px;
     overflow-y: auto;
     white-space: pre-wrap;
   }
   .errors {
-    margin: 8px 0;
-    padding: 8px 12px;
+    margin: var(--space-2) 0;
+    padding: var(--space-2) var(--space-3);
     background: var(--error-bg);
-    border: 1px solid var(--red);
-    border-radius: 6px;
+    border: 0.5px solid var(--red);
+    border-radius: var(--radius-sm);
   }
-  .errors p { margin: 4px 0; color: #ff7675; font-size: 13px; }
+  .errors p {
+    margin: var(--space-1) 0;
+    color: var(--error-text);
+    font: var(--text-body);
+  }
   .modal-footer {
     display: flex;
-    gap: 8px;
+    gap: var(--space-2);
     justify-content: flex-end;
-    margin-top: 16px;
+    margin-top: var(--space-4);
   }
   .btn {
-    padding: 8px 16px;
-    border: none;
-    border-radius: 6px;
-    font-size: 13px;
+    height: 28px;
+    padding: 0 var(--space-3);
+    border: 0;
+    border-radius: var(--radius-sm);
+    font: var(--text-headline);
     cursor: pointer;
     color: var(--text-primary);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
   }
-  .btn:disabled { opacity: 0.5; cursor: not-allowed; }
-  .btn-connect { background: var(--green); color: #fff; }
-  .btn-connect:hover:not(:disabled) { background: #00a884; }
+  .btn:disabled { opacity: 0.45; cursor: not-allowed; }
+  .btn-connect {
+    background: var(--accent);
+    color: var(--text-inverse);
+  }
+  @media (prefers-reduced-motion: no-preference) {
+    .btn, .btn-connect {
+      transition: background-color var(--dur-fast) var(--ease-out),
+                  filter var(--dur-fast) var(--ease-out);
+    }
+  }
+  .btn-connect:hover:not(:disabled) { filter: brightness(1.08); }
+  .btn-connect:active:not(:disabled) { filter: brightness(0.94); }
 </style>

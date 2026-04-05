@@ -1,7 +1,8 @@
 <script>
   import { selectedTunnel, connectionStatus, refreshTunnels, refreshStatus } from '../stores/tunnels.js';
   import { t } from '../i18n/index.js';
-  import { createEventDispatcher } from 'svelte';
+  import { errText } from './errors.js';
+  import { createEventDispatcher, tick, onDestroy } from 'svelte';
 
   export let TunnelService;
   const dispatch = createEventDispatcher();
@@ -11,6 +12,14 @@
   let error = '';
 
   $: if ($selectedTunnel) loadDetail($selectedTunnel.name);
+
+  // Single source of truth for "is this tunnel currently active?" —
+  // combine the selected-tunnel flag with the live connection status so the
+  // UI can't show a stale "connected" chip briefly after disconnect.
+  $: isConnected = $selectedTunnel?.is_connected
+    && $connectionStatus?.state === 'connected'
+    && $connectionStatus?.tunnel_name === $selectedTunnel?.name;
+  $: status = $connectionStatus;
 
   async function loadDetail(name) {
     try {
@@ -36,19 +45,24 @@
       await refreshTunnels(TunnelService);
       await refreshStatus(TunnelService);
     } catch (e) {
-      error = e.toString();
+      error = errText(e);
     }
     loading = false;
   }
 
   let showDeleteConfirm = false;
+  let deleteConfirmBtn = null;
 
-  function askDelete() {
-    if ($selectedTunnel.is_connected) {
-      error = t('confirm.disconnect_first');
+  async function askDelete() {
+    if (isConnected) {
+      error = $t('confirm.disconnect_first');
       return;
     }
     showDeleteConfirm = true;
+    // Auto-focus the confirm button so Enter confirms, Escape cancels,
+    // and a stray Space press doesn't accidentally trigger the No button.
+    await tick();
+    deleteConfirmBtn?.focus();
   }
 
   async function confirmDelete() {
@@ -58,12 +72,23 @@
       selectedTunnel.set(null);
       dispatch('refresh');
     } catch (e) {
-      error = e.toString();
+      error = errText(e);
     }
   }
 
   function cancelDelete() {
     showDeleteConfirm = false;
+  }
+
+  // Global ESC handler — closes whichever modal is open.
+  function handleKeydown(e) {
+    if (e.key !== 'Escape') return;
+    if (showDeleteConfirm) cancelDelete();
+    else if (renaming) cancelRename();
+  }
+  if (typeof window !== 'undefined') {
+    window.addEventListener('keydown', handleKeydown);
+    onDestroy(() => window.removeEventListener('keydown', handleKeydown));
   }
 
   function formatBytes(bytes) {
@@ -74,15 +99,12 @@
     return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
   }
 
-  $: isConnected = $selectedTunnel?.is_connected;
-  $: status = $connectionStatus;
-
   let renaming = false;
   let renameValue = '';
 
   function startRename() {
     if (isConnected) {
-      error = t('confirm.disconnect_first');
+      error = $t('confirm.disconnect_first');
       return;
     }
     renameValue = $selectedTunnel.name;
@@ -99,7 +121,7 @@
       selectedTunnel.set({ ...$selectedTunnel, name: newName });
       dispatch('refresh');
     } catch (e) {
-      error = e.toString();
+      error = errText(e);
     }
   }
 
@@ -111,7 +133,7 @@
 <div class="detail-panel">
   {#if !$selectedTunnel}
     <div class="no-selection">
-      <p>{t('tunnel.no_tunnels')}</p>
+      <p>{$t('tunnel.no_tunnels')}</p>
     </div>
   {:else}
     <div class="detail-header" class:connected={isConnected}>
@@ -128,16 +150,16 @@
           autofocus
         />
       {:else}
-        <h2 on:dblclick={startRename} title="Double-click to rename">{$selectedTunnel.name}</h2>
+        <h2 on:dblclick={startRename} title={$t('tunnel.rename_hint')}>{$selectedTunnel.name}</h2>
         <button class="btn-rename" on:click={startRename} title="Rename">✎</button>
       {/if}
       <span class="state-badge" class:on={isConnected} class:connecting={status.state === 'connecting'}>
         {#if isConnected}
-          {t('app.connected')}
+          {$t('app.connected')}
         {:else if status.state === 'connecting'}
-          {t('app.connecting')}
+          {$t('app.connecting')}
         {:else}
-          {t('app.disconnected')}
+          {$t('app.disconnected')}
         {/if}
       </span>
     </div>
@@ -145,19 +167,19 @@
     {#if isConnected && status.state === 'connected'}
       <div class="stats-grid">
         <div class="stat">
-          <span class="stat-label">{t('tunnel.rx')}</span>
+          <span class="stat-label">{$t('tunnel.rx')}</span>
           <span class="stat-value down">{formatBytes(status.rx_bytes || 0)}</span>
         </div>
         <div class="stat">
-          <span class="stat-label">{t('tunnel.tx')}</span>
+          <span class="stat-label">{$t('tunnel.tx')}</span>
           <span class="stat-value up">{formatBytes(status.tx_bytes || 0)}</span>
         </div>
         <div class="stat">
-          <span class="stat-label">{t('tunnel.handshake')}</span>
-          <span class="stat-value">{status.handshake_age || '-'}</span>
+          <span class="stat-label">{$t('tunnel.handshake')}</span>
+          <span class="stat-value">{status.last_handshake || '-'}</span>
         </div>
         <div class="stat">
-          <span class="stat-label">{t('tunnel.duration')}</span>
+          <span class="stat-label">{$t('tunnel.duration')}</span>
           <span class="stat-value">{status.duration || '-'}</span>
         </div>
       </div>
@@ -166,18 +188,18 @@
     <div class="detail-info">
       {#if $selectedTunnel.endpoint}
         <div class="info-row">
-          <span class="label">{t('tunnel.endpoint')}</span>
+          <span class="label">{$t('tunnel.endpoint')}</span>
           <span class="value">{$selectedTunnel.endpoint}</span>
         </div>
       {/if}
       {#if detail}
         {#each detail.Peers || [] as peer}
           <div class="info-row">
-            <span class="label">{t('tunnel.allowed_ips')}</span>
+            <span class="label">{$t('tunnel.allowed_ips')}</span>
             <span class="value">{(peer.AllowedIPs || []).join(', ')}</span>
           </div>
           <div class="info-row">
-            <span class="label">{t('tunnel.public_key')}</span>
+            <span class="label">{$t('tunnel.public_key')}</span>
             <span class="value mono">{peer.PublicKey?.substring(0, 20)}...</span>
           </div>
         {/each}
@@ -197,21 +219,21 @@
     <div class="actions">
       {#if isConnected}
         <button class="btn btn-disconnect" on:click={disconnect} disabled={loading}>
-          {t('tunnel.disconnect')}
+          {$t('tunnel.disconnect')}
         </button>
       {:else}
         <button class="btn btn-connect" on:click={connect} disabled={loading}>
-          {loading ? t('app.connecting') : t('tunnel.connect')}
+          {loading ? $t('app.connecting') : $t('tunnel.connect')}
         </button>
       {/if}
       <button class="btn btn-secondary" on:click={() => dispatch('edit', $selectedTunnel.name)}>
-        {t('tunnel.edit')}
+        {$t('tunnel.edit')}
       </button>
       <button class="btn btn-secondary" on:click={() => dispatch('export', $selectedTunnel.name)}>
-        {t('tunnel.export')}
+        {$t('tunnel.export')}
       </button>
       <button class="btn btn-danger" on:click={askDelete}>
-        {t('tunnel.delete')}
+        {$t('tunnel.delete')}
       </button>
     </div>
   {/if}
@@ -220,21 +242,22 @@
 {#if showDeleteConfirm}
   <div class="confirm-backdrop" on:click={cancelDelete}>
     <div class="confirm-dialog" on:click|stopPropagation>
-      <h3>{t('confirm.delete_title')}</h3>
-      <p>{t('confirm.delete_message', { name: $selectedTunnel.name })}</p>
+      <h3>{$t('confirm.delete_title')}</h3>
+      <p>{$t('confirm.delete_message', { name: $selectedTunnel.name })}</p>
       <div class="confirm-footer">
-        <button class="btn btn-disconnect" on:click={confirmDelete}>{t('confirm.yes')}</button>
-        <button class="btn btn-secondary" on:click={cancelDelete}>{t('confirm.no')}</button>
+        <button class="btn btn-disconnect" bind:this={deleteConfirmBtn} on:click={confirmDelete}>{$t('confirm.yes')}</button>
+        <button class="btn btn-secondary" on:click={cancelDelete}>{$t('confirm.no')}</button>
       </div>
     </div>
   </div>
 {/if}
 
 <style>
+  /* ---------- Layout ---------- */
   .detail-panel {
     flex: 1;
-    padding: 16px 24px;
-    padding-top: 52px;
+    padding: var(--space-6) var(--space-6);
+    padding-top: 52px; /* clears the macOS traffic-light inset */
     overflow-y: auto;
   }
   .no-selection {
@@ -243,142 +266,209 @@
     justify-content: center;
     height: 100%;
     color: var(--text-muted);
+    font: var(--text-body);
   }
+
+  /* ---------- Header: title + rename + state badge ---------- */
   .detail-header {
     display: flex;
     align-items: center;
-    gap: 12px;
-    margin-bottom: 20px;
-    padding-bottom: 16px;
-    border-bottom: 1px solid var(--border);
+    gap: var(--space-3);
+    margin-bottom: var(--space-5);
+    padding-bottom: var(--space-4);
+    border-bottom: 0.5px solid var(--border);
   }
   .detail-header h2 {
     margin: 0;
-    font-size: 20px;
+    font: var(--text-title-1);
     color: var(--text-primary);
-    cursor: pointer;
+    cursor: text;
   }
   .btn-rename {
     background: transparent;
-    border: none;
+    border: 0;
     color: var(--text-secondary);
     cursor: pointer;
-    padding: 4px 8px;
-    border-radius: 4px;
-    font-size: 14px;
-    opacity: 0.6;
+    padding: var(--space-1) var(--space-2);
+    border-radius: var(--radius-xs);
+    font: var(--text-body);
+    opacity: 0.65;
   }
   .btn-rename:hover {
     background: var(--bg-hover);
     opacity: 1;
   }
   .rename-input {
-    font-size: 20px;
-    padding: 4px 8px;
+    font: var(--text-title-1);
+    padding: 2px var(--space-2);
     background: var(--bg-input);
     border: 1px solid var(--accent);
-    border-radius: 4px;
+    border-radius: var(--radius-sm);
     color: var(--text-primary);
     outline: none;
     flex: 1;
-    max-width: 300px;
+    max-width: 320px;
+    box-shadow: 0 0 0 3px var(--blue-tint);
   }
+
+  /* ---------- State badge (connected / connecting / disconnected) ---------- */
   .state-badge {
-    padding: 4px 10px;
-    border-radius: 12px;
-    font-size: 12px;
+    padding: 2px var(--space-2);
+    border-radius: var(--radius-xs);
+    font: var(--text-footnote);
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
     background: var(--bg-card);
     color: var(--text-muted);
-    transition: background 300ms ease, color 300ms ease;
+  }
+  @media (prefers-reduced-motion: no-preference) {
+    .state-badge {
+      transition: background-color var(--dur-base) var(--ease-out),
+                  color var(--dur-base) var(--ease-out);
+    }
   }
   .state-badge.on {
-    background: rgba(0, 184, 148, 0.15);
+    background: var(--green-tint);
     color: var(--green);
   }
   .state-badge.connecting {
-    background: rgba(253, 203, 110, 0.15);
+    background: var(--yellow-tint);
     color: var(--yellow);
-    animation: pulse 1.5s ease-in-out infinite;
+  }
+  @media (prefers-reduced-motion: no-preference) {
+    .state-badge.connecting {
+      animation: pulse 1.6s ease-in-out infinite;
+    }
   }
   @keyframes pulse {
     0%, 100% { opacity: 1; }
-    50% { opacity: 0.5; }
+    50%      { opacity: 0.55; }
   }
+
+  /* ---------- Stats grid ---------- */
   .stats-grid {
     display: grid;
     grid-template-columns: 1fr 1fr;
-    gap: 12px;
-    margin-bottom: 20px;
+    gap: var(--space-2);
+    margin-bottom: var(--space-5);
   }
   .stat {
     background: var(--bg-card);
-    border-radius: 8px;
-    padding: 12px;
+    border: 0.5px solid var(--border);
+    border-radius: var(--radius-md);
+    padding: var(--space-3);
   }
   .stat-label {
     display: block;
-    font-size: 11px;
+    font: var(--text-footnote);
+    font-weight: 500;
     color: var(--text-secondary);
     text-transform: uppercase;
-    margin-bottom: 4px;
+    letter-spacing: 0.06em;
+    margin-bottom: var(--space-1);
   }
   .stat-value {
-    font-size: 18px;
-    font-weight: 600;
+    font: 600 17px/22px var(--font-sans);
+    font-feature-settings: "tnum";   /* tabular numerals for stable alignment */
     color: var(--text-primary);
   }
-  .stat-value.down { color: var(--green); }
-  .stat-value.up { color: var(--blue); }
+  .stat-value.down { color: var(--stats-rx); }
+  .stat-value.up   { color: var(--stats-tx); }
+
+  /* ---------- Info rows ---------- */
   .detail-info {
-    margin-bottom: 20px;
+    margin-bottom: var(--space-5);
   }
   .info-row {
     display: flex;
     justify-content: space-between;
-    padding: 8px 0;
-    border-bottom: 1px solid var(--border);
-    font-size: 13px;
+    align-items: baseline;
+    gap: var(--space-4);
+    padding: var(--space-2) 0;
+    border-bottom: 0.5px solid var(--border);
+    font: var(--text-body);
   }
-  .label { color: var(--text-secondary); }
-  .value { color: var(--text-primary); text-align: right; }
-  .value.mono { font-family: monospace; font-size: 12px; }
+  .info-row:last-child { border-bottom: 0; }
+  .label { color: var(--text-secondary); flex-shrink: 0; }
+  .value {
+    color: var(--text-primary);
+    text-align: right;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .value.mono {
+    font-family: var(--font-mono);
+    font-size: 11px;
+  }
+
+  /* ---------- Error message ---------- */
   .error-msg {
-    padding: 8px 12px;
-    margin-bottom: 12px;
+    padding: var(--space-2) var(--space-3);
+    margin-bottom: var(--space-3);
     background: var(--error-bg);
-    border: 1px solid var(--red);
-    border-radius: 6px;
-    color: var(--red);
-    font-size: 13px;
+    border: 0.5px solid var(--red);
+    border-radius: var(--radius-sm);
+    color: var(--error-text);
+    font: var(--text-body);
   }
+
+  /* ---------- Actions (button row) ---------- */
   .actions {
     display: flex;
-    gap: 8px;
+    gap: var(--space-2);
     flex-wrap: wrap;
   }
   .btn {
-    padding: 8px 16px;
-    border: none;
-    border-radius: 6px;
-    font-size: 13px;
+    height: 28px;
+    padding: 0 var(--space-3);
+    border: 0;
+    border-radius: var(--radius-sm);
+    font: var(--text-headline);
     cursor: pointer;
     color: var(--text-primary);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
   }
-  .btn:disabled { opacity: 0.5; cursor: not-allowed; }
-  .btn-connect { background: var(--green); color: #fff; }
-  .btn-connect:hover:not(:disabled) { opacity: 0.9; }
-  .btn-disconnect { background: var(--red); color: #fff; }
-  .btn-disconnect:hover:not(:disabled) { opacity: 0.9; }
-  .btn-secondary { background: var(--bg-card); border: 1px solid var(--border); }
+  @media (prefers-reduced-motion: no-preference) {
+    .btn {
+      transition: background-color var(--dur-fast) var(--ease-out),
+                  filter var(--dur-fast) var(--ease-out),
+                  border-color var(--dur-fast) var(--ease-out);
+    }
+  }
+  .btn:disabled { opacity: 0.45; cursor: not-allowed; }
+  .btn-connect {
+    background: var(--accent);
+    color: var(--text-inverse);
+  }
+  .btn-connect:hover:not(:disabled) { filter: brightness(1.08); }
+  .btn-connect:active:not(:disabled) { filter: brightness(0.94); }
+  .btn-disconnect {
+    background: var(--red);
+    color: var(--text-inverse);
+  }
+  .btn-disconnect:hover:not(:disabled) { filter: brightness(1.08); }
+  .btn-disconnect:active:not(:disabled) { filter: brightness(0.94); }
+  .btn-secondary {
+    background: var(--bg-card);
+    border: 0.5px solid var(--border);
+  }
   .btn-secondary:hover { background: var(--bg-hover); }
-  .btn-danger { background: transparent; color: var(--red); border: 1px solid var(--red); }
+  .btn-secondary:active { background: var(--bg-active); }
+  .btn-danger {
+    background: transparent;
+    color: var(--red);
+    border: 0.5px solid var(--red);
+  }
   .btn-danger:hover { background: var(--error-bg); }
 
-  /* Delete confirmation dialog */
+  /* ---------- Delete confirmation dialog ---------- */
   .confirm-backdrop {
     position: fixed;
     inset: 0;
-    background: rgba(0, 0, 0, 0.6);
+    background: var(--overlay-bg);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -386,25 +476,25 @@
   }
   .confirm-dialog {
     background: var(--bg-primary);
-    border: 1px solid var(--border);
-    border-radius: 12px;
-    padding: 24px;
-    width: 360px;
-    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+    border: 0.5px solid var(--border);
+    border-radius: var(--radius-lg);
+    padding: var(--space-5);
+    width: 380px;
+    box-shadow: var(--shadow-md);
   }
   .confirm-dialog h3 {
-    margin: 0 0 8px;
+    margin: 0 0 var(--space-2);
     color: var(--text-primary);
-    font-size: 16px;
+    font: var(--text-title-3);
   }
   .confirm-dialog p {
-    margin: 0 0 16px;
+    margin: 0 0 var(--space-4);
     color: var(--text-secondary);
-    font-size: 13px;
+    font: var(--text-body);
   }
   .confirm-footer {
     display: flex;
-    gap: 8px;
+    gap: var(--space-2);
     justify-content: flex-end;
   }
 </style>

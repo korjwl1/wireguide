@@ -5,6 +5,8 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+
+	"github.com/korjwl1/wireguide/internal/network"
 )
 
 // ActiveTunnelState is persisted to disk while a tunnel is active.
@@ -57,6 +59,19 @@ func LoadActiveState(dataDir string) *ActiveTunnelState {
 
 // RecoverFromCrash checks for orphaned tunnel state and cleans up.
 // Returns the name of the cleaned-up tunnel, or empty string if none.
+//
+// After a crash the TUN device is already gone (the process that owned it
+// died), but routes, DNS overrides, and firewall rules may still reference
+// the dead interface. We run a best-effort cleanup via the platform network
+// manager to avoid leaving the user stuck on the tunnel's DNS servers or
+// with unreachable bypass routes.
+//
+// Important: RestoreDNS relies on the in-memory "savedDNS" snapshot from
+// SetDNS, which a fresh process doesn't have. We therefore call the
+// state-free ResetDNSToSystemDefault() instead, which clears overrides
+// back to DHCP-provided values for every network service. Users lose any
+// custom DNS preferences on the crash recovery path — an acceptable
+// trade-off vs. being stuck on a dead tunnel's DNS.
 func RecoverFromCrash(dataDir string) string {
 	state := LoadActiveState(dataDir)
 	if state == nil {
@@ -66,8 +81,22 @@ func RecoverFromCrash(dataDir string) string {
 		"tunnel", state.TunnelName,
 		"interface", state.InterfaceName)
 
-	// The TUN device is already gone (process died), but routes/DNS may be stale.
-	// Cleanup is best-effort via the network manager.
+	mgr := network.NewPlatformManager()
+
+	// DNS: state-free reset since we have no memory of the pre-crash values.
+	if err := mgr.ResetDNSToSystemDefault(); err != nil {
+		slog.Warn("crash recovery: DNS reset failed", "error", err)
+	}
+
+	// Routes + firewall: Cleanup knows how to walk the route table to find
+	// stale entries pointing at the recorded interface name, so this works
+	// even on a fresh process.
+	if state.InterfaceName != "" {
+		if err := mgr.Cleanup(state.InterfaceName); err != nil {
+			slog.Warn("crash recovery: cleanup failed", "error", err)
+		}
+	}
+
 	ClearActiveState(dataDir)
 	return state.TunnelName
 }

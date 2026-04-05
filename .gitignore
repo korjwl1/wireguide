@@ -24,3 +24,14 @@ Thumbs.db
 .vscode/
 *.swp
 *.swo
+
+# Icon build intermediates — the committed build/darwin/icons.icns is the
+# source of truth; the iconset staging dir and SVG sources here are
+# local-only working files.
+build/icon.iconset/
+build/icon/
+
+# Claude Code working files — plans and local settings are per-user, not
+# repo state.
+.claude/plans/
+.claude/settings.local.json

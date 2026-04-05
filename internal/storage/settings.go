@@ -8,13 +8,13 @@ import (
 
 // Settings holds application-wide settings.
 type Settings struct {
-	Language       string `json:"language"`        // "auto", "en", "ko", "ja"
-	Theme          string `json:"theme"`           // "dark", "light", "system"
-	TrayIconStyle  string `json:"tray_icon_style"` // "color" (MVP: color only)
-	AutoReconnect  bool   `json:"auto_reconnect"`
-	KillSwitch     bool   `json:"kill_switch"`
-	DNSProtection  bool   `json:"dns_protection"`
-	LogLevel       string `json:"log_level"`       // "debug", "info", "warn", "error"
+	Language      string `json:"language"`        // "auto", "en", "ko", "ja"
+	Theme         string `json:"theme"`           // "dark", "light", "system"
+	TrayIconStyle string `json:"tray_icon_style"` // "color" (MVP: color only)
+	AutoStart     bool   `json:"auto_start"` // launch GUI on OS login
+	KillSwitch    bool   `json:"kill_switch"`
+	DNSProtection bool   `json:"dns_protection"`
+	LogLevel      string `json:"log_level"` // "debug", "info", "warn", "error"
 }
 
 // DefaultSettings returns settings with sensible defaults.
@@ -23,7 +23,6 @@ func DefaultSettings() *Settings {
 		Language:      "auto",
 		Theme:         "system", // follows OS dark/light mode
 		TrayIconStyle: "color",
-		AutoReconnect: true,
 		KillSwitch:    false,
 		DNSProtection: false,
 		LogLevel:      "info",
@@ -66,8 +65,12 @@ func (s *SettingsStore) Save(settings *Settings) error {
 		return err
 	}
 	tmp := s.path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0644); err != nil {
+	if err := os.WriteFile(tmp, data, 0600); err != nil {
 		return err
 	}
-	return os.Rename(tmp, s.path)
+	if err := os.Rename(tmp, s.path); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	return nil
 }

@@ -1,4 +1,6 @@
 <script>
+  import { t } from '../i18n/index.js';
+
   export let updateInfo = null;
   export let onInstall = null;
 
@@ -10,12 +12,12 @@
 {#if updateInfo?.available}
   <div class="update-banner">
     <div class="update-text">
-      <strong>Update available: v{updateInfo.version}</strong>
-      <span class="current">(current: v{updateInfo.current_version})</span>
+      <strong>{$t('update.available', { version: updateInfo.version })}</strong>
+      <span class="current">({$t('update.current', { version: updateInfo.current_version })})</span>
     </div>
     <div class="update-actions">
-      <button class="btn-update" on:click={install}>Update Now</button>
-      <a href={updateInfo.release_url} target="_blank" class="btn-notes">Release Notes</a>
+      <button class="btn-update" on:click={install}>{$t('update.update_now')}</button>
+      <a href={updateInfo.release_url} target="_blank" class="btn-notes">{$t('update.release_notes')}</a>
     </div>
   </div>
 {/if}
@@ -26,7 +28,7 @@
     justify-content: space-between;
     align-items: center;
     padding: 8px 16px;
-    background: rgba(253, 203, 110, 0.1);
+    background: var(--yellow-tint);
     border: 1px solid var(--yellow);
     border-radius: 8px;
     margin: 8px 0;
@@ -37,7 +39,7 @@
   .btn-update {
     padding: 4px 12px;
     background: var(--yellow);
-    color: #1a1a2e;
+    color: var(--bg-primary);
     border: none;
     border-radius: 4px;
     cursor: pointer;

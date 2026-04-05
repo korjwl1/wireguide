@@ -1,216 +1,226 @@
+// Package tunnel orchestrates WireGuard tunnel lifecycle.
+//
+// The package is split so each file has a single reason to change:
+//   - manager.go         (this file)   — Manager struct, state machine, Connect/Disconnect/Status facade
+//   - connect_phases.go                — the step-by-step Connect / Disconnect phases and rollback
+//   - status.go                        — status type alias + GetStatus query (wgctrl)
+//   - engine.go                        — wireguard-go + wgctrl TUN wiring
+//   - conflict.go                      — existing-interface conflict detection
+//   - recovery.go                      — crash recovery state file
+//   - script_executor_unix.go          — Pre/PostUp/Down hooks (Unix)
+//   - script_executor_windows.go       — Pre/PostUp/Down hooks (Windows)
 package tunnel
 
 import (
 	"fmt"
 	"log/slog"
-	"os/exec"
-	"runtime"
 	"sync"
 	"time"
 
-	"github.com/korjwl1/wireguide/internal/config"
+	"github.com/korjwl1/wireguide/internal/domain"
 	"github.com/korjwl1/wireguide/internal/network"
 )
 
-// Manager orchestrates tunnel lifecycle: connect, disconnect, status.
+// Manager orchestrates the tunnel lifecycle using a small state machine.
+//
+//	disconnected ──Connect──▶ connecting ──phases ok──▶ connected
+//	                                    ──phases err─▶ disconnected
+//	connected    ──Disconnect──▶ disconnecting ──▶ disconnected
+//
+// Manager.mu is held ONLY for state reads/writes, NEVER during the slow
+// phase operations (ifconfig, route, networksetup, Pre/PostUp scripts).
+// That keeps Status() / IsConnected() / ActiveTunnel() non-blocking even
+// while a long-running Connect or Disconnect is in flight — critical so
+// that the 1 Hz status broadcast loop in helper/events.go can surface
+// "connecting" and "disconnecting" transitions to the GUI in real time,
+// instead of stalling for 1–2 seconds and then flipping straight to
+// "connected".
+//
+// Disconnect races with an in-progress Connect by polling the state every
+// 100 ms for up to 10 s rather than fighting over the mutex.
 type Manager struct {
-	mu          sync.Mutex
+	mu sync.Mutex
+
+	state       domain.State
 	engine      *Engine
-	netMgr      network.NetworkManager
-	dataDir     string
-	activeCfg   *config.WireGuardConfig
+	activeCfg   *domain.WireGuardConfig
 	connectedAt time.Time
-	// scriptsAllowed tracks whether user approved running Pre/PostUp scripts
+	// scriptsAllowed tracks whether the user approved running Pre/PostUp scripts.
 	scriptsAllowed bool
+
+	netMgr  network.NetworkManager
+	dataDir string
 }
+
+// Additional transient states used internally. Exposed on the wire as the
+// closest public state (connecting/disconnecting both surface as
+// "connecting" since the GUI treats them the same way).
+const (
+	stateDisconnecting domain.State = "disconnecting"
+)
 
 // NewManager creates a tunnel manager.
 func NewManager(dataDir string) *Manager {
 	return &Manager{
 		netMgr:  network.NewPlatformManager(),
 		dataDir: dataDir,
+		state:   domain.StateDisconnected,
 	}
 }
 
-// Connect establishes a WireGuard tunnel.
-func (m *Manager) Connect(cfg *config.WireGuardConfig, scriptsAllowed bool) error {
+// setStateLocked mutates state under the lock. Caller MUST hold m.mu.
+// Kept as a helper so future additions (logging, metrics) have one place
+// to hook.
+func (m *Manager) setStateLocked(s domain.State) {
+	m.state = s
+}
+
+// Connect establishes a WireGuard tunnel. Runs the expensive phase work
+// WITHOUT holding m.mu, so Status / IsConnected / ActiveTunnel stay
+// responsive for the duration.
+func (m *Manager) Connect(cfg *domain.WireGuardConfig, scriptsAllowed bool) error {
+	// --- Phase 1: claim the connecting slot under the lock ---
+	m.mu.Lock()
+	switch m.state {
+	case domain.StateConnected:
+		name := ""
+		if m.activeCfg != nil {
+			name = m.activeCfg.Name
+		}
+		m.mu.Unlock()
+		return fmt.Errorf("tunnel %q is already connected", name)
+	case domain.StateConnecting, stateDisconnecting:
+		m.mu.Unlock()
+		return fmt.Errorf("another transition is in progress")
+	}
+	// Stash the tunnel name early so Status() can show "connecting <name>"
+	// while the phases are running.
+	m.activeCfg = cfg
+	m.scriptsAllowed = scriptsAllowed
+	m.setStateLocked(domain.StateConnecting)
+	m.mu.Unlock()
+
+	// --- Phase 2: run the slow operations WITHOUT holding the lock ---
+	engine, err := m.connectPhases(cfg, scriptsAllowed)
+
+	// --- Phase 3: commit final state under the lock ---
 	m.mu.Lock()
 	defer m.mu.Unlock()
-
-	if m.engine != nil {
-		return fmt.Errorf("tunnel %s is already connected", m.activeCfg.Name)
-	}
-
-	m.scriptsAllowed = scriptsAllowed
-
-	// Run PreUp script
-	if scriptsAllowed && cfg.Interface.PreUp != "" {
-		slog.Info("running PreUp script", "cmd", cfg.Interface.PreUp)
-		if err := runScript(cfg.Interface.PreUp); err != nil {
-			return fmt.Errorf("PreUp script failed: %w", err)
-		}
-	}
-
-	// Create WireGuard engine (TUN + WG device)
-	engine, err := NewEngine(cfg)
 	if err != nil {
-		return fmt.Errorf("creating engine: %w", err)
+		// Phases failed — roll back to disconnected. connectPhases has
+		// already cleaned up its partial network state via its internal
+		// rollback helper.
+		m.activeCfg = nil
+		m.scriptsAllowed = false
+		m.setStateLocked(domain.StateDisconnected)
+		return err
 	}
-
-	ifaceName := engine.InterfaceName()
-
-	// Configure networking
-	mtu := cfg.Interface.MTU
-	if mtu <= 0 {
-		mtu = 1420
-	}
-	if err := m.netMgr.SetMTU(ifaceName, mtu); err != nil {
-		engine.Close()
-		return fmt.Errorf("setting MTU: %w", err)
-	}
-
-	if err := m.netMgr.AssignAddress(ifaceName, cfg.Interface.Address); err != nil {
-		engine.Close()
-		return fmt.Errorf("assigning address: %w", err)
-	}
-
-	if err := m.netMgr.BringUp(ifaceName); err != nil {
-		engine.Close()
-		return fmt.Errorf("bringing up interface: %w", err)
-	}
-
-	// Collect all AllowedIPs and determine endpoint for routing
-	var allAllowedIPs []string
-	var endpoint string
-	for _, peer := range cfg.Peers {
-		allAllowedIPs = append(allAllowedIPs, peer.AllowedIPs...)
-		if peer.Endpoint != "" {
-			endpoint = peer.Endpoint
-		}
-	}
-
-	fullTunnel := cfg.IsFullTunnel()
-	if err := m.netMgr.AddRoutes(ifaceName, allAllowedIPs, fullTunnel, endpoint); err != nil {
-		engine.Close()
-		return fmt.Errorf("adding routes: %w", err)
-	}
-
-	if err := m.netMgr.SetDNS(ifaceName, cfg.Interface.DNS); err != nil {
-		slog.Warn("failed to set DNS", "error", err)
-		// Non-fatal: continue without DNS
-	}
-
-	// Save crash recovery state
-	SaveActiveState(m.dataDir, &ActiveTunnelState{
-		TunnelName:    cfg.Name,
-		InterfaceName: ifaceName,
-		FullTunnel:    fullTunnel,
-	})
-
-	// Run PostUp script
-	if scriptsAllowed && cfg.Interface.PostUp != "" {
-		slog.Info("running PostUp script", "cmd", cfg.Interface.PostUp)
-		if err := runScript(cfg.Interface.PostUp); err != nil {
-			slog.Warn("PostUp script failed", "error", err)
-		}
-	}
-
 	m.engine = engine
-	m.activeCfg = cfg
 	m.connectedAt = time.Now()
-
-	slog.Info("tunnel connected",
-		"name", cfg.Name,
-		"interface", ifaceName,
-		"full_tunnel", fullTunnel)
-
+	m.setStateLocked(domain.StateConnected)
 	return nil
 }
 
-// Disconnect tears down the active tunnel.
+// Disconnect tears down the active tunnel. Like Connect, runs the slow
+// teardown work outside the lock. If a Connect is currently in progress,
+// waits up to 10 seconds for it to finish rather than rejecting the user.
 func (m *Manager) Disconnect() error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	if m.engine == nil {
+	// --- Phase 1: wait for any in-flight transition to settle ---
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		m.mu.Lock()
+		if m.state != domain.StateConnecting && m.state != stateDisconnecting {
+			break // lock still held, state is stable
+		}
+		m.mu.Unlock()
+		if time.Now().After(deadline) {
+			return fmt.Errorf("disconnect timeout: another transition is in progress")
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	// m.mu held here, state is Connected / Disconnected / Error.
+	if m.state != domain.StateConnected {
+		m.mu.Unlock()
 		return fmt.Errorf("no tunnel is connected")
 	}
-
+	// Snapshot the handles we need outside the lock.
+	engine := m.engine
 	cfg := m.activeCfg
-	ifaceName := m.engine.InterfaceName()
+	m.setStateLocked(stateDisconnecting)
+	m.mu.Unlock()
 
-	// Run PreDown script
-	if m.scriptsAllowed && cfg.Interface.PreDown != "" {
-		slog.Info("running PreDown script", "cmd", cfg.Interface.PreDown)
-		if err := runScript(cfg.Interface.PreDown); err != nil {
-			slog.Warn("PreDown script failed", "error", err)
-		}
-	}
+	// --- Phase 2: slow teardown outside the lock ---
+	m.disconnectPhases(cfg, engine)
 
-	// Remove routes
-	var allAllowedIPs []string
-	for _, peer := range cfg.Peers {
-		allAllowedIPs = append(allAllowedIPs, peer.AllowedIPs...)
-	}
-	m.netMgr.RemoveRoutes(ifaceName, allAllowedIPs, cfg.IsFullTunnel())
-
-	// Restore DNS
-	m.netMgr.RestoreDNS(ifaceName)
-
-	// Close WireGuard engine (closes TUN)
-	m.engine.Close()
-
-	// Cleanup network state
-	m.netMgr.Cleanup(ifaceName)
-
-	// Clear crash recovery state
-	ClearActiveState(m.dataDir)
-
-	// Run PostDown script
-	if m.scriptsAllowed && cfg.Interface.PostDown != "" {
-		slog.Info("running PostDown script", "cmd", cfg.Interface.PostDown)
-		if err := runScript(cfg.Interface.PostDown); err != nil {
-			slog.Warn("PostDown script failed", "error", err)
-		}
-	}
-
-	slog.Info("tunnel disconnected", "name", cfg.Name)
-
+	// --- Phase 3: commit final state ---
+	m.mu.Lock()
 	m.engine = nil
 	m.activeCfg = nil
 	m.connectedAt = time.Time{}
-
+	m.scriptsAllowed = false
+	m.setStateLocked(domain.StateDisconnected)
+	m.mu.Unlock()
 	return nil
 }
 
-// Status returns the current connection status.
+// Status returns the current connection status. Fast — only holds m.mu long
+// enough to snapshot the state, then queries wgctrl (which talks to a unix
+// socket) outside the lock. Safe to call at 1 Hz from the event broadcast
+// loop even when a Connect / Disconnect is in flight.
 func (m *Manager) Status() *ConnectionStatus {
 	m.mu.Lock()
-	defer m.mu.Unlock()
+	state := m.state
+	engine := m.engine
+	var cfgName string
+	if m.activeCfg != nil {
+		cfgName = m.activeCfg.Name
+	}
+	connectedAt := m.connectedAt
+	m.mu.Unlock()
 
-	if m.engine == nil {
-		return &ConnectionStatus{State: StateDisconnected}
+	switch state {
+	case domain.StateConnecting, stateDisconnecting:
+		// Surface transient states as "connecting" on the wire — the GUI
+		// already has CSS for that (yellow pulsing badge) and doesn't need
+		// to distinguish between "bringing up" vs "tearing down".
+		return &ConnectionStatus{
+			State:      domain.StateConnecting,
+			TunnelName: cfgName,
+		}
+	case domain.StateDisconnected:
+		return &ConnectionStatus{State: domain.StateDisconnected}
+	case domain.StateError:
+		return &ConnectionStatus{State: domain.StateError, TunnelName: cfgName}
 	}
 
-	status, err := GetStatus(m.engine.InterfaceName(), m.activeCfg.Name, m.connectedAt)
+	// StateConnected — talk to wgctrl without holding m.mu. If Disconnect
+	// races us and closes the engine right now, the wgctrl call either
+	// succeeds with stale data (harmless — next tick will show disconnected)
+	// or errors out (we return a minimal "error" status).
+	if engine == nil {
+		return &ConnectionStatus{State: domain.StateDisconnected}
+	}
+	status, err := GetStatus(engine.InterfaceName(), cfgName, connectedAt)
 	if err != nil {
 		slog.Warn("failed to get status", "error", err)
-		return &ConnectionStatus{
-			State:      StateError,
-			TunnelName: m.activeCfg.Name,
-		}
+		return &ConnectionStatus{State: domain.StateError, TunnelName: cfgName}
 	}
 	return status
 }
 
-// IsConnected returns true if a tunnel is active.
+// IsConnected returns true if a tunnel is fully established. Connecting /
+// disconnecting are both considered "not yet connected" so that callers
+// gating on this (e.g. the reconnect monitor's health check) don't do work
+// on a tunnel that's half-up.
 func (m *Manager) IsConnected() bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.engine != nil
+	return m.state == domain.StateConnected
 }
 
-// ActiveTunnel returns the name of the currently connected tunnel, or "".
+// ActiveTunnel returns the name of the currently connected (or connecting)
+// tunnel, or "" if none. Returning the name during Connecting lets the GUI
+// show "connecting <name>" rather than a blank placeholder.
 func (m *Manager) ActiveTunnel() string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -218,19 +228,4 @@ func (m *Manager) ActiveTunnel() string {
 		return ""
 	}
 	return m.activeCfg.Name
-}
-
-func runScript(command string) error {
-	var cmd *exec.Cmd
-	switch runtime.GOOS {
-	case "windows":
-		cmd = exec.Command("cmd", "/C", command)
-	default:
-		cmd = exec.Command("sh", "-c", command)
-	}
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("%w: %s", err, string(out))
-	}
-	return nil
 }

@@ -36,21 +36,21 @@
 
 <div class="keygen">
   <button class="btn-generate" on:click={generate}>
-    Generate Key Pair
+    {$t('keygen.generate')}
   </button>
 
   {#if generated}
     <div class="key-display">
       <div class="key-row">
-        <label>Private Key</label>
-        <code class="key-value private">{privateKey.substring(0, 20)}...</code>
+        <label>{$t('keygen.private_key')}</label>
+        <code class="key-value private">{privateKey.substring(0, 20)}…</code>
       </div>
       <div class="key-row">
-        <label>Public Key</label>
+        <label>{$t('keygen.public_key')}</label>
         <code class="key-value" on:click={copyPublicKey}>
           {publicKey}
         </code>
-        <span class="copy-hint">{copied ? 'Copied!' : 'Click to copy'}</span>
+        <span class="copy-hint">{copied ? '✓' : $t('keygen.copy')}</span>
       </div>
     </div>
   {/if}

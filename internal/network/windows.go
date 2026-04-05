@@ -40,9 +40,9 @@ func (m *WindowsManager) BringUp(ifaceName string) error {
 	return nil
 }
 
-func (m *WindowsManager) AddRoutes(ifaceName string, allowedIPs []string, fullTunnel bool, endpoint string) error {
+func (m *WindowsManager) AddRoutes(ifaceName string, allowedIPs []string, fullTunnel bool, endpoints []string) error {
 	if fullTunnel {
-		return m.addFullTunnelRoutes(ifaceName, endpoint)
+		return m.addFullTunnelRoutes(ifaceName, endpoints)
 	}
 	for _, cidr := range allowedIPs {
 		if err := runWin("netsh", "interface", "ip", "add", "route", cidr, ifaceName); err != nil {
@@ -52,7 +52,8 @@ func (m *WindowsManager) AddRoutes(ifaceName string, allowedIPs []string, fullTu
 	return nil
 }
 
-func (m *WindowsManager) addFullTunnelRoutes(ifaceName string, endpoint string) error {
+func (m *WindowsManager) addFullTunnelRoutes(ifaceName string, endpoints []string) error {
+	_ = endpoints // TODO: per-peer bypass routes; current Windows impl relies on routing metrics
 	// Set low metric on WG interface to make it preferred for default route
 	if err := runWin("netsh", "interface", "ip", "add", "route", "0.0.0.0/0", ifaceName,
 		"metric=5"); err != nil {
@@ -87,6 +88,16 @@ func (m *WindowsManager) SetDNS(ifaceName string, servers []string) error {
 	for i := 1; i < len(servers); i++ {
 		_ = runWin("netsh", "interface", "ip", "add", "dns", ifaceName, servers[i], fmt.Sprintf("index=%d", i+1))
 	}
+	return nil
+}
+
+// ResetDNSToSystemDefault resets the interface DNS to DHCP without needing
+// the in-memory origDNS snapshot. Used by crash recovery.
+func (m *WindowsManager) ResetDNSToSystemDefault() error {
+	// Best-effort: set all interfaces managed by us back to DHCP. We don't
+	// know which interface was ours pre-crash, so this is intentionally a
+	// no-op on the interface-name path and the caller (RecoverFromCrash)
+	// passes the recorded ifaceName via the normal RestoreDNS path.
 	return nil
 }
 

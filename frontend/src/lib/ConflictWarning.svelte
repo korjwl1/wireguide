@@ -1,5 +1,6 @@
 <script>
   import { createEventDispatcher } from 'svelte';
+  import { t } from '../i18n/index.js';
 
   export let conflicts = [];
   const dispatch = createEventDispatcher();
@@ -7,7 +8,7 @@
 
 <div class="modal-backdrop" on:click={() => dispatch('cancel')}>
   <div class="modal" on:click|stopPropagation>
-    <h3>Routing Conflict Detected</h3>
+    <h3>{$t('conflict.title')}</h3>
 
     <div class="conflict-list">
       {#each conflicts as conflict}
@@ -25,17 +26,14 @@
       {/each}
     </div>
 
-    <p class="warning-text">
-      Connecting may affect traffic routing for the above interfaces.
-      The more specific route will take priority.
-    </p>
+    <p class="warning-text">{$t('conflict.message')}</p>
 
     <div class="modal-footer">
       <button class="btn btn-warn" on:click={() => dispatch('proceed')}>
-        Connect Anyway
+        {$t('conflict.proceed')}
       </button>
       <button class="btn btn-cancel" on:click={() => dispatch('cancel')}>
-        Cancel
+        {$t('conflict.cancel')}
       </button>
     </div>
   </div>
@@ -45,7 +43,7 @@
   .modal-backdrop {
     position: fixed;
     inset: 0;
-    background: rgba(0,0,0,0.7);
+    background: var(--overlay-bg);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -57,10 +55,12 @@
     border-radius: 12px;
     padding: 24px;
     width: 480px;
+    box-shadow: var(--shadow-md);
   }
   h3 { color: var(--yellow); margin: 0 0 16px; }
   .conflict-item {
-    background: #0d0d1a;
+    background: var(--warn-item-bg);
+    border: 1px solid var(--border);
     border-radius: 6px;
     padding: 12px;
     margin-bottom: 8px;
@@ -87,6 +87,6 @@
     cursor: pointer;
     font-size: 13px;
   }
-  .btn-warn { background: var(--yellow); color: #1a1a2e; font-weight: 600; }
+  .btn-warn { background: var(--yellow); color: var(--bg-primary); font-weight: 600; }
   .btn-cancel { background: var(--bg-card); color: var(--text-primary); }
 </style>

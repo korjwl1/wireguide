@@ -44,7 +44,7 @@
   {/if}
 
   <button class="mini-toggle" class:on={isConnected} on:click={toggle}>
-    {isConnected ? t('tunnel.disconnect') : t('tunnel.connect')}
+    {isConnected ? $t('tunnel.disconnect') : $t('tunnel.connect')}
   </button>
 </div>
 
@@ -68,7 +68,7 @@
     width: 8px;
     height: 8px;
     border-radius: 50%;
-    background: #555;
+    background: var(--text-muted);
     transition: background 300ms;
   }
   .mini-dot.on {
@@ -110,6 +110,6 @@
   }
   .mini-toggle.on {
     background: var(--red);
-    color: #fff;
+    color: var(--text-inverse);
   }
 </style>

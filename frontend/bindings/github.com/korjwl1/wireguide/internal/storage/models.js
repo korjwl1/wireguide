@@ -39,12 +39,13 @@ export class Settings {
              */
             this["tray_icon_style"] = "";
         }
-        if (!("auto_reconnect" in $$source)) {
+        if (!("auto_start" in $$source)) {
             /**
+             * launch GUI on OS login
              * @member
              * @type {boolean}
              */
-            this["auto_reconnect"] = false;
+            this["auto_start"] = false;
         }
         if (!("kill_switch" in $$source)) {
             /**

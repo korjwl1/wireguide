@@ -42,22 +42,24 @@ const (
 
 // RPC method names
 const (
-	MethodPing               = "Helper.Ping"
-	MethodShutdown           = "Helper.Shutdown"
-	MethodSubscribe          = "Helper.Subscribe"
-	MethodConnect            = "Tunnel.Connect"
-	MethodDisconnect         = "Tunnel.Disconnect"
-	MethodStatus             = "Tunnel.Status"
-	MethodIsConnected        = "Tunnel.IsConnected"
-	MethodActiveName         = "Tunnel.ActiveName"
-	MethodSetKillSwitch      = "Firewall.SetKillSwitch"
-	MethodSetDNSProtection   = "Firewall.SetDNSProtection"
+	MethodPing             = "Helper.Ping"
+	MethodShutdown         = "Helper.Shutdown"
+	MethodSubscribe        = "Helper.Subscribe"
+	MethodSetLogLevel      = "Helper.SetLogLevel"
+	MethodConnect          = "Tunnel.Connect"
+	MethodDisconnect       = "Tunnel.Disconnect"
+	MethodStatus           = "Tunnel.Status"
+	MethodIsConnected      = "Tunnel.IsConnected"
+	MethodActiveName       = "Tunnel.ActiveName"
+	MethodSetKillSwitch    = "Firewall.SetKillSwitch"
+	MethodSetDNSProtection = "Firewall.SetDNSProtection"
 )
 
 // Event names (server → client notifications)
 const (
 	EventStatus    = "event.status"
 	EventReconnect = "event.reconnect"
+	EventLog       = "event.log"
 )
 
 // NewRequest creates a request with auto-serialized params.

@@ -1,21 +1,29 @@
 // Package helper implements the privileged helper process.
 // Runs as root/admin, accepts RPC calls from the GUI, manages tunnel + firewall.
+//
+// The package is split across three files:
+//   - helper.go   (this file) — Helper struct + Run() lifecycle
+//   - handlers.go — RPC method handlers
+//   - events.go   — status diff + broadcast loop, status conversion
 package helper
 
 import (
-	"bytes"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"sync"
 	"time"
 
-	"github.com/korjwl1/wireguide/internal/config"
+	"github.com/korjwl1/wireguide/internal/domain"
 	"github.com/korjwl1/wireguide/internal/firewall"
 	"github.com/korjwl1/wireguide/internal/ipc"
 	"github.com/korjwl1/wireguide/internal/reconnect"
 	"github.com/korjwl1/wireguide/internal/tunnel"
 )
+
+// shutdownGrace is the window the helper waits after a GUI disconnect before
+// terminating itself. Short enough to prevent orphan processes, long enough to
+// tolerate a normal GUI restart.
+const shutdownGrace = 10 * time.Second
 
 // Helper holds the helper process state.
 type Helper struct {
@@ -24,9 +32,20 @@ type Helper struct {
 	firewall firewall.FirewallManager
 	monitor  *reconnect.Monitor
 
+	// logLevel is the runtime-mutable slog level. Helper.SetLogLevel (and
+	// the Settings UI) writes to this; the broadcast handler reads it for
+	// every record. Info by default.
+	logLevel *slog.LevelVar
+
 	mu             sync.Mutex
-	activeCfg      *config.WireGuardConfig // cached for reconnect
+	activeCfg      *domain.WireGuardConfig // cached for reconnect
 	scriptsAllowed bool
+
+	// shutdownTimer is a singleton grace-window timer. When the control
+	// connection drops we Reset it; when the GUI reconnects we Stop it. This
+	// avoids the previous bug where every disconnect spawned a fresh goroutine
+	// and multiple shutdowns could race.
+	shutdownTimer *time.Timer
 
 	done chan struct{}
 }
@@ -43,50 +62,39 @@ func Run(addr string, ownerUID int, dataDir string) error {
 	manager := tunnel.NewManager(dataDir)
 	fw := firewall.NewPlatformFirewall()
 
-	// Crash recovery
-	if recovered := tunnel.RecoverFromCrash(dataDir); recovered != "" {
-		slog.Warn("recovered from previous crash", "tunnel", recovered)
-	}
-
 	h := &Helper{
 		server:   ipc.NewServer(listener),
 		manager:  manager,
 		firewall: fw,
+		logLevel: new(slog.LevelVar), // defaults to Info
 		done:     make(chan struct{}),
 	}
 
-	// Reconnect monitor — uses cached config
-	h.monitor = reconnect.NewMonitor(manager, func() error {
-		h.mu.Lock()
-		cfg := h.activeCfg
-		allowed := h.scriptsAllowed
-		h.mu.Unlock()
-		if cfg == nil {
-			return fmt.Errorf("no cached config for reconnect")
+	// Install the broadcast slog handler BEFORE the first log call so
+	// everything that follows (crash recovery notices, manager init,
+	// handler registration) gets piped to subscribed GUIs.
+	slog.SetDefault(slog.New(newBroadcastHandler(h.logLevel, func() func(string, interface{}) {
+		if h.server == nil {
+			return nil
 		}
-		return manager.Connect(cfg, allowed)
-	}, func(state reconnect.State) {
-		h.server.Broadcast(ipc.EventReconnect, ipc.ReconnectStateDTO{
-			Reconnecting: state.Reconnecting,
-			Attempt:      state.Attempt,
-			MaxAttempts:  state.MaxAttempts,
-			NextRetry:    state.NextRetry,
-		})
-	}, reconnect.DefaultConfig())
+		return h.server.Broadcast
+	})))
+
+	// Crash recovery (now logs via broadcast handler)
+	if recovered := tunnel.RecoverFromCrash(dataDir); recovered != "" {
+		slog.Warn("recovered from previous crash", "tunnel", recovered)
+	}
+
+	// Reconnect monitor — uses cached config
+	h.monitor = reconnect.NewMonitor(manager, h.reconnectFn, h.onReconnectState, reconnect.DefaultConfig())
 	h.monitor.Start()
 
 	// Register RPC handlers
 	h.registerHandlers()
 
-	// Auto-shutdown if GUI disconnects and doesn't reconnect within grace window
-	h.server.OnDisconnect(func() {
-		slog.Info("control connection lost, waiting for reconnect...")
-		go func() {
-			time.Sleep(10 * time.Second)
-			slog.Info("no reconnect within grace window, shutting down")
-			h.shutdown()
-		}()
-	})
+	// Grace-window shutdown on GUI disconnect.
+	h.server.OnConnect(h.cancelShutdownTimer)
+	h.server.OnDisconnect(h.startShutdownTimer)
 
 	// Start event emitter (diff loop)
 	go h.eventLoop()
@@ -99,158 +107,56 @@ func Run(addr string, ownerUID int, dataDir string) error {
 	return err
 }
 
-func (h *Helper) registerHandlers() {
-	h.server.Handle(ipc.MethodPing, func(params json.RawMessage) (interface{}, error) {
-		return ipc.PingResponse{Version: ipc.ProtocolVersion}, nil
-	})
-
-	h.server.Handle(ipc.MethodShutdown, func(params json.RawMessage) (interface{}, error) {
-		go func() {
-			time.Sleep(100 * time.Millisecond) // let response go out first
-			h.shutdown()
-		}()
-		return ipc.Empty{}, nil
-	})
-
-	h.server.Handle(ipc.MethodConnect, func(params json.RawMessage) (interface{}, error) {
-		var req ipc.ConnectRequest
-		if err := json.Unmarshal(params, &req); err != nil {
-			return nil, err
-		}
-		if req.Config == nil {
-			return nil, fmt.Errorf("config is required")
-		}
-		// Re-validate config server-side (don't trust client)
-		if result := config.Validate(req.Config); !result.IsValid() {
-			return nil, fmt.Errorf("invalid config: %s", result.ErrorMessages()[0])
-		}
-
-		// Check for routing conflicts with existing interfaces (Tailscale etc).
-		// Log warnings but don't block — users can override via UI.
-		var allowedIPs []string
-		for _, peer := range req.Config.Peers {
-			allowedIPs = append(allowedIPs, peer.AllowedIPs...)
-		}
-		if conflicts, err := tunnel.CheckConflicts(allowedIPs); err == nil && len(conflicts) > 0 {
-			for _, c := range conflicts {
-				slog.Warn("routing conflict detected",
-					"interface", c.InterfaceName,
-					"owner", c.Owner,
-					"overlaps", c.OverlappingIPs)
-			}
-		}
-
-		if err := h.manager.Connect(req.Config, req.ScriptsAllowed); err != nil {
-			return nil, err
-		}
-		h.mu.Lock()
-		h.activeCfg = req.Config
-		h.scriptsAllowed = req.ScriptsAllowed
-		h.mu.Unlock()
-		return ipc.Empty{}, nil
-	})
-
-	h.server.Handle(ipc.MethodDisconnect, func(params json.RawMessage) (interface{}, error) {
-		if err := h.manager.Disconnect(); err != nil {
-			return nil, err
-		}
-		h.mu.Lock()
-		h.activeCfg = nil
-		h.mu.Unlock()
-		return ipc.Empty{}, nil
-	})
-
-	h.server.Handle(ipc.MethodStatus, func(params json.RawMessage) (interface{}, error) {
-		return h.statusDTO(), nil
-	})
-
-	h.server.Handle(ipc.MethodIsConnected, func(params json.RawMessage) (interface{}, error) {
-		return ipc.BoolResponse{Value: h.manager.IsConnected()}, nil
-	})
-
-	h.server.Handle(ipc.MethodActiveName, func(params json.RawMessage) (interface{}, error) {
-		return ipc.StringResponse{Value: h.manager.ActiveTunnel()}, nil
-	})
-
-	h.server.Handle(ipc.MethodSetKillSwitch, func(params json.RawMessage) (interface{}, error) {
-		var req ipc.KillSwitchRequest
-		if err := json.Unmarshal(params, &req); err != nil {
-			return nil, err
-		}
-		if req.Enabled {
-			status := h.manager.Status()
-			if status.State != tunnel.StateConnected {
-				return nil, fmt.Errorf("no active tunnel")
-			}
-			if err := h.firewall.EnableKillSwitch(status.InterfaceName, status.Endpoint); err != nil {
-				return nil, err
-			}
-		} else {
-			if err := h.firewall.DisableKillSwitch(); err != nil {
-				return nil, err
-			}
-		}
-		return ipc.Empty{}, nil
-	})
-
-	h.server.Handle(ipc.MethodSetDNSProtection, func(params json.RawMessage) (interface{}, error) {
-		var req ipc.DNSProtectionRequest
-		if err := json.Unmarshal(params, &req); err != nil {
-			return nil, err
-		}
-		if req.Enabled {
-			status := h.manager.Status()
-			if status.State != tunnel.StateConnected {
-				return nil, fmt.Errorf("no active tunnel")
-			}
-			if err := h.firewall.EnableDNSProtection(status.InterfaceName, req.DNSServers); err != nil {
-				return nil, err
-			}
-		} else {
-			if err := h.firewall.DisableDNSProtection(); err != nil {
-				return nil, err
-			}
-		}
-		return ipc.Empty{}, nil
-	})
-}
-
-func (h *Helper) statusDTO() ipc.ConnectionStatusDTO {
-	s := h.manager.Status()
-	return ipc.ConnectionStatusDTO{
-		State:         string(s.State),
-		TunnelName:    s.TunnelName,
-		InterfaceName: s.InterfaceName,
-		RxBytes:       s.RxBytes,
-		TxBytes:       s.TxBytes,
-		LastHandshake: s.HandshakeAge,
-		Duration:      s.Duration,
-		Endpoint:      s.Endpoint,
+// reconnectFn is the callback passed to reconnect.Monitor. It fetches the
+// currently cached active config under lock and asks the tunnel manager to
+// reconnect. Returns an error if no config is cached (meaning the user has
+// manually disconnected, in which case reconnection is not desired).
+func (h *Helper) reconnectFn() error {
+	h.mu.Lock()
+	cfg := h.activeCfg
+	allowed := h.scriptsAllowed
+	h.mu.Unlock()
+	if cfg == nil {
+		return fmt.Errorf("no cached config for reconnect")
 	}
+	return h.manager.Connect(cfg, allowed)
 }
 
-// eventLoop periodically broadcasts status changes.
-// Uses JSON serialization for change detection (robust against field swaps).
-func (h *Helper) eventLoop() {
-	ticker := time.NewTicker(1 * time.Second)
-	defer ticker.Stop()
+// onReconnectState forwards reconnection state changes to any subscribed GUI.
+func (h *Helper) onReconnectState(state reconnect.State) {
+	h.server.Broadcast(ipc.EventReconnect, ipc.ReconnectStateDTO{
+		Reconnecting: state.Reconnecting,
+		Attempt:      state.Attempt,
+		MaxAttempts:  state.MaxAttempts,
+		NextRetry:    state.NextRetry,
+	})
+}
 
-	var lastJSON []byte
-	for {
-		select {
-		case <-h.done:
-			return
-		case <-ticker.C:
-			dto := h.statusDTO()
-			currentJSON, err := json.Marshal(dto)
-			if err != nil {
-				continue
-			}
-			if !bytes.Equal(lastJSON, currentJSON) {
-				lastJSON = currentJSON
-				h.server.Broadcast(ipc.EventStatus, dto)
-			}
+// startShutdownTimer begins (or re-begins) the grace-window countdown. Called
+// when the GUI's control connection drops.
+func (h *Helper) startShutdownTimer() {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	slog.Info("control connection lost, starting shutdown grace window", "grace", shutdownGrace)
+	if h.shutdownTimer != nil {
+		h.shutdownTimer.Stop()
+	}
+	h.shutdownTimer = time.AfterFunc(shutdownGrace, func() {
+		slog.Info("no reconnect within grace window, shutting down")
+		h.shutdown()
+	})
+}
+
+// cancelShutdownTimer aborts a pending grace-window shutdown. Called when the
+// GUI reconnects before the timer fires.
+func (h *Helper) cancelShutdownTimer() {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.shutdownTimer != nil {
+		if h.shutdownTimer.Stop() {
+			slog.Info("GUI reconnected within grace window, shutdown cancelled")
 		}
+		h.shutdownTimer = nil
 	}
 }
 
@@ -260,10 +166,13 @@ func (h *Helper) shutdown() {
 
 func (h *Helper) cleanup() {
 	close(h.done)
+	if h.shutdownTimer != nil {
+		h.shutdownTimer.Stop()
+	}
 	h.monitor.Stop()
 	h.firewall.Cleanup()
 	if h.manager.IsConnected() {
-		h.manager.Disconnect()
+		_ = h.manager.Disconnect()
 	}
 	slog.Info("helper shutdown complete")
 }

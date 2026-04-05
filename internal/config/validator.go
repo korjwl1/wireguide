@@ -4,8 +4,14 @@ import (
 	"encoding/base64"
 	"fmt"
 	"net"
+	"regexp"
 	"strconv"
 )
+
+// hostnameRegex matches RFC 1035 hostnames (single-label or FQDN).
+// Used to accept entries like `corp.example.com` in the `DNS =` field,
+// which wg-quick treats as search domains rather than servers.
+var hostnameRegex = regexp.MustCompile(`^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$`)
 
 // ValidationError represents a single validation issue.
 type ValidationError struct {
@@ -70,10 +76,12 @@ func validateInterface(iface *InterfaceConfig, result *ValidationResult) {
 		}
 	}
 
-	// DNS: optional, valid IP addresses
+	// DNS: optional. Each entry is either an IP address (DNS server) or a
+	// hostname (search domain) — matching wg-quick's `DNS = 1.1.1.1, corp.example.com`
+	// syntax. The network adapter splits them at apply time.
 	for _, dns := range iface.DNS {
-		if net.ParseIP(dns) == nil {
-			result.addError("Interface.DNS", fmt.Sprintf("invalid DNS address: %q", dns))
+		if net.ParseIP(dns) == nil && !hostnameRegex.MatchString(dns) {
+			result.addError("Interface.DNS", fmt.Sprintf("invalid DNS entry (not an IP or hostname): %q", dns))
 		}
 	}
 
