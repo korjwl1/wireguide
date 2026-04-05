@@ -19,7 +19,7 @@ function configure() {
 }
 
 // Private type creation functions
-const $$createType0 = $Create.Array($Create.Any);
+const $$createType0 = $Create.Map($Create.Any, $Create.Any);
 const $$createType1 = main$0.ReconnectEvent.createFrom;
 const $$createType2 = main$0.StatusEvent.createFrom;
 

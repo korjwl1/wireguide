@@ -37,8 +37,10 @@
     subscribeToEvents();
 
     // Wails v3 native file drop — HTML5 dragdrop doesn't work in WebKit.
+    // Event payload: { files: string[], details: {...} }
     filesDroppedUnsub = Events.On('files-dropped', async (event) => {
-      const paths = event.data || [];
+      const payload = event.data || {};
+      const paths = payload.files || [];
       for (const path of paths) {
         if (path.toLowerCase().endsWith('.conf')) {
           await importFromPath(path);
@@ -213,7 +215,7 @@
   }
 </script>
 
-<div class="app">
+<div class="app" data-file-drop-target>
   {#if toast}
     <div class="toast">{toast}</div>
   {/if}
@@ -338,6 +340,23 @@
     width: 100vw;
     height: 100vh;
     position: relative;
+  }
+  /* Wails adds this class automatically when dragging files over the target */
+  :global(.file-drop-target-active) {
+    box-shadow: inset 0 0 0 4px var(--green);
+  }
+  :global(.file-drop-target-active::after) {
+    content: 'Drop .conf file to import';
+    position: fixed;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 20px;
+    color: var(--green);
+    background: rgba(0, 184, 148, 0.1);
+    pointer-events: none;
+    z-index: 500;
   }
   .layout {
     display: flex;
@@ -484,27 +503,6 @@
     flex-direction: column;
   }
 
-  /* Drop overlay */
-  .drop-overlay {
-    position: absolute;
-    inset: 0;
-    background: rgba(15, 52, 96, 0.85);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    z-index: 100;
-    border: 3px dashed var(--green);
-    border-radius: 8px;
-    margin: 8px;
-  }
-  .drop-overlay p {
-    font-size: 18px;
-    color: var(--green);
-    pointer-events: none;
-  }
-  .drop-overlay {
-    pointer-events: none;
-  }
   .toast {
     position: fixed;
     bottom: 24px;

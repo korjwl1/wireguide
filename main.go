@@ -45,7 +45,7 @@ type ReconnectEvent struct {
 func init() {
 	application.RegisterEvent[StatusEvent]("status")
 	application.RegisterEvent[ReconnectEvent]("reconnect")
-	application.RegisterEvent[[]string]("files-dropped")
+	application.RegisterEvent[map[string]any]("files-dropped")
 }
 
 func main() {
@@ -127,7 +127,9 @@ func runGUI() {
 	// Register native file drop handler — HTML5 drag-drop doesn't work in WebKit.
 	win.OnWindowEvent(events.Common.WindowFilesDropped, func(event *application.WindowEvent) {
 		files := event.Context().DroppedFiles()
-		app.Event.Emit("files-dropped", files)
+		app.Event.Emit("files-dropped", map[string]any{
+			"files": files,
+		})
 	})
 
 	// System tray
