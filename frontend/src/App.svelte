@@ -254,11 +254,26 @@
   }
 
   // Actually perform the connect RPC (after all warnings have been resolved).
+  // After successful connect, auto-apply kill switch and DNS protection
+  // based on saved settings (global preferences, not per-tunnel).
   async function doConnectFinal(name, scriptsAllowed) {
     try {
       await TunnelService.Connect(name, scriptsAllowed);
       await refreshTunnels(TunnelService);
       await refreshStatus(TunnelService);
+
+      // Auto-apply firewall settings after successful connect
+      try {
+        const s = await TunnelService.GetSettings();
+        if (s?.kill_switch) {
+          await TunnelService.SetKillSwitch(true);
+        }
+        if (s?.dns_protection) {
+          await TunnelService.SetDNSProtection(true);
+        }
+      } catch (e) {
+        console.warn('auto-apply firewall settings failed:', e);
+      }
     } catch (e) {
       showToast("Connect failed: " + errText(e));
     }

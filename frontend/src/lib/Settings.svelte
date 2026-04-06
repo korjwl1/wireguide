@@ -118,20 +118,26 @@
 
   function onKillSwitchChange(e) {
     settings.kill_switch = e.target.checked;
-    TunnelService.SetKillSwitch(settings.kill_switch).catch((err) => {
-      console.error('SetKillSwitch failed:', err);
-      // Revert on failure so the checkbox stays in sync with reality.
-      settings.kill_switch = !settings.kill_switch;
-    });
+    // Save the preference only. Actual activation happens automatically
+    // when VPN connects (handled in App.svelte's connect flow).
+    // If VPN is currently connected, apply immediately too.
+    if ($connectionStatus?.state === 'connected') {
+      TunnelService.SetKillSwitch(settings.kill_switch).catch((err) => {
+        console.error('SetKillSwitch failed:', err);
+        settings.kill_switch = !settings.kill_switch;
+      });
+    }
     scheduleSave();
   }
 
   function onDnsProtectionChange(e) {
     settings.dns_protection = e.target.checked;
-    TunnelService.SetDNSProtection(settings.dns_protection).catch((err) => {
-      console.error('SetDNSProtection failed:', err);
-      settings.dns_protection = !settings.dns_protection;
-    });
+    if ($connectionStatus?.state === 'connected') {
+      TunnelService.SetDNSProtection(settings.dns_protection).catch((err) => {
+        console.error('SetDNSProtection failed:', err);
+        settings.dns_protection = !settings.dns_protection;
+      });
+    }
     scheduleSave();
   }
 
@@ -236,23 +242,17 @@
         <label for="kill-switch">{$t('settings.kill_switch')}</label>
         <input id="kill-switch" type="checkbox"
           checked={settings.kill_switch}
-          disabled={$connectionStatus?.state !== 'connected'}
           on:change={onKillSwitchChange} />
       </div>
-      {#if $connectionStatus?.state !== 'connected'}
-        <p class="setting-hint">{$t('settings.kill_switch_hint')}</p>
-      {/if}
+      <p class="setting-hint">{$t('settings.kill_switch_hint')}</p>
 
       <div class="setting-row">
         <label for="dns-protection">{$t('settings.dns_protection')}</label>
         <input id="dns-protection" type="checkbox"
           checked={settings.dns_protection}
-          disabled={$connectionStatus?.state !== 'connected'}
           on:change={onDnsProtectionChange} />
       </div>
-      {#if $connectionStatus?.state !== 'connected'}
-        <p class="setting-hint">{$t('settings.dns_protection_hint')}</p>
-      {/if}
+      <p class="setting-hint">{$t('settings.dns_protection_hint')}</p>
     </section>
 
     <div class="modal-footer">

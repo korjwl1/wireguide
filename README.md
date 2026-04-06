@@ -134,15 +134,24 @@ task build
 
 ## Architecture
 
-```
-┌─────────────────────┐         ┌──────────────────────────┐
-│   GUI Process        │  UDS    │   Helper Process (root)  │
-│   (Wails + Svelte)   │◄──────►│   wireguard-go + wgctrl  │
-│                      │ JSON-  │   TUN / routing / DNS     │
-│   Config editor      │  RPC   │   kill switch / firewall  │
-│   System tray        │        │   reconnect monitor       │
-│   Diagnostics        │        │   route monitor           │
-└─────────────────────┘         └──────────────────────────┘
+```mermaid
+graph LR
+    subgraph GUI["GUI Process (unprivileged)"]
+        A1[Wails + Svelte]
+        A2[Config editor]
+        A3[System tray]
+        A4[Diagnostics]
+    end
+
+    subgraph Helper["Helper Process (root)"]
+        B1[wireguard-go + wgctrl]
+        B2[TUN / routing / DNS]
+        B3[Kill switch / firewall]
+        B4[Reconnect monitor]
+        B5[Route monitor]
+    end
+
+    GUI <-->|"JSON-RPC over UDS"| Helper
 ```
 
 - **Single binary** — `wireguide` runs as GUI or helper (`--helper` flag)

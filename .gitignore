@@ -35,3 +35,4 @@ build/icon/
 # repo state.
 .claude/plans/
 .claude/settings.local.json
+.spec-mix/

@@ -134,15 +134,24 @@ task build
 
 ## 아키텍처
 
-```
-┌─────────────────────┐         ┌──────────────────────────┐
-│   GUI 프로세스        │  UDS    │   Helper 프로세스 (root)   │
-│   (Wails + Svelte)   │◄──────►│   wireguard-go + wgctrl  │
-│                      │ JSON-  │   TUN / 라우팅 / DNS       │
-│   설정 에디터          │  RPC   │   킬 스위치 / 방화벽        │
-│   시스템 트레이        │        │   재연결 모니터             │
-│   진단 도구           │        │   라우트 모니터             │
-└─────────────────────┘         └──────────────────────────┘
+```mermaid
+graph LR
+    subgraph GUI["GUI 프로세스 (일반 권한)"]
+        A1[Wails + Svelte]
+        A2[설정 에디터]
+        A3[시스템 트레이]
+        A4[진단 도구]
+    end
+
+    subgraph Helper["Helper 프로세스 (root)"]
+        B1[wireguard-go + wgctrl]
+        B2[TUN / 라우팅 / DNS]
+        B3[킬 스위치 / 방화벽]
+        B4[재연결 모니터]
+        B5[라우트 모니터]
+    end
+
+    GUI <-->|"JSON-RPC over UDS"| Helper
 ```
 
 - **단일 바이너리** — `wireguide`가 GUI 또는 helper로 동작 (`--helper` 플래그)

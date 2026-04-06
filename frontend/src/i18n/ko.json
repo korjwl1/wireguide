@@ -86,9 +86,9 @@
     "log_level_warn": "경고",
     "log_level_error": "오류",
     "kill_switch": "킬 스위치",
-    "kill_switch_hint": "VPN에 연결하면 활성화할 수 있습니다",
+    "kill_switch_hint": "VPN이 끊기면 모든 트래픽을 차단합니다. 연결 시 자동 적용.",
     "dns_protection": "DNS 보호",
-    "dns_protection_hint": "VPN에 연결하면 활성화할 수 있습니다"
+    "dns_protection_hint": "DNS를 VPN 터널로만 강제합니다. 연결 시 자동 적용."
   },
   "confirm": {
     "delete_title": "터널 삭제",

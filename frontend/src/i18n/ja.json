@@ -86,9 +86,9 @@
     "log_level_warn": "警告",
     "log_level_error": "エラー",
     "kill_switch": "キルスイッチ",
-    "kill_switch_hint": "VPN に接続すると有効にできます",
+    "kill_switch_hint": "VPN が切断されるとすべてのトラフィックをブロックします。接続時に自動適用。",
     "dns_protection": "DNS 保護",
-    "dns_protection_hint": "VPN に接続すると有効にできます"
+    "dns_protection_hint": "DNS を VPN トンネル経由のみに強制します。接続時に自動適用。"
   },
   "confirm": {
     "delete_title": "トンネルを削除",

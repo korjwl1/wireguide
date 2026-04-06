@@ -86,9 +86,9 @@
     "log_level_warn": "Warning",
     "log_level_error": "Error",
     "kill_switch": "Kill Switch",
-    "kill_switch_hint": "Connect to a VPN to enable",
+    "kill_switch_hint": "Blocks all traffic if VPN drops. Applied automatically on connect.",
     "dns_protection": "DNS Protection",
-    "dns_protection_hint": "Connect to a VPN to enable"
+    "dns_protection_hint": "Forces DNS through VPN only. Applied automatically on connect."
   },
   "confirm": {
     "delete_title": "Delete Tunnel",
