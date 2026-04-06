@@ -20,7 +20,7 @@ import (
 const (
 	githubRepo     = "korjwl1/wireguide"
 	apiEndpoint    = "https://api.github.com/repos/" + githubRepo + "/releases/latest"
-	currentVersion = "0.2.0"
+	currentVersion = "0.1.0"
 )
 
 // Release represents a GitHub release.
@@ -242,22 +242,39 @@ func fetchExpectedHash(checksumURL, assetName string, client *http.Client) strin
 }
 
 func matchAsset(assets []Asset) string {
-	goos := runtime.GOOS
 	arch := runtime.GOARCH
 
-	// Expected naming: wireguide-{os}-{arch}.{ext}
-	patterns := []string{
-		fmt.Sprintf("wireguide-%s-%s", goos, arch),
-		fmt.Sprintf("wireguide_%s_%s", goos, arch),
+	// Map Go OS names to common release naming conventions.
+	osNames := []string{runtime.GOOS}
+	switch runtime.GOOS {
+	case "darwin":
+		osNames = append(osNames, "macos", "osx")
+	case "windows":
+		osNames = append(osNames, "win", "win64")
 	}
 
 	for _, a := range assets {
 		name := strings.ToLower(a.Name)
-		for _, p := range patterns {
-			if strings.Contains(name, p) {
+		for _, osn := range osNames {
+			if strings.Contains(name, osn) && strings.Contains(name, arch) {
 				return a.Name
 			}
 		}
 	}
 	return ""
+}
+
+// IsBrewInstall returns true if the running binary appears to be managed
+// by Homebrew (lives under a Homebrew Cellar/Caskroom path).
+func IsBrewInstall() bool {
+	exe, err := os.Executable()
+	if err != nil {
+		return false
+	}
+	resolved, err := filepath.EvalSymlinks(exe)
+	if err != nil {
+		resolved = exe
+	}
+	lower := strings.ToLower(resolved)
+	return strings.Contains(lower, "homebrew") || strings.Contains(lower, "cellar") || strings.Contains(lower, "caskroom")
 }

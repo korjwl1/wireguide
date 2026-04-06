@@ -201,10 +201,15 @@
     "cancel": "キャンセル"
   },
   "update": {
-    "available": "アップデートあり: v{version}",
+    "available": "v{version} が利用可能",
     "current": "現在: v{version}",
-    "update_now": "今すぐ更新",
-    "release_notes": "リリースノート"
+    "update_now": "更新",
+    "updating": "更新中...",
+    "release_notes": "ノート",
+    "confirm_title": "WireGuide を更新しますか？",
+    "vpn_warning": "更新中に VPN 接続が一時的に切断される場合があります。アプリは自動的に再起動します。",
+    "proceed": "更新する",
+    "cancel": "あとで"
   },
   "wifi_rules": {
     "title": "Wi-Fi ルール",

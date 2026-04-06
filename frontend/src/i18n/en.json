@@ -201,10 +201,15 @@
     "cancel": "Cancel"
   },
   "update": {
-    "available": "Update available: v{version}",
+    "available": "v{version} available",
     "current": "current: v{version}",
-    "update_now": "Update Now",
-    "release_notes": "Release Notes"
+    "update_now": "Update",
+    "updating": "Updating...",
+    "release_notes": "Notes",
+    "confirm_title": "Update WireGuide?",
+    "vpn_warning": "The VPN connection will be briefly interrupted during the update. The app will restart automatically.",
+    "proceed": "Update Now",
+    "cancel": "Later"
   },
   "wifi_rules": {
     "title": "Wi-Fi Rules",

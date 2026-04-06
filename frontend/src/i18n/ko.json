@@ -201,10 +201,15 @@
     "cancel": "취소"
   },
   "update": {
-    "available": "업데이트 있음: v{version}",
+    "available": "v{version} 업데이트 가능",
     "current": "현재: v{version}",
-    "update_now": "지금 업데이트",
-    "release_notes": "릴리스 노트"
+    "update_now": "업데이트",
+    "updating": "업데이트 중...",
+    "release_notes": "노트",
+    "confirm_title": "WireGuide를 업데이트할까요?",
+    "vpn_warning": "업데이트 중 VPN 연결이 잠시 끊길 수 있습니다. 앱이 자동으로 재시작됩니다.",
+    "proceed": "업데이트",
+    "cancel": "나중에"
   },
   "wifi_rules": {
     "title": "Wi-Fi 규칙",

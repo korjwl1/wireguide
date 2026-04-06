@@ -2,12 +2,16 @@ package app
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
+	"os/exec"
+	"runtime"
 	"sync/atomic"
 
 	"github.com/korjwl1/wireguide/internal/autostart"
 	"github.com/korjwl1/wireguide/internal/ipc"
 	"github.com/korjwl1/wireguide/internal/storage"
+	"github.com/korjwl1/wireguide/internal/update"
 )
 
 // guiLogLevelSetter is set by internal/gui at startup so the app package
@@ -114,4 +118,37 @@ func (s *TunnelService) SetDNSProtection(enabled bool) error {
 		Enabled:    enabled,
 		DNSServers: dnsServers,
 	}, nil)
+}
+
+// --- Auto-update ---
+
+// CheckForUpdate queries GitHub for a newer release.
+func (s *TunnelService) CheckForUpdate() (*update.UpdateInfo, error) {
+	return update.CheckForUpdate()
+}
+
+// RunUpdate performs the update. If installed via Homebrew, runs brew upgrade.
+// Otherwise downloads and installs directly from GitHub Releases.
+func (s *TunnelService) RunUpdate(info *update.UpdateInfo) error {
+	if info == nil || !info.Available {
+		return fmt.Errorf("no update available")
+	}
+
+	if runtime.GOOS == "darwin" && update.IsBrewInstall() {
+		slog.Info("update: running brew upgrade --cask wireguide")
+		cmd := exec.Command("brew", "upgrade", "--cask", "wireguide")
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("brew upgrade failed: %w (%s)", err, string(out))
+		}
+		// postflight in the cask handles killall + relaunch
+		return nil
+	}
+
+	// Direct download path (non-brew installs)
+	path, err := update.DownloadUpdate(info)
+	if err != nil {
+		return fmt.Errorf("download failed: %w", err)
+	}
+	return update.Install(path, info)
 }

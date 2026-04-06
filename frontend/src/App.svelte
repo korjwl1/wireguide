@@ -11,7 +11,7 @@
   import DNSLeakTest from './lib/DNSLeakTest.svelte';
   import RouteVisualization from './lib/RouteVisualization.svelte';
   import StatsDashboard from './lib/StatsDashboard.svelte';
-  // NewTunnelDialog removed — ConfigEditor now handles both new + edit
+  import UpdateNotice from './lib/UpdateNotice.svelte';
   import { tunnels, selectedTunnel, refreshTunnels, refreshStatus, subscribeToEvents, unsubscribe, initialLoad, connectionStatus } from './stores/tunnels.js';
   import { applyTheme, initThemeWatcher } from './stores/theme.js';
   import { startLogListener, stopLogListener } from './stores/logs.js';
@@ -34,6 +34,7 @@
   let editorErrors = [];
   let toast = '';
   let toastTimer = null;
+  let updateInfo = null;
   let filesDroppedUnsub = null;
   let helperUnsub = null;
   let helperResetUnsub = null;
@@ -63,6 +64,14 @@
 
     await initialLoad(TunnelService);
     subscribeToEvents();
+
+    // Auto-check for updates (non-blocking, best-effort)
+    try {
+      const info = await TunnelService.CheckForUpdate();
+      if (info?.available) updateInfo = info;
+    } catch (e) {
+      // Silent — update check failure should never block the app
+    }
 
     // Wails v3 native file drop — HTML5 dragdrop doesn't work in WebKit.
     // Event payload: { files: string[], details: {...} }
@@ -282,6 +291,14 @@
     showScriptWarning = false;
     await doConnect(pendingConnectName, false);
   }
+
+  async function handleUpdate() {
+    try {
+      await TunnelService.RunUpdate(updateInfo);
+    } catch (e) {
+      showToast('Update failed: ' + (e?.message || e));
+    }
+  }
 </script>
 
 <!-- The `$: $locale` subscription in the script block lets every `$t(...)`
@@ -333,6 +350,8 @@
 
     <!-- Main content -->
     <div class="main-content">
+      <UpdateNotice {updateInfo} onInstall={handleUpdate} onDismiss={() => updateInfo = null} />
+
       {#if currentView === 'tunnels'}
         <div class="tunnels-view">
           <div class="tunnel-list-pane">
