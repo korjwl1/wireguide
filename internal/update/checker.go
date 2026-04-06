@@ -21,6 +21,12 @@ const (
 	githubRepo     = "korjwl1/wireguide"
 	apiEndpoint    = "https://api.github.com/repos/" + githubRepo + "/releases/latest"
 	currentVersion = "0.1.3"
+
+	// minAssetSize is the minimum acceptable size for a release asset.
+	// A macOS .dmg/.zip containing WireGuide.app is always well over 1 MB;
+	// anything smaller is almost certainly corrupted or a placeholder file
+	// injected by an attacker.
+	minAssetSize = 1 << 20 // 1 MB
 )
 
 // CurrentVersion returns the hardcoded app version string.
@@ -106,6 +112,16 @@ func CheckForUpdate() (*UpdateInfo, error) {
 		}
 	}
 
+	// Reject assets with a zero or suspiciously small size reported by the
+	// GitHub API. A zero size can indicate a failed upload or a tampered
+	// release; a very small size is never valid for a packaged application.
+	if assetSize <= 0 {
+		return nil, fmt.Errorf("refusing update %s: GitHub reports asset size 0 (failed upload or tampered release)", latestVer)
+	}
+	if assetSize < minAssetSize {
+		return nil, fmt.Errorf("refusing update %s: asset size %d bytes is below minimum %d (likely corrupted or malicious)", latestVer, assetSize, minAssetSize)
+	}
+
 	// Try to pre-fetch the expected hash from the checksum file.
 	var expectedHash string
 	if checksumURL != "" && assetName != "" {
@@ -144,6 +160,12 @@ func DownloadUpdate(info *UpdateInfo) (string, error) {
 		return "", fmt.Errorf("download failed: HTTP %d", resp.StatusCode)
 	}
 
+	// Verify Content-Length matches the asset size reported by the GitHub API.
+	// A mismatch may indicate a MITM or CDN substitution attack.
+	if cl := resp.ContentLength; cl > 0 && info.AssetSize > 0 && cl != info.AssetSize {
+		return "", fmt.Errorf("Content-Length %d does not match expected asset size %d — possible tampering", cl, info.AssetSize)
+	}
+
 	// Limit download to expected size + 10% margin to prevent disk exhaustion.
 	maxSize := int64(info.AssetSize) + int64(info.AssetSize)/10
 	if maxSize < 100*1024*1024 {
@@ -162,12 +184,25 @@ func DownloadUpdate(info *UpdateInfo) (string, error) {
 	// Hash the content as we download it.
 	hasher := sha256.New()
 	writer := io.MultiWriter(f, hasher)
-	if _, err := io.Copy(writer, limitedBody); err != nil {
+	written, err := io.Copy(writer, limitedBody)
+	if err != nil {
 		f.Close()
 		os.Remove(destPath)
 		return "", err
 	}
 	f.Close()
+
+	// Reject files that are empty or unreasonably small for a packaged app.
+	if written < minAssetSize {
+		os.Remove(destPath)
+		return "", fmt.Errorf("downloaded file is %d bytes, below minimum %d — refusing to install", written, minAssetSize)
+	}
+
+	// Verify the downloaded size matches the size the GitHub API reported.
+	if info.AssetSize > 0 && written != info.AssetSize {
+		os.Remove(destPath)
+		return "", fmt.Errorf("downloaded %d bytes but expected %d — possible truncation or tampering", written, info.AssetSize)
+	}
 
 	// Checksum verification is mandatory — refuse to install without it.
 	if info.ExpectedHash == "" {
@@ -182,10 +217,17 @@ func DownloadUpdate(info *UpdateInfo) (string, error) {
 	}
 	info.HashVerified = true
 
-	// TODO: Add minisign/Ed25519 signature verification.
-	// After checksum passes, download <asset>.minisig from the release and
-	// verify against an embedded public key. Until signing infrastructure is
-	// in place, log a warning so operators are aware.
+	// TODO(security): Add Ed25519/minisign signature verification once a
+	// signing key is established. The checksum file itself is hosted alongside
+	// the asset on GitHub, so a compromised GitHub account can replace both.
+	// Proper defense requires verifying a cryptographic signature made with a
+	// private key that never touches GitHub:
+	//   1. Generate an Ed25519 keypair (or use minisign).
+	//   2. Embed the public key in this binary at compile time.
+	//   3. Sign each release asset (or the SHA256SUMS file) offline.
+	//   4. Upload the .minisig detached signature as a release asset.
+	//   5. After checksum passes here, download <asset>.minisig and verify
+	//      against the embedded public key before proceeding.
 	slog.Warn("signature verification not yet implemented — update authenticated by SHA256 checksum only")
 
 	return destPath, nil
