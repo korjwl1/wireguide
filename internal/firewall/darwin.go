@@ -122,6 +122,7 @@ func (f *DarwinFirewall) EnableKillSwitch(interfaceName string, _ []string, endp
 	f.pfWasEnabled = pfWas
 	f.killSwitchEnabled = true
 	f.mu.Unlock()
+	slog.Info("kill switch enabled", "interface", interfaceName, "endpoints", len(endpoints))
 	return nil
 }
 
@@ -148,6 +149,7 @@ func (f *DarwinFirewall) DisableKillSwitch() error {
 	f.mu.Lock()
 	f.killSwitchEnabled = false
 	f.mu.Unlock()
+	slog.Info("kill switch disabled")
 	return nil
 }
 
@@ -205,6 +207,7 @@ func (f *DarwinFirewall) EnableDNSProtection(interfaceName string, dnsServers []
 	f.mu.Lock()
 	f.dnsProtectionEnabled = true
 	f.mu.Unlock()
+	slog.Info("DNS protection enabled", "interface", interfaceName, "dns_servers", dnsServers)
 	return nil
 }
 
@@ -239,6 +242,7 @@ func (f *DarwinFirewall) DisableDNSProtection() error {
 	f.mu.Lock()
 	f.dnsProtectionEnabled = false
 	f.mu.Unlock()
+	slog.Info("DNS protection disabled")
 	return nil
 }
 
