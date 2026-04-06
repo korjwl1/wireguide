@@ -170,13 +170,13 @@
     --accent:      #007AFF;   /* systemBlue light */
     --blue:        #007AFF;
     --green:       #34C759;   /* systemGreen light */
-    --yellow:      #FFCC00;   /* systemYellow light */
+    --yellow:      #E5A000;   /* amber — darker than systemYellow for light-bg visibility */
     --red:         #FF3B30;   /* systemRed light */
     --orange:      #FF9500;
     --purple:      #AF52DE;
 
     --green-tint:  rgba(52, 199, 89, 0.14);
-    --yellow-tint: rgba(255, 204, 0, 0.18);
+    --yellow-tint: rgba(229, 160, 0, 0.18);
     --blue-tint:   rgba(0, 122, 255, 0.14);
 
     --error-bg:    rgba(255, 59, 48, 0.12);
@@ -233,13 +233,13 @@
         --accent: #007AFF;
         --blue:   #007AFF;
         --green:  #34C759;
-        --yellow: #FFCC00;
+        --yellow: #E5A000;
         --red:    #FF3B30;
         --orange: #FF9500;
         --purple: #AF52DE;
 
         --green-tint:  rgba(52, 199, 89, 0.14);
-        --yellow-tint: rgba(255, 204, 0, 0.18);
+        --yellow-tint: rgba(229, 160, 0, 0.18);
         --blue-tint:   rgba(0, 122, 255, 0.14);
 
         --error-bg:   rgba(255, 59, 48, 0.12);

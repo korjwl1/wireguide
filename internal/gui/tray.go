@@ -28,9 +28,12 @@ func init() {
 	trayOnIcon = buildTrayOnIcon()
 }
 
-// buildTrayOnIcon takes the Wails default 64x64 template W and draws a small
-// filled black circle at the bottom-left. Black-on-transparent is the correct
-// format for macOS template icons — the system renders it as a mask.
+// buildTrayOnIcon takes the Wails default 64x64 template W and draws a
+// notification-style badge circle at the top-right corner, overlapping the W
+// glyph — similar to Slack's red badge or iOS notification dots.
+//
+// Black-on-transparent is the macOS template icon format: the system uses the
+// alpha channel as a mask and auto-tints for light/dark menu bar themes.
 func buildTrayOnIcon() []byte {
 	base, err := png.Decode(bytes.NewReader(icons.SystrayMacTemplate))
 	if err != nil {
@@ -41,9 +44,10 @@ func buildTrayOnIcon() []byte {
 	dst := image.NewNRGBA(bounds)
 	draw.Draw(dst, bounds, base, bounds.Min, draw.Src)
 
-	// Draw a filled circle at bottom-left. For a 64x64 icon:
-	// center at (10, 54), radius 5 gives a visible but unobtrusive dot.
-	cx, cy, r := 10, 54, 5
+	// Badge: filled circle at top-right, overlapping the W glyph.
+	// For a 64x64 icon: center at (54, 10), radius 9 creates a prominent
+	// badge that overlaps the top-right of the W, like a notification dot.
+	cx, cy, r := 54, 10, 9
 	black := color.NRGBA{0, 0, 0, 255}
 	for y := cy - r; y <= cy+r; y++ {
 		for x := cx - r; x <= cx+r; x++ {
