@@ -188,7 +188,7 @@
 
   .log-entries {
     flex: 1;
-    height: 0;
+    min-height: 0;
     overflow-y: auto;
     padding: var(--space-2);
     font: 11px/1.5 var(--font-mono);

@@ -112,6 +112,7 @@
   /* --- List rows (28px AppKit standard) --- */
   .list-items {
     flex: 1;
+    min-height: 0;
     overflow-y: auto;
     padding: 0 var(--space-2) var(--space-2);
   }

@@ -733,9 +733,11 @@
 
   .logs-view {
     flex: 1;
+    min-height: 0;
     padding-top: 52px;
     display: flex;
     flex-direction: column;
+    overflow: hidden;
   }
 
   /* ---------- Toast (bottom-centre) ---------- */

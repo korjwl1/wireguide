@@ -54,6 +54,7 @@ export class TunnelInfo {
              */
             this["endpoint"] = "";
         }
+
         Object.assign(this, $$source);
     }
 
