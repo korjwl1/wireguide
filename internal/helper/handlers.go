@@ -54,6 +54,10 @@ func (h *Helper) handleShutdown(params json.RawMessage) (interface{}, error) {
 }
 
 func (h *Helper) handleConnect(params json.RawMessage) (interface{}, error) {
+	// Serialize Connect calls so two GUIs can't race on activeCfg.
+	h.connectMu.Lock()
+	defer h.connectMu.Unlock()
+
 	var req ipc.ConnectRequest
 	if err := json.Unmarshal(params, &req); err != nil {
 		return nil, err
@@ -148,6 +152,9 @@ func (h *Helper) handleApproveScripts(params json.RawMessage) (interface{}, erro
 }
 
 func (h *Helper) handleDisconnect(params json.RawMessage) (interface{}, error) {
+	h.connectMu.Lock()
+	defer h.connectMu.Unlock()
+
 	// Cancel any in-flight reconnect backoff first — otherwise the monitor
 	// could wake up seconds after the user clicked Disconnect and re-connect
 	// against their wishes.
@@ -190,6 +197,9 @@ func (h *Helper) handleSetKillSwitch(params json.RawMessage) (interface{}, error
 		// switch is about to block non-tunnel traffic and/or the query would
 		// route through the tunnel itself.
 		endpoints := h.manager.ResolvedEndpoints()
+		if len(endpoints) == 0 {
+			return nil, fmt.Errorf("no resolved endpoints available — tunnel may have disconnected")
+		}
 		// Get interface addresses from the active config for anti-spoof chains
 		var ifaceAddresses []string
 		h.mu.Lock()

@@ -13,7 +13,11 @@ import (
 // with wire-safe JSON tags, we just dereference and return it — no field-by-
 // field translation.
 func (h *Helper) statusDTO() ipc.ConnectionStatus {
-	return *h.manager.Status()
+	s := h.manager.Status()
+	if s == nil {
+		return ipc.ConnectionStatus{}
+	}
+	return *s
 }
 
 // eventLoop broadcasts status updates to subscribed GUIs on change. Change

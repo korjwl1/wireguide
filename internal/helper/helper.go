@@ -26,17 +26,37 @@ import (
 // we've been unable to diagnose because the helper dies silently with no log
 // trail. Every background goroutine in the helper should be started via this
 // wrapper so panics are captured, logged, and surfaced instead of vanishing.
+// goSafe runs fn in a goroutine with panic recovery and automatic restart.
+// If fn panics, the panic is logged and fn is restarted after a 1-second
+// backoff, up to maxRestarts times. This ensures critical background loops
+// (like the event broadcast loop) survive transient panics instead of dying
+// permanently. If fn returns normally (no panic), it is NOT restarted.
 func goSafe(name string, fn func()) {
+	const maxRestarts = 5
 	go func() {
-		defer func() {
-			if r := recover(); r != nil {
-				slog.Error("goroutine panic",
-					"where", name,
-					"panic", fmt.Sprintf("%v", r),
-					"stack", string(debug.Stack()))
+		for attempt := 0; attempt <= maxRestarts; attempt++ {
+			panicked := true
+			func() {
+				defer func() {
+					if r := recover(); r != nil {
+						slog.Error("goroutine panic (will restart)",
+							"where", name,
+							"panic", fmt.Sprintf("%v", r),
+							"stack", string(debug.Stack()),
+							"attempt", attempt+1,
+							"max", maxRestarts+1)
+					}
+				}()
+				fn()
+				panicked = false
+			}()
+			if !panicked {
+				return // fn returned normally — done.
 			}
-		}()
-		fn()
+			// Backoff before restart to avoid tight panic loops.
+			time.Sleep(1 * time.Second)
+		}
+		slog.Error("goroutine exceeded max restarts, giving up", "where", name)
 	}()
 }
 
@@ -51,6 +71,11 @@ type Helper struct {
 	manager  *tunnel.Manager
 	firewall firewall.FirewallManager
 	monitor  *reconnect.Monitor
+
+	// connectMu serializes Connect/Disconnect calls. Without this, two
+	// concurrent GUI connections could race on activeCfg, with the loser's
+	// rollback overwriting the winner's config.
+	connectMu sync.Mutex
 
 	// logLevel is the runtime-mutable slog level. Helper.SetLogLevel (and
 	// the Settings UI) writes to this; the broadcast handler reads it for
