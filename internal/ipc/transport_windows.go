@@ -15,9 +15,12 @@ import (
 // Listen creates a named pipe listener.
 // ownerSID (parameter int is ignored on Windows; use SDDL string) controls ACL.
 func Listen(addr string, ownerUID int) (net.Listener, error) {
-	// H13: Only allow SYSTEM and Built-in Administrators. Interactive Users
-	// (IU) was too permissive — any logged-in user could connect.
-	sddl := "D:(A;;GA;;;SY)(A;;GA;;;BA)" // SYSTEM + Admins only
+	// H13: SYSTEM and Administrators get full control (GA). Interactive Users
+	// (IU / S-1-5-4) get read+write only (GRGW) so the unprivileged GUI
+	// process can connect to the helper pipe without requiring elevation.
+	// IU covers any user who has logged on interactively — this is the
+	// minimal group that enables the privilege-separation design.
+	sddl := "D:(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGW;;;IU)"
 
 	config := &winio.PipeConfig{
 		SecurityDescriptor: sddl,
