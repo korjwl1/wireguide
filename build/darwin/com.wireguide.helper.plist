@@ -5,24 +5,21 @@
     <key>Label</key>
     <string>com.wireguide.helper</string>
 
-    <key>Program</key>
-    <string>/Library/PrivilegedHelperTools/com.wireguide.helper</string>
-
     <key>ProgramArguments</key>
     <array>
         <string>/Library/PrivilegedHelperTools/com.wireguide.helper</string>
         <string>--helper</string>
         <string>--socket=/var/run/wireguide/wireguide.sock</string>
+        <string>--uid=__UID__</string>
         <string>--data-dir=/Library/Application Support/wireguide</string>
     </array>
 
-    <!-- Start on boot/login, restart on crash -->
     <key>RunAtLoad</key>
     <true/>
+
     <key>KeepAlive</key>
     <true/>
 
-    <!-- Socket directory created by the helper itself (needs root) -->
     <key>StandardErrorPath</key>
     <string>/var/log/wireguide-helper.log</string>
     <key>StandardOutPath</key>

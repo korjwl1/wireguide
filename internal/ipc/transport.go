@@ -28,15 +28,12 @@ func DefaultSocketPath() string {
 		}
 
 		if runtime.GOOS == "darwin" {
-			// macOS: use ~/Library/Application Support or /var/run as fallback.
-			// ~/Library is per-user and always exists on macOS.
-			if home, err := os.UserHomeDir(); err == nil {
-				dir := filepath.Join(home, "Library", "Application Support", "wireguide")
-				if err := os.MkdirAll(dir, 0700); err != nil {
-					slog.Warn("failed to create IPC socket directory", "dir", dir, "error", err)
-				}
-				return filepath.Join(dir, "wireguide.sock")
-			}
+			// macOS: use /var/run/wireguide/ — the helper runs as root (via
+			// LaunchDaemon or osascript) and creates this directory. The GUI
+			// connects as an unprivileged user; the helper chowns the socket
+			// so the GUI can read/write it. This path is stable across app
+			// restarts and doesn't pollute the user's home directory.
+			return "/var/run/wireguide/wireguide.sock"
 		}
 
 		// Linux fallback: create a private subdirectory under /tmp with mode 0700

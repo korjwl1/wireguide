@@ -10,6 +10,7 @@ package helper
 import (
 	"fmt"
 	"log/slog"
+	"os"
 	"runtime/debug"
 	"sync"
 	"time"
@@ -140,9 +141,18 @@ func Run(addr string, ownerUID int, dataDir string) error {
 	// Register RPC handlers
 	h.registerHandlers()
 
-	// Grace-window shutdown on GUI disconnect.
-	h.server.OnConnect(h.cancelShutdownTimer)
-	h.server.OnDisconnect(h.startShutdownTimer)
+	// Grace-window shutdown on GUI disconnect — only when NOT running as a
+	// LaunchDaemon. When the daemon plist has KeepAlive=true, launchd
+	// handles restarts; the helper should stay alive even when no GUI is
+	// connected (so the next GUI launch connects instantly without a
+	// password prompt). In osascript/dev mode, the helper still shuts down
+	// after the grace window to avoid orphan processes.
+	if !isDaemon() {
+		h.server.OnConnect(h.cancelShutdownTimer)
+		h.server.OnDisconnect(h.startShutdownTimer)
+	} else {
+		slog.Info("running as LaunchDaemon — shutdown grace disabled")
+	}
 
 	// Start event emitter (diff loop)
 	goSafe("eventLoop", h.eventLoop)
@@ -245,6 +255,12 @@ func (h *Helper) cancelShutdownTimer() {
 
 func (h *Helper) shutdown() {
 	h.server.Shutdown()
+}
+
+// isDaemon returns true when the helper was started by launchd (LaunchDaemon).
+// launchd always sets the process's parent PID to 1 (init/launchd).
+func isDaemon() bool {
+	return os.Getppid() == 1
 }
 
 func (h *Helper) cleanup() {
