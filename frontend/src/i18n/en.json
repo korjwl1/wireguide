@@ -84,7 +84,11 @@
     "log_level_debug": "Debug",
     "log_level_info": "Info",
     "log_level_warn": "Warning",
-    "log_level_error": "Error"
+    "log_level_error": "Error",
+    "kill_switch": "Kill Switch",
+    "kill_switch_hint": "Connect to a VPN to enable",
+    "dns_protection": "DNS Protection",
+    "dns_protection_hint": "Connect to a VPN to enable"
   },
   "confirm": {
     "delete_title": "Delete Tunnel",

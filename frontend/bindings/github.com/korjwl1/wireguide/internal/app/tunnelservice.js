@@ -5,7 +5,9 @@
 /**
  * TunnelService is the Wails-bound service.
  * Storage (tunnel files, settings) stays in the GUI process.
- * Tunnel operations go through the helper via IPC.
+ * Tunnel operations go through the helper via an ipc.ClientHolder (so the
+ * helper can be re-spawned and the connection swapped without rebuilding
+ * the whole service graph).
  * @module
  */
 
@@ -15,10 +17,16 @@ import { Call as $Call, CancellablePromise as $CancellablePromise, Create as $Cr
 
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
-import * as config$0 from "../config/models.js";
+import * as domain$0 from "../domain/models.js";
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
 import * as storage$0 from "../storage/models.js";
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore: Unused imports
+import * as tunnel$0 from "../tunnel/models.js";
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore: Unused imports
+import * as update$0 from "../update/models.js";
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
 import * as application$0 from "../../../../wailsapp/wails/v3/pkg/application/models.js";
@@ -37,6 +45,38 @@ export function BaseName(path) {
 }
 
 /**
+ * CheckConflicts loads a tunnel's config and scans local network interfaces
+ * for routing overlaps (e.g. Tailscale, another WireGuard instance). Runs
+ * entirely in the GUI process — no IPC needed. The frontend calls this before
+ * Connect so it can show a warning dialog if conflicts exist.
+ * @param {string} name
+ * @returns {$CancellablePromise<tunnel$0.ConflictInfo[]>}
+ */
+export function CheckConflicts(name) {
+    return $Call.ByID(3480969502, name).then(/** @type {($result: any) => any} */(($result) => {
+        return $$createType1($result);
+    }));
+}
+
+/**
+ * CheckForUpdate queries GitHub for a newer release.
+ * @returns {$CancellablePromise<update$0.UpdateInfo | null>}
+ */
+export function CheckForUpdate() {
+    return $Call.ByID(3781738431).then(/** @type {($result: any) => any} */(($result) => {
+        return $$createType3($result);
+    }));
+}
+
+/**
+ * Connect loads a tunnel config from local storage and asks the helper to
+ * bring it up. The helper re-validates server-side.
+ * 
+ * When the config contains scripts and scriptsAllowed is true, the helper
+ * verifies the scripts against its persistent allowlist. If the scripts are
+ * not yet approved, the helper rejects with ErrCodeScriptsNotApproved and
+ * this method automatically sends an ApproveScripts RPC (the user already
+ * consented via the GUI's script warning dialog) then retries the connect.
  * @param {string} name
  * @param {boolean} scriptsAllowed
  * @returns {$CancellablePromise<void>}
@@ -46,6 +86,8 @@ export function Connect(name, scriptsAllowed) {
 }
 
 /**
+ * DeleteTunnel removes a tunnel from local storage. Rejects deletion of the
+ * currently connected tunnel (would orphan the interface).
  * @param {string} name
  * @returns {$CancellablePromise<void>}
  */
@@ -54,6 +96,9 @@ export function DeleteTunnel(name) {
 }
 
 /**
+ * Disconnect tears down whatever tunnel the helper currently has active.
+ * If the call fails with a "client closed" error (the health monitor may have
+ * swapped the client during a recovery), retry once with the fresh client.
  * @returns {$CancellablePromise<void>}
  */
 export function Disconnect() {
@@ -61,6 +106,7 @@ export function Disconnect() {
 }
 
 /**
+ * ExportConfig returns the serialized text for display in the export dialog.
  * @param {string} name
  * @returns {$CancellablePromise<string>}
  */
@@ -70,7 +116,7 @@ export function ExportConfig(name) {
 
 /**
  * ExportTunnel shows a native save dialog and writes the .conf file.
- * Returns the saved path, or empty string if user cancelled.
+ * Returns the saved path, or empty string if the user cancelled.
  * @param {string} name
  * @returns {$CancellablePromise<string>}
  */
@@ -79,6 +125,7 @@ export function ExportTunnel(name) {
 }
 
 /**
+ * GetConfigText returns the serialized form of a stored tunnel's config.
  * @param {string} name
  * @returns {$CancellablePromise<string>}
  */
@@ -91,52 +138,83 @@ export function GetConfigText(name) {
  */
 export function GetSettings() {
     return $Call.ByID(2393200110).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType1($result);
-    }));
-}
-
-/**
- * @returns {$CancellablePromise<$models.ConnectionStatus | null>}
- */
-export function GetStatus() {
-    return $Call.ByID(3544552149).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType3($result);
-    }));
-}
-
-/**
- * @param {string} name
- * @returns {$CancellablePromise<config$0.WireGuardConfig | null>}
- */
-export function GetTunnelDetail(name) {
-    return $Call.ByID(3171898132, name).then(/** @type {($result: any) => any} */(($result) => {
         return $$createType5($result);
     }));
 }
 
 /**
+ * GetStatus queries the helper for the current connection status. IPC errors
+ * are surfaced to the caller — the frontend needs to distinguish "helper says
+ * disconnected" from "helper unreachable".
+ * @returns {$CancellablePromise<$models.ConnectionStatus | null>}
+ */
+export function GetStatus() {
+    return $Call.ByID(3544552149).then(/** @type {($result: any) => any} */(($result) => {
+        return $$createType7($result);
+    }));
+}
+
+/**
+ * GetTunnelDetail returns the full WireGuardConfig for a tunnel. Used by the
+ * detail pane to show allowed IPs, DNS, public keys, etc.
+ * @param {string} name
+ * @returns {$CancellablePromise<domain$0.WireGuardConfig | null>}
+ */
+export function GetTunnelDetail(name) {
+    return $Call.ByID(3171898132, name).then(/** @type {($result: any) => any} */(($result) => {
+        return $$createType9($result);
+    }));
+}
+
+/**
+ * ImportConfig parses, validates, and saves a tunnel config under the given
+ * name. Returns a TunnelInfo for optimistic UI display.
  * @param {string} name
  * @param {string} content
  * @returns {$CancellablePromise<$models.TunnelInfo | null>}
  */
 export function ImportConfig(name, content) {
     return $Call.ByID(2459134310, name, content).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType7($result);
+        return $$createType11($result);
     }));
 }
 
 /**
+ * ListTunnels returns every stored tunnel with its summary info.
+ * 
+ * The active-tunnel marker used to come from an IPC round-trip on every call.
+ * That made the tray's rebuild-menu path slow when it was being invoked on
+ * the status event stream. The frontend now learns the active tunnel from
+ * the status event itself, and the tray caches it internally — so this
+ * function stays fully local (disk-only, no IPC) and returns IsConnected
+ * purely as a best-effort flag based on a single active-name probe that is
+ * safe to skip entirely on slow paths.
  * @returns {$CancellablePromise<$models.TunnelInfo[]>}
  */
 export function ListTunnels() {
     return $Call.ByID(3587038916).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType8($result);
+        return $$createType12($result);
     }));
 }
 
 /**
- * ReadFile reads a file from disk (for native file drop).
- * Returns the content as string so the frontend can handle name conflicts.
+ * ListTunnelsLocal returns stored tunnels WITHOUT asking the helper which one
+ * is active — callers that already know the active name (e.g. the system
+ * tray, which tracks it from the status event stream) should use this to
+ * avoid an IPC round-trip on every refresh. IsConnected is always false in
+ * the returned slice; the caller is responsible for applying its own
+ * active-name match.
+ * @returns {$CancellablePromise<$models.TunnelInfo[]>}
+ */
+export function ListTunnelsLocal() {
+    return $Call.ByID(3031176175).then(/** @type {($result: any) => any} */(($result) => {
+        return $$createType12($result);
+    }));
+}
+
+/**
+ * ReadFile reads a file from disk (used by native file drop). Returns the
+ * content as a string so the frontend can handle name conflicts before import.
  * @param {string} path
  * @returns {$CancellablePromise<string>}
  */
@@ -145,7 +223,8 @@ export function ReadFile(path) {
 }
 
 /**
- * RenameTunnel changes a tunnel's name.
+ * RenameTunnel changes a tunnel's name. Rejects rename of the connected
+ * tunnel since the interface name is derived from it.
  * @param {string} oldName
  * @param {string} newName
  * @returns {$CancellablePromise<void>}
@@ -155,6 +234,21 @@ export function RenameTunnel(oldName, newName) {
 }
 
 /**
+ * RunUpdate performs the update. If installed via Homebrew, runs brew upgrade.
+ * Otherwise downloads and installs directly from GitHub Releases.
+ * @param {update$0.UpdateInfo | null} info
+ * @returns {$CancellablePromise<void>}
+ */
+export function RunUpdate(info) {
+    return $Call.ByID(2959589127, info);
+}
+
+/**
+ * SaveSettings persists the settings file AND applies any side effects:
+ * currently, pushing the new log level to both the GUI's slog handler and
+ * the helper's slog handler. Without those side effects a user lowering the
+ * level to Debug wouldn't see any new records — the saved file would match
+ * the UI but the running process would still be at Info.
  * @param {storage$0.Settings | null} settings
  * @returns {$CancellablePromise<void>}
  */
@@ -172,6 +266,9 @@ export function SetApp(app) {
 }
 
 /**
+ * SetDNSProtection asks the helper to lock DNS to the active tunnel's servers.
+ * When enabling, we look up the active tunnel's DNS list from local storage
+ * and pass it along (the helper never touches user-space storage).
  * @param {boolean} enabled
  * @returns {$CancellablePromise<void>}
  */
@@ -180,6 +277,7 @@ export function SetDNSProtection(enabled) {
 }
 
 /**
+ * SetKillSwitch asks the helper to enable or disable the firewall kill switch.
  * @param {boolean} enabled
  * @returns {$CancellablePromise<void>}
  */
@@ -188,6 +286,18 @@ export function SetKillSwitch(enabled) {
 }
 
 /**
+ * SetLogLevel updates both the GUI's and the helper's slog level
+ * immediately. Exposed as a Wails method so the Settings view can call
+ * it without waiting for a full SaveSettings round trip.
+ * @param {string} level
+ * @returns {$CancellablePromise<void>}
+ */
+export function SetLogLevel(level) {
+    return $Call.ByID(537242663, level);
+}
+
+/**
+ * TunnelExists reports whether a tunnel with the given name is stored.
  * @param {string} name
  * @returns {$CancellablePromise<boolean>}
  */
@@ -196,6 +306,8 @@ export function TunnelExists(name) {
 }
 
 /**
+ * UpdateConfig parses, validates, and overwrites an existing tunnel's config.
+ * Rejects edits of the connected tunnel.
  * @param {string} name
  * @param {string} content
  * @returns {$CancellablePromise<void>}
@@ -205,23 +317,29 @@ export function UpdateConfig(name, content) {
 }
 
 /**
+ * ValidateConfig parses and validates a raw config string. Returns a list of
+ * human-readable error messages, or nil if the config is valid.
  * @param {string} content
  * @returns {$CancellablePromise<string[]>}
  */
 export function ValidateConfig(content) {
     return $Call.ByID(592398029, content).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType9($result);
+        return $$createType13($result);
     }));
 }
 
 // Private type creation functions
-const $$createType0 = storage$0.Settings.createFrom;
-const $$createType1 = $Create.Nullable($$createType0);
-const $$createType2 = $models.ConnectionStatus.createFrom;
+const $$createType0 = tunnel$0.ConflictInfo.createFrom;
+const $$createType1 = $Create.Array($$createType0);
+const $$createType2 = update$0.UpdateInfo.createFrom;
 const $$createType3 = $Create.Nullable($$createType2);
-const $$createType4 = config$0.WireGuardConfig.createFrom;
+const $$createType4 = storage$0.Settings.createFrom;
 const $$createType5 = $Create.Nullable($$createType4);
-const $$createType6 = $models.TunnelInfo.createFrom;
+const $$createType6 = domain$0.ConnectionStatus.createFrom;
 const $$createType7 = $Create.Nullable($$createType6);
-const $$createType8 = $Create.Array($$createType6);
-const $$createType9 = $Create.Array($Create.Any);
+const $$createType8 = domain$0.WireGuardConfig.createFrom;
+const $$createType9 = $Create.Nullable($$createType8);
+const $$createType10 = $models.TunnelInfo.createFrom;
+const $$createType11 = $Create.Nullable($$createType10);
+const $$createType12 = $Create.Array($$createType10);
+const $$createType13 = $Create.Array($Create.Any);

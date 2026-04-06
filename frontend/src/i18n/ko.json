@@ -84,7 +84,11 @@
     "log_level_debug": "디버그",
     "log_level_info": "정보",
     "log_level_warn": "경고",
-    "log_level_error": "오류"
+    "log_level_error": "오류",
+    "kill_switch": "킬 스위치",
+    "kill_switch_hint": "VPN에 연결하면 활성화할 수 있습니다",
+    "dns_protection": "DNS 보호",
+    "dns_protection_hint": "VPN에 연결하면 활성화할 수 있습니다"
   },
   "confirm": {
     "delete_title": "터널 삭제",

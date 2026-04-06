@@ -7,15 +7,23 @@ import type { Events } from "@wailsio/runtime";
 
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
-import type * as main$0 from "../../../../korjwl1/wireguide/models.js";
+import type * as domain$0 from "../../../../korjwl1/wireguide/internal/domain/models.js";
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore: Unused imports
+import type * as gui$0 from "../../../../korjwl1/wireguide/internal/gui/models.js";
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore: Unused imports
+import type * as ipc$0 from "../../../../korjwl1/wireguide/internal/ipc/models.js";
 
 declare module "@wailsio/runtime" {
     namespace Events {
         interface CustomEvents {
             "files-dropped": { [_ in string]?: any };
-            "helper": main$0.HelperEvent;
-            "reconnect": main$0.ReconnectEvent;
-            "status": main$0.StatusEvent;
+            "helper": gui$0.HelperEvent;
+            "helper_reset": {};
+            "log": ipc$0.LogEntry;
+            "reconnect": gui$0.ReconnectEvent;
+            "status": domain$0.ConnectionStatus;
         }
     }
 }

@@ -84,7 +84,11 @@
     "log_level_debug": "デバッグ",
     "log_level_info": "情報",
     "log_level_warn": "警告",
-    "log_level_error": "エラー"
+    "log_level_error": "エラー",
+    "kill_switch": "キルスイッチ",
+    "kill_switch_hint": "VPN に接続すると有効にできます",
+    "dns_protection": "DNS 保護",
+    "dns_protection_hint": "VPN に接続すると有効にできます"
   },
   "confirm": {
     "delete_title": "トンネルを削除",

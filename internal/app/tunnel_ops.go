@@ -8,6 +8,7 @@ import (
 	"github.com/korjwl1/wireguide/internal/domain"
 	"github.com/korjwl1/wireguide/internal/ipc"
 	"github.com/korjwl1/wireguide/internal/storage"
+	"github.com/korjwl1/wireguide/internal/tunnel"
 )
 
 // ListTunnelsLocal returns stored tunnels WITHOUT asking the helper which one
@@ -81,6 +82,28 @@ func (s *TunnelService) ListTunnels() ([]TunnelInfo, error) {
 		})
 	}
 	return result, nil
+}
+
+// CheckConflicts loads a tunnel's config and scans local network interfaces
+// for routing overlaps (e.g. Tailscale, another WireGuard instance). Runs
+// entirely in the GUI process — no IPC needed. The frontend calls this before
+// Connect so it can show a warning dialog if conflicts exist.
+func (s *TunnelService) CheckConflicts(name string) ([]tunnel.ConflictInfo, error) {
+	cfg, err := s.tunnelStore.Load(name)
+	if err != nil {
+		return nil, fmt.Errorf("loading tunnel %s: %w", name, err)
+	}
+	var allowedIPs []string
+	for _, peer := range cfg.Peers {
+		allowedIPs = append(allowedIPs, peer.AllowedIPs...)
+	}
+	conflicts, err := tunnel.CheckConflicts(allowedIPs)
+	if err != nil {
+		slog.Warn("conflict check failed", "tunnel", name, "error", err)
+		// Non-fatal — don't block connect if the scan itself fails.
+		return nil, nil
+	}
+	return conflicts, nil
 }
 
 // Connect loads a tunnel config from local storage and asks the helper to

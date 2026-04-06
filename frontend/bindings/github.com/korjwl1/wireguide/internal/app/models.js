@@ -6,83 +6,27 @@
 // @ts-ignore: Unused imports
 import { Create as $Create } from "@wailsio/runtime";
 
-export class ConnectionStatus {
-    /**
-     * Creates a new ConnectionStatus instance.
-     * @param {Partial<ConnectionStatus>} [$$source = {}] - The source object to create the ConnectionStatus.
-     */
-    constructor($$source = {}) {
-        if (!("state" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["state"] = "";
-        }
-        if (!("tunnel_name" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["tunnel_name"] = "";
-        }
-        if (!("interface_name" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["interface_name"] = "";
-        }
-        if (!("rx_bytes" in $$source)) {
-            /**
-             * @member
-             * @type {number}
-             */
-            this["rx_bytes"] = 0;
-        }
-        if (!("tx_bytes" in $$source)) {
-            /**
-             * @member
-             * @type {number}
-             */
-            this["tx_bytes"] = 0;
-        }
-        if (!("last_handshake" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["last_handshake"] = "";
-        }
-        if (!("duration" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["duration"] = "";
-        }
-        if (!("endpoint" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["endpoint"] = "";
-        }
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore: Unused imports
+import * as domain$0 from "../domain/models.js";
 
-        Object.assign(this, $$source);
-    }
+/**
+ * ConnectionStatus is re-exported from the domain package so Wails bindings
+ * expose the same type that the helper broadcasts — preventing field drift
+ * between wire format and frontend expectations.
+ */
+export const ConnectionStatus = domain$0.ConnectionStatus;
 
-    /**
-     * Creates a new ConnectionStatus instance from a string or object.
-     * @param {any} [$$source = {}]
-     * @returns {ConnectionStatus}
-     */
-    static createFrom($$source = {}) {
-        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
-        return new ConnectionStatus(/** @type {Partial<ConnectionStatus>} */($$parsedSource));
-    }
-}
+/**
+ * ConnectionStatus is re-exported from the domain package so Wails bindings
+ * expose the same type that the helper broadcasts — preventing field drift
+ * between wire format and frontend expectations.
+ * @typedef {domain$0.ConnectionStatus} ConnectionStatus
+ */
 
+/**
+ * TunnelInfo is the summary shown in the tunnel list.
+ */
 export class TunnelInfo {
     /**
      * Creates a new TunnelInfo instance.

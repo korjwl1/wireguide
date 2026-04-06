@@ -8,21 +8,29 @@ import { Create as $Create } from "@wailsio/runtime";
 
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
-import * as main$0 from "../../../../korjwl1/wireguide/models.js";
+import * as domain$0 from "../../../../korjwl1/wireguide/internal/domain/models.js";
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore: Unused imports
+import * as gui$0 from "../../../../korjwl1/wireguide/internal/gui/models.js";
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore: Unused imports
+import * as ipc$0 from "../../../../korjwl1/wireguide/internal/ipc/models.js";
 
 function configure() {
     Object.freeze(Object.assign($Create.Events, {
         "files-dropped": $$createType0,
         "helper": $$createType1,
-        "reconnect": $$createType2,
-        "status": $$createType3,
+        "log": $$createType2,
+        "reconnect": $$createType3,
+        "status": $$createType4,
     }));
 }
 
 // Private type creation functions
 const $$createType0 = $Create.Map($Create.Any, $Create.Any);
-const $$createType1 = main$0.HelperEvent.createFrom;
-const $$createType2 = main$0.ReconnectEvent.createFrom;
-const $$createType3 = main$0.StatusEvent.createFrom;
+const $$createType1 = gui$0.HelperEvent.createFrom;
+const $$createType2 = ipc$0.LogEntry.createFrom;
+const $$createType3 = gui$0.ReconnectEvent.createFrom;
+const $$createType4 = domain$0.ConnectionStatus.createFrom;
 
 configure();

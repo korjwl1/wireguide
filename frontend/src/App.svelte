@@ -4,6 +4,7 @@
   import TunnelList from './lib/TunnelList.svelte';
   import TunnelDetail from './lib/TunnelDetail.svelte';
   import ScriptWarning from './lib/ScriptWarning.svelte';
+  import ConflictWarning from './lib/ConflictWarning.svelte';
   import ConfigEditor from './lib/ConfigEditor.svelte';
   import Settings from './lib/Settings.svelte';
   import LogViewer from './lib/LogViewer.svelte';
@@ -27,8 +28,11 @@
   let showEditor = false;
   let showSettings = false;
   let showScriptWarning = false;
+  let showConflictWarning = false;
+  let conflictList = [];
   let scriptWarningScripts = [];
   let pendingConnectName = '';
+  let pendingScriptsAllowed = false;
   let editName = '';
   let editorContent = '';
   let editorErrors = [];
@@ -249,15 +253,44 @@
     }
   }
 
-  async function doConnect(name, scriptsAllowed) {
+  // Actually perform the connect RPC (after all warnings have been resolved).
+  async function doConnectFinal(name, scriptsAllowed) {
     try {
       await TunnelService.Connect(name, scriptsAllowed);
-      // Don't rely on event stream — refresh state immediately.
       await refreshTunnels(TunnelService);
       await refreshStatus(TunnelService);
     } catch (e) {
       showToast("Connect failed: " + errText(e));
     }
+  }
+
+  // Check for routing conflicts before connecting. If conflicts exist, show
+  // the ConflictWarning dialog; otherwise proceed directly.
+  async function doConnect(name, scriptsAllowed) {
+    try {
+      const conflicts = await TunnelService.CheckConflicts(name);
+      if (conflicts && conflicts.length > 0) {
+        conflictList = conflicts;
+        pendingConnectName = name;
+        pendingScriptsAllowed = scriptsAllowed;
+        showConflictWarning = true;
+        return;
+      }
+    } catch (e) {
+      // Non-fatal — if the conflict check itself fails, proceed anyway.
+      console.warn('conflict check failed:', e);
+    }
+    await doConnectFinal(name, scriptsAllowed);
+  }
+
+  async function handleConflictProceed() {
+    showConflictWarning = false;
+    await doConnectFinal(pendingConnectName, pendingScriptsAllowed);
+  }
+
+  function handleConflictCancel() {
+    showConflictWarning = false;
+    conflictList = [];
   }
 
   async function handleConnect(e) {
@@ -306,14 +339,14 @@
      separate components mounted conditionally below; they pick up the new
      language on their next open (deliberate — otherwise changing language
      mid-interaction would destroy the modal). -->
-<div class="app" class:modal-open={showSettings || showEditor || showScriptWarning} data-file-drop-target={!(showSettings || showEditor || showScriptWarning) && currentView === 'tunnels' ? true : undefined}>
+<div class="app" class:modal-open={showSettings || showEditor || showScriptWarning || showConflictWarning} data-file-drop-target={!(showSettings || showEditor || showScriptWarning || showConflictWarning) && currentView === 'tunnels' ? true : undefined}>
   <!-- Wails adds .file-drop-target-active class to .app when dragging files.
        We only render the overlay when drop-target is actually active — i.e.
        on the tunnels view with no modal open — so it can never steal clicks
        from modals. The data-file-drop-target attribute above also removes
        the drop affordance entirely in those states so Wails doesn't even
        detect the drag. -->
-  {#if currentView === 'tunnels' && !(showSettings || showEditor || showScriptWarning)}
+  {#if currentView === 'tunnels' && !(showSettings || showEditor || showScriptWarning || showConflictWarning)}
     <div class="drop-overlay">
       <div class="drop-overlay-content">
         <div class="drop-icon">↓</div>
@@ -431,6 +464,13 @@
       tunnelName={pendingConnectName}
       on:allow={handleScriptAllow}
       on:deny={handleScriptDeny} />
+  {/if}
+
+  {#if showConflictWarning}
+    <ConflictWarning
+      conflicts={conflictList}
+      on:proceed={handleConflictProceed}
+      on:cancel={handleConflictCancel} />
   {/if}
 </div>
 
