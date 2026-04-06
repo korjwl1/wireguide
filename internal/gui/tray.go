@@ -6,9 +6,7 @@ import (
 	"image/color"
 	"image/png"
 	"log/slog"
-	"os/exec"
 	"runtime"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -33,26 +31,20 @@ var (
 )
 
 func init() {
-	trayOnIcon = buildTrayOnIcon(color.NRGBA{0, 0, 0, 255})          // black W
-	trayOnIconDark = buildTrayOnIcon(color.NRGBA{255, 255, 255, 255}) // white W
-	trayOffIcon = buildTrayOffIcon(color.NRGBA{0, 0, 0, 255})
-	trayOffIconDark = buildTrayOffIcon(color.NRGBA{255, 255, 255, 255})
+	// macOS menu bar always has a semi-dark vibrancy background, so white
+	// icons look correct in both light and dark system themes — matching
+	// Apple's own Wi-Fi, battery, clock icons which are always white.
+	// We use white W for all themes. The green dot is the only colour.
+	white := color.NRGBA{255, 255, 255, 255}
+	trayOnIcon = buildTrayOnIcon(white)
+	trayOnIconDark = trayOnIcon // same — white W works everywhere
+	trayOffIcon = buildTrayOffIcon(white)
+	trayOffIconDark = trayOffIcon
 }
 
 // buildTrayOnIcon composites a W glyph (in wColor) with a green dot badge at
 // the bottom-left. Returns a non-template PNG so the green dot keeps its colour.
 // wColor should be black for light menu bars, white for dark menu bars.
-// isDarkMenuBar returns true if macOS is currently using a dark menu bar.
-// Uses `defaults read -g AppleInterfaceStyle` — returns "Dark" when dark mode
-// is active, exits non-zero when light mode is active.
-func isDarkMenuBar() bool {
-	out, err := exec.Command("defaults", "read", "-g", "AppleInterfaceStyle").Output()
-	if err != nil {
-		return false // light mode (command fails = no AppleInterfaceStyle key = light)
-	}
-	return strings.TrimSpace(string(out)) == "Dark"
-}
-
 func buildTrayOnIcon(wColor color.NRGBA) []byte {
 	base, err := png.Decode(bytes.NewReader(icons.SystrayMacTemplate))
 	if err != nil {
@@ -195,25 +187,11 @@ func (t *trayManager) setIconState(activeName string) {
 	t.mu.Unlock()
 
 	if activeName != "" {
-		// Connected: W + green dot. Non-template icon (coloured dot).
-		// Wails's SetDarkModeIcon just calls setIcon on macOS (no-op), so
-		// we detect the theme ourselves and pick the right variant.
-		if runtime.GOOS == "darwin" && isDarkMenuBar() {
-			t.tray.SetIcon(trayOnIconDark)
-		} else {
-			t.tray.SetIcon(trayOnIcon)
-		}
+		t.tray.SetIcon(trayOnIcon)
 		t.tray.SetTooltip("WireGuide — connected: " + activeName)
 	} else {
-		// Disconnected: plain W, no badge. We use SetIcon (not
-		// SetTemplateIcon) to avoid the Wails isTemplateIcon sticky-flag
-		// bug — see comment on the icon vars above.
 		if runtime.GOOS == "darwin" {
-			if isDarkMenuBar() {
-				t.tray.SetIcon(trayOffIconDark)
-			} else {
-				t.tray.SetIcon(trayOffIcon)
-			}
+			t.tray.SetIcon(trayOffIcon)
 		}
 		t.tray.SetTooltip("WireGuide")
 	}

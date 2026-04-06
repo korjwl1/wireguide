@@ -132,11 +132,7 @@ func Run(assetsHandler http.Handler, dataDir string) error {
 	// subsequent SetIcon calls render as monochrome template icons.
 	tray := app.SystemTray.New()
 	if runtime.GOOS == "darwin" {
-		if isDarkMenuBar() {
-			tray.SetIcon(trayOffIconDark)
-		} else {
-			tray.SetIcon(trayOffIcon)
-		}
+		tray.SetIcon(trayOffIcon)
 	} else {
 		tray.SetLabel("WireGuide")
 	}
