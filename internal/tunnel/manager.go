@@ -88,10 +88,10 @@ func (m *Manager) Connect(cfg *domain.WireGuardConfig, scriptsAllowed bool) erro
 			name = m.activeCfg.Name
 		}
 		m.mu.Unlock()
-		return fmt.Errorf("tunnel %q is already connected", name)
+		return newTunnelError(ErrAlreadyConnected, fmt.Sprintf("tunnel %q is already connected", name), nil)
 	case domain.StateConnecting, stateDisconnecting:
 		m.mu.Unlock()
-		return fmt.Errorf("another transition is in progress")
+		return newTunnelError(ErrTransitionInProgress, "another transition is in progress", nil)
 	}
 	// Stash the tunnel name early so Status() can show "connecting <name>"
 	// while the phases are running.
@@ -127,7 +127,7 @@ func (m *Manager) Connect(cfg *domain.WireGuardConfig, scriptsAllowed bool) erro
 		m.activeCfg = nil
 		m.scriptsAllowed = false
 		m.setStateLocked(domain.StateDisconnected)
-		return fmt.Errorf("connect aborted: state changed during setup")
+		return newTunnelError(ErrStateCorrupt, "connect aborted: state changed during setup", nil)
 	}
 	m.engine = engine
 	m.connectedAt = time.Now()
@@ -148,14 +148,14 @@ func (m *Manager) Disconnect() error {
 		}
 		m.mu.Unlock()
 		if time.Now().After(deadline) {
-			return fmt.Errorf("disconnect timeout: another transition is in progress")
+			return newTunnelError(ErrTimeout, "disconnect timeout: another transition is in progress", nil)
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
 	// m.mu held here, state is Connected / Disconnected / Error.
 	if m.state != domain.StateConnected {
 		m.mu.Unlock()
-		return fmt.Errorf("no tunnel is connected")
+		return newTunnelError(ErrNotConnected, "no tunnel is connected", nil)
 	}
 	// Snapshot the handles we need outside the lock.
 	engine := m.engine
@@ -166,7 +166,7 @@ func (m *Manager) Disconnect() error {
 		// it to prevent a nil-pointer panic in disconnectPhases.
 		m.setStateLocked(domain.StateDisconnected)
 		m.mu.Unlock()
-		return fmt.Errorf("engine is nil despite connected state")
+		return newTunnelError(ErrStateCorrupt, "engine is nil despite connected state", nil)
 	}
 	m.setStateLocked(stateDisconnecting)
 	m.mu.Unlock()

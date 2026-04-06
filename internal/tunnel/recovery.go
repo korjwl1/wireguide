@@ -19,6 +19,11 @@ type ActiveTunnelState struct {
 	FullTunnel    bool     `json:"full_tunnel"`
 	Table         string   `json:"table,omitempty"`
 	FwMark        string   `json:"fwmark,omitempty"`
+	// PreModDNS stores the original DNS settings per network service
+	// captured BEFORE any modification. Used for precise crash recovery
+	// instead of the blunt ResetDNSToSystemDefault which loses custom
+	// user preferences.
+	PreModDNS map[string][]string `json:"pre_mod_dns,omitempty"`
 }
 
 const activeTunnelFile = "active-tunnel.json"
@@ -92,9 +97,24 @@ func RecoverFromCrash(dataDir string) string {
 		rs.RestoreRoutingState(state.Table, state.FwMark)
 	}
 
-	// DNS: state-free reset since we have no memory of the pre-crash values.
-	if err := mgr.ResetDNSToSystemDefault(); err != nil {
-		slog.Warn("crash recovery: DNS reset failed", "error", err)
+	// DNS: if we have pre-modification DNS state, restore it precisely.
+	// Otherwise fall back to the blunt ResetDNSToSystemDefault which
+	// clears everything to DHCP defaults (loses custom user preferences).
+	if len(state.PreModDNS) > 0 {
+		if restorer, ok := mgr.(network.DNSStateRestorer); ok {
+			if err := restorer.RestoreDNSFromSnapshot(state.PreModDNS); err != nil {
+				slog.Warn("crash recovery: precise DNS restore failed, falling back to reset", "error", err)
+				_ = mgr.ResetDNSToSystemDefault()
+			} else {
+				slog.Info("crash recovery: DNS restored from pre-modification snapshot")
+			}
+		} else {
+			_ = mgr.ResetDNSToSystemDefault()
+		}
+	} else {
+		if err := mgr.ResetDNSToSystemDefault(); err != nil {
+			slog.Warn("crash recovery: DNS reset failed", "error", err)
+		}
 	}
 
 	// Routes: Cleanup knows how to walk the route table to find stale entries

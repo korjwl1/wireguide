@@ -1,10 +1,10 @@
 package tunnel
 
 import (
-	"fmt"
 	"log/slog"
 
 	"github.com/korjwl1/wireguide/internal/domain"
+	"github.com/korjwl1/wireguide/internal/network"
 )
 
 // connectPhases executes the steps that bring a tunnel up. Called from
@@ -32,7 +32,7 @@ func (m *Manager) connectPhases(cfg *domain.WireGuardConfig, scriptsAllowed bool
 	if scriptsAllowed && cfg.Interface.PreUp != "" {
 		slog.Info("running PreUp script", "cmd", cfg.Interface.PreUp)
 		if err := runScriptWithInterface(cfg.Interface.PreUp, intendedIface); err != nil {
-			return nil, fmt.Errorf("PreUp script failed: %w", err)
+			return nil, newTunnelError(ErrScript, "PreUp script failed", err)
 		}
 	}
 
@@ -43,7 +43,7 @@ func (m *Manager) connectPhases(cfg *domain.WireGuardConfig, scriptsAllowed bool
 	// 2. Engine
 	engine, err := NewEngine(cfg)
 	if err != nil {
-		return nil, fmt.Errorf("creating engine: %w", err)
+		return nil, newTunnelError(ErrEngineCreation, "creating engine", err)
 	}
 	ifaceName := engine.InterfaceName()
 
@@ -75,17 +75,17 @@ func (m *Manager) connectPhases(cfg *domain.WireGuardConfig, scriptsAllowed bool
 	// auto-detection and force the wrong MTU on links like PPPoE (1492)
 	// or USB-tether (often 1500 but varies) or jumbo-frame LANs.
 	if err := m.netMgr.SetMTU(ifaceName, cfg.Interface.MTU); err != nil {
-		return nil, rollback(fmt.Errorf("setting MTU: %w", err))
+		return nil, rollback(newTunnelError(ErrNetwork, "setting MTU", err))
 	}
 
 	// 4. Address
 	if err := m.netMgr.AssignAddress(ifaceName, cfg.Interface.Address); err != nil {
-		return nil, rollback(fmt.Errorf("assigning address: %w", err))
+		return nil, rollback(newTunnelError(ErrNetwork, "assigning address", err))
 	}
 
 	// 5. Bring up
 	if err := m.netMgr.BringUp(ifaceName); err != nil {
-		return nil, rollback(fmt.Errorf("bringing up interface: %w", err))
+		return nil, rollback(newTunnelError(ErrNetwork, "bringing up interface", err))
 	}
 
 	// 6. Routes + endpoint bypass.
@@ -106,7 +106,7 @@ func (m *Manager) connectPhases(cfg *domain.WireGuardConfig, scriptsAllowed bool
 	}
 	endpointIPs := engine.ResolvedEndpointIPs()
 	if err := m.netMgr.AddRoutes(ifaceName, allAllowedIPs, fullTunnel, endpointIPs, cfg.Interface.Table, cfg.Interface.FwMark); err != nil {
-		return nil, rollback(fmt.Errorf("adding routes: %w", err))
+		return nil, rollback(newTunnelError(ErrNetwork, "adding routes", err))
 	}
 
 	// 7. DNS — fatal when DNS servers are explicitly configured (matching
@@ -114,7 +114,7 @@ func (m *Manager) connectPhases(cfg *domain.WireGuardConfig, scriptsAllowed bool
 	// ISP's resolver, which is a privacy leak for VPN users.
 	if err := m.netMgr.SetDNS(ifaceName, cfg.Interface.DNS); err != nil {
 		if len(cfg.Interface.DNS) > 0 {
-			return nil, rollback(fmt.Errorf("setting DNS: %w", err))
+			return nil, rollback(newTunnelError(ErrNetwork, "setting DNS", err))
 		}
 		slog.Warn("failed to set DNS", "error", err)
 	}
@@ -132,6 +132,12 @@ func (m *Manager) connectPhases(cfg *domain.WireGuardConfig, scriptsAllowed bool
 	// tunnel that was never actually brought up. Non-fatal: if we can't
 	// write the recovery file (disk full, permissions) the tunnel is still
 	// up, we just won't be able to recover automatically next boot.
+	// Capture pre-modification DNS snapshot for precise crash recovery.
+	var preModDNS map[string][]string
+	if provider, ok := m.netMgr.(network.DNSSnapshotProvider); ok {
+		preModDNS = provider.SavedDNSSnapshot()
+	}
+
 	if err := SaveActiveState(m.dataDir, &ActiveTunnelState{
 		TunnelName:    cfg.Name,
 		InterfaceName: ifaceName,
@@ -139,6 +145,7 @@ func (m *Manager) connectPhases(cfg *domain.WireGuardConfig, scriptsAllowed bool
 		FullTunnel:    fullTunnel,
 		Table:         cfg.Interface.Table,
 		FwMark:        cfg.Interface.FwMark,
+		PreModDNS:     preModDNS,
 	}); err != nil {
 		slog.Warn("failed to persist crash recovery state", "error", err)
 	}

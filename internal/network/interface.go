@@ -45,6 +45,21 @@ type NetworkManager interface {
 	Cleanup(ifaceName string) error
 }
 
+// DNSStateRestorer is an optional interface that allows restoring DNS
+// settings from a persisted pre-modification snapshot during crash recovery.
+// Unlike RestoreDNS (which needs in-memory state from the same process),
+// this uses the snapshot saved to disk, preserving custom user preferences.
+type DNSStateRestorer interface {
+	RestoreDNSFromSnapshot(preModDNS map[string][]string) error
+}
+
+// SavedDNSSnapshot returns the current in-memory DNS snapshot for
+// persistence to the crash recovery journal. Platform managers that
+// capture per-service DNS state should implement this.
+type DNSSnapshotProvider interface {
+	SavedDNSSnapshot() map[string][]string
+}
+
 // RoutingStateRestorer is an optional interface that platform managers may
 // implement to accept persisted table/fwmark values during crash recovery.
 // This allows cleanup to use the correct routing table instead of hardcoded

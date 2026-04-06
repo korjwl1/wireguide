@@ -706,6 +706,18 @@ func (m *DarwinManager) SetDNS(ifaceName string, entries []string) error {
 	// Push the new DNS to every service in parallel.
 	m.applyDNSToServices(entries, services)
 
+	// Verify DNS actually took effect on at least one service. macOS can
+	// silently fail to apply DNS settings (e.g. permission issues, MDM
+	// profiles overriding). Without this check the user thinks VPN DNS
+	// is active but traffic goes to their ISP resolver.
+	servers, _ := splitDNSEntries(entries)
+	if len(servers) > 0 {
+		if err := m.verifyDNS(services, servers); err != nil {
+			slog.Warn("DNS verification failed", "error", err)
+			return fmt.Errorf("DNS applied but verification failed: %w", err)
+		}
+	}
+
 	// Flush the macOS DNS cache so lookups see the new servers immediately.
 	// Without this users can keep hitting stale resolutions for several
 	// minutes — wg-quick does this at the end of its set_dns.
@@ -834,6 +846,48 @@ func splitDNSEntries(entries []string) (servers, search []string) {
 	return
 }
 
+// verifyDNS checks that at least one network service has the expected DNS
+// servers applied. macOS can silently drop DNS changes (MDM profiles,
+// permission issues, etc.), so we read back and confirm. Retries once
+// after a short delay to handle asynchronous DNS propagation.
+func (m *DarwinManager) verifyDNS(services, expectedServers []string) error {
+	for attempt := 0; attempt < 2; attempt++ {
+		if attempt > 0 {
+			time.Sleep(500 * time.Millisecond)
+		}
+		// Check all services in parallel.
+		type result struct {
+			found bool
+		}
+		results := make([]result, len(services))
+		var wg sync.WaitGroup
+		for i, svc := range services {
+			i, svc := i, svc
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				current, err := getCurrentDNS(svc)
+				if err != nil || len(current) == 0 {
+					return
+				}
+				for _, got := range current {
+					if got == expectedServers[0] {
+						results[i].found = true
+						return
+					}
+				}
+			}()
+		}
+		wg.Wait()
+		for _, r := range results {
+			if r.found {
+				return nil
+			}
+		}
+	}
+	return fmt.Errorf("DNS server %s not found on any network service after apply", expectedServers[0])
+}
+
 // ResetDNSToSystemDefault clears DNS overrides on every network service
 // back to DHCP-provided defaults. Used by crash recovery when the process
 // has no memory of the pre-crash DNS state. Parallel across services.
@@ -903,6 +957,45 @@ func (m *DarwinManager) RestoreDNS(ifaceName string) error {
 				_ = run("networksetup", "-setsearchdomains", svc, "Empty")
 			} else {
 				args := append([]string{"-setsearchdomains", svc}, search...)
+				_ = run("networksetup", args...)
+			}
+		}()
+	}
+	wg.Wait()
+	flushDNSCache()
+	return nil
+}
+
+// SavedDNSSnapshot returns the current per-service DNS snapshot for
+// persistence to the crash recovery journal. Thread-safe.
+func (m *DarwinManager) SavedDNSSnapshot() map[string][]string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if !m.dnsActive || len(m.savedDNS) == 0 {
+		return nil
+	}
+	snapshot := make(map[string][]string, len(m.savedDNS))
+	for svc, dns := range m.savedDNS {
+		cp := make([]string, len(dns))
+		copy(cp, dns)
+		snapshot[svc] = cp
+	}
+	return snapshot
+}
+
+// RestoreDNSFromSnapshot restores DNS from a persisted pre-modification
+// snapshot. Used during crash recovery when in-memory state is unavailable.
+func (m *DarwinManager) RestoreDNSFromSnapshot(preModDNS map[string][]string) error {
+	var wg sync.WaitGroup
+	for svc, orig := range preModDNS {
+		svc, orig := svc, orig
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if len(orig) == 0 {
+				_ = run("networksetup", "-setdnsservers", svc, "Empty")
+			} else {
+				args := append([]string{"-setdnsservers", svc}, orig...)
 				_ = run("networksetup", args...)
 			}
 		}()
