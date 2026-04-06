@@ -8,6 +8,9 @@ package gui
 void setDockVisible(bool visible) {
 	if (visible) {
 		[NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
+		// After switching back to Regular, the app must be explicitly
+		// activated or macOS won't bring it to the foreground.
+		[NSApp activateIgnoringOtherApps:YES];
 	} else {
 		[NSApp setActivationPolicy:NSApplicationActivationPolicyAccessory];
 	}
