@@ -57,7 +57,9 @@
     "title": "Edit Tunnel: {name}",
     "save": "Save",
     "cancel": "Cancel",
-    "validation_error": "Validation Error"
+    "validation_error": "Validation Error",
+    "name_placeholder": "Tunnel name",
+    "name_required": "Tunnel name is required"
   },
   "scripts": {
     "warning_title": "Script Warning",

@@ -11,10 +11,46 @@
   import { resolvedTheme } from '../stores/theme.js';
   import { t } from '../i18n/index.js';
 
+  // Unified config editor: handles both "new" and "edit" modes.
+  // - isNew=true: shows name input, generates template with random private key
+  // - isNew=false: shows name as editable field, content pre-filled
   export let content = '';
   export let errors = [];
+  export let name = '';
+  export let isNew = false;
+  export let nameEditable = true;
 
   const dispatch = createEventDispatcher();
+
+  // Generate a random WireGuard private key (Curve25519 clamped)
+  function generatePrivateKey() {
+    const bytes = new Uint8Array(32);
+    crypto.getRandomValues(bytes);
+    bytes[0] &= 248;
+    bytes[31] &= 127;
+    bytes[31] |= 64;
+    return btoa(String.fromCharCode(...bytes));
+  }
+
+  // Build default template for new configs with auto-generated private key
+  function buildNewTemplate() {
+    const key = generatePrivateKey();
+    return `[Interface]
+PrivateKey = ${key}
+Address = 10.0.0.2/24
+DNS = 1.1.1.1
+
+[Peer]
+PublicKey =
+Endpoint =
+AllowedIPs = 0.0.0.0/0, ::/0
+PersistentKeepalive = 25
+`;
+  }
+
+  if (isNew && !content) {
+    content = buildNewTemplate();
+  }
   let editorContainer;
   let view;
 
@@ -128,7 +164,7 @@
   }
 
   function save() {
-    dispatch('save', content);
+    dispatch('save', { name: name.trim(), content });
   }
 
   function cancel() {
@@ -138,7 +174,16 @@
 
 <div class="editor-wrapper">
   <div class="editor-toolbar">
-    <span class="editor-title">{$t('editor.title', { name: '' })}</span>
+    {#if nameEditable}
+      <input
+        class="name-input"
+        type="text"
+        bind:value={name}
+        placeholder={$t('editor.name_placeholder')}
+      />
+    {:else}
+      <span class="editor-title">{name || $t('editor.title', { name: '' })}</span>
+    {/if}
     <div class="editor-actions">
       <button class="btn btn-save" on:click={save}>{$t('editor.save')}</button>
       <button class="btn btn-cancel" on:click={cancel}>{$t('editor.cancel')}</button>
@@ -172,6 +217,21 @@
   .editor-title {
     font-size: 14px;
     color: var(--text-secondary);
+  }
+  .name-input {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text-primary);
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 4px 8px;
+    min-width: 180px;
+    outline: none;
+  }
+  .name-input:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 2px var(--blue-tint);
   }
   .editor-actions {
     display: flex;

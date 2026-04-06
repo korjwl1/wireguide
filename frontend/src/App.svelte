@@ -11,7 +11,7 @@
   import DNSLeakTest from './lib/DNSLeakTest.svelte';
   import RouteVisualization from './lib/RouteVisualization.svelte';
   import StatsDashboard from './lib/StatsDashboard.svelte';
-  import NewTunnelDialog from './lib/NewTunnelDialog.svelte';
+  // NewTunnelDialog removed — ConfigEditor now handles both new + edit
   import { tunnels, selectedTunnel, refreshTunnels, refreshStatus, subscribeToEvents, unsubscribe, initialLoad, connectionStatus } from './stores/tunnels.js';
   import { applyTheme, initThemeWatcher } from './stores/theme.js';
   import { startLogListener, stopLogListener } from './stores/logs.js';
@@ -24,7 +24,6 @@
   let toolsTab = 'diagnostics'; // 'diagnostics' | 'dnsleak' | 'routes'
 
   // Modal state
-  let showNewTunnel = false;
   let showEditor = false;
   let showSettings = false;
   let showScriptWarning = false;
@@ -172,23 +171,14 @@
     input.click();
   }
 
-  async function handleNewTunnelOpen() {
-    showNewTunnel = true;
-  }
+  let editorIsNew = false;
 
-  async function handleNewTunnelSave(e) {
-    const { name, content } = e.detail;
-    try {
-      const errors = await TunnelService.ValidateConfig(content);
-      if (errors && errors.length > 0) {
-        return { errors };
-      }
-      await TunnelService.ImportConfig(name, content);
-      showNewTunnel = false;
-      await refreshTunnels(TunnelService);
-    } catch (err) {
-      console.error(err);
-    }
+  async function handleNewTunnelOpen() {
+    editName = '';
+    editorContent = ''; // ConfigEditor will generate template when isNew + empty
+    editorErrors = [];
+    editorIsNew = true;
+    showEditor = true;
   }
 
   async function handleEdit(e) {
@@ -196,25 +186,41 @@
     try {
       editorContent = await TunnelService.GetConfigText(editName);
       editorErrors = [];
+      editorIsNew = false;
       showEditor = true;
     } catch (err) {
       console.error(err);
     }
   }
 
-  async function doSave() {
+  async function doSave(e) {
+    const { name: saveName, content: saveContent } = e.detail;
     editorErrors = [];
+
+    if (!saveName) {
+      editorErrors = [$t('editor.name_required')];
+      return;
+    }
+
     try {
-      const errors = await TunnelService.ValidateConfig(editorContent);
+      const errors = await TunnelService.ValidateConfig(saveContent);
       if (errors && errors.length > 0) {
         editorErrors = errors;
         return;
       }
-      await TunnelService.UpdateConfig(editName, editorContent);
+      if (editorIsNew) {
+        await TunnelService.ImportConfig(saveName, saveContent);
+      } else {
+        // If name changed, rename first then update content
+        if (saveName !== editName) {
+          await TunnelService.RenameTunnel(editName, saveName);
+        }
+        await TunnelService.UpdateConfig(saveName, saveContent);
+      }
       showEditor = false;
       await refreshTunnels(TunnelService);
     } catch (err) {
-      editorErrors = [err.toString()];
+      editorErrors = [errText(err)];
     }
   }
 
@@ -381,19 +387,16 @@
   </div>
 
   <!-- Modals -->
-  {#if showNewTunnel}
-    <NewTunnelDialog {TunnelService}
-      on:save={handleNewTunnelSave}
-      on:close={() => showNewTunnel = false} />
-  {/if}
-
   {#if showEditor}
     <div class="modal-backdrop" on:click={() => showEditor = false}>
       <div class="modal modal-editor" on:click|stopPropagation>
         <ConfigEditor
           bind:content={editorContent}
+          bind:name={editName}
           errors={editorErrors}
-          on:save={(e) => { editorContent = e.detail; doSave(); }}
+          isNew={editorIsNew}
+          nameEditable={true}
+          on:save={doSave}
           on:cancel={() => showEditor = false} />
       </div>
     </div>

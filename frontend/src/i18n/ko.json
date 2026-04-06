@@ -57,7 +57,9 @@
     "title": "터널 편집: {name}",
     "save": "저장",
     "cancel": "취소",
-    "validation_error": "유효성 검사 오류"
+    "validation_error": "유효성 검사 오류",
+    "name_placeholder": "터널 이름",
+    "name_required": "터널 이름을 입력하세요"
   },
   "scripts": {
     "warning_title": "스크립트 경고",

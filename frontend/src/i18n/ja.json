@@ -57,7 +57,9 @@
     "title": "トンネル編集: {name}",
     "save": "保存",
     "cancel": "キャンセル",
-    "validation_error": "検証エラー"
+    "validation_error": "検証エラー",
+    "name_placeholder": "トンネル名",
+    "name_required": "トンネル名を入力してください"
   },
   "scripts": {
     "warning_title": "スクリプト警告",
