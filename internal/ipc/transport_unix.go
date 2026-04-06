@@ -28,8 +28,16 @@ func Listen(addr string, ownerUID int) (net.Listener, error) {
 			slog.Debug("chmod parent dir failed (non-fatal)", "dir", dir, "error", err)
 		}
 
-		// Verify the parent directory is owned by the current effective user
-		// to prevent an attacker from pre-creating the directory.
+		// Verify the parent directory is owned by a trusted UID to prevent
+		// an attacker from pre-creating the directory.
+		//
+		// The helper runs as root (euid=0) but the socket directory lives
+		// under the GUI user's home (e.g. ~/Library/Application Support/).
+		// We accept ownership by:
+		//   - The current effective user (root when helper calls Listen)
+		//   - The ownerUID (the GUI user who spawned the helper)
+		// Both are trusted. The real access control is the socket's
+		// chmod 0600 + chown to ownerUID.
 		fi, err := os.Stat(dir)
 		if err != nil {
 			return nil, fmt.Errorf("stat dir %s: %w", dir, err)
@@ -38,8 +46,14 @@ func Listen(addr string, ownerUID int) (net.Listener, error) {
 		if !ok {
 			return nil, fmt.Errorf("cannot determine owner of %s", dir)
 		}
-		if st.Uid != uint32(os.Geteuid()) {
-			return nil, fmt.Errorf("refusing to use %s: owned by UID %d, expected %d", dir, st.Uid, os.Geteuid())
+		dirUID := uint32(st.Uid)
+		euid := uint32(os.Geteuid())
+		trusted := dirUID == euid
+		if !trusted && ownerUID >= 0 && dirUID == uint32(ownerUID) {
+			trusted = true
+		}
+		if !trusted {
+			return nil, fmt.Errorf("refusing to use %s: owned by UID %d, expected %d or %d", dir, dirUID, euid, ownerUID)
 		}
 	}
 
