@@ -81,6 +81,38 @@ Note: The dramatic Linux-only improvements (GSO/GRO vectorized I/O, 4→11 Gbps)
 
 ---
 
+## Install
+
+### macOS (Homebrew)
+
+```bash
+brew tap korjwl1/tap
+brew install --cask wireguide
+```
+
+### macOS (Manual)
+
+Download from [Releases](https://github.com/korjwl1/wireguide/releases), unzip, move to `/Applications`.
+
+> If macOS shows "app is damaged", run: `xattr -cr /Applications/WireGuide.app`
+
+### Build from Source
+
+```bash
+# Prerequisites
+brew install go node
+go install github.com/go-task/task/v3/cmd/task@latest
+go install github.com/wailsapp/wails/v3/cmd/wails3@latest
+
+# Build
+task build
+
+# Run
+./bin/wireguide
+```
+
+---
+
 ## Screenshots
 
 <table>
@@ -122,36 +154,6 @@ Note: The dramatic Linux-only improvements (GSO/GRO vectorized I/O, 4→11 Gbps)
 | **Speed Dashboard** | Real-time RX/TX graph |
 | **i18n** | English, Korean, Japanese |
 | **Dark / Light / System** | Follows OS appearance |
-
----
-
-## Install
-
-### macOS (Homebrew)
-
-```bash
-brew tap korjwl1/tap
-brew install --cask wireguide
-```
-
-### macOS (Manual)
-
-Download from [Releases](https://github.com/korjwl1/wireguide/releases), unzip, move to `/Applications`.
-
-### Build from Source
-
-```bash
-# Prerequisites
-brew install go node
-go install github.com/go-task/task/v3/cmd/task@latest
-go install github.com/wailsapp/wails/v3/cmd/wails3@latest
-
-# Build
-task build
-
-# Run
-./bin/wireguide
-```
 
 ---
 

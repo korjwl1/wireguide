@@ -113,6 +113,7 @@
   "log": {
     "title": "Logs",
     "clear": "Clear",
+    "copy": "Copy",
     "auto_scroll": "Auto-scroll",
     "no_entries": "No log entries",
     "filter_all": "All"

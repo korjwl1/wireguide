@@ -115,7 +115,8 @@
     "clear": "지우기",
     "auto_scroll": "자동 스크롤",
     "no_entries": "로그 항목 없음",
-    "filter_all": "전체"
+    "filter_all": "전체",
+    "copy": "복사"
   },
   "notify": {
     "disconnected": "VPN 연결이 끊겼습니다",

@@ -8,24 +8,16 @@
   let logContainer;
   let prevLogsLen = 0;
   let shouldScroll = true;
+  let copyFeedback = false;
 
   const levels = ['debug', 'info', 'warn', 'error'];
   const levelRank = { debug: 0, info: 1, warn: 2, error: 3 };
 
-  // Filter store -> visible slice. When filter changes or new entries arrive,
-  // mark that we should scroll to bottom after the next DOM update. We do
-  // NOT call `tick().then(...)` inside a reactive block here — that pattern
-  // is known to deadlock on WebKit when combined with `bind:this` + {#each}
-  // during a busy flush cycle (see Svelte issues #6921, #7752). Instead we
-  // set a flag and do the scroll imperatively in `afterUpdate`, which runs
-  // exactly once per DOM update after Svelte has committed all changes.
   $: filtered = ($logs || []).filter((entry) => {
     if (filter === 'all') return true;
     return (levelRank[entry.level] ?? 1) >= (levelRank[filter] ?? 1);
   });
 
-  // Mark scroll needed whenever a NEW entry arrives (not just any reactivity).
-  // Comparing length instead of reference so filter-changes don't scroll.
   $: {
     const len = ($logs || []).length;
     if (len !== prevLogsLen) {
@@ -35,7 +27,6 @@
   }
 
   onMount(() => {
-    // One-shot initial scroll once DOM is stable.
     if (logContainer) logContainer.scrollTop = logContainer.scrollHeight;
   });
 
@@ -60,6 +51,47 @@
     const ms = String(d.getMilliseconds()).padStart(3, '0');
     return `${h}:${m}:${s}.${ms}`;
   }
+
+  function formatEntry(entry) {
+    return `${formatTime(entry.time)}\t${entry.source}\t${entry.level.toUpperCase()}\t${entry.message}`;
+  }
+
+  async function copyAll() {
+    const text = filtered.map(formatEntry).join('\n');
+    try {
+      await navigator.clipboard.writeText(text);
+      copyFeedback = true;
+      setTimeout(() => copyFeedback = false, 1500);
+    } catch (e) {
+      console.error('copy failed:', e);
+    }
+  }
+
+  // Intercept native copy to format grid cells as tab-separated text
+  // instead of the browser's default (which often collapses grid columns
+  // into a single line or adds weird spacing).
+  function handleCopy(e) {
+    const sel = window.getSelection();
+    if (!sel || sel.isCollapsed) return;
+
+    // Walk all .log-entry elements that intersect the selection range
+    if (!logContainer) return;
+    const entries = logContainer.querySelectorAll('.log-entry');
+    const lines = [];
+    for (const row of entries) {
+      if (sel.containsNode(row, true)) {
+        const time = row.querySelector('.log-time')?.textContent || '';
+        const source = row.querySelector('.log-source')?.textContent || '';
+        const level = row.querySelector('.log-level')?.textContent || '';
+        const msg = row.querySelector('.log-msg')?.textContent || '';
+        lines.push(`${time}\t${source}\t${level}\t${msg}`);
+      }
+    }
+    if (lines.length > 0) {
+      e.preventDefault();
+      e.clipboardData.setData('text/plain', lines.join('\n'));
+    }
+  }
 </script>
 
 <div class="log-viewer">
@@ -76,11 +108,14 @@
       <label>
         <input type="checkbox" bind:checked={autoScroll} /> {$t('log.auto_scroll')}
       </label>
-      <button class="btn-clear" on:click={clear}>{$t('log.clear')}</button>
+      <button class="btn-action" on:click={copyAll}>
+        {copyFeedback ? '✓' : $t('log.copy')}
+      </button>
+      <button class="btn-action" on:click={clear}>{$t('log.clear')}</button>
     </div>
   </div>
 
-  <div class="log-entries" bind:this={logContainer}>
+  <div class="log-entries" bind:this={logContainer} on:copy={handleCopy}>
     {#each filtered as entry, i (i)}
       <div class="log-entry level-{entry.level}">
         <span class="log-time">{formatTime(entry.time)}</span>
@@ -139,7 +174,7 @@
     font: var(--text-footnote);
     color: var(--text-secondary);
   }
-  .btn-clear {
+  .btn-action {
     height: 22px;
     padding: 0 var(--space-2);
     background: var(--bg-card);
@@ -149,7 +184,7 @@
     font: var(--text-footnote);
     cursor: pointer;
   }
-  .btn-clear:hover { background: var(--bg-hover); }
+  .btn-action:hover { background: var(--bg-hover); }
 
   .log-entries {
     flex: 1;
@@ -157,11 +192,13 @@
     padding: var(--space-2);
     font: 11px/1.5 var(--font-mono);
     background: var(--log-bg);
-    /* contain: content lets WebKit isolate layout of log rows from the
-     * parent flex container — prevents the reflow-thrash pattern where a
-     * child row's intrinsic width recalculation propagates back up to
-     * the viewport and restarts the whole layout pass. */
     contain: content;
+    /* Ensure text is selectable — the global button reset or other rules
+     * might set user-select: none. Log content MUST be selectable for
+     * copy-paste into bug reports. */
+    user-select: text;
+    -webkit-user-select: text;
+    cursor: text;
   }
   .log-entry {
     display: grid;

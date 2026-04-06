@@ -115,7 +115,8 @@
     "clear": "クリア",
     "auto_scroll": "自動スクロール",
     "no_entries": "ログがありません",
-    "filter_all": "すべて"
+    "filter_all": "すべて",
+    "copy": "コピー"
   },
   "notify": {
     "disconnected": "VPN 接続が切断されました",
