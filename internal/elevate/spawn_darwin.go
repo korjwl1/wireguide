@@ -5,9 +5,11 @@ package elevate
 import (
 	"fmt"
 	"log/slog"
+	"net"
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 )
 
 const (
@@ -27,21 +29,44 @@ const (
 // Method 1 is the production path. Method 2 exists so `./bin/wireguide`
 // works during development without installing a LaunchDaemon.
 func SpawnHelper(args Args) error {
-	// Try LaunchDaemon first — instant, no password prompt.
+	// Try LaunchDaemon first — if the daemon is installed and already
+	// running (KeepAlive=true means launchd auto-starts it), we don't
+	// need to do anything. Just check if the socket is already live.
 	if isDaemonInstalled() {
-		slog.Info("starting helper via LaunchDaemon")
-		// kickstart -k kills the existing instance (if any) and starts a fresh one.
-		cmd := exec.Command("launchctl", "kickstart", "-k", "system/"+daemonLabel)
-		if out, err := cmd.CombinedOutput(); err != nil {
-			slog.Warn("launchctl kickstart failed, falling back to osascript",
-				"error", err, "output", strings.TrimSpace(string(out)))
+		slog.Info("LaunchDaemon installed, checking if helper is already running")
+		// The daemon should be running via KeepAlive. If for some reason
+		// it's not, try kickstart via sudo (will prompt once). But most
+		// of the time the daemon is already alive and we just return.
+		if isSocketLive(args.SocketPath) {
+			slog.Info("helper already running via LaunchDaemon")
+			return nil
+		}
+		// Socket not live — try kickstart. This needs root, so we use
+		// osascript to run launchctl as admin (one-time prompt).
+		script := fmt.Sprintf(
+			`do shell script "launchctl kickstart -k system/%s" with administrator privileges with prompt "WireGuide needs to start its helper service."`,
+			daemonLabel,
+		)
+		if err := exec.Command("osascript", "-e", script).Run(); err != nil {
+			slog.Warn("launchctl kickstart via osascript failed, falling back to direct spawn",
+				"error", err)
 		} else {
-			return nil // daemon started successfully
+			return nil
 		}
 	}
 
 	// Fallback: osascript with administrator privileges.
 	return spawnViaOsascript(args)
+}
+
+// isSocketLive checks whether the helper socket exists and accepts a connection.
+func isSocketLive(socketPath string) bool {
+	conn, err := net.DialTimeout("unix", socketPath, 500*time.Millisecond)
+	if err != nil {
+		return false
+	}
+	conn.Close()
+	return true
 }
 
 // isDaemonInstalled checks whether the LaunchDaemon plist and binary are

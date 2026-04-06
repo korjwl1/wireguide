@@ -256,6 +256,7 @@
     </section>
 
     <div class="modal-footer">
+      <span class="version">v0.1.1</span>
       <button type="button" class="btn-close" on:mousedown|stopPropagation={close}>{$t('settings.close')}</button>
     </div>
   </div>
@@ -288,9 +289,16 @@
   .modal-footer {
     display: flex;
     justify-content: flex-end;
+    align-items: center;
+    gap: var(--space-3);
     margin-top: 20px;
     padding-top: 16px;
     border-top: 1px solid var(--border);
+  }
+  .version {
+    margin-right: auto;
+    font-size: 11px;
+    color: var(--text-muted);
   }
   /* Explicit padding/size — the global `button { padding: 0 }` reset is
    * only beaten by class specificity, so we make sure this button has a
