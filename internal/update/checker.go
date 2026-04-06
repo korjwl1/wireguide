@@ -20,7 +20,7 @@ import (
 const (
 	githubRepo     = "korjwl1/wireguide"
 	apiEndpoint    = "https://api.github.com/repos/" + githubRepo + "/releases/latest"
-	currentVersion = "0.1.1"
+	currentVersion = "0.1.2"
 )
 
 // Release represents a GitHub release.

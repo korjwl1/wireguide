@@ -273,6 +273,7 @@ func (t *trayManager) rebuildMenu() {
 	}
 	m.AddSeparator()
 	m.Add("Show Window").OnClick(func(ctx *application.Context) {
+		showDock()
 		t.win.Show()
 		t.win.Focus()
 	})

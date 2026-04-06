@@ -128,6 +128,7 @@ func Run(assetsHandler http.Handler, dataDir string) error {
 	win.OnWindowEvent(events.Common.WindowClosing, func(event *application.WindowEvent) {
 		event.Cancel()
 		win.Hide()
+		hideDock()
 	})
 
 	// Native file drop forwarded to frontend
