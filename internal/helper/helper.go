@@ -57,9 +57,10 @@ type Helper struct {
 	// every record. Info by default.
 	logLevel *slog.LevelVar
 
-	mu             sync.Mutex
-	activeCfg      *domain.WireGuardConfig // cached for reconnect
-	scriptsAllowed bool
+	mu              sync.Mutex
+	activeCfg       *domain.WireGuardConfig // cached for reconnect
+	scriptsAllowed  bool
+	scriptAllowlist *ScriptAllowlist // persistent allowlist for script approval
 
 	// shutdownTimer is a singleton grace-window timer. When the control
 	// connection drops we Reset it; when the GUI reconnects we Stop it. This
@@ -67,7 +68,8 @@ type Helper struct {
 	// and multiple shutdowns could race.
 	shutdownTimer *time.Timer
 
-	done chan struct{}
+	done        chan struct{}
+	cleanupOnce sync.Once
 }
 
 // Run starts the helper listening on addr. Blocks until shutdown.
@@ -83,11 +85,12 @@ func Run(addr string, ownerUID int, dataDir string) error {
 	fw := firewall.NewPlatformFirewall()
 
 	h := &Helper{
-		server:   ipc.NewServer(listener),
-		manager:  manager,
-		firewall: fw,
-		logLevel: new(slog.LevelVar), // defaults to Info
-		done:     make(chan struct{}),
+		server:          ipc.NewServer(listener, ownerUID),
+		manager:         manager,
+		firewall:        fw,
+		logLevel:        new(slog.LevelVar), // defaults to Info
+		scriptAllowlist: NewScriptAllowlist(dataDir),
+		done:            make(chan struct{}),
 	}
 
 	// Install the broadcast slog handler BEFORE the first log call so
@@ -207,21 +210,23 @@ func (h *Helper) shutdown() {
 }
 
 func (h *Helper) cleanup() {
-	slog.Info("helper cleanup starting",
-		"connected", h.manager.IsConnected(),
-		"call_stack", string(debug.Stack()))
-	close(h.done)
-	h.mu.Lock()
-	t := h.shutdownTimer
-	h.shutdownTimer = nil
-	h.mu.Unlock()
-	if t != nil {
-		t.Stop()
-	}
-	h.monitor.Stop()
-	h.firewall.Cleanup()
-	if h.manager.IsConnected() {
-		_ = h.manager.Disconnect()
-	}
-	slog.Info("helper shutdown complete")
+	h.cleanupOnce.Do(func() {
+		slog.Info("helper cleanup starting",
+			"connected", h.manager.IsConnected(),
+			"call_stack", string(debug.Stack()))
+		close(h.done)
+		h.mu.Lock()
+		t := h.shutdownTimer
+		h.shutdownTimer = nil
+		h.mu.Unlock()
+		if t != nil {
+			t.Stop()
+		}
+		h.monitor.Stop()
+		h.firewall.Cleanup()
+		if h.manager.IsConnected() {
+			_ = h.manager.Disconnect()
+		}
+		slog.Info("helper shutdown complete")
+	})
 }

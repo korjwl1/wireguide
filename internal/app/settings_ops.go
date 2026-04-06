@@ -1,8 +1,9 @@
 package app
 
 import (
-	"log/slog"
+	"fmt"
 	"os"
+	"sync/atomic"
 
 	"github.com/korjwl1/wireguide/internal/autostart"
 	"github.com/korjwl1/wireguide/internal/ipc"
@@ -13,13 +14,20 @@ import (
 // (which is Wails-bound) can update the GUI process's own log level at
 // runtime without importing internal/gui (which would create an import
 // cycle). SetLogLevel below calls this in addition to forwarding the
-// level to the helper.
-var guiLogLevelSetter func(string)
+// level to the helper. Uses atomic.Value for safe concurrent access.
+var guiLogLevelSetter atomic.Value // stores func(string)
 
 // SetGUILogLevelSetter is called once from internal/gui.Run to register
 // the GUI-side log level mutator. Safe to call before NewTunnelService.
 func SetGUILogLevelSetter(f func(string)) {
-	guiLogLevelSetter = f
+	guiLogLevelSetter.Store(f)
+}
+
+func getGUILogLevelSetter() func(string) {
+	if v := guiLogLevelSetter.Load(); v != nil {
+		return v.(func(string))
+	}
+	return nil
 }
 
 // --- Settings (all local, no IPC) ---
@@ -47,19 +55,20 @@ func (s *TunnelService) SaveSettings(settings *storage.Settings) error {
 		if settings.AutoStart {
 			exe, err := os.Executable()
 			if err != nil {
-				slog.Warn("autostart: cannot resolve exe path", "error", err)
-			} else if err := autostart.InstallAutostart(exe); err != nil {
-				slog.Warn("autostart: install failed", "error", err)
+				return fmt.Errorf("autostart: cannot resolve exe path: %w", err)
+			}
+			if err := autostart.InstallAutostart(exe); err != nil {
+				return fmt.Errorf("autostart: install failed: %w", err)
 			}
 		} else {
 			if err := autostart.RemoveAutostart(); err != nil && !os.IsNotExist(err) {
-				slog.Warn("autostart: remove failed", "error", err)
+				return fmt.Errorf("autostart: remove failed: %w", err)
 			}
 		}
 	}
 	if settings.LogLevel != "" {
-		if guiLogLevelSetter != nil {
-			guiLogLevelSetter(settings.LogLevel)
+		if fn := getGUILogLevelSetter(); fn != nil {
+			fn(settings.LogLevel)
 		}
 		// Best-effort: the helper may be unreachable during shutdown, and
 		// the level change is not critical to Save succeeding.
@@ -72,8 +81,8 @@ func (s *TunnelService) SaveSettings(settings *storage.Settings) error {
 // immediately. Exposed as a Wails method so the Settings view can call
 // it without waiting for a full SaveSettings round trip.
 func (s *TunnelService) SetLogLevel(level string) error {
-	if guiLogLevelSetter != nil {
-		guiLogLevelSetter(level)
+	if fn := getGUILogLevelSetter(); fn != nil {
+		fn(level)
 	}
 	return s.call(ipc.MethodSetLogLevel, ipc.SetLogLevelRequest{Level: level}, nil)
 }
@@ -92,7 +101,9 @@ func (s *TunnelService) SetDNSProtection(enabled bool) error {
 	var dnsServers []string
 	if enabled {
 		var active ipc.StringResponse
-		_ = s.call(ipc.MethodActiveName, nil, &active)
+		if err := s.call(ipc.MethodActiveName, nil, &active); err != nil {
+			return fmt.Errorf("cannot verify tunnel state: %w", err)
+		}
 		if active.Value != "" {
 			if cfg, err := s.tunnelStore.Load(active.Value); err == nil {
 				dnsServers = cfg.Interface.DNS

@@ -38,6 +38,11 @@ const (
 	ErrCodeInvalidParams  = -32602
 	ErrCodeInternalError  = -32603
 	ErrCodeAppError       = -32000
+	// ErrCodeScriptsNotApproved is returned when a ConnectRequest includes
+	// scripts with ScriptsAllowed=true but the scripts have not been approved
+	// in the helper's persistent allowlist. The GUI should prompt the user
+	// and send an ApproveScripts RPC if they consent.
+	ErrCodeScriptsNotApproved = -32001
 )
 
 // RPC method names
@@ -51,6 +56,7 @@ const (
 	MethodStatus           = "Tunnel.Status"
 	MethodIsConnected      = "Tunnel.IsConnected"
 	MethodActiveName       = "Tunnel.ActiveName"
+	MethodApproveScripts   = "Tunnel.ApproveScripts"
 	MethodSetKillSwitch    = "Firewall.SetKillSwitch"
 	MethodSetDNSProtection = "Firewall.SetDNSProtection"
 )
@@ -61,6 +67,15 @@ const (
 	EventReconnect = "event.reconnect"
 	EventLog       = "event.log"
 )
+
+// CodedError is an error that carries a specific JSON-RPC error code.
+// Handlers can return this to override the default ErrCodeAppError.
+type CodedError struct {
+	Code    int
+	Message string
+}
+
+func (e *CodedError) Error() string { return e.Message }
 
 // NewRequest creates a request with auto-serialized params.
 func NewRequest(id uint64, method string, params interface{}) (*Request, error) {

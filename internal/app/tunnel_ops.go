@@ -2,6 +2,7 @@ package app
 
 import (
 	"fmt"
+	"log/slog"
 
 	"github.com/korjwl1/wireguide/internal/domain"
 	"github.com/korjwl1/wireguide/internal/ipc"
@@ -23,6 +24,7 @@ func (s *TunnelService) ListTunnelsLocal() ([]TunnelInfo, error) {
 	for _, name := range names {
 		cfg, err := s.tunnelStore.Load(name)
 		if err != nil {
+			slog.Warn("skipping broken tunnel config", "name", name, "error", err)
 			continue
 		}
 		endpoint := ""
@@ -63,6 +65,7 @@ func (s *TunnelService) ListTunnels() ([]TunnelInfo, error) {
 	for _, name := range names {
 		cfg, err := s.tunnelStore.Load(name)
 		if err != nil {
+			slog.Warn("skipping broken tunnel config", "name", name, "error", err)
 			continue
 		}
 		endpoint := ""
@@ -81,15 +84,54 @@ func (s *TunnelService) ListTunnels() ([]TunnelInfo, error) {
 
 // Connect loads a tunnel config from local storage and asks the helper to
 // bring it up. The helper re-validates server-side.
+//
+// When the config contains scripts and scriptsAllowed is true, the helper
+// verifies the scripts against its persistent allowlist. If the scripts are
+// not yet approved, the helper rejects with ErrCodeScriptsNotApproved and
+// this method automatically sends an ApproveScripts RPC (the user already
+// consented via the GUI's script warning dialog) then retries the connect.
 func (s *TunnelService) Connect(name string, scriptsAllowed bool) error {
 	cfg, err := s.tunnelStore.Load(name)
 	if err != nil {
 		return fmt.Errorf("loading tunnel %s: %w", name, err)
 	}
-	return s.call(ipc.MethodConnect, ipc.ConnectRequest{
+
+	err = s.call(ipc.MethodConnect, ipc.ConnectRequest{
 		Config:         cfg,
 		ScriptsAllowed: scriptsAllowed,
 	}, nil)
+
+	// If the helper rejected because scripts aren't in the allowlist yet,
+	// send the approval (the user already consented at the GUI level) and
+	// retry. This only happens once per unique script set.
+	if isScriptsNotApproved(err) && scriptsAllowed {
+		slog.Info("scripts not yet in helper allowlist, approving",
+			"tunnel", name)
+		if approveErr := s.call(ipc.MethodApproveScripts, ipc.ApproveScriptsRequest{
+			Config: cfg,
+		}, nil); approveErr != nil {
+			return fmt.Errorf("approving scripts: %w", approveErr)
+		}
+		// Retry the connect — scripts are now in the allowlist.
+		return s.call(ipc.MethodConnect, ipc.ConnectRequest{
+			Config:         cfg,
+			ScriptsAllowed: scriptsAllowed,
+		}, nil)
+	}
+
+	return err
+}
+
+// isScriptsNotApproved checks whether an error is the specific
+// ErrCodeScriptsNotApproved rejection from the helper.
+func isScriptsNotApproved(err error) bool {
+	if err == nil {
+		return false
+	}
+	if ipcErr, ok := err.(*ipc.Error); ok {
+		return ipcErr.Code == ipc.ErrCodeScriptsNotApproved
+	}
+	return false
 }
 
 // Disconnect tears down whatever tunnel the helper currently has active.
@@ -118,7 +160,9 @@ func (s *TunnelService) GetTunnelDetail(name string) (*domain.WireGuardConfig, e
 // currently connected tunnel (would orphan the interface).
 func (s *TunnelService) DeleteTunnel(name string) error {
 	var active ipc.StringResponse
-	_ = s.call(ipc.MethodActiveName, nil, &active)
+	if err := s.call(ipc.MethodActiveName, nil, &active); err != nil {
+		return fmt.Errorf("cannot verify tunnel state (helper unreachable): %w", err)
+	}
 	if active.Value == name {
 		return fmt.Errorf("cannot delete connected tunnel %q — disconnect first", name)
 	}
@@ -132,7 +176,9 @@ func (s *TunnelService) RenameTunnel(oldName, newName string) error {
 		return err
 	}
 	var active ipc.StringResponse
-	_ = s.call(ipc.MethodActiveName, nil, &active)
+	if err := s.call(ipc.MethodActiveName, nil, &active); err != nil {
+		return fmt.Errorf("cannot verify tunnel state (helper unreachable): %w", err)
+	}
 	if active.Value == oldName {
 		return fmt.Errorf("cannot rename connected tunnel %q — disconnect first", oldName)
 	}

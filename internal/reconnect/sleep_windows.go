@@ -4,12 +4,21 @@ package reconnect
 
 import (
 	"log/slog"
+	"sync"
 	"time"
 )
 
 // windowsSleepDetector detects sleep/wake on Windows using wall clock gap detection.
 // A more robust approach would use WM_POWERBROADCAST via win32 API.
+//
+// TODO(M13): Replace polling with RegisterPowerSettingNotification for instant
+// wake detection. The current polling approach works but has up to a 30-second
+// detection delay. RegisterPowerSettingNotification with GUID_CONSOLE_DISPLAY_STATE
+// or GUID_MONITOR_POWER_ON would provide immediate notification. This requires
+// creating a hidden message-only window and a message pump (win32 GetMessage loop),
+// which is a non-trivial amount of platform-specific code.
 type windowsSleepDetector struct {
+	mu     sync.Mutex
 	wakeCh chan struct{}
 	stopCh chan struct{}
 }
@@ -22,12 +31,19 @@ func NewSleepDetector() SleepDetector {
 }
 
 func (d *windowsSleepDetector) Start() {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	// Reinitialize stopCh so the detector is reusable after Stop().
+	d.stopCh = make(chan struct{})
 	go d.poll()
 }
 
 func (d *windowsSleepDetector) Stop() {
+	d.mu.Lock()
+	defer d.mu.Unlock()
 	select {
 	case <-d.stopCh:
+		// Already closed; nothing to do.
 	default:
 		close(d.stopCh)
 	}
@@ -42,11 +58,14 @@ func (d *windowsSleepDetector) poll() {
 	const pollInterval = 10 * time.Second
 	const sleepThreshold = 30 * time.Second
 
+	ticker := time.NewTicker(pollInterval)
+	defer ticker.Stop()
+
 	for {
 		select {
 		case <-d.stopCh:
 			return
-		case <-time.After(pollInterval):
+		case <-ticker.C:
 			now := time.Now()
 			elapsed := now.Sub(lastCheck)
 			lastCheck = now

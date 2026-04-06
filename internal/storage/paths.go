@@ -1,6 +1,8 @@
 package storage
 
 import (
+	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -20,7 +22,7 @@ type Paths struct {
 func GetPaths() (*Paths, error) {
 	var p Paths
 
-	switch runtime.GOOS {
+	switch runtime.GOOS { //nolint:exhaustive
 	case "darwin":
 		home, err := os.UserHomeDir()
 		if err != nil {
@@ -73,17 +75,41 @@ func GetPaths() (*Paths, error) {
 			programData = `C:\ProgramData`
 		}
 		p.DataDir = filepath.Join(programData, appName)
+
+	default:
+		return nil, fmt.Errorf("unsupported operating system: %s", runtime.GOOS)
 	}
 
 	return &p, nil
 }
 
 // EnsureDirs creates all necessary directories if they don't exist.
+// ConfigDir and TunnelsDir use 0700 to prevent other users from listing
+// config filenames on multi-user systems. LogsDir and DataDir use 0700 as well.
+//
+// DataDir may require root permissions (e.g. /var/lib/wireguide on Linux,
+// /Library/Application Support/wireguide on macOS). If creation fails due
+// to insufficient privileges, the error is logged as a warning instead of
+// failing the entire startup — the helper process will create it when running
+// as root.
 func (p *Paths) EnsureDirs() error {
-	dirs := []string{p.ConfigDir, p.TunnelsDir, p.LogsDir}
-	for _, dir := range dirs {
-		if err := os.MkdirAll(dir, 0755); err != nil {
+	userDirs := []string{p.ConfigDir, p.TunnelsDir, p.LogsDir}
+	for _, dir := range userDirs {
+		if err := os.MkdirAll(dir, 0700); err != nil {
 			return err
+		}
+		// Enforce permissions even if the directory already existed with
+		// wider permissions (e.g., 0755 from a previous version).
+		if err := os.Chmod(dir, 0700); err != nil {
+			return err
+		}
+	}
+	// DataDir may require elevated privileges; warn instead of failing.
+	if p.DataDir != "" {
+		if err := os.MkdirAll(p.DataDir, 0700); err != nil {
+			slog.Warn("cannot create DataDir (may need root)", "dir", p.DataDir, "error", err)
+		} else if err := os.Chmod(p.DataDir, 0700); err != nil {
+			slog.Warn("cannot set DataDir permissions", "dir", p.DataDir, "error", err)
 		}
 	}
 	return nil

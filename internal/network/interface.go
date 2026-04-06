@@ -21,7 +21,7 @@ type NetworkManager interface {
 	// do ourselves would get routed through the partially-installed
 	// tunnel and deadlock. Multi-peer configs should pass all resolved
 	// IPs for all peers. Pass an empty slice to disable bypass setup.
-	AddRoutes(ifaceName string, allowedIPs []string, fullTunnel bool, endpointIPs []string) error
+	AddRoutes(ifaceName string, allowedIPs []string, fullTunnel bool, endpointIPs []string, tableCfg string, fwmarkCfg string) error
 
 	// RemoveRoutes removes routes that were added by AddRoutes.
 	RemoveRoutes(ifaceName string, allowedIPs []string, fullTunnel bool) error
@@ -43,6 +43,14 @@ type NetworkManager interface {
 
 	// Cleanup removes the interface and all associated configuration.
 	Cleanup(ifaceName string) error
+}
+
+// RoutingStateRestorer is an optional interface that platform managers may
+// implement to accept persisted table/fwmark values during crash recovery.
+// This allows cleanup to use the correct routing table instead of hardcoded
+// defaults when the process has no in-memory state.
+type RoutingStateRestorer interface {
+	RestoreRoutingState(table, fwmark string)
 }
 
 // OriginalNetworkState captures the pre-tunnel network state for restoration.

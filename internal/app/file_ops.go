@@ -28,9 +28,21 @@ func (s *TunnelService) ImportConfig(name, content string) (*TunnelInfo, error) 
 	}, nil
 }
 
+// maxReadFileSize is the largest file ReadFile will accept (10 MB).
+// WireGuard configs are typically a few KB; anything larger is almost
+// certainly not a valid .conf file.
+const maxReadFileSize = 10 << 20
+
 // ReadFile reads a file from disk (used by native file drop). Returns the
 // content as a string so the frontend can handle name conflicts before import.
 func (s *TunnelService) ReadFile(path string) (string, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return "", fmt.Errorf("reading %s: %w", path, err)
+	}
+	if info.Size() > maxReadFileSize {
+		return "", fmt.Errorf("file %s is too large (%d bytes, max %d)", path, info.Size(), maxReadFileSize)
+	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return "", fmt.Errorf("reading %s: %w", path, err)
@@ -70,7 +82,9 @@ func (s *TunnelService) GetConfigText(name string) (string, error) {
 // Rejects edits of the connected tunnel.
 func (s *TunnelService) UpdateConfig(name, content string) error {
 	var active ipc.StringResponse
-	_ = s.call(ipc.MethodActiveName, nil, &active)
+	if err := s.call(ipc.MethodActiveName, nil, &active); err != nil {
+		return fmt.Errorf("cannot verify tunnel state: %w", err)
+	}
 	if active.Value == name {
 		return fmt.Errorf("cannot edit connected tunnel %q — disconnect first", name)
 	}

@@ -4,6 +4,7 @@ package diag
 import (
 	"encoding/binary"
 	"fmt"
+	"math"
 	"math/big"
 	"net"
 )
@@ -40,29 +41,43 @@ func CalculateCIDR(cidr string) (*CIDRInfo, error) {
 	if isIPv4 {
 		networkIP := ipToUint32(ipNet.IP.To4())
 		hostBits := 32 - ones
-		totalHosts := int64(1) << hostBits
 
-		if hostBits > 1 {
-			info.TotalHosts = totalHosts - 2 // exclude network + broadcast
-			info.FirstHost = uint32ToIP(networkIP + 1).String()
-			info.LastHost = uint32ToIP(networkIP + uint32(totalHosts) - 2).String()
-			info.Broadcast = uint32ToIP(networkIP + uint32(totalHosts) - 1).String()
-		} else if hostBits == 1 {
-			info.TotalHosts = 2
-			info.FirstHost = ipNet.IP.String()
-			info.LastHost = uint32ToIP(networkIP + 1).String()
-			info.Broadcast = info.LastHost
+		if hostBits >= 32 {
+			// /0 or /1 — the shift would overflow int64/uint32.
+			// Return simplified results for these edge-case networks.
+			info.TotalHosts = math.MaxInt64
+			info.FirstHost = "0.0.0.1"
+			info.LastHost = "255.255.255.254"
+			info.Broadcast = "255.255.255.255"
 		} else {
-			info.TotalHosts = 1
-			info.FirstHost = ip.String()
-			info.LastHost = ip.String()
-			info.Broadcast = ip.String()
+			totalHosts := int64(1) << hostBits
+
+			if hostBits > 1 {
+				info.TotalHosts = totalHosts - 2 // exclude network + broadcast
+				info.FirstHost = uint32ToIP(networkIP + 1).String()
+				info.LastHost = uint32ToIP(networkIP + uint32(totalHosts) - 2).String()
+				info.Broadcast = uint32ToIP(networkIP + uint32(totalHosts) - 1).String()
+			} else if hostBits == 1 {
+				info.TotalHosts = 2
+				info.FirstHost = ipNet.IP.String()
+				info.LastHost = uint32ToIP(networkIP + 1).String()
+				info.Broadcast = info.LastHost
+			} else {
+				info.TotalHosts = 1
+				info.FirstHost = ip.String()
+				info.LastHost = ip.String()
+				info.Broadcast = ip.String()
+			}
 		}
 	} else {
 		// IPv6 simplified
 		hostBits := 128 - ones
 		total := new(big.Int).Lsh(big.NewInt(1), uint(hostBits))
-		info.TotalHosts = total.Int64() // will overflow for large subnets, but fine for display
+		if total.IsInt64() {
+			info.TotalHosts = total.Int64()
+		} else {
+			info.TotalHosts = math.MaxInt64 // cap to avoid garbage values for large IPv6 subnets
+		}
 		info.FirstHost = ipNet.IP.String()
 		info.LastHost = "..."
 		info.Broadcast = "N/A (IPv6)"

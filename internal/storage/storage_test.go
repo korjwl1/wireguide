@@ -260,11 +260,12 @@ func TestEnsureDirs(t *testing.T) {
 		ConfigDir:  filepath.Join(dir, "config"),
 		TunnelsDir: filepath.Join(dir, "tunnels"),
 		LogsDir:    filepath.Join(dir, "logs"),
+		DataDir:    filepath.Join(dir, "data"),
 	}
 	if err := paths.EnsureDirs(); err != nil {
 		t.Fatalf("EnsureDirs failed: %v", err)
 	}
-	for _, d := range []string{paths.ConfigDir, paths.TunnelsDir, paths.LogsDir} {
+	for _, d := range []string{paths.ConfigDir, paths.TunnelsDir, paths.LogsDir, paths.DataDir} {
 		if _, err := os.Stat(d); os.IsNotExist(err) {
 			t.Errorf("directory should exist: %s", d)
 		}

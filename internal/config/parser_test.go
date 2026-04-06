@@ -119,12 +119,9 @@ func TestParseInvalidSyntax(t *testing.T) {
 }
 
 func TestParseEmptyContent(t *testing.T) {
-	cfg, err := Parse("")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(cfg.Peers) != 0 {
-		t.Error("expected no peers for empty config")
+	_, err := Parse("")
+	if err == nil {
+		t.Fatal("expected error for empty config (no [Interface] section)")
 	}
 }
 
@@ -161,6 +158,8 @@ func TestValidateValidConfig(t *testing.T) {
 }
 
 func TestValidateMissingPrivateKey(t *testing.T) {
+	// Parse now rejects configs with no PrivateKey, so we verify the parse
+	// error directly rather than going through Validate.
 	conf := `[Interface]
 Address = 10.0.0.2/24
 
@@ -168,19 +167,9 @@ Address = 10.0.0.2/24
 PublicKey = xTIBA5rboUvnH4htodjb6e697QjLERt1NAB4mZqp8Dg=
 AllowedIPs = 0.0.0.0/0
 `
-	cfg, _ := Parse(conf)
-	result := Validate(cfg)
-	if result.IsValid() {
-		t.Error("expected validation error for missing PrivateKey")
-	}
-	found := false
-	for _, e := range result.Errors {
-		if e.Field == "Interface.PrivateKey" {
-			found = true
-		}
-	}
-	if !found {
-		t.Error("expected error on Interface.PrivateKey field")
+	_, err := Parse(conf)
+	if err == nil {
+		t.Error("expected parse error for missing PrivateKey")
 	}
 }
 
@@ -312,7 +301,10 @@ AllowedIPs = 0.0.0.0/0
 }
 
 func TestValidateMultipleErrors(t *testing.T) {
+	// Parse now requires a PrivateKey, so we supply a badly-formatted one
+	// to still exercise multiple validation errors downstream.
 	conf := `[Interface]
+PrivateKey = not-a-valid-key
 Address = bad-cidr
 
 [Peer]

@@ -25,6 +25,7 @@ type InterfaceConfig struct {
 	PostUp     string   `json:"post_up,omitempty"`     // Optional: script after interface up
 	PreDown    string   `json:"pre_down,omitempty"`    // Optional: script before interface down
 	PostDown   string   `json:"post_down,omitempty"`   // Optional: script after interface down
+	ExtraKeys  map[string]string `json:"extra_keys,omitempty"` // Unrecognized keys preserved for round-tripping
 }
 
 // PeerConfig represents a [Peer] section of a .conf file.
@@ -34,6 +35,7 @@ type PeerConfig struct {
 	Endpoint            string   `json:"endpoint,omitempty"`             // Optional: host:port
 	AllowedIPs          []string `json:"allowed_ips"`                    // Required: CIDR list
 	PersistentKeepalive int      `json:"persistent_keepalive,omitempty"` // Optional: seconds (0 = disabled)
+	ExtraKeys           map[string]string `json:"extra_keys,omitempty"` // Unrecognized keys preserved for round-tripping
 }
 
 // HasScripts returns true if any Pre/PostUp/Down scripts are defined.

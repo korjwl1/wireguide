@@ -115,6 +115,20 @@ func (m *Manager) Connect(cfg *domain.WireGuardConfig, scriptsAllowed bool) erro
 		m.setStateLocked(domain.StateDisconnected)
 		return err
 	}
+	// Re-validate state: a Disconnect may have landed while we were outside
+	// the lock. If so, discard the engine we just created.
+	if m.state != domain.StateConnecting {
+		// A Disconnect landed while we were outside the lock.
+		// Clean up the network state that connectPhases just installed.
+		m.netMgr.RemoveRoutes(engine.InterfaceName(), nil, cfg.IsFullTunnel())
+		m.netMgr.RestoreDNS(engine.InterfaceName())
+		m.netMgr.Cleanup(engine.InterfaceName())
+		engine.Close()
+		m.activeCfg = nil
+		m.scriptsAllowed = false
+		m.setStateLocked(domain.StateDisconnected)
+		return fmt.Errorf("connect aborted: state changed during setup")
+	}
 	m.engine = engine
 	m.connectedAt = time.Now()
 	m.setStateLocked(domain.StateConnected)
@@ -146,11 +160,12 @@ func (m *Manager) Disconnect() error {
 	// Snapshot the handles we need outside the lock.
 	engine := m.engine
 	cfg := m.activeCfg
+	scriptsAllowed := m.scriptsAllowed
 	m.setStateLocked(stateDisconnecting)
 	m.mu.Unlock()
 
 	// --- Phase 2: slow teardown outside the lock ---
-	m.disconnectPhases(cfg, engine)
+	m.disconnectPhases(cfg, engine, scriptsAllowed)
 
 	// --- Phase 3: commit final state ---
 	m.mu.Lock()
@@ -216,6 +231,30 @@ func (m *Manager) IsConnected() bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.state == domain.StateConnected
+}
+
+// ResolvedEndpointIPs returns the pre-resolved endpoint IP addresses from the
+// active engine. Returns nil if no tunnel is connected.
+func (m *Manager) ResolvedEndpointIPs() []string {
+	m.mu.Lock()
+	engine := m.engine
+	m.mu.Unlock()
+	if engine == nil {
+		return nil
+	}
+	return engine.ResolvedEndpointIPs()
+}
+
+// ResolvedEndpoints returns the pre-resolved endpoint ip:port pairs from the
+// active engine. Returns nil if no tunnel is connected.
+func (m *Manager) ResolvedEndpoints() []string {
+	m.mu.Lock()
+	engine := m.engine
+	m.mu.Unlock()
+	if engine == nil {
+		return nil
+	}
+	return engine.ResolvedEndpoints()
 }
 
 // ActiveTunnel returns the name of the currently connected (or connecting)

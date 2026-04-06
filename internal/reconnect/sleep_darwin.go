@@ -4,15 +4,24 @@ package reconnect
 
 import (
 	"log/slog"
-	"os/exec"
-	"strings"
+	"sync"
 	"time"
 )
 
 // darwinSleepDetector detects sleep/wake on macOS by monitoring system uptime gaps.
 // A more robust approach would use CGO with NSWorkspace notifications,
 // but polling uptime is simpler and avoids CGO dependency.
+//
+// TODO(M6): Wall-clock polling is a known limitation. The ticker doesn't fire
+// during sleep, so detection relies on observing a gap between wall-clock
+// elapsed time and the expected tick interval after waking. This means there
+// is always a delay of up to pollInterval before wake is detected. The proper
+// fix is to use IOKit's IORegisterForSystemPower or NSWorkspace's
+// NSWorkspaceDidWakeNotification via CGo, which would give immediate wake
+// notifications. However, that adds a CGo dependency which complicates
+// cross-compilation, so the polling approach is kept for now.
 type darwinSleepDetector struct {
+	mu     sync.Mutex
 	wakeCh chan struct{}
 	stopCh chan struct{}
 }
@@ -25,12 +34,19 @@ func NewSleepDetector() SleepDetector {
 }
 
 func (d *darwinSleepDetector) Start() {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	// Reinitialize stopCh so the detector is reusable after Stop().
+	d.stopCh = make(chan struct{})
 	go d.poll()
 }
 
 func (d *darwinSleepDetector) Stop() {
+	d.mu.Lock()
+	defer d.mu.Unlock()
 	select {
 	case <-d.stopCh:
+		// Already closed; nothing to do.
 	default:
 		close(d.stopCh)
 	}
@@ -48,11 +64,14 @@ func (d *darwinSleepDetector) poll() {
 	const pollInterval = 10 * time.Second
 	const sleepThreshold = 30 * time.Second // if 30s+ gap, assume sleep
 
+	ticker := time.NewTicker(pollInterval)
+	defer ticker.Stop()
+
 	for {
 		select {
 		case <-d.stopCh:
 			return
-		case <-time.After(pollInterval):
+		case <-ticker.C:
 			now := time.Now()
 			elapsed := now.Sub(lastCheck)
 			lastCheck = now
@@ -70,17 +89,3 @@ func (d *darwinSleepDetector) poll() {
 	}
 }
 
-// getSystemWakeTime returns the last wake time (unused but available for future use).
-func getSystemWakeTime() string {
-	out, err := exec.Command("pmset", "-g", "log").CombinedOutput()
-	if err != nil {
-		return ""
-	}
-	lines := strings.Split(string(out), "\n")
-	for i := len(lines) - 1; i >= 0; i-- {
-		if strings.Contains(lines[i], "Wake from") {
-			return strings.TrimSpace(lines[i])
-		}
-	}
-	return ""
-}

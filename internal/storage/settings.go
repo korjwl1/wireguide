@@ -2,8 +2,10 @@ package storage
 
 import (
 	"encoding/json"
+	"log/slog"
 	"os"
 	"path/filepath"
+	"sync"
 )
 
 // Settings holds application-wide settings.
@@ -31,6 +33,7 @@ func DefaultSettings() *Settings {
 
 // SettingsStore manages the app settings JSON file.
 type SettingsStore struct {
+	mu   sync.Mutex
 	path string
 }
 
@@ -43,6 +46,8 @@ func NewSettingsStore(configDir string) *SettingsStore {
 
 // Load reads settings from disk. Returns defaults if file doesn't exist.
 func (s *SettingsStore) Load() (*Settings, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	data, err := os.ReadFile(s.path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -53,23 +58,50 @@ func (s *SettingsStore) Load() (*Settings, error) {
 
 	settings := DefaultSettings()
 	if err := json.Unmarshal(data, settings); err != nil {
-		return nil, err
+		// Corrupt settings file (truncated write, manual edit, etc.) should
+		// not prevent the application from starting. Log the error, back up
+		// the corrupt file for debugging, and return default settings.
+		slog.Warn("settings file is corrupt, falling back to defaults",
+			"path", s.path, "error", err)
+		_ = os.Rename(s.path, s.path+".corrupt")
+		return DefaultSettings(), nil
 	}
 	return settings, nil
 }
 
 // Save writes settings to disk atomically.
 func (s *SettingsStore) Save(settings *Settings) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	data, err := json.MarshalIndent(settings, "", "  ")
 	if err != nil {
 		return err
 	}
-	tmp := s.path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0600); err != nil {
+	tmpFile, err := os.CreateTemp(filepath.Dir(s.path), ".wireguide-*.tmp")
+	if err != nil {
 		return err
 	}
-	if err := os.Rename(tmp, s.path); err != nil {
-		_ = os.Remove(tmp)
+	tmpPath := tmpFile.Name()
+	if _, err := tmpFile.Write(data); err != nil {
+		tmpFile.Close()
+		os.Remove(tmpPath)
+		return err
+	}
+	if err := tmpFile.Sync(); err != nil {
+		tmpFile.Close()
+		os.Remove(tmpPath)
+		return err
+	}
+	if err := tmpFile.Close(); err != nil {
+		os.Remove(tmpPath)
+		return err
+	}
+	if err := os.Chmod(tmpPath, 0600); err != nil {
+		os.Remove(tmpPath)
+		return err
+	}
+	if err := atomicRename(tmpPath, s.path); err != nil {
+		os.Remove(tmpPath)
 		return err
 	}
 	return nil

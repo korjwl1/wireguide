@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"golang.zx2c4.com/wireguard/wgctrl"
 )
 
 // DarwinManager implements NetworkManager for macOS, modeled after wg-quick's
@@ -43,6 +45,11 @@ type DarwinManager struct {
 	// tunnel itself and the connection appears dead.
 	lastGatewayV4 string
 	lastGatewayV6 string
+	// lastHasV4Default/V6Default remember whether AddRoutes hijacked the
+	// default route for each address family. reapply() uses these to skip
+	// bypass routes for families that weren't actually hijacked.
+	lastHasV4Default bool
+	lastHasV6Default bool
 
 	// Route monitor (wg-quick monitor_daemon equivalent) — only runs for full tunnel.
 	monitor *routeMonitor
@@ -120,7 +127,11 @@ func (m *DarwinManager) BringUp(ifaceName string) error {
 // AddRoutes installs routes for AllowedIPs. For /0 (full tunnel) it uses
 // the split-route trick + endpoint bypass. Routes are added longest-prefix
 // first to avoid transient conflicts (wg-quick's sort -nr -k 2 -t /).
-func (m *DarwinManager) AddRoutes(ifaceName string, allowedIPs []string, fullTunnel bool, endpoints []string) error {
+func (m *DarwinManager) AddRoutes(ifaceName string, allowedIPs []string, fullTunnel bool, endpoints []string, tableCfg string, fwmarkCfg string) error {
+	if strings.EqualFold(tableCfg, "off") {
+		slog.Info("Table=off: skipping route installation", "interface", ifaceName)
+		return nil
+	}
 	// Sort by prefix length descending (longest first)
 	sorted := sortAllowedIPs(allowedIPs)
 
@@ -159,8 +170,12 @@ func (m *DarwinManager) AddRoutes(ifaceName string, allowedIPs []string, fullTun
 		}
 	}
 	if hasV6Default {
-		_ = run("route", "-q", "-n", "add", "-inet6", "::/1", "-interface", ifaceName)
-		_ = run("route", "-q", "-n", "add", "-inet6", "8000::/1", "-interface", ifaceName)
+		if err := run("route", "-q", "-n", "add", "-inet6", "::/1", "-interface", ifaceName); err != nil {
+			return fmt.Errorf("adding ::/1: %w", err)
+		}
+		if err := run("route", "-q", "-n", "add", "-inet6", "8000::/1", "-interface", ifaceName); err != nil {
+			return fmt.Errorf("adding 8000::/1: %w", err)
+		}
 	}
 
 	// Add endpoint bypass routes ONLY for the families whose default route
@@ -219,6 +234,8 @@ func (m *DarwinManager) AddRoutes(ifaceName string, allowedIPs []string, fullTun
 	m.mu.Lock()
 	m.lastIface = ifaceName
 	m.lastEndpoints = append([]string(nil), endpoints...)
+	m.lastHasV4Default = hasV4Default
+	m.lastHasV6Default = hasV6Default
 	m.lastGatewayV4 = currentV4
 	m.lastGatewayV6 = currentV6
 	m.mu.Unlock()
@@ -233,7 +250,12 @@ func (m *DarwinManager) AddRoutes(ifaceName string, allowedIPs []string, fullTun
 	// critical handshake window. reapply() itself also gates on
 	// lastGatewayV4/V6 changes, so this delay is belt-and-suspenders — but
 	// cheap insurance against a class of timing bugs.
-	if fullTunnel && len(endpoints) > 0 {
+	// M4: Start route monitor not only for full-tunnel, but also when DNS is
+	// configured or endpoints exist in split-tunnel mode. DNS can be disrupted
+	// by network changes even in split-tunnel mode, and endpoint bypass routes
+	// (if any) need the same gateway-change tracking.
+	needsMonitor := fullTunnel || len(m.lastDNS) > 0
+	if needsMonitor {
 		if m.monitor == nil {
 			m.monitor = newRouteMonitor(m.reapply)
 		}
@@ -261,42 +283,88 @@ func (m *DarwinManager) AddRoutes(ifaceName string, allowedIPs []string, fullTun
 func (m *DarwinManager) reapply() {
 	m.mu.Lock()
 	iface := m.lastIface
-	endpoints := append([]string(nil), m.lastEndpoints...)
+	oldEndpoints := append([]string(nil), m.lastEndpoints...)
 	dns := m.lastDNS
 	mtu := m.lastMTU
 	prevV4 := m.lastGatewayV4
 	prevV6 := m.lastGatewayV6
+	hasV4 := m.lastHasV4Default
+	hasV6 := m.lastHasV6Default
 	m.mu.Unlock()
 
 	if iface == "" {
 		return
 	}
 
-	// Probe the current upstream gateway for each family. Errors here are
-	// normal (e.g. no IPv6 connectivity) — we only care about changes.
-	currentV4, _ := getDefaultGatewayFor(false)
-	currentV6, _ := getDefaultGatewayFor(true)
+	// wg-quick's set_endpoint_direct_route re-reads endpoints from
+	// `wg show <iface> endpoints` on every RTM event, because wireguard-go
+	// can roam to a different endpoint IP after a handshake. We do the
+	// same via wgctrl so bypass routes track the actual peer endpoint.
+	liveEndpoints := collectLiveEndpoints(iface)
+	if len(liveEndpoints) == 0 {
+		// Interface may be gone — monitor loop will break on the next
+		// ifconfig check. Use cached endpoints as fallback.
+		liveEndpoints = oldEndpoints
+	}
 
-	if currentV4 == prevV4 && currentV6 == prevV6 {
-		// No change — bypass routes are still pointing at the right gateway.
-		// Skip the delete+readd cycle entirely.
+	// Probe the current upstream gateway for each family. These values are
+	// reused below when re-installing bypass routes, avoiding a redundant
+	// second pair of netstat calls.
+	currentV4, currentV4Err := getDefaultGatewayFor(false)
+	currentV6, currentV6Err := getDefaultGatewayFor(true)
+
+	gatewayChanged := currentV4 != prevV4 || currentV6 != prevV6
+
+	// Detect endpoint roaming: compare live endpoints against the set we
+	// have bypass routes for. wg-quick diffs old vs new and only touches
+	// changed entries; we do the same.
+	endpointsChanged := !stringSetEqual(oldEndpoints, liveEndpoints)
+
+	needBypassUpdate := (hasV4 || hasV6) && (gatewayChanged || endpointsChanged)
+
+	if !needBypassUpdate {
+		// No bypass work needed, but still re-apply DNS — macOS can
+		// reassign DNS when switching network services.
+		if len(dns) > 0 {
+			_ = m.applyDNS(dns)
+		}
 		return
 	}
 
-	slog.Info("route monitor: upstream gateway changed, reapplying",
+	slog.Info("route monitor: reapplying bypass routes",
 		"iface", iface,
+		"gateway_changed", gatewayChanged,
+		"endpoints_changed", endpointsChanged,
 		"prev_v4", prevV4, "current_v4", currentV4,
-		"prev_v6", prevV6, "current_v6", currentV6)
+		"prev_v6", prevV6, "current_v6", currentV6,
+		"old_endpoints", oldEndpoints, "live_endpoints", liveEndpoints)
 
-	// Gateway changed — drop the stale bypass routes and re-add via the new
-	// gateway. This is the scenario the route monitor was built for (Wi-Fi
-	// switch, Ethernet plug-in/out, etc.).
+	// Build sets for diffing (mirrors wg-quick's old_endpoints / ENDPOINTS logic).
+	oldSet := make(map[string]bool, len(oldEndpoints))
+	for _, ep := range oldEndpoints {
+		oldSet[ep] = true
+	}
+	newSet := make(map[string]bool, len(liveEndpoints))
+	for _, ep := range liveEndpoints {
+		newSet[ep] = true
+	}
+
+	// If gateway changed, delete ALL old bypass routes (wg-quick: remove_all_old=1).
+	// If only endpoints changed, delete only endpoints no longer in the live set.
 	m.mu.Lock()
 	oldBypass := m.bypassEndpoints
 	m.bypassEndpoints = nil
 	m.mu.Unlock()
 
 	for _, ip := range oldBypass {
+		shouldDelete := gatewayChanged || !newSet[ip]
+		if !shouldDelete {
+			// Still current — keep it in the bypass list without re-adding.
+			m.mu.Lock()
+			m.bypassEndpoints = append(m.bypassEndpoints, ip)
+			m.mu.Unlock()
+			continue
+		}
 		family := "-inet"
 		if strings.Contains(ip, ":") {
 			family = "-inet6"
@@ -304,19 +372,46 @@ func (m *DarwinManager) reapply() {
 		_ = run("route", "-q", "-n", "delete", family, ip)
 	}
 
-	// Re-resolve gateways once for the new default, then re-add bypass
-	// routes. `endpoints` here are the IP literals stashed at Connect time,
-	// NOT hostnames — so no DNS is done here either.
-	newGwV4, newGwV4Err := getDefaultGatewayFor(false)
-	newGwV6, newGwV6Err := getDefaultGatewayFor(true)
-	for _, ipStr := range endpoints {
+	// Reuse the gateways already probed above — no need for a second pair
+	// of netstat calls. If the gateway changed between the probe and now
+	// (extremely unlikely), the next RTM event will trigger another reapply.
+	newGwV4, newGwV4Err := currentV4, currentV4Err
+	newGwV6, newGwV6Err := currentV6, currentV6Err
+
+	// Add bypass routes for endpoints that need (re-)installation:
+	// - If gateway changed: all live endpoints (they were all deleted above).
+	// - If only endpoints changed: only newly appeared endpoints.
+	for _, ipStr := range liveEndpoints {
 		if ipStr == "" {
+			continue
+		}
+		if !gatewayChanged && oldSet[ipStr] {
+			// Gateway didn't change and this endpoint already had a valid
+			// bypass route (preserved above). Skip.
+			continue
+		}
+		ip := net.ParseIP(ipStr)
+		if ip == nil {
+			continue
+		}
+		isV6 := ip.To4() == nil
+		if isV6 && !hasV6 {
+			continue
+		}
+		if !isV6 && !hasV4 {
 			continue
 		}
 		if err := m.addBypassForIP(ipStr, newGwV4, newGwV6, newGwV4Err, newGwV6Err); err != nil {
 			slog.Warn("reapply: bypass failed", "ip", ipStr, "error", err)
 		}
 	}
+
+	// Update cached endpoints to the live set.
+	m.mu.Lock()
+	m.lastEndpoints = append([]string(nil), liveEndpoints...)
+	m.lastGatewayV4 = newGwV4
+	m.lastGatewayV6 = newGwV6
+	m.mu.Unlock()
 
 	if len(dns) > 0 {
 		_ = m.applyDNS(dns)
@@ -327,12 +422,57 @@ func (m *DarwinManager) reapply() {
 			_ = run("ifconfig", iface, "mtu", fmt.Sprintf("%d", mtu))
 		}
 	}
+}
 
-	// Remember the new gateway so the next spurious firing is a no-op.
-	m.mu.Lock()
-	m.lastGatewayV4 = currentV4
-	m.lastGatewayV6 = currentV6
-	m.mu.Unlock()
+// collectLiveEndpoints reads the current peer endpoint IPs from the WireGuard
+// interface via wgctrl, mirroring wg-quick's `wg show $REAL_INTERFACE endpoints`.
+// Returns deduplicated IP strings (no port). Returns nil on any error.
+func collectLiveEndpoints(ifaceName string) []string {
+	client, err := wgctrl.New()
+	if err != nil {
+		slog.Debug("collectLiveEndpoints: wgctrl.New failed", "error", err)
+		return nil
+	}
+	defer client.Close()
+
+	dev, err := client.Device(ifaceName)
+	if err != nil {
+		slog.Debug("collectLiveEndpoints: Device() failed", "iface", ifaceName, "error", err)
+		return nil
+	}
+
+	seen := make(map[string]bool)
+	var eps []string
+	for _, peer := range dev.Peers {
+		if peer.Endpoint == nil {
+			continue
+		}
+		ip := peer.Endpoint.IP.String()
+		if !seen[ip] {
+			seen[ip] = true
+			eps = append(eps, ip)
+		}
+	}
+	return eps
+}
+
+// stringSetEqual returns true if two string slices contain the same elements
+// (order-independent).
+func stringSetEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	set := make(map[string]int, len(a))
+	for _, s := range a {
+		set[s]++
+	}
+	for _, s := range b {
+		set[s]--
+		if set[s] < 0 {
+			return false
+		}
+	}
+	return true
 }
 
 // addBypassForIP installs a host route for one already-resolved peer endpoint
@@ -416,6 +556,8 @@ func (m *DarwinManager) RemoveRoutes(ifaceName string, allowedIPs []string, full
 	m.lastEndpoints = nil
 	m.lastGatewayV4 = ""
 	m.lastGatewayV6 = ""
+	m.lastHasV4Default = false
+	m.lastHasV6Default = false
 	m.mu.Unlock()
 
 	for _, ip := range bypass {
@@ -480,12 +622,9 @@ func (m *DarwinManager) deleteInterfaceRoutes(ifaceName, family string) {
 			continue
 		}
 
-		if dest == "default" {
-			dest = "0.0.0.0/0"
-			if family == "inet6" {
-				dest = "::/0"
-			}
-		}
+		// Use "default" directly in route delete — macOS `route` understands
+		// the keyword and it avoids ambiguity with explicit CIDR notation.
+		// No translation needed.
 		famFlag := "-inet"
 		if family == "inet6" {
 			famFlag = "-inet6"
@@ -580,9 +719,57 @@ func (m *DarwinManager) SetDNS(ifaceName string, entries []string) error {
 }
 
 // applyDNS pushes DNS servers and search domains to every network service.
-// Does not touch savedDNS/savedSearch — safe to call from reapply().
+// M5: Also captures original DNS for any new network services that weren't
+// present when SetDNS was first called, so they can be properly restored.
 func (m *DarwinManager) applyDNS(entries []string) error {
 	services := getAllNetworkServices()
+
+	// M5: Check for new services that weren't in the original savedDNS map.
+	// Collect the list of services needing DNS capture under the lock, then
+	// release the lock once, do all network calls, and re-lock once to store.
+	var newServices []string
+	m.mu.Lock()
+	if m.dnsActive {
+		for _, svc := range services {
+			if _, exists := m.savedDNS[svc]; !exists {
+				newServices = append(newServices, svc)
+			}
+		}
+	}
+	m.mu.Unlock()
+
+	// Fetch DNS for newly discovered services without holding the lock.
+	if len(newServices) > 0 {
+		type savedEntry struct {
+			svc    string
+			dns    []string
+			search []string
+		}
+		fetched := make([]savedEntry, len(newServices))
+		var wg sync.WaitGroup
+		for i, svc := range newServices {
+			i, svc := i, svc
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				dns, _ := getCurrentDNS(svc)
+				search, _ := getCurrentSearchDomains(svc)
+				fetched[i] = savedEntry{svc: svc, dns: dns, search: search}
+			}()
+		}
+		wg.Wait()
+
+		m.mu.Lock()
+		for _, e := range fetched {
+			if _, exists := m.savedDNS[e.svc]; !exists {
+				m.savedDNS[e.svc] = e.dns
+				m.savedSearch[e.svc] = e.search
+				slog.Info("discovered new network service, saving DNS", "service", e.svc)
+			}
+		}
+		m.mu.Unlock()
+	}
+
 	m.applyDNSToServices(entries, services)
 	flushDNSCache()
 	return nil
@@ -827,7 +1014,11 @@ func getDefaultInterface() string {
 			}
 			continue
 		}
-		if destIdx < 0 || netifIdx < 0 || len(fields) <= netifIdx {
+		maxIdx := netifIdx
+		if destIdx > maxIdx {
+			maxIdx = destIdx
+		}
+		if destIdx < 0 || netifIdx < 0 || len(fields) <= maxIdx {
 			continue
 		}
 		if fields[destIdx] == "default" {
@@ -946,7 +1137,11 @@ func sortAllowedIPs(cidrs []string) []string {
 func prefixLen(cidr string) int {
 	idx := strings.Index(cidr, "/")
 	if idx < 0 {
-		return 128
+		// Bare address without prefix — return 32 for IPv4, 128 for IPv6
+		if strings.Contains(cidr, ":") {
+			return 128
+		}
+		return 32
 	}
 	var n int
 	fmt.Sscanf(cidr[idx+1:], "%d", &n)

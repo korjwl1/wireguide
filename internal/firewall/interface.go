@@ -5,8 +5,13 @@ package firewall
 type FirewallManager interface {
 	// EnableKillSwitch blocks all traffic except through the WireGuard tunnel.
 	// interfaceName: WG interface (e.g., "utun4")
-	// endpoint: WG server endpoint (host:port) — must be allowed through
-	EnableKillSwitch(interfaceName string, endpoint string) error
+	// ifaceAddresses: WG interface addresses (CIDR, e.g. "10.0.0.2/24") — used on
+	//   Linux to build anti-spoof (preraw) nftables chains.
+	// endpoints: pre-resolved WG server endpoints as "ip:port" pairs — must be
+	//   allowed through. Callers must resolve hostnames BEFORE the tunnel routes
+	//   are installed, otherwise DNS resolution would go through the tunnel and
+	//   may fail. If port is unknown or not applicable, use "ip:" (empty port).
+	EnableKillSwitch(interfaceName string, ifaceAddresses []string, endpoints []string) error
 
 	// DisableKillSwitch removes all kill switch firewall rules.
 	DisableKillSwitch() error

@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net"
 	"sync"
+	"time"
 )
 
 // Handler processes an RPC request and returns a result or error.
@@ -16,6 +17,7 @@ type Handler func(params json.RawMessage) (interface{}, error)
 type Server struct {
 	listener net.Listener
 	handlers map[string]Handler
+	ownerUID int // expected peer UID on Unix (-1 to skip check)
 
 	mu           sync.Mutex
 	eventSubs    map[*subscriber]struct{} // active event subscribers
@@ -30,11 +32,17 @@ type subscriber struct {
 	ch   chan []byte
 }
 
-// NewServer creates a server.
-func NewServer(listener net.Listener) *Server {
+// NewServer creates a server. ownerUID is the expected UID of connecting
+// peers on Unix (pass -1 to skip peer credential checks, e.g. in tests).
+func NewServer(listener net.Listener, ownerUID ...int) *Server {
+	uid := -1
+	if len(ownerUID) > 0 {
+		uid = ownerUID[0]
+	}
 	return &Server{
 		listener:     listener,
 		handlers:     make(map[string]Handler),
+		ownerUID:     uid,
 		eventSubs:    make(map[*subscriber]struct{}),
 		shutdownCh:   make(chan struct{}),
 		controlConns: make(map[net.Conn]struct{}),
@@ -43,19 +51,25 @@ func NewServer(listener net.Listener) *Server {
 
 // Handle registers an RPC handler for the given method.
 func (s *Server) Handle(method string, h Handler) {
+	s.mu.Lock()
 	s.handlers[method] = h
+	s.mu.Unlock()
 }
 
 // OnConnect sets a callback fired whenever a control connection attaches.
 // Used by the helper to cancel a pending grace-window shutdown when the GUI
 // reconnects within the window.
 func (s *Server) OnConnect(fn func()) {
+	s.mu.Lock()
 	s.onConnect = fn
+	s.mu.Unlock()
 }
 
 // OnDisconnect sets a callback fired when the last control connection closes.
 func (s *Server) OnDisconnect(fn func()) {
+	s.mu.Lock()
 	s.onDisconnect = fn
+	s.mu.Unlock()
 }
 
 // Serve accepts connections until the listener is closed.
@@ -126,6 +140,12 @@ func (s *Server) Broadcast(method string, params interface{}) {
 func (s *Server) handleConn(conn net.Conn) {
 	defer conn.Close()
 
+	// Verify the connecting process belongs to the expected owner.
+	if err := verifyPeerUID(conn, s.ownerUID); err != nil {
+		slog.Warn("ipc: rejecting connection: peer credential check failed", "error", err)
+		return
+	}
+
 	remoteDesc := fmt.Sprintf("%p", conn)
 	isControl := false
 	defer func() {
@@ -133,26 +153,31 @@ func (s *Server) handleConn(conn net.Conn) {
 			s.mu.Lock()
 			delete(s.controlConns, conn)
 			remaining := len(s.controlConns)
+			fn := s.onDisconnect
 			s.mu.Unlock()
 			slog.Info("ipc: control conn closed",
 				"conn", remoteDesc,
 				"remaining", remaining)
-			if remaining == 0 && s.onDisconnect != nil {
-				s.onDisconnect()
+			if remaining == 0 && fn != nil {
+				fn()
 			}
 		} else {
 			slog.Debug("ipc: non-control conn closed", "conn", remoteDesc)
 		}
 	}()
 
+	const readDeadline = 60 * time.Second
 	for {
+		if tc, ok := conn.(interface{ SetReadDeadline(time.Time) error }); ok {
+			_ = tc.SetReadDeadline(time.Now().Add(readDeadline))
+		}
 		var req Request
 		if err := ReadFrame(conn, &req); err != nil {
 			slog.Debug("ipc: ReadFrame error, closing conn",
 				"conn", remoteDesc,
 				"is_control", isControl,
 				"error", err)
-			return // connection closed
+			return // connection closed or read deadline exceeded
 		}
 
 		if req.Method == MethodSubscribe {
@@ -167,13 +192,14 @@ func (s *Server) handleConn(conn net.Conn) {
 			s.mu.Lock()
 			s.controlConns[conn] = struct{}{}
 			count := len(s.controlConns)
+			fn := s.onConnect
 			s.mu.Unlock()
 			slog.Info("ipc: new control conn",
 				"conn", remoteDesc,
 				"count", count,
 				"first_method", req.Method)
-			if s.onConnect != nil {
-				s.onConnect()
+			if fn != nil {
+				fn()
 			}
 		}
 
@@ -191,14 +217,20 @@ func (s *Server) handleConn(conn net.Conn) {
 }
 
 func (s *Server) dispatch(req *Request) *Response {
+	s.mu.Lock()
 	handler, ok := s.handlers[req.Method]
+	s.mu.Unlock()
 	if !ok {
 		return NewErrorResponse(req.ID, ErrCodeMethodNotFound, "method not found: "+req.Method)
 	}
 
 	result, err := handler(req.Params)
 	if err != nil {
-		return NewErrorResponse(req.ID, ErrCodeAppError, err.Error())
+		code := ErrCodeAppError
+		if ce, ok := err.(*CodedError); ok {
+			code = ce.Code
+		}
+		return NewErrorResponse(req.ID, code, err.Error())
 	}
 
 	resp, marshalErr := NewResponse(req.ID, result)
@@ -223,7 +255,10 @@ func (s *Server) handleSubscribe(conn net.Conn, reqID uint64) {
 		s.mu.Lock()
 		delete(s.eventSubs, sub)
 		s.mu.Unlock()
-		close(sub.ch)
+		// Do NOT close sub.ch — a concurrent Broadcast may still be trying to
+		// send to it (it copies the subs list outside the lock). Sending to a
+		// closed channel panics. The channel will be GC'd once both the
+		// subscriber and the last Broadcast referencing it are done.
 	}()
 
 	// Acknowledge subscription

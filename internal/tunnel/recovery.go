@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/korjwl1/wireguide/internal/firewall"
 	"github.com/korjwl1/wireguide/internal/network"
 )
 
@@ -16,6 +17,8 @@ type ActiveTunnelState struct {
 	InterfaceName string   `json:"interface_name"`
 	DNSServers    []string `json:"dns_servers_original"`
 	FullTunnel    bool     `json:"full_tunnel"`
+	Table         string   `json:"table,omitempty"`
+	FwMark        string   `json:"fwmark,omitempty"`
 }
 
 const activeTunnelFile = "active-tunnel.json"
@@ -83,18 +86,34 @@ func RecoverFromCrash(dataDir string) string {
 
 	mgr := network.NewPlatformManager()
 
+	// Restore routing state (table/fwmark) from persisted values so that
+	// cleanup uses the correct table instead of hardcoded defaults.
+	if rs, ok := mgr.(network.RoutingStateRestorer); ok {
+		rs.RestoreRoutingState(state.Table, state.FwMark)
+	}
+
 	// DNS: state-free reset since we have no memory of the pre-crash values.
 	if err := mgr.ResetDNSToSystemDefault(); err != nil {
 		slog.Warn("crash recovery: DNS reset failed", "error", err)
 	}
 
-	// Routes + firewall: Cleanup knows how to walk the route table to find
-	// stale entries pointing at the recorded interface name, so this works
-	// even on a fresh process.
+	// Routes: Cleanup knows how to walk the route table to find stale entries
+	// pointing at the recorded interface name, so this works even on a fresh
+	// process. This also handles policy rules and routing tables on Linux.
 	if state.InterfaceName != "" {
-		if err := mgr.Cleanup(state.InterfaceName); err != nil {
-			slog.Warn("crash recovery: cleanup failed", "error", err)
+		if err := mgr.RemoveRoutes(state.InterfaceName, nil, state.FullTunnel); err != nil {
+			slog.Warn("crash recovery: route removal failed", "error", err)
 		}
+		if err := mgr.Cleanup(state.InterfaceName); err != nil {
+			slog.Warn("crash recovery: network cleanup failed", "error", err)
+		}
+	}
+
+	// Firewall: clean up any leftover PF/nftables/netsh rules from the
+	// crashed tunnel's kill switch or DNS protection.
+	fwMgr := firewall.NewPlatformFirewall()
+	if err := fwMgr.Cleanup(); err != nil {
+		slog.Warn("crash recovery: firewall cleanup failed", "error", err)
 	}
 
 	ClearActiveState(dataDir)

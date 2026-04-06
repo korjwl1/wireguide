@@ -23,8 +23,13 @@ type Client struct {
 	controlMu   sync.Mutex
 	controlConn net.Conn
 
+	nextID uint64
+
+	// eventMu guards both eventConn and onEvent so that Subscribe (writer),
+	// eventLoop (reader), and Close don't race on the event connection.
+	eventMu   sync.Mutex
 	eventConn net.Conn
-	nextID    uint64
+	onEvent   EventHandler
 
 	// Pending requests waiting for responses
 	pendingMu sync.Mutex
@@ -33,16 +38,10 @@ type Client struct {
 	// Lifecycle
 	closeOnce sync.Once
 	closed    chan struct{}
-
-	// eventMu guards onEvent so that Subscribe (writer) and eventLoop (reader)
-	// can't race if Subscribe is ever called more than once on the same Client
-	// (shouldn't happen in current usage — helper reconnect creates a fresh
-	// Client — but defensive).
-	eventMu sync.Mutex
-	onEvent EventHandler
 }
 
-// NewClient creates a client connected to addr.
+// NewClient creates a client connected to addr. It performs an initial Ping
+// to verify the helper is responsive and that the protocol version matches.
 func NewClient(addr string) (*Client, error) {
 	conn, err := Dial(addr)
 	if err != nil {
@@ -57,6 +56,20 @@ func NewClient(addr string) (*Client, error) {
 	}
 
 	go c.readLoop()
+
+	// Verify the helper is alive and speaks the same protocol version.
+	var ping PingResponse
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := c.CallWithContext(ctx, MethodPing, nil, &ping); err != nil {
+		c.Close()
+		return nil, fmt.Errorf("initial ping failed: %w", err)
+	}
+	if ping.Version != ProtocolVersion {
+		c.Close()
+		return nil, fmt.Errorf("protocol version mismatch: helper=%q client=%q", ping.Version, ProtocolVersion)
+	}
+
 	return c, nil
 }
 
@@ -70,8 +83,12 @@ func (c *Client) Close() error {
 		if c.controlConn != nil {
 			c.controlConn.Close()
 		}
-		if c.eventConn != nil {
-			c.eventConn.Close()
+		c.eventMu.Lock()
+		ec := c.eventConn
+		c.eventConn = nil
+		c.eventMu.Unlock()
+		if ec != nil {
+			ec.Close()
 		}
 	})
 	return nil
@@ -146,15 +163,10 @@ func (c *Client) CallWithContext(ctx context.Context, method string, params inte
 // Subscribe opens a second connection and subscribes to events.
 // The handler is called for each event notification received.
 func (c *Client) Subscribe(handler EventHandler) error {
-	c.eventMu.Lock()
-	c.onEvent = handler
-	c.eventMu.Unlock()
-
 	conn, err := Dial(c.addr)
 	if err != nil {
 		return fmt.Errorf("dial event conn: %w", err)
 	}
-	c.eventConn = conn
 
 	// Send subscribe request (use ID=1 on event conn)
 	req, _ := NewRequest(1, MethodSubscribe, nil)
@@ -174,6 +186,11 @@ func (c *Client) Subscribe(handler EventHandler) error {
 		return resp.Error
 	}
 
+	c.eventMu.Lock()
+	c.eventConn = conn
+	c.onEvent = handler
+	c.eventMu.Unlock()
+
 	go c.eventLoop()
 	return nil
 }
@@ -188,6 +205,11 @@ func (c *Client) readLoop() {
 		}
 		c.pending = make(map[uint64]chan *Response) // reset, don't set to nil
 		c.pendingMu.Unlock()
+
+		// M19: Signal client closure when readLoop exits due to an error.
+		// Without this, callers waiting on c.closed would hang indefinitely
+		// if the connection drops unexpectedly.
+		c.Close()
 	}()
 
 	for {
@@ -212,8 +234,15 @@ func (c *Client) readLoop() {
 }
 
 func (c *Client) eventLoop() {
+	c.eventMu.Lock()
+	conn := c.eventConn
+	c.eventMu.Unlock()
+	if conn == nil {
+		return
+	}
+
 	for {
-		data, err := ReadFrameRaw(c.eventConn)
+		data, err := ReadFrameRaw(conn)
 		if err != nil {
 			return
 		}

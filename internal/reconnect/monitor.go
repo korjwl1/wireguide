@@ -50,6 +50,7 @@ type Monitor struct {
 	reconnectFn   ReconnectFunc
 	statusFn      StatusChangedFunc
 	stopCh        chan struct{}
+	wg            sync.WaitGroup
 	running       bool
 	attempt       int
 	sleepDetector SleepDetector
@@ -59,6 +60,7 @@ type Monitor struct {
 	// pending exponential-backoff sleep returns immediately instead of waiting
 	// out the full delay.
 	retryCancel context.CancelFunc
+	retryDone   chan struct{} // closed when reconnectWithBackoff exits
 }
 
 // NewMonitor creates a reconnection monitor.
@@ -81,18 +83,27 @@ func (m *Monitor) Start() {
 		return
 	}
 	m.running = true
+	// Recreate stopCh so Start() works after a previous Stop().
+	m.stopCh = make(chan struct{})
 	m.mu.Unlock()
 
-	go m.monitorLoop()
-	go m.sleepWakeLoop()
+	m.wg.Add(2)
+	go func() {
+		defer m.wg.Done()
+		m.monitorLoop()
+	}()
+	go func() {
+		defer m.wg.Done()
+		m.sleepWakeLoop()
+	}()
 	slog.Info("reconnect monitor started")
 }
 
-// Stop stops the monitor.
+// Stop stops the monitor and waits for all goroutines to exit.
 func (m *Monitor) Stop() {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	if !m.running {
+		m.mu.Unlock()
 		return
 	}
 	m.running = false
@@ -104,6 +115,10 @@ func (m *Monitor) Stop() {
 	if m.sleepDetector != nil {
 		m.sleepDetector.Stop()
 	}
+	m.mu.Unlock()
+
+	// Wait for goroutines to exit outside the lock to avoid deadlock.
+	m.wg.Wait()
 	slog.Info("reconnect monitor stopped")
 }
 
@@ -132,69 +147,45 @@ func (m *Monitor) GetState() State {
 }
 
 func (m *Monitor) monitorLoop() {
-	ticker := time.NewTicker(5 * time.Second)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-m.stopCh:
-			return
-		case <-ticker.C:
-			m.checkHealth()
-		}
-	}
-}
-
-func (m *Monitor) checkHealth() {
-	if !m.manager.IsConnected() {
-		return
-	}
-
-	status := m.manager.Status()
-	if status.State != tunnel.StateConnected {
-		return
-	}
-
-	// NOTE: we used to call triggerReconnect() on stale handshake age, but
-	// that was catastrophically wrong — it tears down the TUN device, clears
-	// routes, and rebuilds the tunnel, which severs every in-flight TCP
-	// session on top of it (ssh dies with "Connection reset by peer",
-	// browsers lose long-polling sockets, etc).
-	//
-	// WireGuard has its own rekey mechanism (rekey-after-time = 120s) that
-	// handles stale sessions without touching the TUN or the route table.
-	// Racing it with a full Disconnect+Connect on our side is worse than
-	// doing nothing: wg-quick specifically does NOT do this either.
-	//
-	// We keep the health check alive purely for logging / future hooks, but
-	// stale handshake is no longer a trigger for full reconnect. The only
-	// legitimate full-reconnect path is sleepWakeLoop — when the laptop
-	// wakes from sleep, the network state has genuinely changed and WG's
-	// own rekey won't see the new interfaces.
-	if !status.LastHandshakeTime.IsZero() {
-		age := time.Since(status.LastHandshakeTime)
-		if age > m.cfg.HandshakeTimeout {
-			slog.Debug("handshake is stale — letting WireGuard rekey itself",
-				"tunnel", status.TunnelName,
-				"handshake_age", age.Round(time.Second))
-		}
-	}
+	// NOTE: health-check based reconnection was removed. WireGuard handles
+	// stale handshakes via its own rekey mechanism (rekey-after-time = 120s).
+	// The only legitimate full-reconnect path is sleepWakeLoop. This
+	// goroutine is kept as a placeholder for future health-check hooks
+	// (e.g. metrics export, connectivity probes).
+	<-m.stopCh
 }
 
 func (m *Monitor) triggerReconnect() {
 	m.mu.Lock()
-	// If a previous retry goroutine is still alive, cancel it before starting
-	// a new one — otherwise we'd double-dispatch reconnects on overlapping
-	// health-check failures.
-	if m.retryCancel != nil {
-		m.retryCancel()
-	}
+	// Save old cancel/done so we can clean up outside the lock.
+	oldCancel := m.retryCancel
+	oldDone := m.retryDone
+
+	// Create new context and goroutine under the lock — no gap for another
+	// goroutine to sneak in and create a duplicate reconnectWithBackoff.
 	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
 	m.retryCancel = cancel
+	m.retryDone = done
 	m.attempt = 0
 	m.mu.Unlock()
 
-	go m.reconnectWithBackoff(ctx)
+	// Cancel the old retry goroutine outside the lock to avoid deadlock.
+	if oldCancel != nil {
+		oldCancel()
+	}
+	if oldDone != nil {
+		select {
+		case <-oldDone:
+		case <-time.After(5 * time.Second):
+			slog.Warn("timed out waiting for previous retry goroutine to exit")
+		}
+	}
+
+	go func() {
+		defer close(done)
+		m.reconnectWithBackoff(ctx)
+	}()
 }
 
 func (m *Monitor) reconnectWithBackoff(ctx context.Context) {
@@ -219,7 +210,10 @@ func (m *Monitor) reconnectWithBackoff(ctx context.Context) {
 			})
 			m.mu.Lock()
 			m.attempt = 0
-			m.retryCancel = nil
+			if m.retryCancel != nil {
+				m.retryCancel()
+				m.retryCancel = nil
+			}
 			m.mu.Unlock()
 			return
 		}
@@ -280,7 +274,10 @@ func (m *Monitor) reconnectWithBackoff(ctx context.Context) {
 		m.notifyStatus(State{Reconnecting: false})
 		m.mu.Lock()
 		m.attempt = 0
-		m.retryCancel = nil
+		if m.retryCancel != nil {
+			m.retryCancel()
+			m.retryCancel = nil
+		}
 		m.mu.Unlock()
 		return
 	}

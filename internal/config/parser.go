@@ -3,12 +3,16 @@ package config
 import (
 	"bufio"
 	"fmt"
+	"log/slog"
 	"strconv"
 	"strings"
 )
 
 // Parse parses a WireGuard .conf file content into a WireGuardConfig.
 func Parse(content string) (*WireGuardConfig, error) {
+	// Strip UTF-8 BOM if present (common when files are saved by Windows editors).
+	content = strings.TrimPrefix(content, "\xef\xbb\xbf")
+
 	cfg := &WireGuardConfig{}
 	var currentSection string
 	var currentPeer *PeerConfig
@@ -64,6 +68,17 @@ func Parse(content string) (*WireGuardConfig, error) {
 		}
 	}
 
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("reading config: %w", err)
+	}
+
+	// Validate that an [Interface] section was present with at least a PrivateKey.
+	// A config without [Interface] is structurally invalid and would cause
+	// downstream failures when wireguard-go tries to use an empty key.
+	if cfg.Interface.PrivateKey == "" {
+		return nil, fmt.Errorf("config has no [Interface] section or missing PrivateKey")
+	}
+
 	return cfg, nil
 }
 
@@ -72,9 +87,9 @@ func parseInterfaceKey(iface *InterfaceConfig, key, value string, lineNum int) e
 	case "privatekey":
 		iface.PrivateKey = value
 	case "address":
-		iface.Address = splitAndTrim(value)
+		iface.Address = append(iface.Address, splitAndTrim(value)...)
 	case "dns":
-		iface.DNS = splitAndTrim(value)
+		iface.DNS = append(iface.DNS, splitAndTrim(value)...)
 	case "mtu":
 		n, err := strconv.Atoi(value)
 		if err != nil {
@@ -92,15 +107,19 @@ func parseInterfaceKey(iface *InterfaceConfig, key, value string, lineNum int) e
 	case "fwmark":
 		iface.FwMark = value
 	case "preup":
-		iface.PreUp = value
+		iface.PreUp = appendScriptLine(iface.PreUp, value)
 	case "postup":
-		iface.PostUp = value
+		iface.PostUp = appendScriptLine(iface.PostUp, value)
 	case "predown":
-		iface.PreDown = value
+		iface.PreDown = appendScriptLine(iface.PreDown, value)
 	case "postdown":
-		iface.PostDown = value
+		iface.PostDown = appendScriptLine(iface.PostDown, value)
 	default:
-		return fmt.Errorf("line %d: unknown [Interface] key: %q", lineNum, key)
+		slog.Warn("ignoring unknown [Interface] key", "line", lineNum, "key", key)
+		if iface.ExtraKeys == nil {
+			iface.ExtraKeys = make(map[string]string)
+		}
+		iface.ExtraKeys[key] = value
 	}
 	return nil
 }
@@ -114,7 +133,7 @@ func parsePeerKey(peer *PeerConfig, key, value string, lineNum int) error {
 	case "endpoint":
 		peer.Endpoint = value
 	case "allowedips":
-		peer.AllowedIPs = splitAndTrim(value)
+		peer.AllowedIPs = append(peer.AllowedIPs, splitAndTrim(value)...)
 	case "persistentkeepalive":
 		n, err := strconv.Atoi(value)
 		if err != nil {
@@ -122,12 +141,18 @@ func parsePeerKey(peer *PeerConfig, key, value string, lineNum int) error {
 		}
 		peer.PersistentKeepalive = n
 	default:
-		return fmt.Errorf("line %d: unknown [Peer] key: %q", lineNum, key)
+		slog.Warn("ignoring unknown [Peer] key", "line", lineNum, "key", key)
+		if peer.ExtraKeys == nil {
+			peer.ExtraKeys = make(map[string]string)
+		}
+		peer.ExtraKeys[key] = value
 	}
 	return nil
 }
 
 // Serialize converts a WireGuardConfig back to .conf file format.
+// Multiple Pre/PostUp/Down commands (joined with " ; " internally) are
+// written as separate lines, matching wg-quick's multi-line convention.
 func Serialize(cfg *WireGuardConfig) string {
 	var b strings.Builder
 
@@ -151,17 +176,12 @@ func Serialize(cfg *WireGuardConfig) string {
 	if cfg.Interface.FwMark != "" {
 		b.WriteString("FwMark = " + cfg.Interface.FwMark + "\n")
 	}
-	if cfg.Interface.PreUp != "" {
-		b.WriteString("PreUp = " + cfg.Interface.PreUp + "\n")
-	}
-	if cfg.Interface.PostUp != "" {
-		b.WriteString("PostUp = " + cfg.Interface.PostUp + "\n")
-	}
-	if cfg.Interface.PreDown != "" {
-		b.WriteString("PreDown = " + cfg.Interface.PreDown + "\n")
-	}
-	if cfg.Interface.PostDown != "" {
-		b.WriteString("PostDown = " + cfg.Interface.PostDown + "\n")
+	writeScriptLines(&b, "PreUp", cfg.Interface.PreUp)
+	writeScriptLines(&b, "PostUp", cfg.Interface.PostUp)
+	writeScriptLines(&b, "PreDown", cfg.Interface.PreDown)
+	writeScriptLines(&b, "PostDown", cfg.Interface.PostDown)
+	for k, v := range cfg.Interface.ExtraKeys {
+		b.WriteString(k + " = " + v + "\n")
 	}
 
 	for _, peer := range cfg.Peers {
@@ -179,9 +199,38 @@ func Serialize(cfg *WireGuardConfig) string {
 		if peer.PersistentKeepalive > 0 {
 			b.WriteString("PersistentKeepalive = " + strconv.Itoa(peer.PersistentKeepalive) + "\n")
 		}
+		for k, v := range peer.ExtraKeys {
+			b.WriteString(k + " = " + v + "\n")
+		}
 	}
 
 	return b.String()
+}
+
+// scriptSeparator is a sentinel used to join/split multiple Pre/PostUp/Down
+// script lines internally. It must not appear in any legitimate script command.
+// Using a NUL byte ensures collision-free round-tripping.
+const scriptSeparator = "\x00"
+
+// appendScriptLine joins multiple Pre/PostUp/Down values with the internal
+// separator so they can be stored in a single string field.
+func appendScriptLine(existing, value string) string {
+	if existing == "" {
+		return value
+	}
+	return existing + scriptSeparator + value
+}
+
+// writeScriptLines writes Pre/PostUp/Down values back as separate lines,
+// splitting on the internal separator. This round-trips correctly with
+// wg-quick's multi-line convention without colliding with ` ; ` in scripts.
+func writeScriptLines(b *strings.Builder, key, value string) {
+	if value == "" {
+		return
+	}
+	for _, part := range strings.Split(value, scriptSeparator) {
+		b.WriteString(key + " = " + part + "\n")
+	}
 }
 
 func splitAndTrim(s string) []string {

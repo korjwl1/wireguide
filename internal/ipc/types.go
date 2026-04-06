@@ -17,6 +17,21 @@ type ConnectRequest struct {
 	ScriptsAllowed bool                    `json:"scripts_allowed"`
 }
 
+// ApproveScriptsRequest is sent by the GUI after the user explicitly approves
+// the scripts in a tunnel config. The helper adds the script fingerprint to
+// its persistent allowlist so subsequent connects auto-approve.
+type ApproveScriptsRequest struct {
+	Config *domain.WireGuardConfig `json:"config"`
+}
+
+// ScriptsNotApprovedDetail is included in the ErrCodeScriptsNotApproved error
+// response so the GUI knows which scripts need user approval.
+type ScriptsNotApprovedDetail struct {
+	TunnelName  string          `json:"tunnel_name"`
+	Scripts     []domain.Script `json:"scripts"`
+	Fingerprint string          `json:"fingerprint"`
+}
+
 // ConnectionStatus is the wire representation of the tunnel connection state.
 // It is a direct alias of the domain type — there used to be a separate
 // `ConnectionStatusDTO` here that drifted from the tunnel package's Status

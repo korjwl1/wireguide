@@ -16,6 +16,14 @@ func testSocketPath(t *testing.T) string {
 	return filepath.Join(os.TempDir(), "wireguide-test-"+t.Name()+".sock")
 }
 
+// registerTestPing registers a Helper.Ping handler that returns the current
+// protocol version, which NewClient requires for its handshake.
+func registerTestPing(s *Server) {
+	s.Handle(MethodPing, func(params json.RawMessage) (interface{}, error) {
+		return PingResponse{Version: ProtocolVersion, PID: os.Getpid()}, nil
+	})
+}
+
 func TestClientServerRPC(t *testing.T) {
 	addr := testSocketPath(t)
 	listener, err := Listen(addr, -1)
@@ -25,6 +33,7 @@ func TestClientServerRPC(t *testing.T) {
 	defer listener.Close()
 
 	server := NewServer(listener)
+	registerTestPing(server)
 	server.Handle("Test.Echo", func(params json.RawMessage) (interface{}, error) {
 		var s string
 		json.Unmarshal(params, &s)
@@ -60,6 +69,7 @@ func TestEventBroadcast(t *testing.T) {
 	defer listener.Close()
 
 	server := NewServer(listener)
+	registerTestPing(server)
 	go server.Serve()
 	defer server.Shutdown()
 
@@ -106,6 +116,7 @@ func TestMethodNotFound(t *testing.T) {
 	defer listener.Close()
 
 	server := NewServer(listener)
+	registerTestPing(server)
 	go server.Serve()
 	defer server.Shutdown()
 

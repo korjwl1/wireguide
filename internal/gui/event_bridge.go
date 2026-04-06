@@ -40,6 +40,14 @@ func (b *eventBridge) start() {
 
 // Resubscribe re-attaches after a helper restart. Called by the health monitor
 // right after it swaps the client in the holder.
+//
+// Race safety: the old goroutine (from the previous Subscribe call) will
+// terminate on its own when the old connection's read loop returns an error
+// (the dead socket gets closed). The new Subscribe call starts a fresh
+// goroutine on the new client. There is no shared mutable state between the
+// two goroutines — the subscribedTo guard prevents double-subscribing on the
+// same client, and the old goroutine's callback becomes a no-op once its
+// connection is gone.
 func (b *eventBridge) Resubscribe() {
 	b.resubscribe()
 	// Let the frontend know that state is now fresh — it should re-fetch the
@@ -63,6 +71,10 @@ func (b *eventBridge) resubscribe() {
 
 	if err := c.Subscribe(b.handleEvent); err != nil {
 		slog.Warn("event subscription failed", "error", err)
+		// Reset subscribedTo so a subsequent Resubscribe can retry.
+		b.mu.Lock()
+		b.subscribedTo = nil
+		b.mu.Unlock()
 	}
 }
 
@@ -70,7 +82,9 @@ func (b *eventBridge) handleEvent(method string, params json.RawMessage) {
 	switch method {
 	case ipc.EventStatus:
 		var status domain.ConnectionStatus
-		if json.Unmarshal(params, &status) == nil {
+		if err := json.Unmarshal(params, &status); err != nil {
+			slog.Debug("event bridge: unmarshal status failed", "error", err)
+		} else {
 			b.app.Event.Emit("status", status)
 			if b.onStatusChange != nil {
 				// Derive active tunnel name directly from the event payload —
@@ -84,7 +98,9 @@ func (b *eventBridge) handleEvent(method string, params json.RawMessage) {
 		}
 	case ipc.EventReconnect:
 		var dto ipc.ReconnectStateDTO
-		if json.Unmarshal(params, &dto) == nil {
+		if err := json.Unmarshal(params, &dto); err != nil {
+			slog.Debug("event bridge: unmarshal reconnect failed", "error", err)
+		} else {
 			b.app.Event.Emit("reconnect", ReconnectEvent{
 				Reconnecting: dto.Reconnecting,
 				Attempt:      dto.Attempt,
@@ -97,7 +113,9 @@ func (b *eventBridge) handleEvent(method string, params json.RawMessage) {
 		// entry. Without this bridge the helper's stderr output is swallowed
 		// by osascript during spawn and the viewer stays empty forever.
 		var entry ipc.LogEntry
-		if json.Unmarshal(params, &entry) == nil {
+		if err := json.Unmarshal(params, &entry); err != nil {
+			slog.Debug("event bridge: unmarshal log entry failed", "error", err)
+		} else {
 			b.app.Event.Emit("log", entry)
 		}
 	}

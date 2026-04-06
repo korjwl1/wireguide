@@ -1,12 +1,16 @@
 package tunnel
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
 	"log/slog"
 	"net"
+	"runtime"
 	"strings"
+	"sync"
+	"time"
 
 	"golang.zx2c4.com/wireguard/conn"
 	"golang.zx2c4.com/wireguard/device"
@@ -21,6 +25,7 @@ type Engine struct {
 	wgDevice     *device.Device
 	uapiListener net.Listener
 	ifaceName    string
+	closeOnce    sync.Once
 
 	// resolvedEndpointIPs caches the IP address each peer endpoint was
 	// resolved to during NewEngine. The network adapter uses these when
@@ -29,6 +34,10 @@ type Engine struct {
 	// create a chicken-and-egg loop — the DNS query itself would try to
 	// route through the tunnel that hasn't finished coming up yet).
 	resolvedEndpointIPs []string
+
+	// resolvedEndpoints caches the full ip:port pairs for each peer
+	// endpoint. Used by the firewall to add port-specific allow rules.
+	resolvedEndpoints []string
 }
 
 // NewEngine creates a WireGuard tunnel with a TUN device and starts the WG protocol.
@@ -63,6 +72,7 @@ func NewEngine(cfg *config.WireGuardConfig) (*Engine, error) {
 	resolvedCfg := *cfg
 	resolvedCfg.Peers = make([]config.PeerConfig, len(cfg.Peers))
 	var resolvedEndpointIPs []string
+	var resolvedEndpoints []string // ip:port pairs for firewall rules
 	for i, p := range cfg.Peers {
 		resolvedCfg.Peers[i] = p
 		if p.Endpoint == "" {
@@ -72,15 +82,22 @@ func NewEngine(cfg *config.WireGuardConfig) (*Engine, error) {
 		if err != nil {
 			return nil, fmt.Errorf("peer[%d] endpoint %q: %w", i, p.Endpoint, err)
 		}
-		ips, err := net.LookupHost(host)
-		if err != nil || len(ips) == 0 {
+		dnsCtx, dnsCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		ips, err := net.DefaultResolver.LookupHost(dnsCtx, host)
+		dnsCancel()
+		if err != nil {
 			return nil, fmt.Errorf("peer[%d] resolve %q: %w", i, host, err)
+		}
+		if len(ips) == 0 {
+			return nil, fmt.Errorf("peer[%d] resolve %q: no addresses found", i, host)
 		}
 		// Use the first resolved IP for the WG config. wireguard-go will
 		// roam to a different source if the peer's handshake arrives from
 		// somewhere else, so this is a reasonable starting point.
-		resolvedCfg.Peers[i].Endpoint = net.JoinHostPort(ips[0], port)
-		resolvedEndpointIPs = append(resolvedEndpointIPs, ips...)
+		resolved := net.JoinHostPort(ips[0], port)
+		resolvedCfg.Peers[i].Endpoint = resolved
+		resolvedEndpointIPs = append(resolvedEndpointIPs, ips[0])
+		resolvedEndpoints = append(resolvedEndpoints, net.JoinHostPort(ips[0], port))
 	}
 
 	mtu := cfg.Interface.MTU
@@ -88,7 +105,19 @@ func NewEngine(cfg *config.WireGuardConfig) (*Engine, error) {
 		mtu = 1420 // conservative default; platform SetMTU may override
 	}
 
-	tunDev, err := tun.CreateTUN("utun", mtu)
+	// Platform-specific TUN device name:
+	//  - macOS: "utun" — wireguard-go allocates utun0, utun1, etc.
+	//  - Linux: "wg" — wireguard-go creates wg0, wg1, etc. ("utun" is invalid on Linux)
+	//  - Windows: "WireGuide" — Windows expects a proper adapter name, not "utun"
+	tunName := "utun"
+	switch runtime.GOOS {
+	case "linux":
+		tunName = "wg"
+	case "windows":
+		tunName = "WireGuide"
+	}
+
+	tunDev, err := tun.CreateTUN(tunName, mtu)
 	if err != nil {
 		return nil, fmt.Errorf("creating TUN device: %w", err)
 	}
@@ -112,6 +141,7 @@ func NewEngine(cfg *config.WireGuardConfig) (*Engine, error) {
 		wgDevice:            wgDev,
 		ifaceName:           ifaceName,
 		resolvedEndpointIPs: resolvedEndpointIPs,
+		resolvedEndpoints:   resolvedEndpoints,
 	}
 
 	// Apply config using IpcSet (in-process, no UAPI socket needed)
@@ -159,18 +189,30 @@ func (e *Engine) InterfaceName() string { return e.ifaceName }
 // resolved to at Connect time. Used by the network adapter for installing
 // bypass routes without re-running DNS through the tunnel.
 func (e *Engine) ResolvedEndpointIPs() []string {
-	return e.resolvedEndpointIPs
+	result := make([]string, len(e.resolvedEndpointIPs))
+	copy(result, e.resolvedEndpointIPs)
+	return result
+}
+
+// ResolvedEndpoints returns the full ip:port pairs for each resolved peer
+// endpoint. Used by the firewall to add port-specific allow rules.
+func (e *Engine) ResolvedEndpoints() []string {
+	result := make([]string, len(e.resolvedEndpoints))
+	copy(result, e.resolvedEndpoints)
+	return result
 }
 
 // Close tears down the UAPI listener and the wireguard-go device (which in
-// turn closes the TUN).
+// turn closes the TUN). Safe for concurrent and repeated calls.
 func (e *Engine) Close() {
-	if e.uapiListener != nil {
-		e.uapiListener.Close()
-	}
-	if e.wgDevice != nil {
-		e.wgDevice.Close()
-	}
+	e.closeOnce.Do(func() {
+		if e.uapiListener != nil {
+			e.uapiListener.Close()
+		}
+		if e.wgDevice != nil {
+			e.wgDevice.Close()
+		}
+	})
 }
 
 // buildIpcConfig creates the WireGuard IPC config string.
@@ -189,6 +231,10 @@ func buildIpcConfig(cfg *config.WireGuardConfig) (string, error) {
 	if cfg.Interface.ListenPort > 0 {
 		b.WriteString(fmt.Sprintf("listen_port=%d\n", cfg.Interface.ListenPort))
 	}
+	// FwMark is intentionally NOT set here in the UAPI config. The platform
+	// network manager sets it via `wg set <iface> fwmark <value>` AFTER
+	// engine creation, which avoids a brief mismatch window on Linux
+	// full-tunnel where the platform installs fwmark-aware routing rules.
 	b.WriteString("replace_peers=true\n")
 
 	for i, peer := range cfg.Peers {
@@ -252,6 +298,7 @@ func keyToHex(b64Key string) (string, error) {
 	}
 	return hex.EncodeToString(raw), nil
 }
+
 
 // newWireguardSlogLogger builds a wireguard-go logger that routes Errorf to
 // our structured log stream at Warn level, and DISCARDS Verbosef. The latter

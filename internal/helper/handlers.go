@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"os"
+	"strings"
 	"time"
 
 	"github.com/korjwl1/wireguide/internal/config"
@@ -19,6 +21,7 @@ func (h *Helper) registerHandlers() {
 	h.server.Handle(ipc.MethodShutdown, h.handleShutdown)
 	h.server.Handle(ipc.MethodSetLogLevel, h.handleSetLogLevel)
 	h.server.Handle(ipc.MethodConnect, h.handleConnect)
+	h.server.Handle(ipc.MethodApproveScripts, h.handleApproveScripts)
 	h.server.Handle(ipc.MethodDisconnect, h.handleDisconnect)
 	h.server.Handle(ipc.MethodStatus, h.handleStatus)
 	h.server.Handle(ipc.MethodIsConnected, h.handleIsConnected)
@@ -39,7 +42,7 @@ func (h *Helper) handleSetLogLevel(params json.RawMessage) (interface{}, error) 
 }
 
 func (h *Helper) handlePing(params json.RawMessage) (interface{}, error) {
-	return ipc.PingResponse{Version: ipc.ProtocolVersion}, nil
+	return ipc.PingResponse{Version: ipc.ProtocolVersion, PID: os.Getpid()}, nil
 }
 
 func (h *Helper) handleShutdown(params json.RawMessage) (interface{}, error) {
@@ -60,7 +63,29 @@ func (h *Helper) handleConnect(params json.RawMessage) (interface{}, error) {
 	}
 	// Re-validate config server-side (don't trust client).
 	if result := config.Validate(req.Config); !result.IsValid() {
-		return nil, fmt.Errorf("invalid config: %s", result.ErrorMessages()[0])
+		return nil, fmt.Errorf("invalid config: %s", strings.Join(result.ErrorMessages(), "; "))
+	}
+
+	// SECURITY: Never trust the client's ScriptsAllowed flag directly.
+	// If the config contains scripts and the client says scripts are allowed,
+	// verify the scripts have been explicitly approved via the persistent
+	// allowlist. This prevents a rogue user-level process from connecting
+	// to the IPC socket and executing arbitrary commands as root.
+	scriptsAllowed := req.ScriptsAllowed
+	if scriptsAllowed && req.Config.HasScripts() {
+		if !h.scriptAllowlist.IsApproved(req.Config) {
+			fp := ScriptFingerprint(req.Config)
+			slog.Warn("rejecting connect: scripts not in allowlist",
+				"tunnel", req.Config.Name,
+				"fingerprint", fp)
+			return nil, &ipc.CodedError{
+				Code:    ipc.ErrCodeScriptsNotApproved,
+				Message: fmt.Sprintf("scripts_not_approved:%s", fp),
+			}
+		}
+		slog.Info("scripts approved via allowlist",
+			"tunnel", req.Config.Name,
+			"fingerprint", ScriptFingerprint(req.Config))
 	}
 
 	// Check for routing conflicts with existing interfaces (Tailscale etc).
@@ -85,15 +110,39 @@ func (h *Helper) handleConnect(params json.RawMessage) (interface{}, error) {
 	prevCfg := h.activeCfg
 	prevScripts := h.scriptsAllowed
 	h.activeCfg = req.Config
-	h.scriptsAllowed = req.ScriptsAllowed
+	h.scriptsAllowed = scriptsAllowed
 	h.mu.Unlock()
 
-	if err := h.manager.Connect(req.Config, req.ScriptsAllowed); err != nil {
+	if err := h.manager.Connect(req.Config, scriptsAllowed); err != nil {
 		h.mu.Lock()
 		h.activeCfg = prevCfg
 		h.scriptsAllowed = prevScripts
 		h.mu.Unlock()
 		return nil, err
+	}
+	return ipc.Empty{}, nil
+}
+
+func (h *Helper) handleApproveScripts(params json.RawMessage) (interface{}, error) {
+	var req ipc.ApproveScriptsRequest
+	if err := json.Unmarshal(params, &req); err != nil {
+		return nil, err
+	}
+	if req.Config == nil {
+		return nil, fmt.Errorf("config is required")
+	}
+	if !req.Config.HasScripts() {
+		return nil, fmt.Errorf("config has no scripts to approve")
+	}
+
+	fp := ScriptFingerprint(req.Config)
+	slog.Info("approving scripts",
+		"tunnel", req.Config.Name,
+		"fingerprint", fp,
+		"scripts", req.Config.Scripts())
+
+	if err := h.scriptAllowlist.Approve(req.Config); err != nil {
+		return nil, fmt.Errorf("failed to persist script approval: %w", err)
 	}
 	return ipc.Empty{}, nil
 }
@@ -136,7 +185,19 @@ func (h *Helper) handleSetKillSwitch(params json.RawMessage) (interface{}, error
 		if status.State != tunnel.StateConnected {
 			return nil, fmt.Errorf("no active tunnel")
 		}
-		if err := h.firewall.EnableKillSwitch(status.InterfaceName, status.Endpoint); err != nil {
+		// Use pre-resolved endpoints (resolved before tunnel routes were
+		// installed). Doing DNS resolution here would fail because the kill
+		// switch is about to block non-tunnel traffic and/or the query would
+		// route through the tunnel itself.
+		endpoints := h.manager.ResolvedEndpoints()
+		// Get interface addresses from the active config for anti-spoof chains
+		var ifaceAddresses []string
+		h.mu.Lock()
+		if h.activeCfg != nil {
+			ifaceAddresses = h.activeCfg.Interface.Address
+		}
+		h.mu.Unlock()
+		if err := h.firewall.EnableKillSwitch(status.InterfaceName, ifaceAddresses, endpoints); err != nil {
 			return nil, err
 		}
 	} else {

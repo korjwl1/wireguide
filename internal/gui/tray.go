@@ -5,6 +5,8 @@ import (
 	"log/slog"
 	"runtime"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	wgapp "github.com/korjwl1/wireguide/internal/app"
 	"github.com/wailsapp/wails/v3/pkg/application"
@@ -45,7 +47,9 @@ type trayManager struct {
 	doShutdown func()
 
 	mu           sync.Mutex
-	activeTunnel string // cached from status events, avoids MethodActiveName IPC
+	activeTunnel string      // cached from status events, avoids MethodActiveName IPC
+	rebuildTimer *time.Timer // debounce timer for rebuildMenu
+	rebuilding   atomic.Bool // guard against concurrent rebuildMenu calls
 }
 
 func newTrayManager(app *application.App, tray *application.SystemTray, svc *wgapp.TunnelService, doShutdown func()) *trayManager {
@@ -104,18 +108,34 @@ func (t *trayManager) setIconState(activeName string) {
 	}
 
 	// When the active tunnel actually changes (not just a stats tick), we
-	// also need to update the menu's ●/○ glyphs. The menu rebuild is O(n)
-	// over the tunnel list + disk reads, so we do it off the caller's
-	// goroutine to keep the event loop moving.
+	// also need to update the menu's glyphs. Debounce to 100ms so rapid
+	// state transitions (e.g. disconnect+reconnect) coalesce into one rebuild.
 	if prev != activeName {
-		go t.rebuildMenu()
+		t.scheduleRebuild()
 	}
+}
+
+// scheduleRebuild debounces rebuildMenu calls — multiple triggers within 100ms
+// are coalesced into a single rebuild.
+func (t *trayManager) scheduleRebuild() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.rebuildTimer != nil {
+		t.rebuildTimer.Stop()
+	}
+	t.rebuildTimer = time.AfterFunc(100*time.Millisecond, t.rebuildMenu)
 }
 
 // rebuildMenu reconstructs the whole tray menu: tunnel list, Show Window,
 // Quit. Uses ListTunnelsLocal (disk only, no IPC) + the cached activeTunnel
 // for connected-state glyphs. Safe to invoke from any goroutine.
 func (t *trayManager) rebuildMenu() {
+	// Prevent concurrent rebuilds from overlapping AfterFunc timers.
+	if !t.rebuilding.CompareAndSwap(false, true) {
+		return
+	}
+	defer t.rebuilding.Store(false)
+
 	tunnels, err := t.svc.ListTunnelsLocal()
 	if err != nil {
 		slog.Debug("tray: list tunnels failed", "error", err)
@@ -136,13 +156,17 @@ func (t *trayManager) rebuildMenu() {
 		if connected {
 			label = "● " + tun.Name
 		}
+		tunName := tun.Name
 		m.Add(label).OnClick(func(ctx *application.Context) {
-			if connected {
+			// Query current state at click time to avoid stale closure capture.
+			t.mu.Lock()
+			isActive := t.activeTunnel == tunName
+			t.mu.Unlock()
+			if isActive {
 				_ = t.svc.Disconnect()
 			} else {
-				_ = t.svc.Connect(tun.Name, false)
+				_ = t.svc.Connect(tunName, false)
 			}
-			// Rebuild happens via the status event from the helper.
 		})
 	}
 	m.AddSeparator()

@@ -2,8 +2,11 @@ package storage
 
 import (
 	"encoding/json"
+	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 )
 
@@ -18,12 +21,16 @@ type SessionRecord struct {
 
 // HistoryStore manages connection history.
 type HistoryStore struct {
+	mu      sync.Mutex
 	path    string
 	maxSize int
 }
 
 // NewHistoryStore creates a history store.
 func NewHistoryStore(configDir string, maxRecords int) *HistoryStore {
+	if maxRecords < 1 {
+		maxRecords = 1
+	}
 	return &HistoryStore{
 		path:    filepath.Join(configDir, "history.json"),
 		maxSize: maxRecords,
@@ -32,7 +39,18 @@ func NewHistoryStore(configDir string, maxRecords int) *HistoryStore {
 
 // Add appends a session record.
 func (h *HistoryStore) Add(record SessionRecord) error {
-	records, _ := h.Load()
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	records, err := h.load()
+	if err != nil {
+		if os.IsPermission(err) {
+			return fmt.Errorf("history file permission denied: %w", err)
+		}
+		if !os.IsNotExist(err) {
+			slog.Warn("history file corrupted, starting fresh", "error", err)
+			records = nil
+		}
+	}
 	records = append(records, record)
 	if len(records) > h.maxSize {
 		records = records[len(records)-h.maxSize:]
@@ -42,6 +60,13 @@ func (h *HistoryStore) Add(record SessionRecord) error {
 
 // Load reads all session records.
 func (h *HistoryStore) Load() ([]SessionRecord, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.load()
+}
+
+// load is the internal unlocked version of Load.
+func (h *HistoryStore) load() ([]SessionRecord, error) {
 	data, err := os.ReadFile(h.path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -56,9 +81,15 @@ func (h *HistoryStore) Load() ([]SessionRecord, error) {
 	return records, nil
 }
 
-// Clear removes all history.
+// Clear removes all history. Returns nil if the file doesn't exist.
 func (h *HistoryStore) Clear() error {
-	return os.Remove(h.path)
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	err := os.Remove(h.path)
+	if err != nil && os.IsNotExist(err) {
+		return nil
+	}
+	return err
 }
 
 func (h *HistoryStore) save(records []SessionRecord) error {
@@ -68,12 +99,32 @@ func (h *HistoryStore) save(records []SessionRecord) error {
 	}
 	// Atomic write + private permissions (history may include tunnel names
 	// and timestamps that are user-sensitive on multi-user systems).
-	tmp := h.path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0600); err != nil {
+	// Use os.CreateTemp to avoid predictable temp file names.
+	tmpFile, err := os.CreateTemp(filepath.Dir(h.path), ".wireguide-*.tmp")
+	if err != nil {
 		return err
 	}
-	if err := os.Rename(tmp, h.path); err != nil {
-		_ = os.Remove(tmp)
+	tmpPath := tmpFile.Name()
+	if _, err := tmpFile.Write(data); err != nil {
+		tmpFile.Close()
+		os.Remove(tmpPath)
+		return err
+	}
+	if err := tmpFile.Sync(); err != nil {
+		tmpFile.Close()
+		os.Remove(tmpPath)
+		return err
+	}
+	if err := tmpFile.Close(); err != nil {
+		os.Remove(tmpPath)
+		return err
+	}
+	if err := os.Chmod(tmpPath, 0600); err != nil {
+		os.Remove(tmpPath)
+		return err
+	}
+	if err := atomicRename(tmpPath, h.path); err != nil {
+		os.Remove(tmpPath)
 		return err
 	}
 	return nil

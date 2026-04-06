@@ -5,6 +5,7 @@ package elevate
 import (
 	"fmt"
 	"os/exec"
+	"strings"
 )
 
 // SpawnHelper launches the helper with admin privileges via PowerShell + UAC.
@@ -16,11 +17,17 @@ func SpawnHelper(args Args) error {
 
 	argList := fmt.Sprintf(
 		`'--helper','--socket=%s','--data-dir=%s'`,
-		args.SocketPath, args.DataDir,
+		psEscape(args.SocketPath), psEscape(args.DataDir),
 	)
 	ps := fmt.Sprintf(
 		`Start-Process '%s' -ArgumentList %s -Verb RunAs -WindowStyle Hidden`,
-		exe, argList,
+		psEscape(exe), argList,
 	)
 	return exec.Command("powershell", "-Command", ps).Start()
+}
+
+// psEscape escapes a string for use inside a PowerShell single-quoted string.
+// Single quotes are doubled per PowerShell escaping rules.
+func psEscape(s string) string {
+	return strings.ReplaceAll(s, "'", "''")
 }

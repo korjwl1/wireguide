@@ -141,8 +141,11 @@ func processExists(name string) bool {
 }
 
 func processOwnsInterface(ifaceName, processName string) bool {
-	// On macOS/Linux, check if the process has the TUN fd open
-	// Simplified: just check if the process is running
+	// NOTE: This is a simplification — it checks whether the process is running
+	// at all, not whether it actually owns this specific interface. A more
+	// accurate implementation would inspect /proc/<pid>/fd on Linux or use
+	// lsof on macOS to correlate the TUN fd with the interface. Acceptable
+	// for now because false positives only produce a warning, not a hard block.
 	return processExists(processName)
 }
 
@@ -154,6 +157,8 @@ func getInterfaceRoutes(ifaceName string) []string {
 	case "linux":
 		return getRoutesLinux(ifaceName)
 	default:
+		// TODO: Implement Windows route enumeration via `route print` or
+		// netsh to detect conflicts on Windows interfaces.
 		return nil
 	}
 }

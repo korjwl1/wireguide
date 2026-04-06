@@ -22,13 +22,23 @@ import (
 //  8. PostUp script (best-effort)
 //  9. Persist crash-recovery state (only after everything else succeeds)
 func (m *Manager) connectPhases(cfg *domain.WireGuardConfig, scriptsAllowed bool) (*Engine, error) {
+	// Determine the intended interface name for %i expansion in PreUp.
+	// The actual TUN device name is assigned by the OS in step 2, but we
+	// need a value now. wg-quick uses the config filename; we use the
+	// tunnel name which serves the same purpose.
+	intendedIface := cfg.Name
+
 	// 1. PreUp (fatal on failure — user opted in)
 	if scriptsAllowed && cfg.Interface.PreUp != "" {
 		slog.Info("running PreUp script", "cmd", cfg.Interface.PreUp)
-		if err := runScript(cfg.Interface.PreUp); err != nil {
+		if err := runScriptWithInterface(cfg.Interface.PreUp, intendedIface); err != nil {
 			return nil, fmt.Errorf("PreUp script failed: %w", err)
 		}
 	}
+
+	// Compute fullTunnel early — needed by the rollback closure and later
+	// by AddRoutes. It only depends on cfg which is a parameter.
+	fullTunnel := cfg.IsFullTunnel()
 
 	// 2. Engine
 	engine, err := NewEngine(cfg)
@@ -41,8 +51,21 @@ func (m *Manager) connectPhases(cfg *domain.WireGuardConfig, scriptsAllowed bool
 	// later phase fails. Best-effort — we log rather than propagate cleanup
 	// errors because we already have a primary failure to report.
 	rollback := func(primary error) error {
+		// Undo routes that may have been installed before the failure.
+		if err := m.netMgr.RemoveRoutes(ifaceName, nil, fullTunnel); err != nil {
+			slog.Warn("rollback: RemoveRoutes failed", "error", err)
+		}
 		_ = m.netMgr.Cleanup(ifaceName)
 		engine.Close()
+		// If PreUp was executed, run PostDown to undo its side effects.
+		// PostDown is the correct counterpart: wg-quick runs PostDown after
+		// teardown to reverse what PreUp set up.
+		if scriptsAllowed && cfg.Interface.PostDown != "" {
+			slog.Info("rollback: running PostDown script", "cmd", cfg.Interface.PostDown)
+			if err := runScriptWithInterface(cfg.Interface.PostDown, ifaceName); err != nil {
+				slog.Warn("rollback: PostDown script failed", "error", err)
+			}
+		}
 		return primary
 	}
 
@@ -67,6 +90,9 @@ func (m *Manager) connectPhases(cfg *domain.WireGuardConfig, scriptsAllowed bool
 
 	// 6. Routes + endpoint bypass.
 	//
+	// If Table=off, the user wants to manage routing themselves — skip
+	// route installation entirely, matching wg-quick behaviour.
+	//
 	// IMPORTANT: we pass the peer endpoint IPs that NewEngine already
 	// resolved, NOT the hostname strings from the config. If AddRoutes had
 	// to resolve hostnames itself, it would do so AFTER installing the /1
@@ -78,21 +104,25 @@ func (m *Manager) connectPhases(cfg *domain.WireGuardConfig, scriptsAllowed bool
 	for _, peer := range cfg.Peers {
 		allAllowedIPs = append(allAllowedIPs, peer.AllowedIPs...)
 	}
-	fullTunnel := cfg.IsFullTunnel()
 	endpointIPs := engine.ResolvedEndpointIPs()
-	if err := m.netMgr.AddRoutes(ifaceName, allAllowedIPs, fullTunnel, endpointIPs); err != nil {
+	if err := m.netMgr.AddRoutes(ifaceName, allAllowedIPs, fullTunnel, endpointIPs, cfg.Interface.Table, cfg.Interface.FwMark); err != nil {
 		return nil, rollback(fmt.Errorf("adding routes: %w", err))
 	}
 
-	// 7. DNS (non-fatal — tunnel still works without custom DNS)
+	// 7. DNS — fatal when DNS servers are explicitly configured (matching
+	// wg-quick's behaviour). A silent DNS failure leaves the user on their
+	// ISP's resolver, which is a privacy leak for VPN users.
 	if err := m.netMgr.SetDNS(ifaceName, cfg.Interface.DNS); err != nil {
+		if len(cfg.Interface.DNS) > 0 {
+			return nil, rollback(fmt.Errorf("setting DNS: %w", err))
+		}
 		slog.Warn("failed to set DNS", "error", err)
 	}
 
 	// 8. PostUp (non-fatal — tunnel is already live)
 	if scriptsAllowed && cfg.Interface.PostUp != "" {
 		slog.Info("running PostUp script", "cmd", cfg.Interface.PostUp)
-		if err := runScript(cfg.Interface.PostUp); err != nil {
+		if err := runScriptWithInterface(cfg.Interface.PostUp, ifaceName); err != nil {
 			slog.Warn("PostUp script failed", "error", err)
 		}
 	}
@@ -107,6 +137,8 @@ func (m *Manager) connectPhases(cfg *domain.WireGuardConfig, scriptsAllowed bool
 		InterfaceName: ifaceName,
 		DNSServers:    cfg.Interface.DNS,
 		FullTunnel:    fullTunnel,
+		Table:         cfg.Interface.Table,
+		FwMark:        cfg.Interface.FwMark,
 	}); err != nil {
 		slog.Warn("failed to persist crash recovery state", "error", err)
 	}
@@ -122,13 +154,13 @@ func (m *Manager) connectPhases(cfg *domain.WireGuardConfig, scriptsAllowed bool
 // from Manager.Disconnect under the manager's mutex. All steps are best-effort
 // — we log errors rather than returning them because partial teardown is
 // better than none.
-func (m *Manager) disconnectPhases(cfg *domain.WireGuardConfig, engine *Engine) {
+func (m *Manager) disconnectPhases(cfg *domain.WireGuardConfig, engine *Engine, scriptsAllowed bool) {
 	ifaceName := engine.InterfaceName()
 
 	// PreDown script (non-fatal)
-	if m.scriptsAllowed && cfg.Interface.PreDown != "" {
+	if scriptsAllowed && cfg.Interface.PreDown != "" {
 		slog.Info("running PreDown script", "cmd", cfg.Interface.PreDown)
-		if err := runScript(cfg.Interface.PreDown); err != nil {
+		if err := runScriptWithInterface(cfg.Interface.PreDown, ifaceName); err != nil {
 			slog.Warn("PreDown script failed", "error", err)
 		}
 	}
@@ -140,22 +172,19 @@ func (m *Manager) disconnectPhases(cfg *domain.WireGuardConfig, engine *Engine) 
 	}
 	_ = m.netMgr.RemoveRoutes(ifaceName, allAllowedIPs, cfg.IsFullTunnel())
 
-	// DNS
-	_ = m.netMgr.RestoreDNS(ifaceName)
-
 	// TUN
 	engine.Close()
 
-	// Network cleanup
+	// Network cleanup (also restores DNS internally)
 	_ = m.netMgr.Cleanup(ifaceName)
 
 	// Clear crash-recovery state
 	_ = ClearActiveState(m.dataDir)
 
 	// PostDown script (non-fatal)
-	if m.scriptsAllowed && cfg.Interface.PostDown != "" {
+	if scriptsAllowed && cfg.Interface.PostDown != "" {
 		slog.Info("running PostDown script", "cmd", cfg.Interface.PostDown)
-		if err := runScript(cfg.Interface.PostDown); err != nil {
+		if err := runScriptWithInterface(cfg.Interface.PostDown, ifaceName); err != nil {
 			slog.Warn("PostDown script failed", "error", err)
 		}
 	}

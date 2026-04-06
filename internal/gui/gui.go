@@ -8,7 +8,8 @@
 package gui
 
 import (
-	"log"
+	"context"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"runtime"
@@ -60,10 +61,10 @@ func Run(assetsHandler http.Handler, dataDir string) error {
 	// 1. Local storage
 	paths, err := storage.GetPaths()
 	if err != nil {
-		log.Fatal("paths:", err)
+		return fmt.Errorf("paths: %w", err)
 	}
 	if err := paths.EnsureDirs(); err != nil {
-		log.Fatal("create dirs:", err)
+		return fmt.Errorf("create dirs: %w", err)
 	}
 	tunnelStore := storage.NewTunnelStore(paths.TunnelsDir)
 	settingsStore := storage.NewSettingsStore(paths.ConfigDir)
@@ -75,9 +76,11 @@ func Run(assetsHandler http.Handler, dataDir string) error {
 	}
 
 	// 2. Helper process (spawn if needed)
-	initialClient, err := ensureHelper(dataDir)
+	helperCtx, helperCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer helperCancel()
+	initialClient, err := ensureHelper(helperCtx, dataDir)
 	if err != nil {
-		log.Fatal("helper connection failed:", err)
+		return fmt.Errorf("helper connection failed: %w", err)
 	}
 	clients := ipc.NewClientHolder(initialClient)
 
@@ -146,9 +149,15 @@ func Run(assetsHandler http.Handler, dataDir string) error {
 			if c != nil {
 				_ = c.Call(ipc.MethodDisconnect, nil, nil)
 				_ = c.Call(ipc.MethodShutdown, nil, nil)
-				time.Sleep(200 * time.Millisecond)
 			}
-			clients.Close()
+			// Close in a goroutine with a short delay so the helper has
+			// time to process the shutdown command without blocking the
+			// macOS main thread (AppKit requires the main thread to stay
+			// responsive during termination).
+			go func() {
+				time.Sleep(50 * time.Millisecond)
+				clients.Close()
+			}()
 		})
 	}
 
@@ -179,8 +188,14 @@ func Run(assetsHandler http.Handler, dataDir string) error {
 		}
 	}
 
-	startHelperHealthMonitor(app, clients, dataDir, bridge)
+	healthDone := make(chan struct{})
+	var healthWg sync.WaitGroup
+	healthWg.Add(1)
+	startHelperHealthMonitor(app, clients, dataDir, bridge, healthDone, &healthWg)
 
 	// 9. Run (blocks)
-	return app.Run()
+	err = app.Run()
+	close(healthDone)
+	healthWg.Wait()
+	return err
 }

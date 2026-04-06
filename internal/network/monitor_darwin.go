@@ -82,6 +82,7 @@ func (rm *routeMonitor) Stop() {
 	close(rm.stopCh)
 	if rm.cmd != nil && rm.cmd.Process != nil {
 		_ = rm.cmd.Process.Kill()
+		_ = rm.cmd.Wait() // reap the zombie
 	}
 	// If a debounce timer is pending, cancel it. Stop() returns true when the
 	// timer was successfully stopped before firing — in that case the AfterFunc

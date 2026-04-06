@@ -1,6 +1,7 @@
 package autostart
 
 import (
+	"encoding/xml"
 	"fmt"
 	"os"
 	"os/exec"
@@ -42,9 +43,17 @@ func RemoveAutostart() error {
 // --- macOS: LaunchAgent ---
 
 func installMacAutostart(appPath string) error {
-	home, _ := os.UserHomeDir()
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("cannot determine home directory: %w", err)
+	}
 	plistDir := filepath.Join(home, "Library", "LaunchAgents")
 	os.MkdirAll(plistDir, 0755)
+
+	// XML-escape appPath to prevent plist injection from special characters.
+	var b strings.Builder
+	xml.EscapeText(&b, []byte(appPath))
+	safeAppPath := b.String()
 
 	plist := fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -58,17 +67,18 @@ func installMacAutostart(appPath string) error {
     </array>
     <key>RunAtLoad</key>
     <true/>
-    <key>LSUIElement</key>
-    <true/>
 </dict>
 </plist>
-`, appPath)
+`, safeAppPath)
 
 	return os.WriteFile(filepath.Join(plistDir, "com.wireguide.gui.plist"), []byte(plist), 0644)
 }
 
 func removeMacAutostart() error {
-	home, _ := os.UserHomeDir()
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("cannot determine home directory: %w", err)
+	}
 	return os.Remove(filepath.Join(home, "Library", "LaunchAgents", "com.wireguide.gui.plist"))
 }
 
@@ -77,12 +87,17 @@ func removeMacAutostart() error {
 func installLinuxAutostart(appPath string) error {
 	configHome := os.Getenv("XDG_CONFIG_HOME")
 	if configHome == "" {
-		home, _ := os.UserHomeDir()
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return fmt.Errorf("cannot determine home directory: %w", err)
+		}
 		configHome = filepath.Join(home, ".config")
 	}
 	autostartDir := filepath.Join(configHome, "autostart")
 	os.MkdirAll(autostartDir, 0755)
 
+	// Quote the Exec path per Desktop Entry Spec to handle spaces/special chars.
+	quotedPath := `"` + strings.ReplaceAll(appPath, `"`, `\"`) + `"`
 	desktop := fmt.Sprintf(`[Desktop Entry]
 Type=Application
 Name=WireGuide
@@ -91,7 +106,7 @@ Icon=wireguide
 Terminal=false
 StartupNotify=false
 X-GNOME-Autostart-enabled=true
-`, appPath)
+`, quotedPath)
 
 	return os.WriteFile(filepath.Join(autostartDir, "wireguide.desktop"), []byte(desktop), 0644)
 }
@@ -108,9 +123,12 @@ func removeLinuxAutostart() error {
 // --- Windows: Registry Run key ---
 
 func installWindowsAutostart(appPath string) error {
+	// M15: Wrap the path in quotes so spaces in the path are handled correctly
+	// by the Windows shell when the registry value is used to launch the app.
+	quotedPath := `"` + appPath + `"`
 	return exec.Command("reg", "add",
 		`HKCU\Software\Microsoft\Windows\CurrentVersion\Run`,
-		"/v", "WireGuide", "/t", "REG_SZ", "/d", appPath, "/f").Run()
+		"/v", "WireGuide", "/t", "REG_SZ", "/d", quotedPath, "/f").Run()
 }
 
 func removeWindowsAutostart() error {

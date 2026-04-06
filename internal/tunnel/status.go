@@ -25,6 +25,11 @@ const (
 )
 
 // GetStatus queries the current status of a WireGuard interface.
+//
+// NOTE: This creates a new wgctrl client on every call. If performance becomes
+// an issue (e.g. sub-second polling), consider caching the client at the Manager
+// level. For now, a fresh client per call is fine — wgctrl.New() is cheap
+// (opens a netlink/UAPI socket) and avoids stale-connection edge cases.
 func GetStatus(ifaceName string, tunnelName string, connectedAt time.Time) (*ConnectionStatus, error) {
 	client, err := wgctrl.New()
 	if err != nil {
@@ -56,7 +61,7 @@ func GetStatus(ifaceName string, tunnelName string, connectedAt time.Time) (*Con
 			}
 		}
 
-		if peer.Endpoint != nil {
+		if peer.Endpoint != nil && status.Endpoint == "" {
 			status.Endpoint = peer.Endpoint.String()
 		}
 	}
