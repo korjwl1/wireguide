@@ -146,6 +146,7 @@
     "dns_leak_leaked": "DNS leak detected",
     "dns_servers_detected": "DNS Servers Detected",
     "route_title": "Route Table",
+    "route_desc": "Shows where your network traffic is going. Routes marked VPN flow through the tunnel; others go directly to the internet.",
     "route_reload": "Reload",
     "route_header_dest": "Destination",
     "route_header_gateway": "Gateway",

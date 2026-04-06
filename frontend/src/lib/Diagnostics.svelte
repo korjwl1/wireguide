@@ -79,10 +79,11 @@
     padding: 6px 12px;
     background: var(--accent);
     border: none;
-    border-radius: 4px;
-    color: var(--text-primary);
+    border-radius: 6px;
+    color: #fff;
     cursor: pointer;
     font-size: 13px;
+    white-space: nowrap;
   }
   .result-grid {
     display: grid;

@@ -23,7 +23,8 @@
 </script>
 
 <div class="route-viz">
-  <h4>{$t('tools.route_title')}</h4>
+  <h3>{$t('tools.route_title')}</h3>
+  <p class="description">{$t('tools.route_desc')}</p>
   <button class="btn-load" on:click={loadRoutes} disabled={loading}>
     {loading ? '…' : $t('tools.route_reload')}
   </button>
@@ -57,14 +58,17 @@
 </div>
 
 <style>
-  .route-viz { padding: 8px 0; }
-  h4 {
-    font-size: 12px; color: var(--text-secondary);
-    text-transform: uppercase; letter-spacing: 1px; margin-bottom: 8px;
+  .route-viz { padding: 16px; }
+  h3 { margin-bottom: 4px; }
+  .description {
+    font-size: 13px;
+    color: var(--text-secondary);
+    margin-bottom: 12px;
+    line-height: 1.5;
   }
   .btn-load {
     padding: 8px 16px; background: var(--accent); border: none;
-    border-radius: 6px; color: var(--text-primary); cursor: pointer; font-size: 13px;
+    border-radius: 6px; color: #fff; cursor: pointer; font-size: 13px;
   }
   .route-table {
     margin-top: 12px; background: var(--bg-card); border-radius: 8px; overflow: hidden;
