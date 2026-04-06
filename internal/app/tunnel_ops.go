@@ -3,6 +3,7 @@ package app
 import (
 	"fmt"
 	"log/slog"
+	"strings"
 
 	"github.com/korjwl1/wireguide/internal/domain"
 	"github.com/korjwl1/wireguide/internal/ipc"
@@ -141,10 +142,23 @@ func isScriptsNotApproved(err error) bool {
 }
 
 // Disconnect tears down whatever tunnel the helper currently has active.
+// If the call fails with a "client closed" error (the health monitor may have
+// swapped the client during a recovery), retry once with the fresh client.
 func (s *TunnelService) Disconnect() error {
 	s.clients.MarkInflight()
 	defer s.clients.UnmarkInflight()
-	return s.callLong(ipc.MethodDisconnect, nil, nil)
+	err := s.callLong(ipc.MethodDisconnect, nil, nil)
+	if err != nil && isClientClosed(err) {
+		slog.Info("disconnect got client-closed, retrying with fresh client")
+		err = s.callLong(ipc.MethodDisconnect, nil, nil)
+	}
+	return err
+}
+
+// isClientClosed returns true for errors caused by the IPC client being closed
+// mid-call (e.g., health monitor swapped clients during recovery).
+func isClientClosed(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "client closed")
 }
 
 // GetStatus queries the helper for the current connection status. IPC errors
