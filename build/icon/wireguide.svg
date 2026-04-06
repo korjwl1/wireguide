@@ -1,0 +1,83 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"
+     width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!--
+    WireGuide app icon.
+
+    The W mark is the EXACT same glyph the system tray uses (Wails'
+    DefaultMacTemplateIcon.png, embedded here as a data URI). We invert its
+    black pixels to white via feColorMatrix, then composite onto a red
+    rounded-square WireGuard tile. This guarantees pixel-perfect
+    consistency between the Dock icon and the menu-bar icon — the user
+    explicitly preferred the tray's chunky letterform over the hand-rolled
+    polygonal W from the previous revision.
+  -->
+
+  <defs>
+    <linearGradient id="tileGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%"   stop-color="#C4242A"/>
+      <stop offset="55%"  stop-color="#9E1A1F"/>
+      <stop offset="100%" stop-color="#6E1114"/>
+    </linearGradient>
+
+    <linearGradient id="topGloss" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%"   stop-color="#FFFFFF" stop-opacity="0.18"/>
+      <stop offset="35%"  stop-color="#FFFFFF" stop-opacity="0.02"/>
+      <stop offset="100%" stop-color="#FFFFFF" stop-opacity="0"/>
+    </linearGradient>
+
+    <!-- Black → white colour matrix.
+         The source PNG actually contains TWO things: the solid-black W
+         glyph (alpha≈1.0) and a subtle dark rounded-rect frame around it
+         (alpha≈0.2). Just forcing RGB to 1 would promote both to white,
+         leaving a faint square halo on our red tile. We chain a hard alpha
+         threshold after the colour swap so only high-opacity pixels (the
+         glyph itself) survive; the frame disappears entirely. -->
+    <filter id="blackToWhite" x="0%" y="0%" width="100%" height="100%">
+      <feColorMatrix type="matrix" values="
+        0 0 0 0 1
+        0 0 0 0 1
+        0 0 0 0 1
+        0 0 0 1 0"/>
+      <feComponentTransfer>
+        <!-- slope=6, intercept=-3 maps:
+               input alpha 0.50 → 0.00 (frame, dropped)
+               input alpha 0.67 → 1.00 (glyph edge, fully opaque)
+               input alpha 1.00 → 1.00 (glyph core)
+             Soft enough to keep anti-aliased edges but sharp enough to
+             kill the semi-transparent frame. -->
+        <feFuncA type="linear" slope="6" intercept="-3"/>
+      </feComponentTransfer>
+    </filter>
+
+    <filter id="markShadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="8"/>
+      <feOffset dx="0" dy="8" result="offsetBlur"/>
+      <feComponentTransfer>
+        <feFuncA type="linear" slope="0.40"/>
+      </feComponentTransfer>
+      <feMerge>
+        <feMergeNode/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <!-- Red squircle tile (rx=230 approximates macOS Big Sur+ squircle) -->
+  <rect x="92" y="92" width="840" height="840" rx="230" ry="230"
+        fill="url(#tileGrad)"/>
+  <rect x="92" y="92" width="840" height="840" rx="230" ry="230"
+        fill="url(#topGloss)"/>
+  <rect x="92.5" y="92.5" width="839" height="839" rx="229.5" ry="229.5"
+        fill="none" stroke="#000000" stroke-opacity="0.25" stroke-width="1"/>
+
+  <!-- The W glyph: identical bitmap to the system tray icon, colour-inverted
+       to white, centred inside the squircle. The source PNG is 64×64; we
+       scale it up to 560×560 (~67% of the tile). Nearest-neighbour would
+       pixelate it at that scale, so we let the renderer smooth-scale. -->
+  <g filter="url(#markShadow)">
+    <image x="232" y="232" width="560" height="560"
+           preserveAspectRatio="xMidYMid meet"
+           filter="url(#blackToWhite)"
+           xlink:href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAMAAACdt4HsAAAAYFBMVEUAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD6T+iNAAAAIHRSTlMA4QwQBxpPFdxdQmVKhrA2yr12ItOVbqehfVYtxpqPKXYqcncAAAHMSURBVFjD7dbbcoIwEAbgZUEDyBk5CB7e/y1bYHc2sZ0kjBd1Ov43uJB8hAQQ+OSfBXck+tk9VCH6J1QIZmiHJfYOGMLeKEvlFTSGcNgPROGbAuWRMq9rS8V6uOVDqQ3oAsplqRIqjktx50O5BZBWzVINVGRLUfGh0gbk3Oq0XEGsAQ8+crXOwYWbJd/FMdCAk4zNBjTcbOIJYWDk4mEFeq1PdNYLvpzauowy0BQgDTSg5N+9HUi0qc4F0K7tYAcmbjfTuvFwCvpZgB3IuE8LcyCArGjiAFIZaaMDDMfKDshcIdQ6wPMxgi8A7bqpCLjyU+ECHjxUWtB8A1rejS6AW563aa+SDeDV7cAFHPiJUfE6AAJuPBlOIOQbdtJPnZ5pXJETQL5fbluHDejlVeICopiAddvRrT3w/e0GgIBtkxFAOyvwAOhqadEIoFx8gCqQjGACsw9QB5LEBGrYCcTKBHovoJAOBb2hOK0XMEiHEwPseQGjecaT5vkBnTlnAsTKD7gHnMYEBvAD5FVcmsDkB8h/WwUGEKMfIK/S3ARu4An08iI1gMwFyH7KU/n2H1nqDwDEV7+VX/xaD/EZVLgnv5wwQgx9gwifvFO+AILUEtVQlCj0AAAAAElFTkSuQmCC"/>
+  </g>
+</svg>

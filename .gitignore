@@ -25,11 +25,10 @@ Thumbs.db
 *.swp
 *.swo
 
-# Icon build intermediates — the committed build/darwin/icons.icns is the
-# source of truth; the iconset staging dir and SVG sources here are
-# local-only working files.
+# Icon build intermediates — the iconset staging dir is regenerated from
+# the SVG source by `iconutil`. The SVG + final icns in build/icon/ are
+# committed as source assets; the iconset is a throwaway.
 build/icon.iconset/
-build/icon/
 
 # Claude Code working files — plans and local settings are per-user, not
 # repo state.

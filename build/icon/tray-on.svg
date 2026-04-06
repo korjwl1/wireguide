@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"
+     width="64" height="64" viewBox="0 0 64 64">
+  <!--
+    Tray icon, connected state.
+    Same W glyph as the off-state tray PNG (exactly the Wails default) with
+    a small green dot tucked into the bottom-right. Rendered as a coloured
+    (non-template) icon so the green survives macOS's menu-bar rendering —
+    template icons are monochrome and would blacken the dot.
+  -->
+  <g>
+    <!-- Base W bitmap, kept native size 64×64 -->
+    <image x="0" y="0" width="64" height="64"
+           xlink:href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAMAAACdt4HsAAAAYFBMVEUAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD6T+iNAAAAIHRSTlMA4QwQBxpPFdxdQmVKhrA2yr12ItOVbqehfVYtxpqPKXYqcncAAAHMSURBVFjD7dbbcoIwEAbgZUEDyBk5CB7e/y1bYHc2sZ0kjBd1Ov43uJB8hAQQ+OSfBXck+tk9VCH6J1QIZmiHJfYOGMLeKEvlFTSGcNgPROGbAuWRMq9rS8V6uOVDqQ3oAsplqRIqjktx50O5BZBWzVINVGRLUfGh0gbk3Oq0XEGsAQ8+crXOwYWbJd/FMdCAk4zNBjTcbOIJYWDk4mEFeq1PdNYLvpzauowy0BQgDTSg5N+9HUi0qc4F0K7tYAcmbjfTuvFwCvpZgB3IuE8LcyCArGjiAFIZaaMDDMfKDshcIdQ6wPMxgi8A7bqpCLjyU+ECHjxUWtB8A1rejS6AW563aa+SDeDV7cAFHPiJUfE6AAJuPBlOIOQbdtJPnZ5pXJETQL5fbluHDejlVeICopiAddvRrT3w/e0GgIBtkxFAOyvwAOhqadEIoFx8gCqQjGACsw9QB5LEBGrYCcTKBHovoJAOBb2hOK0XMEiHEwPseQGjecaT5vkBnTlnAsTKD7gHnMYEBvAD5FVcmsDkB8h/WwUGEKMfIK/S3ARu4An08iI1gMwFyH7KU/n2H1nqDwDEV7+VX/xaD/EZVLgnv5wwQgx9gwifvFO+AILUEtVQlCj0AAAAAElFTkSuQmCC"/>
+  </g>
+  <!-- Connected dot: bright system green with a subtle ring so it stays
+       legible on both light and dark menu bars. Position: bottom-right. -->
+  <circle cx="52" cy="52" r="9" fill="#FFFFFF"/>
+  <circle cx="52" cy="52" r="7.5" fill="#30D158"/>
+</svg>
