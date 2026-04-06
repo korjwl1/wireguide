@@ -44,10 +44,10 @@ func buildTrayOnIcon() []byte {
 	dst := image.NewNRGBA(bounds)
 	draw.Draw(dst, bounds, base, bounds.Min, draw.Src)
 
-	// Badge: filled circle at top-right, overlapping the W glyph.
-	// For a 64x64 icon: center at (54, 10), radius 9 creates a prominent
-	// badge that overlaps the top-right of the W, like a notification dot.
-	cx, cy, r := 54, 10, 9
+	// Badge: filled circle at bottom-left, overlapping the W glyph.
+	// For a 64x64 icon: center at (10, 54), radius 9 creates a prominent
+	// badge that overlaps the bottom-left of the W.
+	cx, cy, r := 10, 54, 9
 	black := color.NRGBA{0, 0, 0, 255}
 	for y := cy - r; y <= cy+r; y++ {
 		for x := cx - r; x <= cx+r; x++ {
