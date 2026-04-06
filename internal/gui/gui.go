@@ -123,13 +123,21 @@ func Run(assetsHandler http.Handler, dataDir string) error {
 
 	// macOS standard: close button hides the window instead of destroying it.
 	// The app stays alive in the tray; "Show Window" brings it back.
-	// Without this, closing the window destroys it permanently and
-	// "Show Window" from the tray does nothing (no window to show).
-	win.OnWindowEvent(events.Common.WindowClosing, func(event *application.WindowEvent) {
+	//
+	// CRITICAL: Must use RegisterHook, NOT OnWindowEvent. Wails registers
+	// its own OnWindowEvent(WindowClosing) listener that calls markAsDestroyed
+	// + close. Listeners run in separate goroutines, so Cancel() from our
+	// listener races with Wails' listener — the window gets destroyed despite
+	// Cancel. Hooks run sequentially BEFORE listeners, so Cancel() here
+	// reliably prevents Wails' default close/destroy behavior.
+	win.RegisterHook(events.Common.WindowClosing, func(event *application.WindowEvent) {
 		event.Cancel()
 		win.Hide()
 		hideDock()
 	})
+
+	// Wire the window reference so showDock() can retry showing it.
+	dockWindow = win
 
 	// Native file drop forwarded to frontend
 	win.OnWindowEvent(events.Common.WindowFilesDropped, func(event *application.WindowEvent) {

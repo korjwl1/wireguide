@@ -10,15 +10,13 @@
         <key>CFBundleIdentifier</key>
             <string>com.example.wireguide</string>
         <key>CFBundleVersion</key>
-            <string>0.1.0</string>
+            <string>0.1.3</string>
         <key>CFBundleGetInfoString</key>
             <string>This is a comment</string>
         <key>CFBundleShortVersionString</key>
-            <string>0.1.0</string>
+            <string>0.1.3</string>
         <key>CFBundleIconFile</key>
             <string>icons</string>
-        <key>CFBundleIconName</key>
-            <string>appicon</string>
         <key>LSMinimumSystemVersion</key>
             <string>10.15.0</string>
         <key>NSHighResolutionCapable</key>

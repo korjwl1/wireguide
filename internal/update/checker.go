@@ -20,8 +20,11 @@ import (
 const (
 	githubRepo     = "korjwl1/wireguide"
 	apiEndpoint    = "https://api.github.com/repos/" + githubRepo + "/releases/latest"
-	currentVersion = "0.1.2"
+	currentVersion = "0.1.3"
 )
+
+// CurrentVersion returns the hardcoded app version string.
+func CurrentVersion() string { return currentVersion }
 
 // Release represents a GitHub release.
 type Release struct {
