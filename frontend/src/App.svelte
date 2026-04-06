@@ -233,6 +233,10 @@
         // created a new file instead of overwriting the old one.
         if (saveName !== editorOriginalName) {
           await TunnelService.RenameTunnel(editorOriginalName, saveName);
+          // Update selectedTunnel so refreshTunnels' find() matches the
+          // new name. Without this, the list refreshes but the detail
+          // pane stays on the stale old name.
+          selectedTunnel.update(sel => sel ? { ...sel, name: saveName } : sel);
         }
         await TunnelService.UpdateConfig(saveName, saveContent);
       }
