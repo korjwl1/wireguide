@@ -6,7 +6,9 @@ import (
 	"image/color"
 	"image/png"
 	"log/slog"
+	"os/exec"
 	"runtime"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -33,6 +35,17 @@ func init() {
 // buildTrayOnIcon composites a W glyph (in wColor) with a green dot badge at
 // the bottom-left. Returns a non-template PNG so the green dot keeps its colour.
 // wColor should be black for light menu bars, white for dark menu bars.
+// isDarkMenuBar returns true if macOS is currently using a dark menu bar.
+// Uses `defaults read -g AppleInterfaceStyle` — returns "Dark" when dark mode
+// is active, exits non-zero when light mode is active.
+func isDarkMenuBar() bool {
+	out, err := exec.Command("defaults", "read", "-g", "AppleInterfaceStyle").Output()
+	if err != nil {
+		return false // light mode (command fails = no AppleInterfaceStyle key = light)
+	}
+	return strings.TrimSpace(string(out)) == "Dark"
+}
+
 func buildTrayOnIcon(wColor color.NRGBA) []byte {
 	base, err := png.Decode(bytes.NewReader(icons.SystrayMacTemplate))
 	if err != nil {
@@ -59,8 +72,11 @@ func buildTrayOnIcon(wColor color.NRGBA) []byte {
 		}
 	}
 
-	// Green badge: filled circle at bottom-left, overlapping the W glyph.
-	cx, cy, r := 10, 54, 9
+	// Green badge: filled circle overlapping the bottom of the W's left leg.
+	// The W's left leg bottom is at roughly (x=16-24, y=48) in the 64x64 icon.
+	// Placing the dot at (16, 52) with radius 8 creates a visible badge that
+	// overlaps the glyph naturally, like a notification indicator.
+	cx, cy, r := 16, 52, 8
 	green := color.NRGBA{52, 199, 89, 255} // macOS systemGreen
 	for y := cy - r; y <= cy+r; y++ {
 		for x := cx - r; x <= cx+r; x++ {
@@ -138,10 +154,14 @@ func (t *trayManager) setIconState(activeName string) {
 	t.mu.Unlock()
 
 	if activeName != "" {
-		// Connected: W + green dot (non-template so the dot keeps colour).
-		// SetIcon = light bar (black W), SetDarkModeIcon = dark bar (white W).
-		t.tray.SetIcon(trayOnIcon)
-		t.tray.SetDarkModeIcon(trayOnIconDark)
+		// Connected: W + green dot. Non-template icon (coloured dot).
+		// Wails's SetDarkModeIcon just calls setIcon on macOS (no-op), so
+		// we detect the theme ourselves and pick the right variant.
+		if runtime.GOOS == "darwin" && isDarkMenuBar() {
+			t.tray.SetIcon(trayOnIconDark)
+		} else {
+			t.tray.SetIcon(trayOnIcon)
+		}
 		t.tray.SetTooltip("WireGuide — connected: " + activeName)
 	} else {
 		// Disconnected: plain W template icon (auto-inverts for theme).
