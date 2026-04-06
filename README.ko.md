@@ -11,7 +11,7 @@
 <p align="center">
   <a href="https://github.com/korjwl1/wireguide/releases/latest"><img src="https://img.shields.io/github/v/release/korjwl1/wireguide?style=flat-square" alt="Release" /></a>
   <a href="#설치"><img src="https://img.shields.io/badge/homebrew-tap-blue?style=flat-square" alt="Homebrew" /></a>
-  <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey?style=flat-square" alt="Platform" />
+  <img src="https://img.shields.io/badge/platform-macOS%20(Apple%20Silicon)-lightgrey?style=flat-square" alt="Platform" />
   <a href="LICENSE"><img src="https://img.shields.io/github/license/korjwl1/wireguide?style=flat-square" alt="License" /></a>
 </p>
 
@@ -81,6 +81,29 @@ WireGuide는 `wg-quick`의 전체 로직을 Go로 구현했습니다 — [`darwi
 
 ---
 
+## 스크린샷
+
+<table>
+  <tr>
+    <td align="center"><img src="docs/screenshots/06-connected.png" width="400" /><br><sub>VPN 연결됨 — 실시간 통계 및 속도 그래프</sub></td>
+    <td align="center"><img src="docs/screenshots/02-editor.png" width="400" /><br><sub>설정 에디터 — WireGuard 문법 강조</sub></td>
+  </tr>
+  <tr>
+    <td align="center"><img src="docs/screenshots/03-autocomplete.png" width="400" /><br><sub>에디터 자동완성 — 필드 제안</sub></td>
+    <td align="center"><img src="docs/screenshots/04-diagnostics.png" width="400" /><br><sub>네트워크 진단</sub></td>
+  </tr>
+  <tr>
+    <td align="center"><img src="docs/screenshots/05-settings.png" width="400" /><br><sub>설정 — 테마, 언어, 로그 레벨</sub></td>
+    <td align="center"><img src="docs/screenshots/08-logs.png" width="400" /><br><sub>로그 뷰어 — 레벨 필터링, 자동 스크롤</sub></td>
+  </tr>
+  <tr>
+    <td align="center"><img src="docs/screenshots/01-main.png" width="400" /><br><sub>빈 상태 — .conf 드래그 앤 드롭 가져오기</sub></td>
+    <td align="center"><img src="docs/screenshots/09-tray-menu.png" width="200" /><br><sub>시스템 트레이 메뉴</sub></td>
+  </tr>
+</table>
+
+---
+
 ## 기능
 
 | 기능 | 설명 |
@@ -114,6 +137,8 @@ brew install --cask wireguide
 ### macOS (수동)
 
 [Releases](https://github.com/korjwl1/wireguide/releases)에서 다운로드 후 `/Applications`으로 이동.
+
+> macOS에서 "앱이 손상되었습니다" 경고가 뜨면: `xattr -cr /Applications/WireGuide.app`
 
 ### 소스에서 빌드
 
@@ -161,6 +186,30 @@ graph LR
 
 ---
 
+## 기술 스택
+
+| 구성 요소 | 기술 |
+|-----------|------|
+| 언어 | Go 1.25+ |
+| GUI | [Wails v3](https://wails.io) |
+| 프론트엔드 | Svelte + Vite |
+| WireGuard | [wireguard-go](https://git.zx2c4.com/wireguard-go) + [wgctrl-go](https://github.com/WireGuard/wgctrl-go) |
+| IPC | JSON-RPC over Unix socket / Named pipe |
+| 에디터 | [CodeMirror 6](https://codemirror.net/) |
+| 방화벽 | macOS `pf` / Linux `nftables` / Windows `netsh advfirewall` |
+
+---
+
+## 후원
+
+<a href="https://github.com/sponsors/korjwl1">
+  <img src="https://img.shields.io/badge/Sponsor-%E2%9D%A4-pink?style=for-the-badge&logo=github" alt="Sponsor" />
+</a>
+
+WireGuide가 유용하셨다면 후원으로 개발을 지원해 주세요.
+
+---
+
 ## 라이선스
 
-MIT
+[MIT](LICENSE)
