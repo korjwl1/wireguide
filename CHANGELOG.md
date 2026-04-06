@@ -2,6 +2,30 @@
 
 All notable changes to WireGuide will be documented in this file.
 
+## [0.1.4] - 2026-04-07
+
+### Security
+- Remove script execution (PreUp/PostUp/PreDown/PostDown) — eliminates local privilege escalation via ApproveScripts RPC
+- Fix Windows IPC ACL: allow non-admin GUI to connect to helper pipe
+- Harden update integrity: asset size validation + Content-Length check
+
+### Fixed
+- Kill switch pf rules: use anchor-only approach instead of modifying main ruleset (fixes Tahoe compatibility)
+- Kill switch + DNS protection now toggleable while VPN is connected
+- Kill switch reconnect deadlock: suspend/resume firewall rules during reconnect
+- Log viewer scroll not working
+- Tunnel list scroll overflow
+
+### Added
+- Handshake-based health check: detects dead tunnels and triggers reconnect after 180s
+- Instant sleep/wake detection via NSWorkspace notification (polling fallback kept)
+- Typed tunnel error enums (ErrAlreadyConnected, ErrNetwork, etc.)
+- DNS post-write verification
+- Crash recovery journal with pre-modification DNS snapshot
+- Comprehensive unit tests (102 tests, race-clean)
+- CHANGELOG.md
+- Info-level logs for kill switch and DNS protection events
+
 ## [0.1.3] - 2026-04-07
 
 ### Fixed
