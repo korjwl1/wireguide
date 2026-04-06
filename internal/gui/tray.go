@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"image"
 	"image/color"
-	"image/draw"
 	"image/png"
 	"log/slog"
 	"runtime"
@@ -17,24 +16,24 @@ import (
 	"github.com/wailsapp/wails/v3/pkg/icons"
 )
 
-// trayOnIcon is the template icon for "connected" state: the Wails default W
-// with a small filled circle (●) in the bottom-left corner. Both icons use
-// SetTemplateIcon so macOS auto-inverts for light/dark menu bar themes.
-//
-// Generated at init time by compositing a dot onto icons.SystrayMacTemplate.
-var trayOnIcon []byte
+// trayOnIcon (light) and trayOnIconDark are the connected-state icons:
+// W glyph + green dot badge at bottom-left. Non-template icons so the
+// green dot keeps its colour. Two variants because non-template icons
+// don't auto-invert — black W for light bars, white W for dark bars.
+var (
+	trayOnIcon     []byte // black W + green dot (light menu bar)
+	trayOnIconDark []byte // white W + green dot (dark menu bar)
+)
 
 func init() {
-	trayOnIcon = buildTrayOnIcon()
+	trayOnIcon = buildTrayOnIcon(color.NRGBA{0, 0, 0, 255})     // black W
+	trayOnIconDark = buildTrayOnIcon(color.NRGBA{255, 255, 255, 255}) // white W
 }
 
-// buildTrayOnIcon takes the Wails default 64x64 template W and draws a
-// notification-style badge circle at the top-right corner, overlapping the W
-// glyph — similar to Slack's red badge or iOS notification dots.
-//
-// Black-on-transparent is the macOS template icon format: the system uses the
-// alpha channel as a mask and auto-tints for light/dark menu bar themes.
-func buildTrayOnIcon() []byte {
+// buildTrayOnIcon composites a W glyph (in wColor) with a green dot badge at
+// the bottom-left. Returns a non-template PNG so the green dot keeps its colour.
+// wColor should be black for light menu bars, white for dark menu bars.
+func buildTrayOnIcon(wColor color.NRGBA) []byte {
 	base, err := png.Decode(bytes.NewReader(icons.SystrayMacTemplate))
 	if err != nil {
 		slog.Warn("failed to decode base tray icon, using unmodified", "error", err)
@@ -42,18 +41,32 @@ func buildTrayOnIcon() []byte {
 	}
 	bounds := base.Bounds()
 	dst := image.NewNRGBA(bounds)
-	draw.Draw(dst, bounds, base, bounds.Min, draw.Src)
 
-	// Badge: filled circle at bottom-left, overlapping the W glyph.
-	// For a 64x64 icon: center at (10, 54), radius 9 creates a prominent
-	// badge that overlaps the bottom-left of the W.
+	// The template icon has black pixels with varying alpha. Re-tint each
+	// pixel to wColor while preserving its alpha — this turns the black W
+	// into a white W (for dark mode) or keeps it black (for light mode).
+	for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
+		for x := bounds.Min.X; x < bounds.Max.X; x++ {
+			_, _, _, a := base.At(x, y).RGBA()
+			if a > 0 {
+				dst.SetNRGBA(x, y, color.NRGBA{
+					R: wColor.R,
+					G: wColor.G,
+					B: wColor.B,
+					A: uint8(a >> 8),
+				})
+			}
+		}
+	}
+
+	// Green badge: filled circle at bottom-left, overlapping the W glyph.
 	cx, cy, r := 10, 54, 9
-	black := color.NRGBA{0, 0, 0, 255}
+	green := color.NRGBA{52, 199, 89, 255} // macOS systemGreen
 	for y := cy - r; y <= cy+r; y++ {
 		for x := cx - r; x <= cx+r; x++ {
 			dx, dy := x-cx, y-cy
 			if dx*dx+dy*dy <= r*r {
-				dst.SetNRGBA(x, y, black)
+				dst.SetNRGBA(x, y, green)
 			}
 		}
 	}
@@ -125,14 +138,13 @@ func (t *trayManager) setIconState(activeName string) {
 	t.mu.Unlock()
 
 	if activeName != "" {
-		// Connected: W with a small dot badge. Both states use template icons
-		// so macOS auto-inverts for light/dark menu bar themes.
-		if runtime.GOOS == "darwin" {
-			t.tray.SetTemplateIcon(trayOnIcon)
-		}
+		// Connected: W + green dot (non-template so the dot keeps colour).
+		// SetIcon = light bar (black W), SetDarkModeIcon = dark bar (white W).
+		t.tray.SetIcon(trayOnIcon)
+		t.tray.SetDarkModeIcon(trayOnIconDark)
 		t.tray.SetTooltip("WireGuide — connected: " + activeName)
 	} else {
-		// Disconnected: plain W template icon.
+		// Disconnected: plain W template icon (auto-inverts for theme).
 		if runtime.GOOS == "darwin" {
 			t.tray.SetTemplateIcon(icons.SystrayMacTemplate)
 		}
