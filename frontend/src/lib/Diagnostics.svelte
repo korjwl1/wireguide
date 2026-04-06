@@ -1,77 +1,28 @@
 <script>
   import { t } from '../i18n/index.js';
 
-  let cidrInput = '';
-  let cidrResult = null;
   let pingEndpoint = '';
   let pingResult = null;
-  let speedResult = null;
-  let loading = { cidr: false, ping: false, speed: false };
-
-  // These would call Go backend via Wails bindings in production
-  function calcCIDR() {
-    loading.cidr = true;
-    // Placeholder — would call TunnelService.CalculateCIDR(cidrInput)
-    try {
-      const parts = cidrInput.split('/');
-      const prefix = parseInt(parts[1] || '32');
-      const hosts = prefix >= 31 ? (prefix === 32 ? 1 : 2) : Math.pow(2, 32 - prefix) - 2;
-      cidrResult = {
-        cidr: cidrInput,
-        network: parts[0],
-        prefix_len: prefix,
-        total_hosts: hosts,
-      };
-    } catch (e) {
-      cidrResult = { error: 'Invalid CIDR' };
-    }
-    loading.cidr = false;
-  }
+  let loading = false;
 
   function runPing() {
-    loading.ping = true;
+    loading = true;
     pingResult = { host: pingEndpoint, reachable: false, latency_ms: 0, error: 'Run from backend (requires Go)' };
-    loading.ping = false;
-  }
-
-  function runSpeed() {
-    loading.speed = true;
-    speedResult = { download_mbps: 0, error: 'Run from backend (requires Go HTTP client)' };
-    loading.speed = false;
+    loading = false;
   }
 </script>
 
 <div class="diag">
   <h3>{$t('tools.net_diag_title')}</h3>
+  <p class="description">{$t('tools.net_diag_desc')}</p>
 
-  <!-- CIDR Calculator -->
-  <section>
-    <h4>{$t('tools.cidr_calc_title')}</h4>
-    <div class="input-row">
-      <input type="text" bind:value={cidrInput} placeholder={$t('tools.cidr_placeholder')}
-        on:keydown={(e) => e.key === 'Enter' && calcCIDR()} />
-      <button on:click={calcCIDR}>{$t('tools.calculate')}</button>
-    </div>
-    {#if cidrResult}
-      {#if cidrResult.error}
-        <p class="error">{cidrResult.error}</p>
-      {:else}
-        <div class="result-grid">
-          <span class="label">{$t('tools.network')}</span><span>{cidrResult.network}</span>
-          <span class="label">{$t('tools.prefix')}</span><span>/{cidrResult.prefix_len}</span>
-          <span class="label">{$t('tools.hosts')}</span><span>{cidrResult.total_hosts?.toLocaleString()}</span>
-        </div>
-      {/if}
-    {/if}
-  </section>
-
-  <!-- Ping Test -->
   <section>
     <h4>{$t('tools.endpoint_reach_title')}</h4>
+    <p class="hint">{$t('tools.ping_desc')}</p>
     <div class="input-row">
       <input type="text" bind:value={pingEndpoint} placeholder={$t('tools.endpoint_placeholder')}
         on:keydown={(e) => e.key === 'Enter' && runPing()} />
-      <button on:click={runPing} disabled={loading.ping}>{loading.ping ? $t('tools.pinging') : $t('tools.ping')}</button>
+      <button on:click={runPing} disabled={loading}>{loading ? $t('tools.pinging') : $t('tools.ping')}</button>
     </div>
     {#if pingResult}
       <div class="result-grid">
@@ -86,34 +37,28 @@
       </div>
     {/if}
   </section>
-
-  <!-- Speed Test -->
-  <section>
-    <h4>{$t('tools.speed_test_title')}</h4>
-    <button class="btn-speed" on:click={runSpeed} disabled={loading.speed}>
-      {loading.speed ? '…' : $t('tools.run_speed_test')}
-    </button>
-    {#if speedResult}
-      <div class="result-grid">
-        <span class="label">{$t('tools.download_speed')}</span>
-        <span>{speedResult.download_mbps ? speedResult.download_mbps.toFixed(1) + ' Mbps' : '-'}</span>
-        {#if speedResult.error}
-          <span class="label">{$t('tools.note')}</span><span class="muted">{speedResult.error}</span>
-        {/if}
-      </div>
-    {/if}
-  </section>
 </div>
 
 <style>
   .diag { padding: 16px; }
-  h3 { margin-bottom: 16px; }
+  h3 { margin-bottom: 4px; }
+  .description {
+    font-size: 13px;
+    color: var(--text-secondary);
+    margin-bottom: 16px;
+    line-height: 1.5;
+  }
   section { margin-bottom: 20px; }
   h4 {
     font-size: 12px;
     color: var(--text-secondary);
     text-transform: uppercase;
     letter-spacing: 1px;
+    margin-bottom: 4px;
+  }
+  .hint {
+    font-size: 12px;
+    color: var(--text-muted);
     margin-bottom: 8px;
   }
   .input-row {
@@ -130,7 +75,7 @@
     font-family: monospace;
     font-size: 13px;
   }
-  .input-row button, .btn-speed {
+  .input-row button {
     padding: 6px 12px;
     background: var(--accent);
     border: none;
@@ -139,7 +84,6 @@
     cursor: pointer;
     font-size: 13px;
   }
-  .btn-speed:disabled { opacity: 0.5; }
   .result-grid {
     display: grid;
     grid-template-columns: 80px 1fr;
@@ -153,6 +97,4 @@
   .label { color: var(--text-secondary); }
   .green { color: var(--green); }
   .red { color: var(--red); }
-  .muted { color: var(--text-muted); font-size: 12px; }
-  .error { color: var(--red); font-size: 13px; margin-top: 4px; }
 </style>

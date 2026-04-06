@@ -20,6 +20,7 @@
 
 <div class="dns-test">
   <h4>{$t('tools.dns_leak_title')}</h4>
+  <p class="description">{$t('tools.dns_leak_desc')}</p>
   <button class="btn-test" on:click={runTest} disabled={loading}>
     {loading ? $t('tools.dns_leak_checking') : $t('tools.dns_leak_run')}
   </button>
@@ -49,7 +50,13 @@
   .dns-test { padding: 8px 0; }
   h4 {
     font-size: 12px; color: var(--text-secondary);
-    text-transform: uppercase; letter-spacing: 1px; margin-bottom: 8px;
+    text-transform: uppercase; letter-spacing: 1px; margin-bottom: 4px;
+  }
+  .description {
+    font-size: 12px;
+    color: var(--text-muted);
+    margin-bottom: 10px;
+    line-height: 1.5;
   }
   .btn-test {
     padding: 8px 16px; background: var(--accent); border: none;
