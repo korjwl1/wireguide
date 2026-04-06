@@ -23,6 +23,9 @@ const (
 	currentVersion = "0.1.3"
 )
 
+// CurrentVersion returns the hardcoded app version string.
+func CurrentVersion() string { return currentVersion }
+
 // Release represents a GitHub release.
 type Release struct {
 	TagName     string  `json:"tag_name"`

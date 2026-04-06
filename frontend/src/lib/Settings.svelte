@@ -28,6 +28,7 @@
     tray_icon_style: 'color',
   };
   let loaded = false;
+  let appVersion = '';
 
   async function load() {
     try {
@@ -184,8 +185,11 @@
       close();
     }
   }
-  onMount(() => {
+  onMount(async () => {
     window.addEventListener('keydown', onKeyDown);
+    try {
+      appVersion = await TunnelService.GetVersion();
+    } catch (_) {}
     return () => window.removeEventListener('keydown', onKeyDown);
   });
 </script>
@@ -256,7 +260,7 @@
     </section>
 
     <div class="modal-footer">
-      <span class="version">v0.1.1</span>
+      <span class="version">{appVersion ? `v${appVersion}` : ''}</span>
       <button type="button" class="btn-close" on:mousedown|stopPropagation={close}>{$t('settings.close')}</button>
     </div>
   </div>

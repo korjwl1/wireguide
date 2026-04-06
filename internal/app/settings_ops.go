@@ -122,6 +122,11 @@ func (s *TunnelService) SetDNSProtection(enabled bool) error {
 
 // --- Auto-update ---
 
+// GetVersion returns the current app version string.
+func (s *TunnelService) GetVersion() string {
+	return update.CurrentVersion()
+}
+
 // CheckForUpdate queries GitHub for a newer release.
 func (s *TunnelService) CheckForUpdate() (*update.UpdateInfo, error) {
 	return update.CheckForUpdate()
