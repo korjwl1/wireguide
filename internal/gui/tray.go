@@ -18,18 +18,25 @@ import (
 	"github.com/wailsapp/wails/v3/pkg/icons"
 )
 
-// trayOnIcon (light) and trayOnIconDark are the connected-state icons:
-// W glyph + green dot badge at bottom-left. Non-template icons so the
-// green dot keeps its colour. Two variants because non-template icons
-// don't auto-invert — black W for light bars, white W for dark bars.
+// Tray icon variants. We always use SetIcon (non-template) to avoid a
+// Wails v3 bug where SetTemplateIcon sets isTemplateIcon=true on the
+// macosSystemTray struct, and the subsequent SetIcon never clears it —
+// causing all future icons to be rendered monochrome by macOS.
+//
+// Two colour variants per state because non-template icons don't
+// auto-invert — black W for light menu bars, white W for dark.
 var (
-	trayOnIcon     []byte // black W + green dot (light menu bar)
-	trayOnIconDark []byte // white W + green dot (dark menu bar)
+	trayOnIcon      []byte // black W + green dot (light menu bar)
+	trayOnIconDark  []byte // white W + green dot (dark menu bar)
+	trayOffIcon     []byte // black W, no dot (light menu bar)
+	trayOffIconDark []byte // white W, no dot (dark menu bar)
 )
 
 func init() {
-	trayOnIcon = buildTrayOnIcon(color.NRGBA{0, 0, 0, 255})     // black W
+	trayOnIcon = buildTrayOnIcon(color.NRGBA{0, 0, 0, 255})          // black W
 	trayOnIconDark = buildTrayOnIcon(color.NRGBA{255, 255, 255, 255}) // white W
+	trayOffIcon = buildTrayOffIcon(color.NRGBA{0, 0, 0, 255})
+	trayOffIconDark = buildTrayOffIcon(color.NRGBA{255, 255, 255, 255})
 }
 
 // buildTrayOnIcon composites a W glyph (in wColor) with a green dot badge at
@@ -72,11 +79,11 @@ func buildTrayOnIcon(wColor color.NRGBA) []byte {
 		}
 	}
 
-	// Green badge: filled circle overlapping the bottom of the W's left leg.
-	// The W's left leg bottom is at roughly (x=16-24, y=48) in the 64x64 icon.
-	// Placing the dot at (16, 52) with radius 8 creates a visible badge that
-	// overlaps the glyph naturally, like a notification indicator.
-	cx, cy, r := 16, 52, 8
+	// Green badge: filled circle overlapping the W's left leg.
+	// The W occupies roughly x=15-49, y=16-48 in the 64x64 icon.
+	// Placing the dot at (20, 48) with radius 8 centers it on the left
+	// leg's bottom, overlapping the glyph like a notification badge.
+	cx, cy, r := 20, 48, 8
 	green := color.NRGBA{52, 199, 89, 255} // macOS systemGreen
 	for y := cy - r; y <= cy+r; y++ {
 		for x := cx - r; x <= cx+r; x++ {
@@ -90,6 +97,40 @@ func buildTrayOnIcon(wColor color.NRGBA) []byte {
 	var buf bytes.Buffer
 	if err := png.Encode(&buf, dst); err != nil {
 		slog.Warn("failed to encode tray-on icon, using unmodified", "error", err)
+		return icons.SystrayMacTemplate
+	}
+	return buf.Bytes()
+}
+
+// buildTrayOffIcon renders the W glyph in wColor with no badge — the
+// disconnected-state equivalent of the template icon, but as a plain
+// (non-template) PNG so we never need SetTemplateIcon.
+func buildTrayOffIcon(wColor color.NRGBA) []byte {
+	base, err := png.Decode(bytes.NewReader(icons.SystrayMacTemplate))
+	if err != nil {
+		slog.Warn("failed to decode base tray icon, using unmodified", "error", err)
+		return icons.SystrayMacTemplate
+	}
+	bounds := base.Bounds()
+	dst := image.NewNRGBA(bounds)
+
+	for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
+		for x := bounds.Min.X; x < bounds.Max.X; x++ {
+			_, _, _, a := base.At(x, y).RGBA()
+			if a > 0 {
+				dst.SetNRGBA(x, y, color.NRGBA{
+					R: wColor.R,
+					G: wColor.G,
+					B: wColor.B,
+					A: uint8(a >> 8),
+				})
+			}
+		}
+	}
+
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, dst); err != nil {
+		slog.Warn("failed to encode tray-off icon, using unmodified", "error", err)
 		return icons.SystrayMacTemplate
 	}
 	return buf.Bytes()
@@ -164,9 +205,15 @@ func (t *trayManager) setIconState(activeName string) {
 		}
 		t.tray.SetTooltip("WireGuide — connected: " + activeName)
 	} else {
-		// Disconnected: plain W template icon (auto-inverts for theme).
+		// Disconnected: plain W, no badge. We use SetIcon (not
+		// SetTemplateIcon) to avoid the Wails isTemplateIcon sticky-flag
+		// bug — see comment on the icon vars above.
 		if runtime.GOOS == "darwin" {
-			t.tray.SetTemplateIcon(icons.SystrayMacTemplate)
+			if isDarkMenuBar() {
+				t.tray.SetIcon(trayOffIconDark)
+			} else {
+				t.tray.SetIcon(trayOffIcon)
+			}
 		}
 		t.tray.SetTooltip("WireGuide")
 	}

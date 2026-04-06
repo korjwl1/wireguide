@@ -22,7 +22,6 @@ import (
 	"github.com/korjwl1/wireguide/internal/storage"
 	"github.com/wailsapp/wails/v3/pkg/application"
 	"github.com/wailsapp/wails/v3/pkg/events"
-	"github.com/wailsapp/wails/v3/pkg/icons"
 )
 
 // ReconnectEvent mirrors ipc.ReconnectStateDTO for Wails event emission.
@@ -128,10 +127,16 @@ func Run(assetsHandler http.Handler, dataDir string) error {
 		app.Event.Emit("files-dropped", map[string]any{"files": files})
 	})
 
-	// 6. System tray
+	// 6. System tray — always use SetIcon (never SetTemplateIcon) to avoid
+	// a Wails v3 bug where the isTemplateIcon sticky flag makes all
+	// subsequent SetIcon calls render as monochrome template icons.
 	tray := app.SystemTray.New()
 	if runtime.GOOS == "darwin" {
-		tray.SetTemplateIcon(icons.SystrayMacTemplate)
+		if isDarkMenuBar() {
+			tray.SetIcon(trayOffIconDark)
+		} else {
+			tray.SetIcon(trayOffIcon)
+		}
 	} else {
 		tray.SetLabel("WireGuide")
 	}
