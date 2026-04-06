@@ -175,6 +175,16 @@ graph LR
 
 ---
 
+## Sponsor
+
+<a href="https://github.com/sponsors/korjwl1">
+  <img src="https://img.shields.io/badge/Sponsor-%E2%9D%A4-pink?style=for-the-badge&logo=github" alt="Sponsor" />
+</a>
+
+If WireGuide is useful to you, consider sponsoring to support development.
+
+---
+
 ## License
 
-MIT
+[MIT](LICENSE)
