@@ -15,14 +15,16 @@ import (
 // Listen creates a Unix socket listener at addr.
 // If ownerUID >= 0, chowns the socket to that UID and sets mode 0600.
 func Listen(addr string, ownerUID int) (net.Listener, error) {
-	// Ensure parent directory exists with restrictive permissions (0700)
-	// to prevent other users from placing symlinks or interfering with
-	// the socket on multi-user systems.
+	// Ensure parent directory exists. On macOS the socket lives in
+	// /var/run/wireguide/ — the helper (root) creates it, and the GUI
+	// (unprivileged user) needs to traverse it to reach the socket.
+	// 0755 allows traversal; the socket itself is chmod 0600 + chowned
+	// to the GUI user, so only that user can actually connect.
 	if dir := filepath.Dir(addr); dir != "" {
-		if err := os.MkdirAll(dir, 0700); err != nil {
+		if err := os.MkdirAll(dir, 0755); err != nil {
 			return nil, fmt.Errorf("mkdir %s: %w", dir, err)
 		}
-		if err := os.Chmod(dir, 0700); err != nil {
+		if err := os.Chmod(dir, 0755); err != nil {
 			// Non-fatal: we may not own the directory (e.g. system temp dir).
 			// The ownership check below is the real security boundary.
 			slog.Debug("chmod parent dir failed (non-fatal)", "dir", dir, "error", err)
