@@ -10,7 +10,9 @@
 package app
 
 import (
+	"context"
 	"fmt"
+	"time"
 
 	"github.com/korjwl1/wireguide/internal/domain"
 	"github.com/korjwl1/wireguide/internal/ipc"
@@ -61,6 +63,23 @@ func (s *TunnelService) call(method string, params interface{}, result interface
 		return errHelperUnavailable
 	}
 	return c.Call(method, params, result)
+}
+
+// callLong performs an RPC with a generous timeout for operations that may
+// take many seconds (Connect, Disconnect). The default 10-second timeout
+// is too short for Connect, which involves DNS resolution + route setup +
+// networksetup DNS configuration across all services (can take 15+ seconds
+// on a Mac with many network services). If the client times out before the
+// server finishes, the tunnel gets connected server-side but the GUI sees
+// a false error, and the health monitor may trigger unnecessary recovery.
+func (s *TunnelService) callLong(method string, params interface{}, result interface{}) error {
+	c := s.clients.Get()
+	if c == nil {
+		return errHelperUnavailable
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	return c.CallWithContext(ctx, method, params, result)
 }
 
 // TunnelInfo is the summary shown in the tunnel list.

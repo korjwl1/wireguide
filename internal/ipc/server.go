@@ -84,8 +84,22 @@ func (s *Server) Serve() error {
 				return err
 			}
 		}
-		go s.handleConn(conn)
+		go s.safeHandleConn(conn)
 	}
+}
+
+// safeHandleConn wraps handleConn with panic recovery so that a panic in any
+// RPC handler does not kill the entire helper process. Without this, a nil
+// dereference or unexpected state in a handler would crash the helper silently.
+func (s *Server) safeHandleConn(conn net.Conn) {
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Error("ipc: panic in connection handler (recovered)",
+				"panic", r,
+				"conn", conn.RemoteAddr().String())
+		}
+	}()
+	s.handleConn(conn)
 }
 
 // Shutdown stops the server.

@@ -102,7 +102,7 @@ func (s *TunnelService) Connect(name string, scriptsAllowed bool) error {
 	s.clients.MarkInflight()
 	defer s.clients.UnmarkInflight()
 
-	err = s.call(ipc.MethodConnect, ipc.ConnectRequest{
+	err = s.callLong(ipc.MethodConnect, ipc.ConnectRequest{
 		Config:         cfg,
 		ScriptsAllowed: scriptsAllowed,
 	}, nil)
@@ -119,7 +119,7 @@ func (s *TunnelService) Connect(name string, scriptsAllowed bool) error {
 			return fmt.Errorf("approving scripts: %w", approveErr)
 		}
 		// Retry the connect — scripts are now in the allowlist.
-		return s.call(ipc.MethodConnect, ipc.ConnectRequest{
+		return s.callLong(ipc.MethodConnect, ipc.ConnectRequest{
 			Config:         cfg,
 			ScriptsAllowed: scriptsAllowed,
 		}, nil)
@@ -144,7 +144,7 @@ func isScriptsNotApproved(err error) bool {
 func (s *TunnelService) Disconnect() error {
 	s.clients.MarkInflight()
 	defer s.clients.UnmarkInflight()
-	return s.call(ipc.MethodDisconnect, nil, nil)
+	return s.callLong(ipc.MethodDisconnect, nil, nil)
 }
 
 // GetStatus queries the helper for the current connection status. IPC errors
