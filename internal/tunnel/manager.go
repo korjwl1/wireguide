@@ -46,6 +46,10 @@ type Manager struct {
 
 	netMgr  network.NetworkManager
 	dataDir string
+
+	// engineFactory creates the WireGuard engine. Defaults to NewEngine.
+	// Overridable in tests to avoid requiring root / TUN device access.
+	engineFactory func(cfg *domain.WireGuardConfig) (*Engine, error)
 }
 
 // Additional transient states used internally. Exposed on the wire as the
@@ -58,9 +62,10 @@ const (
 // NewManager creates a tunnel manager.
 func NewManager(dataDir string) *Manager {
 	return &Manager{
-		netMgr:  network.NewPlatformManager(),
-		dataDir: dataDir,
-		state:   domain.StateDisconnected,
+		netMgr:        network.NewPlatformManager(),
+		dataDir:       dataDir,
+		state:         domain.StateDisconnected,
+		engineFactory: NewEngine,
 	}
 }
 

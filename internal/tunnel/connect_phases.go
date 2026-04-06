@@ -29,7 +29,11 @@ func (m *Manager) connectPhases(cfg *domain.WireGuardConfig) (*Engine, error) {
 	fullTunnel := cfg.IsFullTunnel()
 
 	// 2. Engine
-	engine, err := NewEngine(cfg)
+	factory := m.engineFactory
+	if factory == nil {
+		factory = NewEngine
+	}
+	engine, err := factory(cfg)
 	if err != nil {
 		return nil, newTunnelError(ErrEngineCreation, "creating engine", err)
 	}

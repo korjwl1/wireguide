@@ -12,6 +12,16 @@ import (
 	"github.com/korjwl1/wireguide/internal/tunnel"
 )
 
+// TunnelManager is the subset of tunnel.Manager that the reconnect monitor
+// needs. Defined here (consumer-side interface) so tests can supply a mock
+// without importing tunnel internals or spinning up real WireGuard state.
+type TunnelManager interface {
+	IsConnected() bool
+	ActiveTunnel() string
+	Status() *tunnel.ConnectionStatus
+	Disconnect() error
+}
+
 // Config holds reconnection parameters.
 type Config struct {
 	HandshakeTimeout time.Duration // Max time without handshake before reconnecting (default: 120s)
@@ -58,7 +68,7 @@ type FirewallResumeFunc func() error
 type Monitor struct {
 	mu            sync.Mutex
 	cfg           Config
-	manager       *tunnel.Manager
+	manager       TunnelManager
 	reconnectFn   ReconnectFunc
 	statusFn      StatusChangedFunc
 	fwSuspendFn   FirewallSuspendFunc
@@ -78,7 +88,7 @@ type Monitor struct {
 }
 
 // NewMonitor creates a reconnection monitor.
-func NewMonitor(manager *tunnel.Manager, reconnectFn ReconnectFunc, statusFn StatusChangedFunc, cfg Config) *Monitor {
+func NewMonitor(manager TunnelManager, reconnectFn ReconnectFunc, statusFn StatusChangedFunc, cfg Config) *Monitor {
 	return &Monitor{
 		cfg:           cfg,
 		manager:       manager,
