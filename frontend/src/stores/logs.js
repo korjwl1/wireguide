@@ -8,7 +8,7 @@ import { Events } from '@wailsio/runtime';
 // tab without losing history).
 export const logs = writable([]);
 
-const MAX_ENTRIES = 2000;
+const MAX_ENTRIES = 1000;
 
 let installed = false;
 let unsub = null;
