@@ -98,6 +98,19 @@ func startHelperHealthMonitor(app *application.App, clients *ipc.ClientHolder, d
 			cancel()
 			alive := err == nil
 
+			// If a long-running RPC (Connect, Disconnect) is in-flight, the
+			// server processes requests sequentially per connection, so our
+			// ping won't be read until the RPC finishes. A timeout here does
+			// NOT mean the helper is dead — it just means it's busy. Treating
+			// this as a failure would trigger recoverHelper, which closes the
+			// old client (killing the in-flight RPC), creates a new client,
+			// and the server's onDisconnect fires the shutdown timer.
+			// This was the root cause of the "helper dies 22-30s after connect" bug.
+			if !alive && clients.HasInflight() {
+				slog.Debug("health ping timed out but RPC in-flight, skipping")
+				continue
+			}
+
 			switch {
 			case !alive && wasAlive:
 				slog.Warn("helper disconnected", "error", err)

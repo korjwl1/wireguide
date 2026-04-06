@@ -1,6 +1,9 @@
 package ipc
 
-import "sync"
+import (
+	"sync"
+	"sync/atomic"
+)
 
 // ClientHolder wraps a *Client so that multiple goroutines can share a single
 // IPC connection and swap it atomically after a helper restart. Both the
@@ -13,6 +16,13 @@ import "sync"
 type ClientHolder struct {
 	mu     sync.RWMutex
 	client *Client
+
+	// inflight tracks the number of RPCs currently in-flight (Connect,
+	// Disconnect, etc.). The health monitor checks this to avoid falsely
+	// declaring the helper dead when a long-running RPC is blocking the
+	// server's per-connection request loop, preventing pings from being
+	// processed on the same connection.
+	inflight atomic.Int64
 }
 
 // NewClientHolder wraps an initial client.
@@ -49,3 +59,14 @@ func (h *ClientHolder) Close() {
 		prev.Close()
 	}
 }
+
+// MarkInflight increments the in-flight RPC counter. Call before starting
+// a long-running RPC (Connect, Disconnect, etc.).
+func (h *ClientHolder) MarkInflight() { h.inflight.Add(1) }
+
+// UnmarkInflight decrements the in-flight RPC counter. Call when the RPC
+// completes (use defer).
+func (h *ClientHolder) UnmarkInflight() { h.inflight.Add(-1) }
+
+// HasInflight returns true if any long-running RPC is currently in-flight.
+func (h *ClientHolder) HasInflight() bool { return h.inflight.Load() > 0 }

@@ -96,6 +96,12 @@ func (s *TunnelService) Connect(name string, scriptsAllowed bool) error {
 		return fmt.Errorf("loading tunnel %s: %w", name, err)
 	}
 
+	// Mark the RPC as in-flight so the health monitor doesn't falsely
+	// detect helper death while the server is busy processing Connect
+	// (which blocks the per-connection request loop, preventing pings).
+	s.clients.MarkInflight()
+	defer s.clients.UnmarkInflight()
+
 	err = s.call(ipc.MethodConnect, ipc.ConnectRequest{
 		Config:         cfg,
 		ScriptsAllowed: scriptsAllowed,
@@ -136,6 +142,8 @@ func isScriptsNotApproved(err error) bool {
 
 // Disconnect tears down whatever tunnel the helper currently has active.
 func (s *TunnelService) Disconnect() error {
+	s.clients.MarkInflight()
+	defer s.clients.UnmarkInflight()
 	return s.call(ipc.MethodDisconnect, nil, nil)
 }
 
