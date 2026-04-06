@@ -81,6 +81,29 @@ Note: The dramatic Linux-only improvements (GSO/GRO vectorized I/O, 4→11 Gbps)
 
 ---
 
+## Screenshots
+
+<table>
+  <tr>
+    <td align="center"><img src="docs/screenshots/06-connected.png" width="400" /><br><sub>VPN Connected — real-time stats &amp; speed graph</sub></td>
+    <td align="center"><img src="docs/screenshots/02-editor.png" width="400" /><br><sub>Config Editor — WireGuard syntax highlighting</sub></td>
+  </tr>
+  <tr>
+    <td align="center"><img src="docs/screenshots/03-autocomplete.png" width="400" /><br><sub>Editor Autocomplete — field suggestions</sub></td>
+    <td align="center"><img src="docs/screenshots/04-diagnostics.png" width="400" /><br><sub>Network Diagnostics</sub></td>
+  </tr>
+  <tr>
+    <td align="center"><img src="docs/screenshots/05-settings.png" width="400" /><br><sub>Settings — theme, language, log level</sub></td>
+    <td align="center"><img src="docs/screenshots/08-logs.png" width="400" /><br><sub>Log Viewer — level filtering, auto-scroll</sub></td>
+  </tr>
+  <tr>
+    <td align="center"><img src="docs/screenshots/01-main.png" width="400" /><br><sub>Empty State — drag &amp; drop .conf import</sub></td>
+    <td align="center"><img src="docs/screenshots/09-tray-menu.png" width="200" /><br><sub>System Tray Menu</sub></td>
+  </tr>
+</table>
+
+---
+
 ## Features
 
 | Feature | Description |

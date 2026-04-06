@@ -35,6 +35,7 @@
   let pendingScriptsAllowed = false;
   let editName = '';
   let editorContent = '';
+  let editorOriginalName = ''; // preserved across bind updates for rename detection
   let editorErrors = [];
   let toast = '';
   let toastTimer = null;
@@ -196,6 +197,7 @@
 
   async function handleEdit(e) {
     editName = e.detail;
+    editorOriginalName = editName; // snapshot before bind can mutate it
     try {
       editorContent = await TunnelService.GetConfigText(editName);
       editorErrors = [];
@@ -224,9 +226,13 @@
       if (editorIsNew) {
         await TunnelService.ImportConfig(saveName, saveContent);
       } else {
-        // If name changed, rename first then update content
-        if (saveName !== editName) {
-          await TunnelService.RenameTunnel(editName, saveName);
+        // Compare against the ORIGINAL name (snapshot before bind could
+        // mutate editName). bind:name={editName} updates editName live
+        // as the user types, so by save-time editName === saveName always
+        // — which meant RenameTunnel was never called, and UpdateConfig
+        // created a new file instead of overwriting the old one.
+        if (saveName !== editorOriginalName) {
+          await TunnelService.RenameTunnel(editorOriginalName, saveName);
         }
         await TunnelService.UpdateConfig(saveName, saveContent);
       }
