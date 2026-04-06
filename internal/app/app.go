@@ -87,7 +87,6 @@ type TunnelInfo struct {
 	Name        string `json:"name"`
 	IsConnected bool   `json:"is_connected"`
 	Endpoint    string `json:"endpoint"`
-	HasScripts  bool   `json:"has_scripts"`
 }
 
 // ConnectionStatus is re-exported from the domain package so Wails bindings

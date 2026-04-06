@@ -169,7 +169,3 @@ func (r *ValidationResult) ErrorMessages() []string {
 	return msgs
 }
 
-// HasScriptWarnings returns true if the config contains executable scripts.
-func HasScriptWarnings(cfg *WireGuardConfig) bool {
-	return cfg.HasScripts()
-}

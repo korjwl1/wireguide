@@ -7,8 +7,6 @@
 //   - engine.go                        — wireguard-go + wgctrl TUN wiring
 //   - conflict.go                      — existing-interface conflict detection
 //   - recovery.go                      — crash recovery state file
-//   - script_executor_unix.go          — Pre/PostUp/Down hooks (Unix)
-//   - script_executor_windows.go       — Pre/PostUp/Down hooks (Windows)
 package tunnel
 
 import (
@@ -28,7 +26,7 @@ import (
 //	connected    ──Disconnect──▶ disconnecting ──▶ disconnected
 //
 // Manager.mu is held ONLY for state reads/writes, NEVER during the slow
-// phase operations (ifconfig, route, networksetup, Pre/PostUp scripts).
+// phase operations (ifconfig, route, networksetup).
 // That keeps Status() / IsConnected() / ActiveTunnel() non-blocking even
 // while a long-running Connect or Disconnect is in flight — critical so
 // that the 1 Hz status broadcast loop in helper/events.go can surface
@@ -45,8 +43,6 @@ type Manager struct {
 	engine      *Engine
 	activeCfg   *domain.WireGuardConfig
 	connectedAt time.Time
-	// scriptsAllowed tracks whether the user approved running Pre/PostUp scripts.
-	scriptsAllowed bool
 
 	netMgr  network.NetworkManager
 	dataDir string
@@ -78,7 +74,7 @@ func (m *Manager) setStateLocked(s domain.State) {
 // Connect establishes a WireGuard tunnel. Runs the expensive phase work
 // WITHOUT holding m.mu, so Status / IsConnected / ActiveTunnel stay
 // responsive for the duration.
-func (m *Manager) Connect(cfg *domain.WireGuardConfig, scriptsAllowed bool) error {
+func (m *Manager) Connect(cfg *domain.WireGuardConfig) error {
 	// --- Phase 1: claim the connecting slot under the lock ---
 	m.mu.Lock()
 	switch m.state {
@@ -96,12 +92,11 @@ func (m *Manager) Connect(cfg *domain.WireGuardConfig, scriptsAllowed bool) erro
 	// Stash the tunnel name early so Status() can show "connecting <name>"
 	// while the phases are running.
 	m.activeCfg = cfg
-	m.scriptsAllowed = scriptsAllowed
 	m.setStateLocked(domain.StateConnecting)
 	m.mu.Unlock()
 
 	// --- Phase 2: run the slow operations WITHOUT holding the lock ---
-	engine, err := m.connectPhases(cfg, scriptsAllowed)
+	engine, err := m.connectPhases(cfg)
 
 	// --- Phase 3: commit final state under the lock ---
 	m.mu.Lock()
@@ -111,7 +106,6 @@ func (m *Manager) Connect(cfg *domain.WireGuardConfig, scriptsAllowed bool) erro
 		// already cleaned up its partial network state via its internal
 		// rollback helper.
 		m.activeCfg = nil
-		m.scriptsAllowed = false
 		m.setStateLocked(domain.StateDisconnected)
 		return err
 	}
@@ -125,7 +119,6 @@ func (m *Manager) Connect(cfg *domain.WireGuardConfig, scriptsAllowed bool) erro
 		m.netMgr.Cleanup(engine.InterfaceName())
 		engine.Close()
 		m.activeCfg = nil
-		m.scriptsAllowed = false
 		m.setStateLocked(domain.StateDisconnected)
 		return newTunnelError(ErrStateCorrupt, "connect aborted: state changed during setup", nil)
 	}
@@ -160,7 +153,6 @@ func (m *Manager) Disconnect() error {
 	// Snapshot the handles we need outside the lock.
 	engine := m.engine
 	cfg := m.activeCfg
-	scriptsAllowed := m.scriptsAllowed
 	if engine == nil {
 		// Should never happen given the state check above, but guard against
 		// it to prevent a nil-pointer panic in disconnectPhases.
@@ -172,14 +164,13 @@ func (m *Manager) Disconnect() error {
 	m.mu.Unlock()
 
 	// --- Phase 2: slow teardown outside the lock ---
-	m.disconnectPhases(cfg, engine, scriptsAllowed)
+	m.disconnectPhases(cfg, engine)
 
 	// --- Phase 3: commit final state ---
 	m.mu.Lock()
 	m.engine = nil
 	m.activeCfg = nil
 	m.connectedAt = time.Time{}
-	m.scriptsAllowed = false
 	m.setStateLocked(domain.StateDisconnected)
 	m.mu.Unlock()
 	return nil

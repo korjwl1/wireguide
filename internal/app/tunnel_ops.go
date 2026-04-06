@@ -34,9 +34,8 @@ func (s *TunnelService) ListTunnelsLocal() ([]TunnelInfo, error) {
 			endpoint = cfg.Peers[0].Endpoint
 		}
 		result = append(result, TunnelInfo{
-			Name:       name,
-			Endpoint:   endpoint,
-			HasScripts: cfg.HasScripts(),
+			Name:     name,
+			Endpoint: endpoint,
 		})
 	}
 	return result, nil
@@ -78,7 +77,6 @@ func (s *TunnelService) ListTunnels() ([]TunnelInfo, error) {
 			Name:        name,
 			IsConnected: name == active.Value,
 			Endpoint:    endpoint,
-			HasScripts:  cfg.HasScripts(),
 		})
 	}
 	return result, nil
@@ -108,13 +106,7 @@ func (s *TunnelService) CheckConflicts(name string) ([]tunnel.ConflictInfo, erro
 
 // Connect loads a tunnel config from local storage and asks the helper to
 // bring it up. The helper re-validates server-side.
-//
-// When the config contains scripts and scriptsAllowed is true, the helper
-// verifies the scripts against its persistent allowlist. If the scripts are
-// not yet approved, the helper rejects with ErrCodeScriptsNotApproved and
-// this method automatically sends an ApproveScripts RPC (the user already
-// consented via the GUI's script warning dialog) then retries the connect.
-func (s *TunnelService) Connect(name string, scriptsAllowed bool) error {
+func (s *TunnelService) Connect(name string) error {
 	cfg, err := s.tunnelStore.Load(name)
 	if err != nil {
 		return fmt.Errorf("loading tunnel %s: %w", name, err)
@@ -126,42 +118,9 @@ func (s *TunnelService) Connect(name string, scriptsAllowed bool) error {
 	s.clients.MarkInflight()
 	defer s.clients.UnmarkInflight()
 
-	err = s.callLong(ipc.MethodConnect, ipc.ConnectRequest{
-		Config:         cfg,
-		ScriptsAllowed: scriptsAllowed,
+	return s.callLong(ipc.MethodConnect, ipc.ConnectRequest{
+		Config: cfg,
 	}, nil)
-
-	// If the helper rejected because scripts aren't in the allowlist yet,
-	// send the approval (the user already consented at the GUI level) and
-	// retry. This only happens once per unique script set.
-	if isScriptsNotApproved(err) && scriptsAllowed {
-		slog.Info("scripts not yet in helper allowlist, approving",
-			"tunnel", name)
-		if approveErr := s.call(ipc.MethodApproveScripts, ipc.ApproveScriptsRequest{
-			Config: cfg,
-		}, nil); approveErr != nil {
-			return fmt.Errorf("approving scripts: %w", approveErr)
-		}
-		// Retry the connect — scripts are now in the allowlist.
-		return s.callLong(ipc.MethodConnect, ipc.ConnectRequest{
-			Config:         cfg,
-			ScriptsAllowed: scriptsAllowed,
-		}, nil)
-	}
-
-	return err
-}
-
-// isScriptsNotApproved checks whether an error is the specific
-// ErrCodeScriptsNotApproved rejection from the helper.
-func isScriptsNotApproved(err error) bool {
-	if err == nil {
-		return false
-	}
-	if ipcErr, ok := err.(*ipc.Error); ok {
-		return ipcErr.Code == ipc.ErrCodeScriptsNotApproved
-	}
-	return false
 }
 
 // Disconnect tears down whatever tunnel the helper currently has active.

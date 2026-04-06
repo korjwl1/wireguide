@@ -22,9 +22,8 @@ func (s *TunnelService) ImportConfig(name, content string) (*TunnelInfo, error) 
 		endpoint = cfg.Peers[0].Endpoint
 	}
 	return &TunnelInfo{
-		Name:       cfg.Name,
-		Endpoint:   endpoint,
-		HasScripts: cfg.HasScripts(),
+		Name:     cfg.Name,
+		Endpoint: endpoint,
 	}, nil
 }
 

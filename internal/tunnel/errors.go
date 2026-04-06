@@ -26,8 +26,6 @@ const (
 	ErrEngineCreation
 	// ErrNetwork: route, DNS, MTU, or address assignment failed.
 	ErrNetwork
-	// ErrScript: PreUp/PostUp/PreDown/PostDown script failed.
-	ErrScript
 	// ErrResolution: peer endpoint DNS resolution failed.
 	ErrResolution
 	// ErrConfig: invalid WireGuard config (bad keys, etc.).

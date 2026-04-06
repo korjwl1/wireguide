@@ -11,31 +11,19 @@ import (
 // Manager.Connect under the manager's mutex. Returns the created engine on
 // success, or an error after rolling back any partial state on failure.
 //
-// Steps (matching wg-quick's order):
-//  1. PreUp script
-//  2. Create WireGuard engine (TUN + wgctrl device)
-//  3. Set MTU
-//  4. Assign address
-//  5. Bring interface up
-//  6. Install routes (incl. endpoint bypass for every peer)
-//  7. Apply DNS (best-effort)
-//  8. PostUp script (best-effort)
-//  9. Persist crash-recovery state (only after everything else succeeds)
-func (m *Manager) connectPhases(cfg *domain.WireGuardConfig, scriptsAllowed bool) (*Engine, error) {
-	// Determine the intended interface name for %i expansion in PreUp.
-	// The actual TUN device name is assigned by the OS in step 2, but we
-	// need a value now. wg-quick uses the config filename; we use the
-	// tunnel name which serves the same purpose.
-	intendedIface := cfg.Name
-
-	// 1. PreUp (fatal on failure — user opted in)
-	if scriptsAllowed && cfg.Interface.PreUp != "" {
-		slog.Info("running PreUp script", "cmd", cfg.Interface.PreUp)
-		if err := runScriptWithInterface(cfg.Interface.PreUp, intendedIface); err != nil {
-			return nil, newTunnelError(ErrScript, "PreUp script failed", err)
-		}
-	}
-
+// Steps:
+//  1. Create WireGuard engine (TUN + wgctrl device)
+//  2. Set MTU
+//  3. Assign address
+//  4. Bring interface up
+//  5. Install routes (incl. endpoint bypass for every peer)
+//  6. Apply DNS (best-effort)
+//  7. Persist crash-recovery state (only after everything else succeeds)
+//
+// Note: Pre/PostUp/Down script execution was removed as a security hardening
+// measure. The config parser still accepts these fields so existing configs
+// import without error, but the scripts are silently ignored.
+func (m *Manager) connectPhases(cfg *domain.WireGuardConfig) (*Engine, error) {
 	// Compute fullTunnel early — needed by the rollback closure and later
 	// by AddRoutes. It only depends on cfg which is a parameter.
 	fullTunnel := cfg.IsFullTunnel()
@@ -57,15 +45,6 @@ func (m *Manager) connectPhases(cfg *domain.WireGuardConfig, scriptsAllowed bool
 		}
 		_ = m.netMgr.Cleanup(ifaceName)
 		engine.Close()
-		// If PreUp was executed, run PostDown to undo its side effects.
-		// PostDown is the correct counterpart: wg-quick runs PostDown after
-		// teardown to reverse what PreUp set up.
-		if scriptsAllowed && cfg.Interface.PostDown != "" {
-			slog.Info("rollback: running PostDown script", "cmd", cfg.Interface.PostDown)
-			if err := runScriptWithInterface(cfg.Interface.PostDown, ifaceName); err != nil {
-				slog.Warn("rollback: PostDown script failed", "error", err)
-			}
-		}
 		return primary
 	}
 
@@ -119,15 +98,7 @@ func (m *Manager) connectPhases(cfg *domain.WireGuardConfig, scriptsAllowed bool
 		slog.Warn("failed to set DNS", "error", err)
 	}
 
-	// 8. PostUp (non-fatal — tunnel is already live)
-	if scriptsAllowed && cfg.Interface.PostUp != "" {
-		slog.Info("running PostUp script", "cmd", cfg.Interface.PostUp)
-		if err := runScriptWithInterface(cfg.Interface.PostUp, ifaceName); err != nil {
-			slog.Warn("PostUp script failed", "error", err)
-		}
-	}
-
-	// 9. Crash recovery state — persisted AFTER all fallible phases so a
+	// 8. Crash recovery state — persisted AFTER all fallible phases so a
 	// mid-connect failure doesn't leave an orphan state file pointing at a
 	// tunnel that was never actually brought up. Non-fatal: if we can't
 	// write the recovery file (disk full, permissions) the tunnel is still
@@ -161,16 +132,8 @@ func (m *Manager) connectPhases(cfg *domain.WireGuardConfig, scriptsAllowed bool
 // from Manager.Disconnect under the manager's mutex. All steps are best-effort
 // — we log errors rather than returning them because partial teardown is
 // better than none.
-func (m *Manager) disconnectPhases(cfg *domain.WireGuardConfig, engine *Engine, scriptsAllowed bool) {
+func (m *Manager) disconnectPhases(cfg *domain.WireGuardConfig, engine *Engine) {
 	ifaceName := engine.InterfaceName()
-
-	// PreDown script (non-fatal)
-	if scriptsAllowed && cfg.Interface.PreDown != "" {
-		slog.Info("running PreDown script", "cmd", cfg.Interface.PreDown)
-		if err := runScriptWithInterface(cfg.Interface.PreDown, ifaceName); err != nil {
-			slog.Warn("PreDown script failed", "error", err)
-		}
-	}
 
 	// Routes
 	var allAllowedIPs []string
@@ -187,14 +150,6 @@ func (m *Manager) disconnectPhases(cfg *domain.WireGuardConfig, engine *Engine, 
 
 	// Clear crash-recovery state
 	_ = ClearActiveState(m.dataDir)
-
-	// PostDown script (non-fatal)
-	if scriptsAllowed && cfg.Interface.PostDown != "" {
-		slog.Info("running PostDown script", "cmd", cfg.Interface.PostDown)
-		if err := runScriptWithInterface(cfg.Interface.PostDown, ifaceName); err != nil {
-			slog.Warn("PostDown script failed", "error", err)
-		}
-	}
 
 	slog.Info("tunnel disconnected", "name", cfg.Name)
 }

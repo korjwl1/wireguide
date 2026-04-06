@@ -21,7 +21,6 @@ func (h *Helper) registerHandlers() {
 	h.server.Handle(ipc.MethodShutdown, h.handleShutdown)
 	h.server.Handle(ipc.MethodSetLogLevel, h.handleSetLogLevel)
 	h.server.Handle(ipc.MethodConnect, h.handleConnect)
-	h.server.Handle(ipc.MethodApproveScripts, h.handleApproveScripts)
 	h.server.Handle(ipc.MethodDisconnect, h.handleDisconnect)
 	h.server.Handle(ipc.MethodStatus, h.handleStatus)
 	h.server.Handle(ipc.MethodIsConnected, h.handleIsConnected)
@@ -70,26 +69,10 @@ func (h *Helper) handleConnect(params json.RawMessage) (interface{}, error) {
 		return nil, fmt.Errorf("invalid config: %s", strings.Join(result.ErrorMessages(), "; "))
 	}
 
-	// SECURITY: Never trust the client's ScriptsAllowed flag directly.
-	// If the config contains scripts and the client says scripts are allowed,
-	// verify the scripts have been explicitly approved via the persistent
-	// allowlist. This prevents a rogue user-level process from connecting
-	// to the IPC socket and executing arbitrary commands as root.
-	scriptsAllowed := req.ScriptsAllowed
-	if scriptsAllowed && req.Config.HasScripts() {
-		if !h.scriptAllowlist.IsApproved(req.Config) {
-			fp := ScriptFingerprint(req.Config)
-			slog.Warn("rejecting connect: scripts not in allowlist",
-				"tunnel", req.Config.Name,
-				"fingerprint", fp)
-			return nil, &ipc.CodedError{
-				Code:    ipc.ErrCodeScriptsNotApproved,
-				Message: fmt.Sprintf("scripts_not_approved:%s", fp),
-			}
-		}
-		slog.Info("scripts approved via allowlist",
-			"tunnel", req.Config.Name,
-			"fingerprint", ScriptFingerprint(req.Config))
+	// Log if the config contains scripts — they are parsed but ignored.
+	if req.Config.HasScripts() {
+		slog.Info("config contains Pre/PostUp/Down scripts; ignoring (not supported in GUI client)",
+			"tunnel", req.Config.Name)
 	}
 
 	// Check for routing conflicts with existing interfaces (Tailscale etc).
@@ -112,41 +95,14 @@ func (h *Helper) handleConnect(params json.RawMessage) (interface{}, error) {
 	// (not nil or the previous one). Roll back on failure.
 	h.mu.Lock()
 	prevCfg := h.activeCfg
-	prevScripts := h.scriptsAllowed
 	h.activeCfg = req.Config
-	h.scriptsAllowed = scriptsAllowed
 	h.mu.Unlock()
 
-	if err := h.manager.Connect(req.Config, scriptsAllowed); err != nil {
+	if err := h.manager.Connect(req.Config); err != nil {
 		h.mu.Lock()
 		h.activeCfg = prevCfg
-		h.scriptsAllowed = prevScripts
 		h.mu.Unlock()
 		return nil, err
-	}
-	return ipc.Empty{}, nil
-}
-
-func (h *Helper) handleApproveScripts(params json.RawMessage) (interface{}, error) {
-	var req ipc.ApproveScriptsRequest
-	if err := json.Unmarshal(params, &req); err != nil {
-		return nil, err
-	}
-	if req.Config == nil {
-		return nil, fmt.Errorf("config is required")
-	}
-	if !req.Config.HasScripts() {
-		return nil, fmt.Errorf("config has no scripts to approve")
-	}
-
-	fp := ScriptFingerprint(req.Config)
-	slog.Info("approving scripts",
-		"tunnel", req.Config.Name,
-		"fingerprint", fp,
-		"scripts", req.Config.Scripts())
-
-	if err := h.scriptAllowlist.Approve(req.Config); err != nil {
-		return nil, fmt.Errorf("failed to persist script approval: %w", err)
 	}
 	return ipc.Empty{}, nil
 }

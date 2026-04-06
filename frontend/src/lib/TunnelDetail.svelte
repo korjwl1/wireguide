@@ -31,8 +31,7 @@
 
   function connect() {
     dispatch('connect', {
-      name: $selectedTunnel.name,
-      hasScripts: $selectedTunnel.has_scripts
+      name: $selectedTunnel.name
     });
   }
 

@@ -71,18 +71,11 @@ export function CheckForUpdate() {
 /**
  * Connect loads a tunnel config from local storage and asks the helper to
  * bring it up. The helper re-validates server-side.
- * 
- * When the config contains scripts and scriptsAllowed is true, the helper
- * verifies the scripts against its persistent allowlist. If the scripts are
- * not yet approved, the helper rejects with ErrCodeScriptsNotApproved and
- * this method automatically sends an ApproveScripts RPC (the user already
- * consented via the GUI's script warning dialog) then retries the connect.
  * @param {string} name
- * @param {boolean} scriptsAllowed
  * @returns {$CancellablePromise<void>}
  */
-export function Connect(name, scriptsAllowed) {
-    return $Call.ByID(1123040453, name, scriptsAllowed);
+export function Connect(name) {
+    return $Call.ByID(1123040453, name);
 }
 
 /**
@@ -164,6 +157,14 @@ export function GetTunnelDetail(name) {
     return $Call.ByID(3171898132, name).then(/** @type {($result: any) => any} */(($result) => {
         return $$createType9($result);
     }));
+}
+
+/**
+ * GetVersion returns the current app version string.
+ * @returns {$CancellablePromise<string>}
+ */
+export function GetVersion() {
+    return $Call.ByID(1775430717);
 }
 
 /**

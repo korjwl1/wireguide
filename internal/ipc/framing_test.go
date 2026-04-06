@@ -41,7 +41,7 @@ func TestMultipleFrames(t *testing.T) {
 }
 
 func TestNewRequest(t *testing.T) {
-	req, err := NewRequest(1, MethodConnect, ConnectRequest{ScriptsAllowed: true})
+	req, err := NewRequest(1, MethodConnect, ConnectRequest{})
 	if err != nil {
 		t.Fatal(err)
 	}

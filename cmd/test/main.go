@@ -45,7 +45,7 @@ func main() {
 	// Step 3: Connect
 	fmt.Println("\n=== Step 3: Connect ===")
 	manager := tunnel.NewManager(os.TempDir())
-	err = manager.Connect(cfg, false)
+	err = manager.Connect(cfg)
 	if err != nil {
 		fmt.Println("CONNECT ERROR:", err)
 		os.Exit(1)

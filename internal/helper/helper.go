@@ -83,10 +83,14 @@ type Helper struct {
 	// every record. Info by default.
 	logLevel *slog.LevelVar
 
-	mu              sync.Mutex
-	activeCfg       *domain.WireGuardConfig // cached for reconnect
-	scriptsAllowed  bool
-	scriptAllowlist *ScriptAllowlist // persistent allowlist for script approval
+	mu        sync.Mutex
+	activeCfg *domain.WireGuardConfig // cached for reconnect
+
+	// Firewall state saved during reconnect suspend/resume cycle.
+	// These track what was active before suspend so resume can restore it.
+	fwSavedKillSwitch    bool
+	fwSavedDNSProtection bool
+	fwSavedDNSServers    []string // DNS servers to re-enable on resume
 
 	// shutdownTimer is a singleton grace-window timer. When the control
 	// connection drops we Reset it; when the GUI reconnects we Stop it. This
@@ -114,9 +118,8 @@ func Run(addr string, ownerUID int, dataDir string) error {
 		server:          ipc.NewServer(listener, ownerUID),
 		manager:         manager,
 		firewall:        fw,
-		logLevel:        new(slog.LevelVar), // defaults to Info
-		scriptAllowlist: NewScriptAllowlist(dataDir),
-		done:            make(chan struct{}),
+		logLevel: new(slog.LevelVar), // defaults to Info
+		done:     make(chan struct{}),
 	}
 
 	// Install the broadcast slog handler BEFORE the first log call so
@@ -136,6 +139,7 @@ func Run(addr string, ownerUID int, dataDir string) error {
 
 	// Reconnect monitor — uses cached config
 	h.monitor = reconnect.NewMonitor(manager, h.reconnectFn, h.onReconnectState, reconnect.DefaultConfig())
+	h.monitor.SetFirewallCallbacks(h.suspendFirewall, h.resumeFirewall)
 	h.monitor.Start()
 
 	// Register RPC handlers
@@ -182,12 +186,11 @@ func Run(addr string, ownerUID int, dataDir string) error {
 func (h *Helper) reconnectFn() error {
 	h.mu.Lock()
 	cfg := h.activeCfg
-	allowed := h.scriptsAllowed
 	h.mu.Unlock()
 	if cfg == nil {
 		return fmt.Errorf("no cached config for reconnect")
 	}
-	return h.manager.Connect(cfg, allowed)
+	return h.manager.Connect(cfg)
 }
 
 // onReconnectState forwards reconnection state changes to any subscribed GUI.
@@ -261,6 +264,110 @@ func (h *Helper) shutdown() {
 // launchd always sets the process's parent PID to 1 (init/launchd).
 func isDaemon() bool {
 	return os.Getppid() == 1
+}
+
+// suspendFirewall saves the current firewall state and disables all firewall
+// rules. Called by the reconnect monitor before Disconnect so that old pf rules
+// referencing the previous utun interface name don't block the new connection.
+func (h *Helper) suspendFirewall() error {
+	ksEnabled := h.firewall.IsKillSwitchEnabled()
+	dnsEnabled := h.firewall.IsDNSProtectionEnabled()
+
+	h.mu.Lock()
+	h.fwSavedKillSwitch = ksEnabled
+	h.fwSavedDNSProtection = dnsEnabled
+	// DNS servers are stored from the active config's Interface.DNS
+	if h.activeCfg != nil {
+		h.fwSavedDNSServers = h.activeCfg.Interface.DNS
+	}
+	h.mu.Unlock()
+
+	if !ksEnabled && !dnsEnabled {
+		slog.Debug("suspendFirewall: no firewall rules active, nothing to suspend")
+		return nil
+	}
+
+	slog.Info("suspending firewall rules for reconnect",
+		"kill_switch", ksEnabled, "dns_protection", dnsEnabled)
+
+	// Disable DNS protection first (it may be a sub-anchor of the kill switch).
+	if dnsEnabled {
+		if err := h.firewall.DisableDNSProtection(); err != nil {
+			slog.Warn("suspendFirewall: failed to disable DNS protection", "error", err)
+		}
+	}
+	if ksEnabled {
+		if err := h.firewall.DisableKillSwitch(); err != nil {
+			return fmt.Errorf("suspendFirewall: disable kill switch: %w", err)
+		}
+	}
+
+	return nil
+}
+
+// resumeFirewall re-enables firewall rules that were active before the
+// reconnect suspend. It reads the NEW interface name and endpoints from the
+// tunnel manager so the pf rules match the newly created utun interface.
+func (h *Helper) resumeFirewall() error {
+	h.mu.Lock()
+	restoreKS := h.fwSavedKillSwitch
+	restoreDNS := h.fwSavedDNSProtection
+	savedDNSServers := h.fwSavedDNSServers
+	var ifaceAddresses []string
+	if h.activeCfg != nil {
+		ifaceAddresses = h.activeCfg.Interface.Address
+	}
+	// Clear saved state so a second resume is a no-op.
+	h.fwSavedKillSwitch = false
+	h.fwSavedDNSProtection = false
+	h.fwSavedDNSServers = nil
+	h.mu.Unlock()
+
+	if !restoreKS && !restoreDNS {
+		slog.Debug("resumeFirewall: no firewall rules to restore")
+		return nil
+	}
+
+	status := h.manager.Status()
+	ifaceName := ""
+	if status != nil {
+		ifaceName = status.InterfaceName
+	}
+
+	slog.Info("resuming firewall rules after reconnect",
+		"kill_switch", restoreKS, "dns_protection", restoreDNS,
+		"new_interface", ifaceName)
+
+	if restoreKS {
+		if ifaceName == "" {
+			slog.Warn("resumeFirewall: no interface name available, cannot re-enable kill switch")
+		} else {
+			endpoints := h.manager.ResolvedEndpoints()
+			if len(endpoints) == 0 {
+				slog.Warn("resumeFirewall: no resolved endpoints, cannot re-enable kill switch")
+			} else {
+				if err := h.firewall.EnableKillSwitch(ifaceName, ifaceAddresses, endpoints); err != nil {
+					slog.Error("resumeFirewall: failed to re-enable kill switch", "error", err)
+					return fmt.Errorf("resumeFirewall: enable kill switch: %w", err)
+				}
+			}
+		}
+	}
+
+	if restoreDNS {
+		if ifaceName == "" {
+			slog.Warn("resumeFirewall: no interface name available, cannot re-enable DNS protection")
+		} else if len(savedDNSServers) == 0 {
+			slog.Warn("resumeFirewall: no DNS servers saved, cannot re-enable DNS protection")
+		} else {
+			if err := h.firewall.EnableDNSProtection(ifaceName, savedDNSServers); err != nil {
+				slog.Error("resumeFirewall: failed to re-enable DNS protection", "error", err)
+				return fmt.Errorf("resumeFirewall: enable DNS protection: %w", err)
+			}
+		}
+	}
+
+	return nil
 }
 
 func (h *Helper) cleanup() {

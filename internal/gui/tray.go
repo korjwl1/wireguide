@@ -267,7 +267,7 @@ func (t *trayManager) rebuildMenu() {
 			if isActive {
 				_ = t.svc.Disconnect()
 			} else {
-				_ = t.svc.Connect(tunName, false)
+				_ = t.svc.Connect(tunName)
 			}
 		})
 	}

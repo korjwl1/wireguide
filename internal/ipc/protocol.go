@@ -37,12 +37,7 @@ const (
 	ErrCodeMethodNotFound = -32601
 	ErrCodeInvalidParams  = -32602
 	ErrCodeInternalError  = -32603
-	ErrCodeAppError       = -32000
-	// ErrCodeScriptsNotApproved is returned when a ConnectRequest includes
-	// scripts with ScriptsAllowed=true but the scripts have not been approved
-	// in the helper's persistent allowlist. The GUI should prompt the user
-	// and send an ApproveScripts RPC if they consent.
-	ErrCodeScriptsNotApproved = -32001
+	ErrCodeAppError = -32000
 )
 
 // RPC method names
@@ -55,9 +50,8 @@ const (
 	MethodDisconnect       = "Tunnel.Disconnect"
 	MethodStatus           = "Tunnel.Status"
 	MethodIsConnected      = "Tunnel.IsConnected"
-	MethodActiveName       = "Tunnel.ActiveName"
-	MethodApproveScripts   = "Tunnel.ApproveScripts"
-	MethodSetKillSwitch    = "Firewall.SetKillSwitch"
+	MethodActiveName    = "Tunnel.ActiveName"
+	MethodSetKillSwitch = "Firewall.SetKillSwitch"
 	MethodSetDNSProtection = "Firewall.SetDNSProtection"
 )
 

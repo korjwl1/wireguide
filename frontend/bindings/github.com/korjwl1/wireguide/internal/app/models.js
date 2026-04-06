@@ -54,14 +54,6 @@ export class TunnelInfo {
              */
             this["endpoint"] = "";
         }
-        if (!("has_scripts" in $$source)) {
-            /**
-             * @member
-             * @type {boolean}
-             */
-            this["has_scripts"] = false;
-        }
-
         Object.assign(this, $$source);
     }
 
