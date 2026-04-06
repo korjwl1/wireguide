@@ -121,6 +121,15 @@ func Run(assetsHandler http.Handler, dataDir string) error {
 		URL:              "/",
 	})
 
+	// macOS standard: close button hides the window instead of destroying it.
+	// The app stays alive in the tray; "Show Window" brings it back.
+	// Without this, closing the window destroys it permanently and
+	// "Show Window" from the tray does nothing (no window to show).
+	win.OnWindowEvent(events.Common.WindowClosing, func(event *application.WindowEvent) {
+		event.Cancel()
+		win.Hide()
+	})
+
 	// Native file drop forwarded to frontend
 	win.OnWindowEvent(events.Common.WindowFilesDropped, func(event *application.WindowEvent) {
 		files := event.Context().DroppedFiles()
@@ -162,7 +171,7 @@ func Run(assetsHandler http.Handler, dataDir string) error {
 		})
 	}
 
-	trayMgr := newTrayManager(app, tray, tunnelService, doShutdown)
+	trayMgr := newTrayManager(app, win, tray, tunnelService, doShutdown)
 	trayMgr.initialBuild()
 
 	if runtime.GOOS == "darwin" {

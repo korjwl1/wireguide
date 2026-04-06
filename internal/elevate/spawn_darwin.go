@@ -4,9 +4,7 @@ package elevate
 
 import (
 	"fmt"
-	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 )
 
@@ -27,13 +25,13 @@ func SpawnHelper(args Args) error {
 	// every respawn wipes the crash/shutdown evidence from the previous
 	// helper instance, which is exactly what we need to diagnose why it died.
 	//
-	// Use ~/Library/Logs/WireGuide/ instead of /tmp to avoid symlink attacks.
-	// The helper runs as root, so writing to a world-writable /tmp path
-	// controlled by an attacker could overwrite arbitrary files.
-	home, _ := os.UserHomeDir()
-	logDir := filepath.Join(home, "Library", "Logs", "WireGuide")
-	os.MkdirAll(logDir, 0700)
-	logPath := filepath.Join(logDir, "helper.log")
+	// Helper log goes to /var/log/wireguide-helper.log. The helper runs as
+	// root so it can write here without issue. We previously used
+	// ~/Library/Logs/WireGuide/ but that created a root-owned directory
+	// inside the user's home, which then caused the GUI's EnsureDirs()
+	// to crash on chmod (operation not permitted). /var/log is root-writable
+	// by design and doesn't pollute the user's home.
+	logPath := "/var/log/wireguide-helper.log"
 	cmd := fmt.Sprintf(
 		`(echo ''; echo '==== helper spawn ====' ; date ; %s --helper --socket=%s --uid=%d --data-dir=%s) >> %s 2>&1 & disown`,
 		shellQuote(exe), shellQuote(args.SocketPath), args.SocketUID, shellQuote(args.DataDir), shellQuote(logPath),

@@ -145,6 +145,7 @@ func buildTrayOffIcon(wColor color.NRGBA) []byte {
 // event stream, making the UI feel sluggish under a 1 Hz status broadcast.
 type trayManager struct {
 	app        *application.App
+	win        *application.WebviewWindow
 	tray       *application.SystemTray
 	svc        *wgapp.TunnelService
 	doShutdown func()
@@ -155,9 +156,10 @@ type trayManager struct {
 	rebuilding   atomic.Bool // guard against concurrent rebuildMenu calls
 }
 
-func newTrayManager(app *application.App, tray *application.SystemTray, svc *wgapp.TunnelService, doShutdown func()) *trayManager {
+func newTrayManager(app *application.App, win *application.WebviewWindow, tray *application.SystemTray, svc *wgapp.TunnelService, doShutdown func()) *trayManager {
 	return &trayManager{
 		app:        app,
+		win:        win,
 		tray:       tray,
 		svc:        svc,
 		doShutdown: doShutdown,
@@ -270,7 +272,10 @@ func (t *trayManager) rebuildMenu() {
 		})
 	}
 	m.AddSeparator()
-	m.Add("Show Window").OnClick(func(ctx *application.Context) { t.app.Show() })
+	m.Add("Show Window").OnClick(func(ctx *application.Context) {
+		t.win.Show()
+		t.win.Focus()
+	})
 	m.AddSeparator()
 	m.Add("Quit").OnClick(func(ctx *application.Context) {
 		t.doShutdown()

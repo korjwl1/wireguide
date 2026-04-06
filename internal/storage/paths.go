@@ -10,6 +10,20 @@ import (
 
 const appName = "wireguide"
 
+// canWriteDir tests whether the current process can create files in dir by
+// writing and immediately removing a temp file. Used by EnsureDirs to
+// distinguish "can't chmod but can still use" from "truly inaccessible".
+func canWriteDir(dir string) bool {
+	tmp := filepath.Join(dir, ".wireguide-write-test")
+	f, err := os.Create(tmp)
+	if err != nil {
+		return false
+	}
+	f.Close()
+	os.Remove(tmp)
+	return true
+}
+
 // Paths holds all OS-specific directory paths for the application.
 type Paths struct {
 	ConfigDir  string // App settings (config.json)
@@ -101,7 +115,17 @@ func (p *Paths) EnsureDirs() error {
 		// Enforce permissions even if the directory already existed with
 		// wider permissions (e.g., 0755 from a previous version).
 		if err := os.Chmod(dir, 0700); err != nil {
-			return err
+			// Chmod fails when the directory is owned by another user (e.g.
+			// root created it during a previous helper spawn). As long as
+			// we can actually write to it, proceed with a warning — crashing
+			// the entire app over a permission tightening failure on a
+			// directory we can still use is worse than running with 0755.
+			if canWriteDir(dir) {
+				slog.Warn("cannot tighten dir permissions (owned by another user)",
+					"dir", dir, "error", err)
+			} else {
+				return fmt.Errorf("directory %s exists but is not writable: %w", dir, err)
+			}
 		}
 	}
 	// DataDir may require elevated privileges; warn instead of failing.
