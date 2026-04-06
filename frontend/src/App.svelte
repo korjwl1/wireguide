@@ -289,14 +289,14 @@
      separate components mounted conditionally below; they pick up the new
      language on their next open (deliberate — otherwise changing language
      mid-interaction would destroy the modal). -->
-<div class="app" class:modal-open={showSettings || showEditor || showNewTunnel || showScriptWarning} data-file-drop-target={!(showSettings || showEditor || showNewTunnel || showScriptWarning) && currentView === 'tunnels' ? true : undefined}>
+<div class="app" class:modal-open={showSettings || showEditor || showScriptWarning} data-file-drop-target={!(showSettings || showEditor || showScriptWarning) && currentView === 'tunnels' ? true : undefined}>
   <!-- Wails adds .file-drop-target-active class to .app when dragging files.
        We only render the overlay when drop-target is actually active — i.e.
        on the tunnels view with no modal open — so it can never steal clicks
        from modals. The data-file-drop-target attribute above also removes
        the drop affordance entirely in those states so Wails doesn't even
        detect the drag. -->
-  {#if currentView === 'tunnels' && !(showSettings || showEditor || showNewTunnel || showScriptWarning)}
+  {#if currentView === 'tunnels' && !(showSettings || showEditor || showScriptWarning)}
     <div class="drop-overlay">
       <div class="drop-overlay-content">
         <div class="drop-icon">↓</div>
