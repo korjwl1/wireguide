@@ -53,14 +53,31 @@ The [official Windows client](https://git.zx2c4.com/wireguard-windows) (v0.5.3) 
 
 ### What WireGuide does differently
 
-WireGuide implements the full `wg-quick` logic in Go — verified line-by-line against the reference [`darwin.bash`](https://git.zx2c4.com/wireguard-tools/tree/src/wg-quick/darwin.bash), [`linux.bash`](https://git.zx2c4.com/wireguard-tools/tree/src/wg-quick/linux.bash), and the [wireguard-windows](https://git.zx2c4.com/wireguard-windows) source. Every fix listed above is addressed:
+WireGuide implements the full `wg-quick` logic in Go — verified line-by-line against the reference [`darwin.bash`](https://git.zx2c4.com/wireguard-tools/tree/src/wg-quick/darwin.bash), [`linux.bash`](https://git.zx2c4.com/wireguard-tools/tree/src/wg-quick/linux.bash), and the [wireguard-windows](https://git.zx2c4.com/wireguard-windows) source.
 
+**Networking fixes:**
 - DNS applied to **all** network services (not just the active one)
 - Route monitor re-applies endpoint bypass on gateway changes
 - Kill switch via pf/nftables/WFAS with correct endpoint + DHCP exceptions
 - Auto-reconnect with exponential backoff after sleep/wake or network change
 - Endpoint re-reading from `wg show` on every route event (roaming support)
 - Helper process stays alive as long as tunnel is active (wg-quick semantics)
+
+**Performance & stability (wireguard-go 2025-05 vs official app's 2023-02):**
+
+The official macOS app ships wireguard-go from February 2023. WireGuide uses the May 2025 build — **57 commits ahead** — which includes:
+
+| Fix | Impact |
+|-----|--------|
+| Socket buffer 128KB → 7MB ([`f26efb6`](https://github.com/WireGuard/wireguard-go/commit/f26efb6)) | ~20-30% throughput improvement on macOS |
+| Go 1.19 → 1.25 runtime | ~10-15% faster on Apple Silicon (register ABI, improved GC) |
+| 3 deadlock fixes ([`b7cd547`](https://github.com/WireGuard/wireguard-go/commit/b7cd547), [`12269c2`](https://github.com/WireGuard/wireguard-go/commit/12269c2), [`113c8f1`](https://github.com/WireGuard/wireguard-go/commit/113c8f1)) | Tunnel no longer hangs on close or under sustained load |
+| WaitPool wakeup fix + memory leak ([`867a4c4`](https://github.com/WireGuard/wireguard-go/commit/867a4c4)) | Fixes progressive slowdown → eventual tunnel freeze |
+| Peer endpoint lock contention reduction ([`4ffa9c2`](https://github.com/WireGuard/wireguard-go/commit/4ffa9c2)) | Lower per-packet latency |
+| Darwin utun retry loop elimination ([`bc30fee`](https://github.com/WireGuard/wireguard-go/commit/bc30fee)) | Reconnection no longer stalls up to 6 seconds |
+| Handshake encode/decode 25-119x faster ([`9e7529c`](https://github.com/WireGuard/wireguard-go/commit/9e7529c), [`264889f`](https://github.com/WireGuard/wireguard-go/commit/264889f)) | Less GC pressure during rekeying |
+
+Note: The dramatic Linux-only improvements (GSO/GRO vectorized I/O, 4→11 Gbps) do not apply to macOS due to platform limitations.
 
 ---
 

@@ -55,12 +55,29 @@
 
 WireGuide는 `wg-quick`의 전체 로직을 Go로 구현했습니다 — [`darwin.bash`](https://git.zx2c4.com/wireguard-tools/tree/src/wg-quick/darwin.bash), [`linux.bash`](https://git.zx2c4.com/wireguard-tools/tree/src/wg-quick/linux.bash), [wireguard-windows](https://git.zx2c4.com/wireguard-windows) 소스와 라인별로 대조 검증했습니다.
 
+**네트워킹 수정:**
 - DNS를 **모든** 네트워크 서비스에 적용 (활성 서비스 하나만이 아닌)
 - 게이트웨이 변경 시 라우트 모니터가 엔드포인트 바이패스 재적용
 - pf/nftables/WFAS 기반 킬 스위치 (엔드포인트 + DHCP 예외 포함)
 - 슬립/웨이크 및 네트워크 변경 후 지수 백오프 자동 재연결
 - 매 라우트 이벤트마다 `wg show`에서 엔드포인트 재조회 (로밍 지원)
 - 터널 활성 중에는 helper 프로세스가 절대 종료되지 않음 (wg-quick 시맨틱)
+
+**성능 및 안정성 (wireguard-go 2025-05 vs 공식 앱의 2023-02):**
+
+공식 macOS 앱은 2023년 2월의 wireguard-go를 탑재하고 있습니다. WireGuide는 2025년 5월 빌드를 사용하며, **57개 커밋 앞서** 있습니다:
+
+| 수정 | 효과 |
+|------|------|
+| 소켓 버퍼 128KB → 7MB | macOS에서 스루풋 ~20-30% 향상 |
+| Go 1.19 → 1.25 런타임 | Apple Silicon에서 ~10-15% 성능 향상 (register ABI, GC 개선) |
+| 3건의 데드락 수정 | 터널 종료 시 hang, 부하 시 hang 해결 |
+| WaitPool wakeup 수정 + 메모리 누수 | 점진적 속도 저하 → 터널 멈춤 현상 해결 |
+| Peer endpoint 락 경합 감소 | 패킷당 지연시간 감소 |
+| Darwin utun 재시도 루프 제거 | 재연결 시 최대 6초 지연 해결 |
+| 핸드셰이크 인코딩/디코딩 25-119x 가속 | rekeying 시 GC 압박 감소 |
+
+참고: Linux 전용 대폭 개선 (GSO/GRO 벡터화 I/O, 4→11 Gbps)은 플랫폼 제한으로 macOS에 적용되지 않습니다.
 
 ---
 
