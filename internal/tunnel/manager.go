@@ -161,6 +161,13 @@ func (m *Manager) Disconnect() error {
 	engine := m.engine
 	cfg := m.activeCfg
 	scriptsAllowed := m.scriptsAllowed
+	if engine == nil {
+		// Should never happen given the state check above, but guard against
+		// it to prevent a nil-pointer panic in disconnectPhases.
+		m.setStateLocked(domain.StateDisconnected)
+		m.mu.Unlock()
+		return fmt.Errorf("engine is nil despite connected state")
+	}
 	m.setStateLocked(stateDisconnecting)
 	m.mu.Unlock()
 

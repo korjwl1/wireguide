@@ -167,26 +167,39 @@ func (h *Helper) onReconnectState(state reconnect.State) {
 
 // startShutdownTimer begins (or re-begins) the grace-window countdown. Called
 // when the GUI's control connection drops.
+//
+// CRITICAL DESIGN: wg-quick never shuts down while a tunnel is active. Our
+// helper must follow the same principle. If a tunnel is connected, we do NOT
+// start the shutdown timer — the helper stays alive indefinitely, just like
+// wg-quick's monitor_daemon. The timer only applies when there is no active
+// tunnel (i.e., the user disconnected and then closed the GUI).
 func (h *Helper) startShutdownTimer() {
-	// DIAGNOSTIC: if the helper is currently running a tunnel, a shutdown
-	// timer fire will tear the tunnel down. The user has been seeing this
-	// 22–32s after a successful connect, and we need to know whether it's
-	// a spurious OnDisconnect (control conn mis-closed) or a legit quit.
-	// Log stack trace at the trigger point so we can see what invoked it.
 	active := ""
 	if h.manager != nil {
 		active = h.manager.ActiveTunnel()
 	}
-	slog.Info("control connection lost, starting shutdown grace window",
-		"grace", shutdownGrace,
-		"active_tunnel", active,
-		"call_stack", string(debug.Stack()))
+
+	if active != "" {
+		slog.Info("GUI disconnected but tunnel is active — helper stays alive (wg-quick semantics)",
+			"active_tunnel", active)
+		return
+	}
+
+	slog.Info("GUI disconnected, no active tunnel — starting shutdown grace window",
+		"grace", shutdownGrace)
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if h.shutdownTimer != nil {
 		h.shutdownTimer.Stop()
 	}
 	h.shutdownTimer = time.AfterFunc(shutdownGrace, func() {
+		// Double-check at fire time: a tunnel may have been activated between
+		// timer start and fire (e.g., reconnect monitor brought it back up).
+		if t := h.manager.ActiveTunnel(); t != "" {
+			slog.Info("shutdown timer fired but tunnel is now active — aborting shutdown",
+				"active_tunnel", t)
+			return
+		}
 		slog.Info("no reconnect within grace window, shutting down")
 		h.shutdown()
 	})

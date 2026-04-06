@@ -3,7 +3,9 @@ package reconnect
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
+	"runtime/debug"
 	"sync"
 	"time"
 
@@ -90,10 +92,24 @@ func (m *Monitor) Start() {
 	m.wg.Add(2)
 	go func() {
 		defer m.wg.Done()
+		defer func() {
+			if r := recover(); r != nil {
+				slog.Error("monitorLoop panic (recovered)",
+					"panic", fmt.Sprintf("%v", r),
+					"stack", string(debug.Stack()))
+			}
+		}()
 		m.monitorLoop()
 	}()
 	go func() {
 		defer m.wg.Done()
+		defer func() {
+			if r := recover(); r != nil {
+				slog.Error("sleepWakeLoop panic (recovered)",
+					"panic", fmt.Sprintf("%v", r),
+					"stack", string(debug.Stack()))
+			}
+		}()
 		m.sleepWakeLoop()
 	}()
 	slog.Info("reconnect monitor started")
@@ -118,8 +134,18 @@ func (m *Monitor) Stop() {
 	m.mu.Unlock()
 
 	// Wait for goroutines to exit outside the lock to avoid deadlock.
-	m.wg.Wait()
-	slog.Info("reconnect monitor stopped")
+	// Use a timeout so a stuck goroutine doesn't block helper cleanup forever.
+	waitDone := make(chan struct{})
+	go func() {
+		m.wg.Wait()
+		close(waitDone)
+	}()
+	select {
+	case <-waitDone:
+		slog.Info("reconnect monitor stopped")
+	case <-time.After(5 * time.Second):
+		slog.Warn("reconnect monitor stop timed out after 5s, proceeding with cleanup")
+	}
 }
 
 // CancelRetry aborts any in-flight reconnection attempt. Called by the helper
@@ -184,6 +210,13 @@ func (m *Monitor) triggerReconnect() {
 
 	go func() {
 		defer close(done)
+		defer func() {
+			if r := recover(); r != nil {
+				slog.Error("reconnectWithBackoff panic (recovered)",
+					"panic", fmt.Sprintf("%v", r),
+					"stack", string(debug.Stack()))
+			}
+		}()
 		m.reconnectWithBackoff(ctx)
 	}()
 }

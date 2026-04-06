@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"runtime/debug"
 	"sync"
 	"time"
 )
@@ -72,8 +73,12 @@ func (s *Server) OnDisconnect(fn func()) {
 	s.mu.Unlock()
 }
 
-// Serve accepts connections until the listener is closed.
+// Serve accepts connections until the listener is closed. Transient Accept
+// errors (EMFILE, ENFILE, etc.) are retried with backoff rather than killing
+// the helper — matching the principle that the helper must stay alive as long
+// as a tunnel is active, just like wg-quick's monitor_daemon.
 func (s *Server) Serve() error {
+	consecutiveErrors := 0
 	for {
 		conn, err := s.listener.Accept()
 		if err != nil {
@@ -81,9 +86,18 @@ func (s *Server) Serve() error {
 			case <-s.shutdownCh:
 				return nil
 			default:
-				return err
 			}
+			consecutiveErrors++
+			if consecutiveErrors > 100 {
+				// Persistent failure — give up to avoid spinning.
+				return fmt.Errorf("too many consecutive Accept errors (last: %w)", err)
+			}
+			slog.Warn("ipc: Accept error, retrying", "error", err,
+				"consecutive", consecutiveErrors)
+			time.Sleep(time.Duration(consecutiveErrors) * 100 * time.Millisecond)
+			continue
 		}
+		consecutiveErrors = 0
 		go s.safeHandleConn(conn)
 	}
 }
@@ -94,9 +108,13 @@ func (s *Server) Serve() error {
 func (s *Server) safeHandleConn(conn net.Conn) {
 	defer func() {
 		if r := recover(); r != nil {
+			// Use %p (pointer address) instead of RemoteAddr().String() to
+			// avoid a potential nil dereference INSIDE the recovery handler,
+			// which would be unrecoverable and crash the helper.
 			slog.Error("ipc: panic in connection handler (recovered)",
-				"panic", r,
-				"conn", conn.RemoteAddr().String())
+				"panic", fmt.Sprintf("%v", r),
+				"conn", fmt.Sprintf("%p", conn),
+				"stack", string(debug.Stack()))
 		}
 	}()
 	s.handleConn(conn)

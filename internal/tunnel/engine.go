@@ -173,7 +173,14 @@ func NewEngine(cfg *config.WireGuardConfig) (*Engine, error) {
 				if err != nil {
 					return
 				}
-				go wgDev.IpcHandle(c)
+				go func() {
+					defer func() {
+						if r := recover(); r != nil {
+							slog.Warn("UAPI IpcHandle panic (recovered)", "panic", r)
+						}
+					}()
+					wgDev.IpcHandle(c)
+				}()
 			}
 		}()
 	}
