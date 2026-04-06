@@ -17,7 +17,7 @@ type Config struct {
 	HandshakeTimeout time.Duration // Max time without handshake before reconnecting (default: 120s)
 	InitialDelay     time.Duration // First retry delay (default: 5s)
 	MaxDelay         time.Duration // Max retry delay (default: 60s)
-	MaxAttempts      int           // Max reconnection attempts (default: 10, 0 = unlimited)
+	MaxAttempts      int           // Max reconnection attempts (default: 0 = unlimited)
 }
 
 // DefaultConfig returns sensible default reconnection settings.
@@ -26,7 +26,7 @@ func DefaultConfig() Config {
 		HandshakeTimeout: 120 * time.Second,
 		InitialDelay:     5 * time.Second,
 		MaxDelay:         60 * time.Second,
-		MaxAttempts:      10,
+		MaxAttempts:      0, // unlimited — health check ensures persistent reconnection
 	}
 }
 
@@ -44,6 +44,16 @@ type ReconnectFunc func() error
 // StatusChangedFunc is called when reconnection state changes.
 type StatusChangedFunc func(state State)
 
+// FirewallSuspendFunc is called before disconnect during reconnection to
+// temporarily disable firewall rules (kill switch / DNS protection). This
+// prevents a deadlock when the utun interface name changes (e.g. utun4->utun5)
+// and old pf rules block the new interface's traffic.
+type FirewallSuspendFunc func() error
+
+// FirewallResumeFunc is called after a successful reconnect to re-enable
+// firewall rules with the new interface name and endpoints.
+type FirewallResumeFunc func() error
+
 // Monitor watches tunnel health and triggers reconnection.
 type Monitor struct {
 	mu            sync.Mutex
@@ -51,6 +61,8 @@ type Monitor struct {
 	manager       *tunnel.Manager
 	reconnectFn   ReconnectFunc
 	statusFn      StatusChangedFunc
+	fwSuspendFn   FirewallSuspendFunc
+	fwResumeFn    FirewallResumeFunc
 	stopCh        chan struct{}
 	wg            sync.WaitGroup
 	running       bool
@@ -75,6 +87,16 @@ func NewMonitor(manager *tunnel.Manager, reconnectFn ReconnectFunc, statusFn Sta
 		stopCh:        make(chan struct{}),
 		sleepDetector: NewSleepDetector(),
 	}
+}
+
+// SetFirewallCallbacks configures the firewall suspend/resume callbacks used
+// during reconnection. Must be called before Start(). Separated from
+// NewMonitor to avoid changing the constructor signature for all callers.
+func (m *Monitor) SetFirewallCallbacks(suspend FirewallSuspendFunc, resume FirewallResumeFunc) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.fwSuspendFn = suspend
+	m.fwResumeFn = resume
 }
 
 // Start begins monitoring the tunnel connection.
@@ -173,12 +195,34 @@ func (m *Monitor) GetState() State {
 }
 
 func (m *Monitor) monitorLoop() {
-	// NOTE: health-check based reconnection was removed. WireGuard handles
-	// stale handshakes via its own rekey mechanism (rekey-after-time = 120s).
-	// The only legitimate full-reconnect path is sleepWakeLoop. This
-	// goroutine is kept as a placeholder for future health-check hooks
-	// (e.g. metrics export, connectivity probes).
-	<-m.stopCh
+	const checkInterval = 30 * time.Second
+	const handshakeStaleThreshold = 180 * time.Second // 3 minutes
+
+	ticker := time.NewTicker(checkInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-m.stopCh:
+			return
+		case <-ticker.C:
+			if !m.manager.IsConnected() {
+				continue
+			}
+			status := m.manager.Status()
+			if status == nil || status.LastHandshakeTime.IsZero() {
+				// No handshake data yet — tunnel may still be initializing.
+				continue
+			}
+			age := time.Since(status.LastHandshakeTime)
+			if age > handshakeStaleThreshold {
+				slog.Warn("handshake stale, triggering reconnect",
+					"last_handshake_age", age.Round(time.Second),
+					"threshold", handshakeStaleThreshold)
+				m.triggerReconnect()
+			}
+		}
+	}
 }
 
 func (m *Monitor) triggerReconnect() {
@@ -282,6 +326,18 @@ func (m *Monitor) reconnectWithBackoff(ctx context.Context) {
 			return
 		}
 
+		// Suspend firewall rules before disconnect so old pf rules (which
+		// reference the old utun interface name) don't block the new
+		// connection's traffic when the interface name changes.
+		firewallWasSuspended := false
+		if m.fwSuspendFn != nil {
+			if err := m.fwSuspendFn(); err != nil {
+				slog.Warn("failed to suspend firewall for reconnect", "error", err)
+			} else {
+				firewallWasSuspended = true
+			}
+		}
+
 		// Disconnect first (ignore errors — might already be disconnected)
 		_ = m.manager.Disconnect()
 
@@ -289,18 +345,39 @@ func (m *Monitor) reconnectWithBackoff(ctx context.Context) {
 		// Disconnect can take a moment and the user's cancel may land here.
 		if ctx.Err() != nil {
 			slog.Info("reconnection cancelled before reconnectFn", "attempt", attempt)
+			// Re-enable firewall even on cancel to avoid leaving the
+			// system unprotected.
+			if firewallWasSuspended && m.fwResumeFn != nil {
+				if err := m.fwResumeFn(); err != nil {
+					slog.Warn("failed to resume firewall after cancel", "error", err)
+				}
+			}
 			return
 		}
 
 		// Attempt reconnection
 		if err := m.reconnectFn(); err != nil {
 			slog.Warn("reconnection failed", "attempt", attempt, "error", err)
+			// Re-enable firewall after failed attempt so the system stays
+			// protected between retries.
+			if firewallWasSuspended && m.fwResumeFn != nil {
+				if err := m.fwResumeFn(); err != nil {
+					slog.Warn("failed to resume firewall after failed reconnect", "error", err)
+				}
+			}
 			// Exponential backoff
 			delay *= 2
 			if delay > m.cfg.MaxDelay {
 				delay = m.cfg.MaxDelay
 			}
 			continue
+		}
+
+		// Resume firewall with the new interface name and endpoints.
+		if firewallWasSuspended && m.fwResumeFn != nil {
+			if err := m.fwResumeFn(); err != nil {
+				slog.Warn("failed to resume firewall after successful reconnect", "error", err)
+			}
 		}
 
 		slog.Info("reconnected successfully", "attempt", attempt)
