@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"os/exec"
 	"runtime"
 	"strings"
 	"testing"
@@ -672,6 +674,67 @@ func TestCheckForUpdate_Non200ReturnsNotAvailable(t *testing.T) {
 	}
 	if info.Available {
 		t.Error("expected not available when API returns 403")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// IsBrewInstall
+// ---------------------------------------------------------------------------
+
+func TestIsBrewInstall_ReturnsBool(t *testing.T) {
+	// IsBrewInstall depends on the filesystem and exec.LookPath, which
+	// are hard to mock without interfaces. This test verifies the function
+	// returns without panicking on the current machine and that the result
+	// is consistent across repeated calls.
+	result1 := IsBrewInstall()
+	result2 := IsBrewInstall()
+	if result1 != result2 {
+		t.Errorf("IsBrewInstall() returned inconsistent results: %v then %v", result1, result2)
+	}
+	// Log the result so CI/local runs can see what was detected.
+	t.Logf("IsBrewInstall() = %v (machine-dependent)", result1)
+}
+
+func TestIsBrewInstall_NoCaskroom(t *testing.T) {
+	// On most dev/CI machines, /opt/homebrew/Caskroom/wireguide and
+	// /usr/local/Caskroom/wireguide do not exist, so IsBrewInstall should
+	// return false. If this test runs on a machine where WireGuide IS
+	// installed via brew, the result is legitimately true — skip.
+	result := IsBrewInstall()
+	// We can't assert false universally, but we CAN check the logic:
+	// if neither Caskroom path exists, the result MUST be false.
+	caskroomPaths := []string{
+		"/opt/homebrew/Caskroom/wireguide",
+		"/usr/local/Caskroom/wireguide",
+	}
+	anyCaskroom := false
+	for _, p := range caskroomPaths {
+		if info, err := os.Stat(p); err == nil && info.IsDir() {
+			anyCaskroom = true
+			break
+		}
+	}
+	if !anyCaskroom && result {
+		t.Error("IsBrewInstall() returned true but no Caskroom directory exists")
+	}
+}
+
+func TestIsBrewInstall_CaskroomWithoutBrew(t *testing.T) {
+	// This test documents the expected behaviour: even if a Caskroom
+	// directory exists, IsBrewInstall returns false when brew is not
+	// in PATH. We can't easily create/remove directories under
+	// /opt/homebrew in a unit test, so we verify the logic by checking
+	// that the function correctly requires BOTH conditions.
+	//
+	// On a machine without brew in PATH and without a Caskroom dir,
+	// the result must be false.
+	if _, err := exec.LookPath("brew"); err != nil {
+		// brew is NOT in PATH
+		if IsBrewInstall() {
+			t.Error("IsBrewInstall() returned true but brew is not in PATH")
+		}
+	} else {
+		t.Log("brew is in PATH on this machine; skipping no-brew assertion")
 	}
 }
 
