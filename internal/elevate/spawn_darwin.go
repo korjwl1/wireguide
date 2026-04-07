@@ -31,8 +31,8 @@ const (
 //  3. Daemon installed but not running → bootout + bootstrap to restart.
 //  4. Dev fallback: if all else fails, osascript spawns helper directly.
 func SpawnHelper(args Args) error {
-	// 1. Already running?
-	if isSocketLive(args.SocketPath) {
+	// 1. Already running? (skip check if force-reinstalling after version mismatch)
+	if !args.ForceReinstall && isSocketLive(args.SocketPath) {
 		slog.Info("helper already running")
 		return nil
 	}

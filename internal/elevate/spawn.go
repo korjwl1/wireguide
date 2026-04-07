@@ -11,6 +11,10 @@ type Args struct {
 	SocketUID int
 	// DataDir for crash recovery state
 	DataDir string
+	// ForceReinstall skips the "already running" socket check and
+	// reinstalls the binary + restarts the daemon. Used when the GUI
+	// detects a helper version mismatch after an app update.
+	ForceReinstall bool
 }
 
 // SelfPath returns the absolute path of the current executable.

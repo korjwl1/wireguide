@@ -11,6 +11,7 @@ import (
 	"github.com/korjwl1/wireguide/internal/config"
 	"github.com/korjwl1/wireguide/internal/ipc"
 	"github.com/korjwl1/wireguide/internal/tunnel"
+	"github.com/korjwl1/wireguide/internal/update"
 )
 
 // registerHandlers binds every RPC method to a Helper method. Splitting the
@@ -42,7 +43,7 @@ func (h *Helper) handleSetLogLevel(params json.RawMessage) (interface{}, error) 
 }
 
 func (h *Helper) handlePing(params json.RawMessage) (interface{}, error) {
-	return ipc.PingResponse{Version: ipc.ProtocolVersion, PID: os.Getpid()}, nil
+	return ipc.PingResponse{Version: update.CurrentVersion(), PID: os.Getpid()}, nil
 }
 
 func (h *Helper) handleShutdown(params json.RawMessage) (interface{}, error) {

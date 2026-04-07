@@ -10,6 +10,7 @@ import (
 
 	"github.com/korjwl1/wireguide/internal/elevate"
 	"github.com/korjwl1/wireguide/internal/ipc"
+	"github.com/korjwl1/wireguide/internal/update"
 	"github.com/wailsapp/wails/v3/pkg/application"
 )
 
@@ -17,6 +18,7 @@ import (
 // one with privilege elevation. Polls for readiness until the context expires.
 func ensureHelper(ctx context.Context, dataDir string) (*ipc.Client, error) {
 	addr := ipc.DefaultSocketPath()
+	forceReinstall := false
 
 	// Try an existing helper first (survives GUI restarts).
 	if client, err := ipc.NewClient(addr); err == nil {
@@ -24,18 +26,32 @@ func ensureHelper(ctx context.Context, dataDir string) (*ipc.Client, error) {
 		defer cancel()
 		var resp ipc.PingResponse
 		if err := client.CallWithContext(pingCtx, ipc.MethodPing, nil, &resp); err == nil {
-			slog.Info("connected to existing helper", "version", resp.Version)
-			return client, nil
+			guiVersion := update.CurrentVersion()
+			if resp.Version == guiVersion {
+				slog.Info("connected to existing helper", "version", resp.Version)
+				return client, nil
+			}
+			// Helper version mismatch — shut down old helper and reinstall.
+			slog.Warn("helper version mismatch, upgrading",
+				"helper", resp.Version, "gui", guiVersion)
+			_ = client.Call(ipc.MethodShutdown, nil, nil)
+			client.Close()
+			// Force reinstall so SpawnHelper skips the "already running"
+			// check — KeepAlive may have restarted the old binary already.
+			forceReinstall = true
+			time.Sleep(300 * time.Millisecond)
+		} else {
+			client.Close()
 		}
-		client.Close()
 	}
 
 	// Spawn new helper with elevation
 	slog.Info("spawning helper with elevation...")
 	args := elevate.Args{
-		SocketPath: addr,
-		SocketUID:  os.Getuid(),
-		DataDir:    dataDir,
+		SocketPath:     addr,
+		SocketUID:      os.Getuid(),
+		DataDir:        dataDir,
+		ForceReinstall: forceReinstall,
 	}
 	if err := elevate.SpawnHelper(args); err != nil {
 		return nil, fmt.Errorf("spawn helper: %w", err)
