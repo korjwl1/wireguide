@@ -2,6 +2,15 @@
 
 All notable changes to WireGuide will be documented in this file.
 
+## [0.1.5] - 2026-04-07
+
+### Added
+- Health Check toggle in Settings (default: off, recommended with PersistentKeepalive)
+
+### Changed
+- Health Check default changed from on to off (consistent with other WG clients)
+- README rewritten: removed aggressive tone, verified claims, acknowledged official app works for many users
+
 ## [0.1.4] - 2026-04-07
 
 ### Security
