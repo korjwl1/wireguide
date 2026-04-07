@@ -513,6 +513,7 @@
     cursor: pointer;
   }
   .link-btn:hover { text-decoration: underline; }
+  .link-btn:disabled { opacity: 0.5; cursor: wait; text-decoration: none; }
   .link-btn:focus-visible {
     outline: 2px solid var(--accent, #007AFF);
     outline-offset: 2px;

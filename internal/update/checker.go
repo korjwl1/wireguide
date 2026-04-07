@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -321,7 +322,11 @@ func IsBrewInstall() bool {
 	}
 	for _, p := range caskroomPaths {
 		if info, err := os.Stat(p); err == nil && info.IsDir() {
-			return true
+			// Verify brew is actually in PATH — Caskroom dir could be a
+			// leftover from an uninstalled Homebrew.
+			if _, err := exec.LookPath("brew"); err == nil {
+				return true
+			}
 		}
 	}
 	return false

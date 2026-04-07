@@ -27,13 +27,18 @@ func ensureHelper(ctx context.Context, dataDir string) (*ipc.Client, error) {
 		var resp ipc.PingResponse
 		if err := client.CallWithContext(pingCtx, ipc.MethodPing, nil, &resp); err == nil {
 			guiVersion := update.CurrentVersion()
-			if resp.Version == guiVersion {
-				slog.Info("connected to existing helper", "version", resp.Version)
+			helperAppVersion := resp.AppVersion
+			if helperAppVersion == "" {
+				// Old helper that doesn't have AppVersion field — force upgrade.
+				helperAppVersion = "unknown"
+			}
+			if helperAppVersion == guiVersion {
+				slog.Info("connected to existing helper", "version", helperAppVersion)
 				return client, nil
 			}
 			// Helper version mismatch — shut down old helper and reinstall.
 			slog.Warn("helper version mismatch, upgrading",
-				"helper", resp.Version, "gui", guiVersion)
+				"helper", helperAppVersion, "gui", guiVersion)
 			_ = client.Call(ipc.MethodShutdown, nil, nil)
 			client.Close()
 			// Force reinstall so SpawnHelper skips the "already running"
@@ -70,7 +75,13 @@ func ensureHelper(ctx context.Context, dataDir string) (*ipc.Client, error) {
 		}
 		var resp ipc.PingResponse
 		if err := client.CallWithContext(ctx, ipc.MethodPing, nil, &resp); err == nil {
-			slog.Info("helper ready", "version", resp.Version)
+			// After force reinstall, verify we connected to the NEW helper.
+			if forceReinstall && resp.AppVersion != "" && resp.AppVersion != update.CurrentVersion() {
+				slog.Debug("polling: still old helper version", "got", resp.AppVersion)
+				client.Close()
+				continue
+			}
+			slog.Info("helper ready", "app_version", resp.AppVersion)
 			return client, nil
 		}
 		client.Close()

@@ -4,13 +4,12 @@
 
   export let updateInfo = null;
   export let onInstall = null;
-  export let onDismiss = null;
 
   let installing = false;
   let showConfirm = false;
 
   // Check if this version was previously dismissed
-  $: dismissed = updateInfo?.version && localStorage.getItem('wireguide_skip_version') === updateInfo.version;
+  $: dismissed = (() => { try { return updateInfo?.version && localStorage.getItem('wireguide_skip_version') === updateInfo.version; } catch { return false; } })();
   $: showPopup = updateInfo?.available && !dismissed;
 
   function requestInstall() {
@@ -22,6 +21,7 @@
   }
 
   async function doInstall() {
+    if (installing) return;
     showConfirm = false;
     installing = true;
     if (onInstall) await onInstall();
@@ -30,10 +30,11 @@
 
   function dismiss() {
     // Save dismissed version so popup doesn't show again for this version
-    if (updateInfo?.version) {
-      localStorage.setItem('wireguide_skip_version', updateInfo.version);
-    }
-    if (onDismiss) onDismiss();
+    try {
+      if (updateInfo?.version) {
+        localStorage.setItem('wireguide_skip_version', updateInfo.version);
+      }
+    } catch { /* localStorage unavailable */ }
   }
 </script>
 

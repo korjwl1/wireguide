@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"strings"
 	"sync/atomic"
 
 	"github.com/korjwl1/wireguide/internal/autostart"
@@ -127,8 +128,12 @@ func (s *TunnelService) SetHealthCheck(enabled bool) error {
 	return s.call(ipc.MethodSetHealthCheck, ipc.SetHealthCheckRequest{Enabled: enabled}, nil)
 }
 
-// OpenURL opens a URL in the default browser.
+// OpenURL opens a URL in the default browser. Only HTTPS URLs on
+// github.com are allowed to prevent misuse from a compromised frontend.
 func (s *TunnelService) OpenURL(url string) error {
+	if !strings.HasPrefix(url, "https://github.com/") {
+		return fmt.Errorf("URL not allowed: %s", url)
+	}
 	if s.app != nil {
 		return s.app.Browser.OpenURL(url)
 	}
