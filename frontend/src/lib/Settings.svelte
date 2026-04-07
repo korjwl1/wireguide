@@ -5,19 +5,9 @@
   import { connectionStatus } from '../stores/tunnels.js';
 
   export let TunnelService;
-  // Prop callback instead of createEventDispatcher. Dispatcher requires the
-  // parent to wire `on:close={...}`, and earlier builds had a subtle bug
-  // where clicks on custom buttons in the modal weren't reaching the parent
-  // handler (while <select>/<input> native controls still worked). Passing
-  // onClose as a plain prop sidesteps the dispatcher entirely — the button
-  // just calls the parent's state mutator directly.
   export let onClose = () => {};
 
-
-  // Field names here match the Go JSON tags on storage.Settings exactly.
-  // The Wails binding generator uses the JSON tags (snake_case), not the
-  // Go struct field names — using PascalCase here previously meant theme
-  // changes never persisted across restarts.
+  let activeTab = 'general';
   let settings = {
     language: getLanguage(),
     theme: 'system',
@@ -68,9 +58,6 @@
     }
   }
 
-  // Debounced save: toggling several checkboxes in quick succession should
-  // result in ONE write, not N writes. 300ms feels instant yet collapses
-  // the typical click burst.
   let saveTimer = null;
   function scheduleSave() {
     if (saveTimer) clearTimeout(saveTimer);
@@ -80,13 +67,6 @@
     }, 300);
   }
 
-  // Explicit handlers instead of `$:` reactive blocks. The reactive
-  // approach depended on Svelte tracking settings.<field> writes via
-  // bind:value, which turned out to be unreliable inside a nested modal
-  // component — theme/language changes weren't propagating to applyTheme
-  // at all. With on:change handlers the flow is dead simple: user picks
-  // an option → we mutate the local state, immediately apply the side
-  // effect, and schedule the debounced save.
   function onThemeChange(e) {
     settings.theme = e.target.value;
     applyTheme(settings.theme);
@@ -95,10 +75,6 @@
 
   function onLanguageChange(e) {
     settings.language = e.target.value;
-    // 'auto' means "follow the OS locale" — resolve it to a concrete
-    // language and push that to the locale store, otherwise picking Auto
-    // would leave the store at whatever language was set before (the bug
-    // the user just hit: picking Auto did nothing).
     const resolved = settings.language === 'auto' ? detectLanguage() : settings.language;
     setLanguage(resolved);
     scheduleSave();
@@ -111,9 +87,6 @@
 
   function onLogLevelChange(e) {
     settings.log_level = e.target.value;
-    // Push log level IMMEDIATELY, not via debounced save — user is
-    // probably switching to Debug because they're diagnosing something
-    // right now; a 300ms delay drops the records they care about.
     TunnelService.SetLogLevel(settings.log_level).catch((err) => {
       console.error('SetLogLevel failed:', err);
     });
@@ -122,9 +95,6 @@
 
   function onKillSwitchChange(e) {
     settings.kill_switch = e.target.checked;
-    // Save the preference only. Actual activation happens automatically
-    // when VPN connects (handled in App.svelte's connect flow).
-    // If VPN is currently connected, apply immediately too.
     if ($connectionStatus?.state === 'connected') {
       TunnelService.SetKillSwitch(settings.kill_switch).catch((err) => {
         console.error('SetKillSwitch failed:', err);
@@ -154,8 +124,6 @@
     scheduleSave();
   }
 
-  // Ensure a pending save is flushed before the modal closes. Otherwise
-  // quickly toggling and immediately clicking close could lose the last write.
   onDestroy(() => {
     if (saveTimer) {
       clearTimeout(saveTimer);
@@ -163,24 +131,13 @@
     }
   });
 
-  function stopEvent(e) {
-    e.stopPropagation();
-  }
+  function stopEvent(e) { e.stopPropagation(); }
 
   function handleBackdropMousedown(e) {
-    // Only close if the press landed directly on the backdrop, not on
-    // something that bubbled up from inside the modal. Using mousedown
-    // instead of click so the handler fires before any native form
-    // control can swallow the event.
-    if (e.target === e.currentTarget) {
-      close();
-    }
+    if (e.target === e.currentTarget) close();
   }
 
   function close() {
-    // Flush any pending debounced save before closing so the last change
-    // isn't lost. save() is async but we don't need to await — the IPC
-    // round-trip can finish after the modal is gone.
     if (saveTimer) {
       clearTimeout(saveTimer);
       saveTimer = null;
@@ -189,98 +146,119 @@
     onClose();
   }
 
-  // ESC to close — standard modal affordance. Window-level listener so it
-  // works regardless of which element currently holds focus (selects etc.).
   function onKeyDown(e) {
     if (e.key === 'Escape') {
       e.preventDefault();
       close();
     }
   }
+
   onMount(async () => {
     window.addEventListener('keydown', onKeyDown);
-    try {
-      appVersion = await TunnelService.GetVersion();
-    } catch (_) {}
+    try { appVersion = await TunnelService.GetVersion(); } catch (_) {}
     return () => window.removeEventListener('keydown', onKeyDown);
   });
 </script>
 
-<!-- Backdrop click closes; inner modal stops propagation via a concrete
-     handler (not a modifier-only on:click, which has been flaky in some
-     Svelte compile paths). -->
 <div class="modal-backdrop" on:mousedown={handleBackdropMousedown}>
   <div class="modal" on:mousedown={stopEvent} role="dialog" aria-modal="true" aria-labelledby="settings-title">
     <h3 id="settings-title">{$t('settings.title')}</h3>
 
-    <section>
-      <h4>{$t('settings.general')}</h4>
+    <div class="settings-layout">
+      <nav class="settings-sidebar" role="tablist" aria-label="Settings sections">
+        <button role="tab" aria-selected={activeTab === 'general'} class:active={activeTab === 'general'} on:click={() => activeTab = 'general'}>
+          {$t('settings.general')}
+        </button>
+        <button role="tab" aria-selected={activeTab === 'advanced'} class:active={activeTab === 'advanced'} on:click={() => activeTab = 'advanced'}>
+          {$t('settings.advanced')}
+        </button>
+        <button role="tab" aria-selected={activeTab === 'about'} class:active={activeTab === 'about'} on:click={() => activeTab = 'about'}>
+          {$t('settings.about')}
+        </button>
+      </nav>
 
-      <div class="setting-row">
-        <label for="theme-select">{$t('settings.theme')}</label>
-        <select id="theme-select" value={settings.theme} on:change={onThemeChange}>
-          <option value="dark">{$t('settings.theme_dark')}</option>
-          <option value="light">{$t('settings.theme_light')}</option>
-          <option value="system">{$t('settings.theme_system')}</option>
-        </select>
+      <div class="settings-content" role="tabpanel">
+        {#if activeTab === 'general'}
+          <div class="setting-row">
+            <label for="theme-select">{$t('settings.theme')}</label>
+            <select id="theme-select" value={settings.theme} on:change={onThemeChange}>
+              <option value="dark">{$t('settings.theme_dark')}</option>
+              <option value="light">{$t('settings.theme_light')}</option>
+              <option value="system">{$t('settings.theme_system')}</option>
+            </select>
+          </div>
+
+          <div class="setting-row">
+            <label for="lang-select">{$t('settings.language')}</label>
+            <select id="lang-select" value={settings.language} on:change={onLanguageChange}>
+              <option value="auto">{$t('settings.lang_auto')}</option>
+              <option value="en">English</option>
+              <option value="ko">한국어</option>
+              <option value="ja">日本語</option>
+            </select>
+          </div>
+
+          <div class="setting-row">
+            <label for="auto-start">{$t('settings.auto_start')}</label>
+            <input id="auto-start" type="checkbox" checked={settings.auto_start} on:change={onAutoStartChange} />
+          </div>
+
+        {:else if activeTab === 'advanced'}
+          <div class="setting-row">
+            <label for="log-level">{$t('settings.log_level')}</label>
+            <select id="log-level" value={settings.log_level} on:change={onLogLevelChange}>
+              <option value="debug">{$t('settings.log_level_debug')}</option>
+              <option value="info">{$t('settings.log_level_info')}</option>
+              <option value="warn">{$t('settings.log_level_warn')}</option>
+              <option value="error">{$t('settings.log_level_error')}</option>
+            </select>
+          </div>
+
+          <div class="setting-row">
+            <label for="kill-switch">{$t('settings.kill_switch')}</label>
+            <input id="kill-switch" type="checkbox"
+              checked={settings.kill_switch}
+              on:change={onKillSwitchChange} />
+          </div>
+          <p class="setting-hint">{$t('settings.kill_switch_hint')}</p>
+
+          <div class="setting-row">
+            <label for="dns-protection">{$t('settings.dns_protection')}</label>
+            <input id="dns-protection" type="checkbox"
+              checked={settings.dns_protection}
+              on:change={onDnsProtectionChange} />
+          </div>
+          <p class="setting-hint">{$t('settings.dns_protection_hint')}</p>
+
+          <div class="setting-row">
+            <label for="health-check">{$t('settings.health_check')}</label>
+            <input id="health-check" type="checkbox"
+              checked={settings.health_check}
+              on:change={onHealthCheckChange} />
+          </div>
+          <p class="setting-hint">{$t('settings.health_check_hint')}</p>
+
+        {:else if activeTab === 'about'}
+          <div class="about-section">
+            <div class="about-header">
+              <img src="/appicon.png" alt="WireGuide" class="about-icon" />
+              <div>
+                <div class="about-name">WireGuide</div>
+                <span class="about-version">{appVersion ? `v${appVersion}` : ''}</span>
+              </div>
+            </div>
+            <p class="about-desc">{$t('settings.about_desc')}</p>
+            <div class="about-links">
+              <button class="link-btn" on:click={() => TunnelService.OpenURL('https://github.com/korjwl1/wireguide')}>GitHub</button>
+              <button class="link-btn" on:click={() => TunnelService.OpenURL('https://github.com/korjwl1/wireguide/issues')}>{$t('settings.about_issues')}</button>
+              <button class="link-btn" on:click={() => TunnelService.OpenURL('https://github.com/korjwl1/wireguide/blob/main/LICENSE')}>{$t('settings.about_license')}</button>
+            </div>
+          </div>
+        {/if}
       </div>
-
-      <div class="setting-row">
-        <label for="lang-select">{$t('settings.language')}</label>
-        <select id="lang-select" value={settings.language} on:change={onLanguageChange}>
-          <option value="auto">{$t('settings.lang_auto')}</option>
-          <option value="en">English</option>
-          <option value="ko">한국어</option>
-          <option value="ja">日本語</option>
-        </select>
-      </div>
-
-      <div class="setting-row">
-        <label for="auto-start">{$t('settings.auto_start')}</label>
-        <input id="auto-start" type="checkbox" checked={settings.auto_start} on:change={onAutoStartChange} />
-      </div>
-    </section>
-
-    <section>
-      <h4>{$t('settings.advanced')}</h4>
-
-      <div class="setting-row">
-        <label for="log-level">{$t('settings.log_level')}</label>
-        <select id="log-level" value={settings.log_level} on:change={onLogLevelChange}>
-          <option value="debug">{$t('settings.log_level_debug')}</option>
-          <option value="info">{$t('settings.log_level_info')}</option>
-          <option value="warn">{$t('settings.log_level_warn')}</option>
-          <option value="error">{$t('settings.log_level_error')}</option>
-        </select>
-      </div>
-
-      <div class="setting-row">
-        <label for="kill-switch">{$t('settings.kill_switch')}</label>
-        <input id="kill-switch" type="checkbox"
-          checked={settings.kill_switch}
-          on:change={onKillSwitchChange} />
-      </div>
-      <p class="setting-hint">{$t('settings.kill_switch_hint')}</p>
-
-      <div class="setting-row">
-        <label for="dns-protection">{$t('settings.dns_protection')}</label>
-        <input id="dns-protection" type="checkbox"
-          checked={settings.dns_protection}
-          on:change={onDnsProtectionChange} />
-      </div>
-      <p class="setting-hint">{$t('settings.dns_protection_hint')}</p>
-
-      <div class="setting-row">
-        <label for="health-check">{$t('settings.health_check')}</label>
-        <input id="health-check" type="checkbox"
-          checked={settings.health_check}
-          on:change={onHealthCheckChange} />
-      </div>
-      <p class="setting-hint">{$t('settings.health_check_hint')}</p>
-    </section>
+    </div>
 
     <div class="modal-footer">
-      <span class="version">{appVersion ? `v${appVersion}` : ''}</span>
       <button type="button" class="btn-close" on:mousedown|stopPropagation={close}>{$t('settings.close')}</button>
     </div>
   </div>
@@ -290,92 +268,203 @@
   .modal-backdrop {
     position: fixed;
     inset: 0;
-    background: var(--overlay-bg);
+    background: rgba(0,0,0,0.35);
     display: flex;
     align-items: center;
     justify-content: center;
     z-index: 200;
   }
+  @media (prefers-color-scheme: dark) {
+    .modal-backdrop { background: rgba(0,0,0,0.55); }
+  }
   .modal {
     background: var(--bg-primary);
-    border: 1px solid var(--border);
-    border-radius: 12px;
-    padding: 20px 24px 24px;
-    width: 420px;
+    border: 0.5px solid var(--border);
+    border-radius: 10px;
+    padding: 20px 24px 12px;
+    width: 520px;
     max-height: 80vh;
     overflow-y: auto;
+    box-shadow: var(--shadow-md, 0 4px 12px rgba(0,0,0,0.12), 0 16px 48px rgba(0,0,0,0.08));
   }
   h3 {
     margin: 0 0 16px;
-    font-size: 16px;
-    font-weight: 600;
+    font: 600 15px/20px var(--font-sans, -apple-system, BlinkMacSystemFont, sans-serif);
+    color: var(--text-primary);
+    letter-spacing: -0.005em;
   }
-  .modal-footer {
+
+  /* Split layout */
+  .settings-layout {
     display: flex;
-    justify-content: flex-end;
+    gap: 16px;
+    min-height: 240px;
+  }
+
+  /* Sidebar */
+  .settings-sidebar {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 100px;
+    border-right: 0.5px solid var(--border);
+    padding-right: 12px;
+  }
+  .settings-sidebar button {
+    display: flex;
     align-items: center;
-    gap: var(--space-3);
-    margin-top: 20px;
-    padding-top: 16px;
-    border-top: 1px solid var(--border);
-  }
-  .version {
-    margin-right: auto;
-    font-size: 11px;
-    color: var(--text-muted);
-  }
-  /* Explicit padding/size — the global `button { padding: 0 }` reset is
-   * only beaten by class specificity, so we make sure this button has a
-   * real hit area regardless. */
-  .btn-close {
-    min-width: 80px;
-    height: 32px;
-    padding: 0 18px;
-    background: var(--accent);
-    color: var(--text-inverse);
-    border: 0;
-    border-radius: 6px;
-    font-size: 13px;
-    font-weight: 500;
-    cursor: pointer;
-  }
-  .btn-close:hover { opacity: 0.9; }
-  section { margin-bottom: 20px; }
-  section:last-of-type { margin-bottom: 0; }
-  h4 {
-    font-size: 11px;
+    padding: 6px 8px;
+    background: none;
+    border: none;
+    border-radius: 4px;
     color: var(--text-secondary);
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-    margin: 0 0 8px;
-    padding-bottom: 4px;
-    border-bottom: 1px solid var(--border);
+    font: 500 13px/18px var(--font-sans, -apple-system, BlinkMacSystemFont, sans-serif);
+    cursor: pointer;
+    text-align: left;
+    min-height: 28px;
   }
+  .settings-sidebar button:hover {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+  }
+  .settings-sidebar button.active {
+    background: var(--accent, #007AFF);
+    color: var(--text-inverse, #fff);
+  }
+  .settings-sidebar button:focus-visible {
+    outline: 2px solid var(--accent, #007AFF);
+    outline-offset: 2px;
+  }
+
+  /* Content */
+  .settings-content {
+    flex: 1;
+    min-width: 0;
+  }
+
   .setting-row {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding: 6px 0;
+    padding: 4px 0;
+    min-height: 28px;
   }
-  label { font-size: 13px; color: var(--text-primary); }
+  label {
+    font: 400 13px/18px var(--font-sans, -apple-system, BlinkMacSystemFont, sans-serif);
+    color: var(--text-primary);
+  }
   .setting-hint {
-    margin: 4px 0 0;
+    margin: 2px 0 8px;
     padding: 0;
-    font-size: 11px;
+    font: 400 11px/14px var(--font-sans, -apple-system, BlinkMacSystemFont, sans-serif);
     color: var(--text-secondary);
-    line-height: 1.4;
+    letter-spacing: 0.02em;
   }
   select {
     padding: 4px 8px;
+    height: 22px;
     background: var(--bg-input);
-    border: 1px solid var(--border);
+    border: 0.5px solid var(--border);
     border-radius: 4px;
     color: var(--text-primary);
-    font-size: 13px;
+    font: 400 13px var(--font-sans, -apple-system, BlinkMacSystemFont, sans-serif);
+  }
+  select:focus-visible {
+    outline: 2px solid var(--accent, #007AFF);
+    outline-offset: 2px;
   }
   input[type="checkbox"] {
-    width: 18px;
-    height: 18px;
-    accent-color: var(--green);
+    width: 16px;
+    height: 16px;
+    accent-color: var(--green, #34C759);
+    min-width: 16px;
+  }
+  input[type="checkbox"]:focus-visible {
+    outline: 2px solid var(--accent, #007AFF);
+    outline-offset: 2px;
+  }
+
+  /* About tab */
+  .about-section {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+  .about-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .about-icon {
+    width: 48px;
+    height: 48px;
+    border-radius: 10px;
+  }
+  .about-name {
+    font: 600 15px/20px var(--font-sans, -apple-system, BlinkMacSystemFont, sans-serif);
+    color: var(--text-primary);
+  }
+  .about-version {
+    font: 400 11px/14px var(--font-sans, -apple-system, BlinkMacSystemFont, sans-serif);
+    color: var(--text-secondary);
+  }
+  .about-desc {
+    font: 400 12px/16px var(--font-sans, -apple-system, BlinkMacSystemFont, sans-serif);
+    color: var(--text-secondary);
+    margin: 0;
+  }
+  .about-links {
+    display: flex;
+    gap: 16px;
+  }
+  .link-btn {
+    font: 400 12px/16px var(--font-sans, -apple-system, BlinkMacSystemFont, sans-serif);
+    color: var(--accent, #007AFF);
+    background: none;
+    border: none;
+    padding: 0;
+    cursor: pointer;
+  }
+  .link-btn:hover { text-decoration: underline; }
+  .link-btn:focus-visible {
+    outline: 2px solid var(--accent, #007AFF);
+    outline-offset: 2px;
+  }
+
+  /* Footer */
+  .modal-footer {
+    display: flex;
+    justify-content: flex-end;
+    align-items: center;
+    margin-top: 16px;
+    padding-top: 12px;
+    border-top: 0.5px solid var(--border);
+  }
+  .btn-close {
+    min-width: 72px;
+    height: 28px;
+    padding: 0 16px;
+    background: var(--accent, #007AFF);
+    color: var(--text-inverse, #fff);
+    border: 0;
+    border-radius: 6px;
+    font: 500 13px/18px var(--font-sans, -apple-system, BlinkMacSystemFont, sans-serif);
+    cursor: pointer;
+  }
+  .btn-close:hover { filter: brightness(1.08); }
+  .btn-close:active { filter: brightness(0.94); }
+  .btn-close:focus-visible {
+    outline: 2px solid var(--accent, #007AFF);
+    outline-offset: 2px;
+  }
+
+  @media (prefers-reduced-motion: no-preference) {
+    .settings-sidebar button {
+      transition: background-color 120ms cubic-bezier(0.2, 0, 0.1, 1),
+                  color 120ms cubic-bezier(0.2, 0, 0.1, 1);
+    }
+    .btn-close {
+      transition: filter 120ms cubic-bezier(0.2, 0, 0.1, 1);
+    }
   }
 </style>

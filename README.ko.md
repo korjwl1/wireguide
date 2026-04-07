@@ -5,7 +5,7 @@
 <h1 align="center">WireGuide</h1>
 
 <p align="center">
-  모던 UI와 편의 기능을 갖춘 네이티브 macOS WireGuard VPN 클라이언트
+  모던 UI와 편의 기능을 갖춘 크로스 플랫폼 WireGuard VPN 클라이언트
 </p>
 
 <p align="center">

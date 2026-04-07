@@ -90,7 +90,11 @@
     "dns_protection": "DNS Protection",
     "dns_protection_hint": "Forces DNS through VPN only. Applied automatically on connect.",
     "health_check": "Health Check",
-    "health_check_hint": "Monitors handshake age and triggers reconnect if tunnel is dead for 180s. Recommended with PersistentKeepalive."
+    "health_check_hint": "Monitors handshake age and triggers reconnect if tunnel is dead for 180s. Recommended with PersistentKeepalive.",
+    "about": "About",
+    "about_desc": "A cross-platform WireGuard VPN client with modern UI and quality-of-life features.",
+    "about_issues": "Report Issue",
+    "about_license": "License (MIT)"
   },
   "confirm": {
     "delete_title": "Delete Tunnel",

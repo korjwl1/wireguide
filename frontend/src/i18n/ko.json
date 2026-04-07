@@ -90,7 +90,11 @@
     "dns_protection": "DNS 보호",
     "dns_protection_hint": "DNS를 VPN 터널로만 강제합니다. 연결 시 자동 적용.",
     "health_check": "헬스 체크",
-    "health_check_hint": "핸드셰이크 상태를 모니터링하고 180초 동안 응답 없으면 재연결합니다. PersistentKeepalive 사용 시 권장."
+    "health_check_hint": "핸드셰이크 상태를 모니터링하고 180초 동안 응답 없으면 재연결합니다. PersistentKeepalive 사용 시 권장.",
+    "about": "정보",
+    "about_desc": "모던 UI와 편의 기능을 갖춘 크로스 플랫폼 WireGuard VPN 클라이언트",
+    "about_issues": "문제 신고",
+    "about_license": "라이선스 (MIT)"
   },
   "confirm": {
     "delete_title": "터널 삭제",

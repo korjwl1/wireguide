@@ -127,6 +127,14 @@ func (s *TunnelService) SetHealthCheck(enabled bool) error {
 	return s.call(ipc.MethodSetHealthCheck, ipc.SetHealthCheckRequest{Enabled: enabled}, nil)
 }
 
+// OpenURL opens a URL in the default browser.
+func (s *TunnelService) OpenURL(url string) error {
+	if s.app != nil {
+		return s.app.Browser.OpenURL(url)
+	}
+	return fmt.Errorf("app not initialized")
+}
+
 // GetVersion returns the current app version string.
 func (s *TunnelService) GetVersion() string {
 	return update.CurrentVersion()

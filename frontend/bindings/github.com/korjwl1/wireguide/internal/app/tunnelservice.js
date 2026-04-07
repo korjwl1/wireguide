@@ -214,6 +214,15 @@ export function ListTunnelsLocal() {
 }
 
 /**
+ * OpenURL opens a URL in the default browser.
+ * @param {string} url
+ * @returns {$CancellablePromise<void>}
+ */
+export function OpenURL(url) {
+    return $Call.ByID(1649174774, url);
+}
+
+/**
  * ReadFile reads a file from disk (used by native file drop). Returns the
  * content as a string so the frontend can handle name conflicts before import.
  * @param {string} path
