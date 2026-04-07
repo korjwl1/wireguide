@@ -39,9 +39,7 @@ func SpawnHelper(args Args) error {
 
 	// 2-3. Install/restart daemon via a single osascript admin prompt.
 	if err := installAndLoadDaemon(args); err != nil {
-		slog.Warn("daemon install/load failed, falling back to direct spawn", "error", err)
-		// 4. Dev fallback.
-		return spawnViaOsascript(args)
+		return fmt.Errorf("daemon install failed: %w", err)
 	}
 	return nil
 }
@@ -126,7 +124,7 @@ func installAndLoadDaemon(args Args) error {
 	escaped := strings.ReplaceAll(shellScript, `\`, `\\`)
 	escaped = strings.ReplaceAll(escaped, `"`, `\"`)
 	osascriptCmd := fmt.Sprintf(
-		`do shell script "%s" with administrator privileges with prompt "WireGuide needs to install its helper service (one-time setup)."`,
+		`do shell script "%s" with administrator privileges with prompt "WireGuide needs administrator access to install its VPN helper service.\n\nThe helper runs as a background service to manage VPN tunnels, firewall rules, and network configuration. This prompt appears on first launch or after an app update."`,
 		escaped,
 	)
 
@@ -172,7 +170,7 @@ func spawnViaOsascript(args Args) error {
 	escaped := strings.ReplaceAll(cmd, `\`, `\\`)
 	escaped = strings.ReplaceAll(escaped, `"`, `\"`)
 	script := fmt.Sprintf(
-		`do shell script "%s" with administrator privileges with prompt "WireGuide needs administrator privileges to manage VPN tunnels."`,
+		`do shell script "%s" with administrator privileges with prompt "WireGuide needs administrator access to install its VPN helper service.\n\nThe helper runs as a background service to manage VPN tunnels, firewall rules, and network configuration."`,
 		escaped,
 	)
 

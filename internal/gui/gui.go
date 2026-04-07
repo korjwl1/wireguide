@@ -12,7 +12,9 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"os/exec"
 	"runtime"
+	"strings"
 	"sync"
 	"time"
 
@@ -74,12 +76,29 @@ func Run(assetsHandler http.Handler, dataDir string) error {
 		setGUILogLevel(s.LogLevel)
 	}
 
-	// 2. Helper process (spawn if needed)
-	helperCtx, helperCancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer helperCancel()
-	initialClient, err := ensureHelper(helperCtx, dataDir)
-	if err != nil {
-		return fmt.Errorf("helper connection failed: %w", err)
+	// 2. Helper process (spawn if needed).
+	// If the user cancels the admin prompt, retry up to 3 times with a
+	// user-visible dialog explaining why the helper is required.
+	var initialClient *ipc.Client
+	for attempt := 0; attempt < 3; attempt++ {
+		helperCtx, helperCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		var err error
+		initialClient, err = ensureHelper(helperCtx, dataDir)
+		helperCancel()
+		if err == nil {
+			break
+		}
+		slog.Warn("helper connection failed", "attempt", attempt+1, "error", err)
+		if attempt < 2 {
+			// Show retry dialog via osascript (Wails app isn't running yet)
+			retryCmd := `display dialog "WireGuide needs its helper service to manage VPN connections.\n\nPlease grant administrator access when prompted." buttons {"Quit", "Retry"} default button "Retry" with title "WireGuide" with icon caution`
+			out, retryErr := exec.Command("osascript", "-e", retryCmd).Output()
+			if retryErr != nil || strings.Contains(string(out), "Quit") {
+				return fmt.Errorf("helper setup cancelled by user")
+			}
+			continue
+		}
+		return fmt.Errorf("helper connection failed after 3 attempts: %w", err)
 	}
 	clients := ipc.NewClientHolder(initialClient)
 
