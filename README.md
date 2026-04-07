@@ -5,7 +5,7 @@
 <h1 align="center">WireGuide</h1>
 
 <p align="center">
-  A cross-platform WireGuard VPN client built to replace the abandoned official apps.
+  A native macOS WireGuard VPN client with modern UI and quality-of-life features.
 </p>
 
 <p align="center">
@@ -23,61 +23,34 @@
 
 ## Why does this exist?
 
-The official WireGuard clients for macOS and Windows have been effectively abandoned, and the accumulated bugs make them unreliable on modern operating systems.
+The official WireGuard macOS client (v1.0.16) hasn't been updated since February 2023. While it works fine for many users with standard setups, there are known issues that remain unpatched — particularly around split DNS, sleep/wake recovery, and missing features like a kill switch.
 
-### macOS: last release February 2023 — 3+ years with no updates
+WireGuide was born out of a specific frustration: the official client caused severe system lag on an M1 MacBook Air after updating to macOS Tahoe, and no fix was available. Rather than waiting, I built an alternative that also adds features the official app doesn't have.
 
-The [official macOS client](https://apps.apple.com/us/app/wireguard/id1451685025?mt=12) (v1.0.16) has not been updated since February 15, 2023. It has received **zero updates** for macOS 14 Sonoma, macOS 15 Sequoia, or macOS 16 Tahoe.
+### Known issues with the official macOS client
 
-| Problem | Impact | Reference |
-|---------|--------|-----------|
-| **Split DNS is broken** | DNS servers configured in the tunnel are ignored unless AllowedIPs is `0.0.0.0/0`. Split-tunnel users get no DNS resolution through the VPN. | [wireguard-apple PR #11](https://github.com/WireGuard/wireguard-apple/pull/11) — approved Jan 2025, still unmerged after 4 years |
-| **DNS persists after disconnect** | After sleep/wake + disconnect, DNS servers are not reverted. System DNS stays tainted until reboot. | [wireguard-tools PR #22](https://github.com/WireGuard/wireguard-tools/pull/22), [Pritunl forum](https://forum.pritunl.com/t/dns-settings-stay-after-disconnecting-from-wireguard-mode-on-mac/1603) |
-| **Tunnel dies after sleep** | UDP socket enters "closed" state after macOS sleep. All read/write operations fail silently. No auto-recovery. | [KaringX/karing#1360](https://github.com/KaringX/karing/issues/1360), [wireguard-go#41](https://github.com/inverse-inc/wireguard-go/issues/41) |
-| **On-Demand infinite loop** | Switching macOS user accounts causes Settings > VPN to enter an on/off loop with high CPU. | [WireGuard mailing list, Nov 2023](https://lists.zx2c4.com/pipermail/wireguard/2023-November/008247.html) |
-| **Sequoia firewall conflict** | macOS 15's "Block incoming connections" now blocks DNS responses, breaking VPN connectivity. | [mjtsai.com](https://mjtsai.com/blog/2024/09/18/macos-firewall-regressions-in-sequoia/), [Vivaldi forum](https://forum.vivaldi.net/topic/101342/cannot-connect-to-internet-w-wireguard-in-macos-sequoia-15-0) |
-| **No kill switch** | Traffic leaks to ISP when the tunnel goes down. | — |
-| **No auto-reconnect** | After network change or sleep/wake, the tunnel stays dead until manual intervention. | — |
-| **GitHub issues disabled** | No public issue tracker. Community has [no way to report bugs](https://news.ycombinator.com/item?id=43369111). | [HN discussion, Mar 2025](https://news.ycombinator.com/item?id=43369111) |
+These are documented issues — not all users experience them, but they've been reported and remain unfixed:
 
-### Windows: last release December 2021 — 4+ years old
+| Issue | Description | Reference |
+|-------|-------------|-----------|
+| **Split DNS** | DNS servers ignored unless AllowedIPs is `0.0.0.0/0` | [wireguard-apple PR #11](https://github.com/WireGuard/wireguard-apple/pull/11) — open 4+ years |
+| **DNS persists after disconnect** | DNS not reverted after sleep/wake + disconnect | [wireguard-tools PR #22](https://github.com/WireGuard/wireguard-tools/pull/22) |
+| **No kill switch** | No option to block traffic when tunnel drops | — |
+| **No GitHub issues** | No public bug tracker | [HN discussion](https://news.ycombinator.com/item?id=43369111) |
 
-The [official Windows client](https://git.zx2c4.com/wireguard-windows) (v0.5.3) was last released December 22, 2021. The `master` branch has recent commits but no release has been cut.
+### What WireGuide adds
 
-| Problem | Impact | Reference |
-|---------|--------|-----------|
-| **DNS leaks in split tunnel** | DNS queries go to ALL interfaces, defeating VPN privacy unless full-tunnel. | [Engineer Workshop](https://engineerworkshop.com/blog/dont-let-wireguard-dns-leaks-on-windows-compromise-your-security-learn-how-to-fix-it/) |
-| **No endpoint re-resolution** | Dynamic DNS endpoints resolve once and never again. Tunnel silently breaks if server IP changes. | [wireguard-windows#18](https://github.com/WireGuard/wireguard-windows/issues/18) — open 4+ years |
-| **Kill switch blocks LAN** | Full-tunnel kill switch blocks printers, NAS, and all local services. Using /1 routes disables the kill switch entirely. | [netquirk.md](https://github.com/WireGuard/wireguard-windows/blob/master/docs/netquirk.md), [Privacy Guides](https://discuss.privacyguides.net/t/wireguard-with-killswitch-and-lan-exception-on-windows/32117) |
-| **No auto-reconnect** | No watchdog or health-check mechanism. Third-party tools required. | — |
+- **Kill Switch** — blocks all non-VPN traffic via macOS `pf` (optional, off by default)
+- **DNS Protection** — forces DNS queries through VPN only (optional)
+- **Sleep/Wake Recovery** — detects wake events and handles reconnection
+- **Route Monitor** — re-applies endpoint bypass routes on gateway changes
+- **Config Editor** — CodeMirror 6 with WireGuard syntax highlighting and autocompletion
+- **Drag-and-drop import** — drop `.conf` files to add tunnels
+- **Health Check** — monitors handshake age, triggers reconnect if tunnel is unresponsive (optional, off by default, recommended with `PersistentKeepalive`)
 
-### What WireGuide does differently
+### wireguard-go version
 
-WireGuide implements the full `wg-quick` logic in Go — verified line-by-line against the reference [`darwin.bash`](https://git.zx2c4.com/wireguard-tools/tree/src/wg-quick/darwin.bash), [`linux.bash`](https://git.zx2c4.com/wireguard-tools/tree/src/wg-quick/linux.bash), and the [wireguard-windows](https://git.zx2c4.com/wireguard-windows) source.
-
-**Networking fixes:**
-- DNS applied to **all** network services (not just the active one)
-- Route monitor re-applies endpoint bypass on gateway changes
-- Kill switch via pf/nftables/WFAS with correct endpoint + DHCP exceptions
-- Auto-reconnect with exponential backoff after sleep/wake or network change
-- Endpoint re-reading from `wg show` on every route event (roaming support)
-- Helper process stays alive as long as tunnel is active (wg-quick semantics)
-
-**Performance & stability (wireguard-go 2025-05 vs official app's 2023-02):**
-
-The official macOS app ships wireguard-go from February 2023. WireGuide uses the May 2025 build — **57 commits ahead** — which includes:
-
-| Fix | Impact |
-|-----|--------|
-| Socket buffer 128KB → 7MB ([`f26efb6`](https://github.com/WireGuard/wireguard-go/commit/f26efb6)) | ~20-30% throughput improvement on macOS |
-| Go 1.19 → 1.25 runtime | ~10-15% faster on Apple Silicon (register ABI, improved GC) |
-| 3 deadlock fixes ([`b7cd547`](https://github.com/WireGuard/wireguard-go/commit/b7cd547), [`12269c2`](https://github.com/WireGuard/wireguard-go/commit/12269c2), [`113c8f1`](https://github.com/WireGuard/wireguard-go/commit/113c8f1)) | Tunnel no longer hangs on close or under sustained load |
-| WaitPool wakeup fix + memory leak ([`867a4c4`](https://github.com/WireGuard/wireguard-go/commit/867a4c4)) | Fixes progressive slowdown → eventual tunnel freeze |
-| Peer endpoint lock contention reduction ([`4ffa9c2`](https://github.com/WireGuard/wireguard-go/commit/4ffa9c2)) | Lower per-packet latency |
-| Darwin utun retry loop elimination ([`bc30fee`](https://github.com/WireGuard/wireguard-go/commit/bc30fee)) | Reconnection no longer stalls up to 6 seconds |
-| Handshake encode/decode 25-119x faster ([`9e7529c`](https://github.com/WireGuard/wireguard-go/commit/9e7529c), [`264889f`](https://github.com/WireGuard/wireguard-go/commit/264889f)) | Less GC pressure during rekeying |
-
-Note: The dramatic Linux-only improvements (GSO/GRO vectorized I/O, 4→11 Gbps) do not apply to macOS due to platform limitations.
+WireGuide uses wireguard-go from May 2025 (57 commits ahead of the version in the official app), which includes deadlock fixes, socket buffer improvements, and handshake performance gains. See the [wireguard-go commit log](https://github.com/WireGuard/wireguard-go/commits/master) for details.
 
 ---
 
@@ -143,10 +116,10 @@ task build
 | **Tunnel Management** | Import, create, edit, export `.conf` files. Drag-and-drop import. |
 | **Config Editor** | CodeMirror 6 with WireGuard syntax highlighting and autocompletion |
 | **System Tray** | Connection status badge (green dot), 1-click connect/disconnect |
-| **Kill Switch** | Blocks all non-VPN traffic (macOS `pf` / Linux `nftables` / Windows `WFAS`) |
-| **DNS Protection** | Forces DNS queries through the VPN tunnel only |
-| **Auto-Reconnect** | Exponential backoff with dead-connection detection |
-| **Sleep/Wake Recovery** | Automatic reconnect after system sleep |
+| **Kill Switch** | Blocks all non-VPN traffic via macOS `pf` (optional) |
+| **DNS Protection** | Forces DNS queries through the VPN tunnel only (optional) |
+| **Health Check** | Handshake age monitoring with auto-reconnect (optional) |
+| **Sleep/Wake Recovery** | Detects system wake and handles tunnel recovery |
 | **Route Monitor** | Re-applies endpoint bypass routes on gateway changes |
 | **Conflict Detection** | Warns about route conflicts with Tailscale, other WG interfaces, etc. |
 | **Diagnostics** | Ping test, DNS leak test, route table visualization |
