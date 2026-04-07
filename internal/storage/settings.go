@@ -28,7 +28,7 @@ func DefaultSettings() *Settings {
 		TrayIconStyle: "color",
 		KillSwitch:    false,
 		DNSProtection: false,
-		HealthCheck:   true, // enabled by default
+		HealthCheck:   false,
 		LogLevel:      "info",
 	}
 }

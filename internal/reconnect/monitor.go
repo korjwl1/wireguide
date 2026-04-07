@@ -101,7 +101,7 @@ func NewMonitor(manager TunnelManager, reconnectFn ReconnectFunc, statusFn Statu
 		statusFn:           statusFn,
 		stopCh:             make(chan struct{}),
 		sleepDetector:      NewSleepDetector(),
-		healthCheckEnabled: true, // default ON
+		healthCheckEnabled: false, // default OFF — enable in Settings
 	}
 }
 

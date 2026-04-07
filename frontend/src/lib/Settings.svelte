@@ -24,7 +24,7 @@
     auto_start: false,
     kill_switch: false,
     dns_protection: false,
-    health_check: true,
+    health_check: false,
     log_level: 'info',
     tray_icon_style: 'color',
   };
@@ -40,7 +40,7 @@
         settings.auto_start = s.auto_start ?? false;
         settings.kill_switch = s.kill_switch ?? false;
         settings.dns_protection = s.dns_protection ?? false;
-        settings.health_check = s.health_check ?? true;
+        settings.health_check = s.health_check ?? false;
         settings.log_level = s.log_level || 'info';
         settings.tray_icon_style = s.tray_icon_style || 'color';
       }
