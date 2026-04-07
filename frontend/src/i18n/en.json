@@ -94,7 +94,8 @@
     "about": "About",
     "about_desc": "A cross-platform WireGuard VPN client with modern UI and quality-of-life features.",
     "about_issues": "Report Issue",
-    "about_license": "License (MIT)"
+    "about_license": "License (MIT)",
+    "up_to_date": "You're on the latest version."
   },
   "confirm": {
     "delete_title": "Delete Tunnel",
@@ -216,7 +217,8 @@
     "current": "current: v{version}",
     "update_now": "Update",
     "updating": "Updating...",
-    "release_notes": "Notes",
+    "release_notes": "What's New",
+    "skip": "Skip This Version",
     "confirm_title": "Update WireGuide?",
     "vpn_warning": "The VPN connection will be briefly interrupted during the update. The app will restart automatically.",
     "proceed": "Update Now",

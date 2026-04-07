@@ -9,8 +9,11 @@
   let installing = false;
   let showConfirm = false;
 
+  // Check if this version was previously dismissed
+  $: dismissed = updateInfo?.version && localStorage.getItem('wireguide_skip_version') === updateInfo.version;
+  $: showPopup = updateInfo?.available && !dismissed;
+
   function requestInstall() {
-    // If VPN is connected, show confirmation with warning
     if ($connectionStatus?.state === 'connected') {
       showConfirm = true;
     } else {
@@ -24,104 +27,165 @@
     if (onInstall) await onInstall();
     installing = false;
   }
+
+  function dismiss() {
+    // Save dismissed version so popup doesn't show again for this version
+    if (updateInfo?.version) {
+      localStorage.setItem('wireguide_skip_version', updateInfo.version);
+    }
+    if (onDismiss) onDismiss();
+  }
 </script>
 
-{#if updateInfo?.available}
-  <div class="update-banner">
-    <div class="update-info">
-      <strong>{$t('update.available', { version: updateInfo.version })}</strong>
-      <span class="current">{$t('update.current', { version: updateInfo.current_version })}</span>
-    </div>
-    <div class="update-actions">
-      <button class="btn-update" on:click={requestInstall} disabled={installing}>
-        {installing ? $t('update.updating') : $t('update.update_now')}
-      </button>
-      <a href={updateInfo.release_url} target="_blank" class="btn-notes">{$t('update.release_notes')}</a>
-      {#if onDismiss}
-        <button class="btn-dismiss" on:click={onDismiss}>×</button>
-      {/if}
-    </div>
-  </div>
-
-  {#if showConfirm}
-    <div class="confirm-backdrop" on:click={() => showConfirm = false}>
-      <div class="confirm-dialog" on:click|stopPropagation role="dialog">
-        <h3>{$t('update.confirm_title')}</h3>
-        <p>{$t('update.vpn_warning')}</p>
-        <div class="confirm-actions">
-          <button class="btn-proceed" on:click={doInstall}>{$t('update.proceed')}</button>
-          <button class="btn-cancel" on:click={() => showConfirm = false}>{$t('update.cancel')}</button>
+{#if showPopup}
+  <div class="popup-backdrop" on:mousedown|self={dismiss}>
+    <div class="popup" role="dialog" aria-modal="true" on:mousedown|stopPropagation>
+      <div class="popup-header">
+        <img src="/appicon.png" alt="WireGuide" class="popup-icon" />
+        <div>
+          <div class="popup-title">{$t('update.available', { version: updateInfo.version })}</div>
+          <span class="popup-current">{$t('update.current', { version: updateInfo.current_version })}</span>
         </div>
       </div>
+
+      {#if updateInfo.release_notes}
+        <div class="popup-notes-label">{$t('update.release_notes')}</div>
+        <div class="popup-notes">{updateInfo.release_notes}</div>
+      {/if}
+
+      <div class="popup-actions">
+        <button class="btn-update" on:click={requestInstall} disabled={installing}>
+          {installing ? $t('update.updating') : $t('update.update_now')}
+        </button>
+        <button class="btn-skip" on:click={dismiss}>{$t('update.skip')}</button>
+      </div>
     </div>
-  {/if}
+  </div>
+{/if}
+
+{#if showConfirm}
+  <div class="popup-backdrop" on:mousedown|self={() => showConfirm = false}>
+    <div class="popup" on:mousedown|stopPropagation role="dialog" aria-modal="true">
+      <h3>{$t('update.confirm_title')}</h3>
+      <p class="confirm-msg">{$t('update.vpn_warning')}</p>
+      <div class="popup-actions">
+        <button class="btn-update" on:click={doInstall}>{$t('update.proceed')}</button>
+        <button class="btn-skip" on:click={() => showConfirm = false}>{$t('update.cancel')}</button>
+      </div>
+    </div>
+  </div>
 {/if}
 
 <style>
-  .update-banner {
+  .popup-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.35);
     display: flex;
-    justify-content: space-between;
     align-items: center;
-    padding: 8px 16px;
-    background: var(--green-tint);
-    border: 1px solid var(--green);
-    border-radius: 8px;
-    margin: 8px 16px;
+    justify-content: center;
+    z-index: 300;
   }
-  .update-info { font-size: 13px; }
-  .current { color: var(--text-secondary); font-size: 12px; margin-left: 4px; }
-  .update-actions { display: flex; gap: 8px; align-items: center; }
-  .btn-update {
-    padding: 4px 12px;
-    background: var(--green);
-    color: #fff;
-    border: none;
-    border-radius: 4px;
-    cursor: pointer;
-    font-size: 12px;
-    font-weight: 600;
+  @media (prefers-color-scheme: dark) {
+    .popup-backdrop { background: rgba(0,0,0,0.55); }
   }
-  .btn-update:disabled { opacity: 0.5; cursor: wait; }
-  .btn-notes {
-    padding: 4px 12px;
-    color: var(--text-secondary);
-    font-size: 12px;
-    text-decoration: none;
-  }
-  .btn-notes:hover { color: var(--text-primary); }
-  .btn-dismiss {
-    background: none; border: none; color: var(--text-muted);
-    cursor: pointer; font-size: 16px; padding: 0 4px;
-  }
-
-  .confirm-backdrop {
-    position: fixed; inset: 0;
-    background: var(--overlay-bg);
-    display: flex; align-items: center; justify-content: center;
-    z-index: 1000;
-  }
-  .confirm-dialog {
+  .popup {
     background: var(--bg-primary);
-    border: 1px solid var(--border);
-    border-radius: 12px;
-    padding: 24px;
-    max-width: 400px;
-    box-shadow: var(--shadow-md);
+    border: 0.5px solid var(--border);
+    border-radius: 10px;
+    padding: 20px 24px;
+    width: 380px;
+    box-shadow: var(--shadow-md, 0 4px 12px rgba(0,0,0,0.12));
   }
-  .confirm-dialog h3 { margin: 0 0 12px; }
-  .confirm-dialog p {
-    font-size: 13px;
+  .popup-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 12px;
+  }
+  .popup-icon {
+    width: 48px;
+    height: 48px;
+    border-radius: 10px;
+  }
+  .popup-title {
+    font: 600 14px/18px var(--font-sans, -apple-system, BlinkMacSystemFont, sans-serif);
+    color: var(--text-primary);
+  }
+  .popup-current {
+    font: 400 11px/14px var(--font-sans, -apple-system, BlinkMacSystemFont, sans-serif);
     color: var(--text-secondary);
-    line-height: 1.5;
+  }
+  .popup-notes-label {
+    font: 600 11px/14px var(--font-sans, -apple-system, BlinkMacSystemFont, sans-serif);
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    margin-bottom: 4px;
+  }
+  .popup-notes {
+    font: 400 12px/16px var(--font-mono, ui-monospace, "SF Mono", Menlo, monospace);
+    color: var(--text-secondary);
+    margin-bottom: 16px;
+    max-height: 140px;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    background: var(--bg-secondary, #F5F5F7);
+    border: 0.5px solid var(--border);
+    border-radius: 6px;
+    padding: 8px 10px;
+  }
+  .popup-actions {
+    display: flex;
+    gap: 8px;
+    justify-content: flex-end;
+  }
+  .btn-update {
+    height: 28px;
+    padding: 0 16px;
+    background: var(--accent, #007AFF);
+    color: var(--text-inverse, #fff);
+    border: none;
+    border-radius: 6px;
+    font: 500 13px var(--font-sans, -apple-system, BlinkMacSystemFont, sans-serif);
+    cursor: pointer;
+  }
+  .btn-update:hover { filter: brightness(1.08); }
+  .btn-update:active { filter: brightness(0.94); }
+  .btn-update:disabled { opacity: 0.5; cursor: wait; }
+  .btn-update:focus-visible {
+    outline: 2px solid var(--accent, #007AFF);
+    outline-offset: 2px;
+  }
+  .btn-skip {
+    height: 28px;
+    padding: 0 16px;
+    background: var(--bg-secondary, #F5F5F7);
+    color: var(--text-primary);
+    border: 0.5px solid var(--border);
+    border-radius: 6px;
+    font: 400 13px var(--font-sans, -apple-system, BlinkMacSystemFont, sans-serif);
+    cursor: pointer;
+  }
+  .btn-skip:hover { background: var(--bg-hover); }
+  .btn-skip:focus-visible {
+    outline: 2px solid var(--accent, #007AFF);
+    outline-offset: 2px;
+  }
+  h3 {
+    margin: 0 0 8px;
+    font: 600 15px/20px var(--font-sans, -apple-system, BlinkMacSystemFont, sans-serif);
+  }
+  .confirm-msg {
+    font: 400 13px/18px var(--font-sans, -apple-system, BlinkMacSystemFont, sans-serif);
+    color: var(--text-secondary);
     margin: 0 0 16px;
   }
-  .confirm-actions { display: flex; gap: 8px; justify-content: flex-end; }
-  .btn-proceed {
-    padding: 6px 16px; background: var(--green); color: #fff;
-    border: none; border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: 600;
-  }
-  .btn-cancel {
-    padding: 6px 16px; background: var(--bg-card); color: var(--text-primary);
-    border: 1px solid var(--border); border-radius: 6px; cursor: pointer; font-size: 13px;
+
+  @media (prefers-reduced-motion: no-preference) {
+    .btn-update, .btn-skip {
+      transition: filter 120ms cubic-bezier(0.2, 0, 0.1, 1),
+                  background-color 120ms cubic-bezier(0.2, 0, 0.1, 1);
+    }
   }
 </style>

@@ -94,7 +94,8 @@
     "about": "情報",
     "about_desc": "モダンUIと便利な機能を備えたクロスプラットフォーム WireGuard VPNクライアント",
     "about_issues": "問題を報告",
-    "about_license": "ライセンス (MIT)"
+    "about_license": "ライセンス (MIT)",
+    "up_to_date": "最新バージョンです。"
   },
   "confirm": {
     "delete_title": "トンネルを削除",
@@ -216,7 +217,8 @@
     "current": "現在: v{version}",
     "update_now": "更新",
     "updating": "更新中...",
-    "release_notes": "ノート",
+    "release_notes": "新機能",
+    "skip": "このバージョンをスキップ",
     "confirm_title": "WireGuide を更新しますか？",
     "vpn_warning": "更新中に VPN 接続が一時的に切断される場合があります。アプリは自動的に再起動します。",
     "proceed": "更新する",

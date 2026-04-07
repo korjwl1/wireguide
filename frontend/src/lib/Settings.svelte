@@ -6,6 +6,8 @@
 
   export let TunnelService;
   export let onClose = () => {};
+  export let updateInfo = null;
+  export let onInstall = null;
 
   let activeTab = 'general';
   let settings = {
@@ -244,10 +246,21 @@
               <img src="/appicon.png" alt="WireGuide" class="about-icon" />
               <div>
                 <div class="about-name">WireGuide</div>
-                <span class="about-version">{appVersion ? `v${appVersion}` : ''}</span>
+                <div class="about-version-row">
+                  <span class="about-version">{appVersion ? `v${appVersion}` : ''}</span>
+                  {#if updateInfo?.available}
+                    <span class="update-dot"></span>
+                    <span class="update-badge">{$t('update.available', { version: updateInfo.version })}</span>
+                    <button class="link-btn" on:click={onInstall}>{$t('update.update_now')}</button>
+                  {:else}
+                    <span class="about-uptodate">— {$t('settings.up_to_date')}</span>
+                  {/if}
+                </div>
               </div>
             </div>
+
             <p class="about-desc">{$t('settings.about_desc')}</p>
+
             <div class="about-links">
               <button class="link-btn" on:click={() => TunnelService.OpenURL('https://github.com/korjwl1/wireguide')}>GitHub</button>
               <button class="link-btn" on:click={() => TunnelService.OpenURL('https://github.com/korjwl1/wireguide/issues')}>{$t('settings.about_issues')}</button>
@@ -404,9 +417,20 @@
     font: 600 15px/20px var(--font-sans, -apple-system, BlinkMacSystemFont, sans-serif);
     color: var(--text-primary);
   }
+  .about-version-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
   .about-version {
     font: 400 11px/14px var(--font-sans, -apple-system, BlinkMacSystemFont, sans-serif);
     color: var(--text-secondary);
+  }
+  .about-divider {
+    border: none;
+    border-top: 0.5px solid var(--border);
+    margin: 8px 0;
   }
   .about-desc {
     font: 400 12px/16px var(--font-sans, -apple-system, BlinkMacSystemFont, sans-serif);
@@ -416,6 +440,20 @@
   .about-links {
     display: flex;
     gap: 16px;
+  }
+  .update-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--accent, #007AFF);
+  }
+  .update-badge {
+    font: 500 12px/16px var(--font-sans, -apple-system, BlinkMacSystemFont, sans-serif);
+    color: var(--accent, #007AFF);
+  }
+  .about-uptodate {
+    font: 400 11px/14px var(--font-sans, -apple-system, BlinkMacSystemFont, sans-serif);
+    color: var(--text-secondary);
   }
   .link-btn {
     font: 400 12px/16px var(--font-sans, -apple-system, BlinkMacSystemFont, sans-serif);

@@ -376,7 +376,7 @@
 
     <!-- Main content -->
     <div class="main-content">
-      <UpdateNotice {updateInfo} onInstall={handleUpdate} onDismiss={() => updateInfo = null} />
+      <UpdateNotice {updateInfo} onInstall={handleUpdate} />
 
       {#if currentView === 'tunnels'}
         <div class="tunnels-view">
@@ -448,7 +448,7 @@
   {/if}
 
   {#if showSettings}
-    <Settings {TunnelService} onClose={() => showSettings = false} />
+    <Settings {TunnelService} onClose={() => showSettings = false} {updateInfo} onInstall={handleUpdate} />
   {/if}
 
   {#if showConflictWarning}
