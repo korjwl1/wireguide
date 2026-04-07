@@ -2,6 +2,29 @@
 
 All notable changes to WireGuide will be documented in this file.
 
+## [0.1.6] - 2026-04-08
+
+### Added
+- Settings redesign: split layout with sidebar (General / Advanced / About)
+- About tab: app icon, version, GitHub/Issues/License links, update status
+- Update popup: modal with release notes ("What's New") and "Skip This Version"
+- Helper auto-upgrade: detects version mismatch and reinstalls on app update
+- Helper install retry dialog with Quit/Retry options on cancel
+- OpenURL Wails binding (restricted to github.com)
+- Tests for IsBrewInstall and OpenURL validation (7 new tests)
+
+### Fixed
+- Brew install detection: check Caskroom receipt instead of binary path
+- Non-brew update: opens GitHub Releases page instead of broken auto-download
+- Brew update: runs `brew update` before `brew upgrade` for third-party taps
+- Helper Ping response: separate AppVersion field (fixes IPC protocol validation)
+- Update popup double-click guard
+- localStorage exception handling for skip version
+- Detailed admin prompt explaining why password is needed
+
+### Changed
+- README/About description: "native macOS" → "cross-platform"
+
 ## [0.1.5] - 2026-04-07
 
 ### Added

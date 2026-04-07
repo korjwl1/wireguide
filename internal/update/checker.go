@@ -21,7 +21,7 @@ import (
 const (
 	githubRepo     = "korjwl1/wireguide"
 	apiEndpoint    = "https://api.github.com/repos/" + githubRepo + "/releases/latest"
-	currentVersion = "0.1.5"
+	currentVersion = "0.1.6"
 
 	// minAssetSize is the minimum acceptable size for a release asset.
 	// A macOS .dmg/.zip containing WireGuide.app is always well over 1 MB;
