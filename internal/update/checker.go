@@ -309,17 +309,20 @@ func matchAsset(assets []Asset) string {
 	return ""
 }
 
-// IsBrewInstall returns true if the running binary appears to be managed
-// by Homebrew (lives under a Homebrew Cellar/Caskroom path).
+// IsBrewInstall returns true if WireGuide was installed via Homebrew.
+// Homebrew cask copies (not symlinks) the app to /Applications, so we
+// can't rely on the binary path containing "homebrew". Instead we check
+// if the Caskroom receipt directory exists.
 func IsBrewInstall() bool {
-	exe, err := os.Executable()
-	if err != nil {
-		return false
+	// Check common Homebrew Caskroom paths (Apple Silicon + Intel)
+	caskroomPaths := []string{
+		"/opt/homebrew/Caskroom/wireguide",
+		"/usr/local/Caskroom/wireguide",
 	}
-	resolved, err := filepath.EvalSymlinks(exe)
-	if err != nil {
-		resolved = exe
+	for _, p := range caskroomPaths {
+		if info, err := os.Stat(p); err == nil && info.IsDir() {
+			return true
+		}
 	}
-	lower := strings.ToLower(resolved)
-	return strings.Contains(lower, "homebrew") || strings.Contains(lower, "cellar") || strings.Contains(lower, "caskroom")
+	return false
 }

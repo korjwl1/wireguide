@@ -9,6 +9,27 @@
   export let updateInfo = null;
   export let onInstall = null;
 
+  let aboutUpdating = false;
+  let aboutShowVpnWarn = false;
+
+  function aboutRequestUpdate() {
+    if ($connectionStatus?.state === 'connected') {
+      aboutShowVpnWarn = true;
+    } else {
+      doAboutUpdate();
+    }
+  }
+
+  async function doAboutUpdate() {
+    aboutShowVpnWarn = false;
+    aboutUpdating = true;
+    try {
+      if (onInstall) await onInstall();
+    } finally {
+      aboutUpdating = false;
+    }
+  }
+
   let activeTab = 'general';
   let settings = {
     language: getLanguage(),
@@ -251,7 +272,9 @@
                   {#if updateInfo?.available}
                     <span class="update-dot"></span>
                     <span class="update-badge">{$t('update.available', { version: updateInfo.version })}</span>
-                    <button class="link-btn" on:click={onInstall}>{$t('update.update_now')}</button>
+                    <button class="link-btn" on:click={aboutRequestUpdate} disabled={aboutUpdating}>
+                      {aboutUpdating ? $t('update.updating') : $t('update.update_now')}
+                    </button>
                   {:else}
                     <span class="about-uptodate">— {$t('settings.up_to_date')}</span>
                   {/if}
@@ -260,6 +283,16 @@
             </div>
 
             <p class="about-desc">{$t('settings.about_desc')}</p>
+
+            {#if aboutShowVpnWarn}
+              <div class="about-vpn-warn">
+                <p>{$t('update.vpn_warning')}</p>
+                <div class="about-warn-actions">
+                  <button class="link-btn" on:click={doAboutUpdate}>{$t('update.proceed')}</button>
+                  <button class="link-btn" on:click={() => aboutShowVpnWarn = false}>{$t('update.cancel')}</button>
+                </div>
+              </div>
+            {/if}
 
             <div class="about-links">
               <button class="link-btn" on:click={() => TunnelService.OpenURL('https://github.com/korjwl1/wireguide')}>GitHub</button>
@@ -454,6 +487,22 @@
   .about-uptodate {
     font: 400 11px/14px var(--font-sans, -apple-system, BlinkMacSystemFont, sans-serif);
     color: var(--text-secondary);
+  }
+  .about-vpn-warn {
+    background: var(--bg-secondary, #F5F5F7);
+    border: 0.5px solid var(--border);
+    border-radius: 6px;
+    padding: 8px 10px;
+    margin-bottom: 8px;
+  }
+  .about-vpn-warn p {
+    font: 400 12px/16px var(--font-sans, -apple-system, BlinkMacSystemFont, sans-serif);
+    color: var(--text-secondary);
+    margin: 0 0 6px;
+  }
+  .about-warn-actions {
+    display: flex;
+    gap: 12px;
   }
   .link-btn {
     font: 400 12px/16px var(--font-sans, -apple-system, BlinkMacSystemFont, sans-serif);
