@@ -163,10 +163,13 @@ func (s *TunnelService) RunUpdate(info *update.UpdateInfo) error {
 		return nil
 	}
 
-	// Direct download path (non-brew installs)
-	path, err := update.DownloadUpdate(info)
-	if err != nil {
-		return fmt.Errorf("download failed: %w", err)
+	// Non-brew installs: open GitHub Releases page in browser.
+	// Auto-replacing the app bundle needs sudo and has many failure modes,
+	// so we let the user download and replace manually — same UX as most
+	// indie macOS apps.
+	slog.Info("update: opening GitHub Releases page (non-brew install)")
+	if s.app != nil {
+		return s.app.Browser.OpenURL("https://github.com/korjwl1/wireguide/releases/latest")
 	}
-	return update.Install(path, info)
+	return exec.Command("open", "https://github.com/korjwl1/wireguide/releases/latest").Run()
 }

@@ -26,12 +26,11 @@ func Install(filePath string, info *UpdateInfo) error {
 }
 
 func installDarwin(path string) error {
-	// If .dmg, mount and open
-	if len(path) > 4 && path[len(path)-4:] == ".dmg" {
-		return exec.Command("open", path).Run()
-	}
-	// If .zip, extract and replace
-	return exec.Command("open", path).Run()
+	// For non-brew installs, open the GitHub releases page in the browser
+	// instead of trying to auto-replace the app bundle (which would need
+	// sudo and has many failure modes). The user downloads and replaces
+	// the app manually — same UX as most indie macOS apps.
+	return exec.Command("open", "https://github.com/korjwl1/wireguide/releases/latest").Run()
 }
 
 func installLinux(path string) error {
