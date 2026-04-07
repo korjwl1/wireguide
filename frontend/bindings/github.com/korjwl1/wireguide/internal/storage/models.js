@@ -61,6 +61,14 @@ export class Settings {
              */
             this["dns_protection"] = false;
         }
+        if (!("health_check" in $$source)) {
+            /**
+             * periodic handshake age monitoring
+             * @member
+             * @type {boolean}
+             */
+            this["health_check"] = false;
+        }
         if (!("log_level" in $$source)) {
             /**
              * "debug", "info", "warn", "error"

@@ -27,6 +27,7 @@ func (h *Helper) registerHandlers() {
 	h.server.Handle(ipc.MethodActiveName, h.handleActiveName)
 	h.server.Handle(ipc.MethodSetKillSwitch, h.handleSetKillSwitch)
 	h.server.Handle(ipc.MethodSetDNSProtection, h.handleSetDNSProtection)
+	h.server.Handle(ipc.MethodSetHealthCheck, h.handleSetHealthCheck)
 }
 
 func (h *Helper) handleSetLogLevel(params json.RawMessage) (interface{}, error) {
@@ -191,6 +192,17 @@ func (h *Helper) handleSetDNSProtection(params json.RawMessage) (interface{}, er
 		if err := h.firewall.DisableDNSProtection(); err != nil {
 			return nil, err
 		}
+	}
+	return ipc.Empty{}, nil
+}
+
+func (h *Helper) handleSetHealthCheck(params json.RawMessage) (interface{}, error) {
+	var req ipc.SetHealthCheckRequest
+	if err := json.Unmarshal(params, &req); err != nil {
+		return nil, err
+	}
+	if h.monitor != nil {
+		h.monitor.SetHealthCheck(req.Enabled)
 	}
 	return ipc.Empty{}, nil
 }

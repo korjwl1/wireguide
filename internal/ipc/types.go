@@ -52,6 +52,11 @@ type LogEntry struct {
 	Message string `json:"message"` // human-readable text (already includes attrs)
 }
 
+// SetHealthCheckRequest is the parameter for Monitor.SetHealthCheck.
+type SetHealthCheckRequest struct {
+	Enabled bool `json:"enabled"`
+}
+
 // SetLogLevelRequest is the parameter for Helper.SetLogLevel.
 type SetLogLevelRequest struct {
 	Level string `json:"level"` // "debug" | "info" | "warn" | "error"

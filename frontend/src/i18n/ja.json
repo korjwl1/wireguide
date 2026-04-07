@@ -88,7 +88,9 @@
     "kill_switch": "キルスイッチ",
     "kill_switch_hint": "VPN が切断されるとすべてのトラフィックをブロックします。接続時に自動適用。",
     "dns_protection": "DNS 保護",
-    "dns_protection_hint": "DNS を VPN トンネル経由のみに強制します。接続時に自動適用。"
+    "dns_protection_hint": "DNS を VPN トンネル経由のみに強制します。接続時に自動適用。",
+    "health_check": "ヘルスチェック",
+    "health_check_hint": "ハンドシェイクの状態を監視し、180秒間応答がない場合に再接続します。PersistentKeepalive 使用時に推奨。"
   },
   "confirm": {
     "delete_title": "トンネルを削除",

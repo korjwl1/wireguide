@@ -51,8 +51,9 @@ const (
 	MethodStatus           = "Tunnel.Status"
 	MethodIsConnected      = "Tunnel.IsConnected"
 	MethodActiveName    = "Tunnel.ActiveName"
-	MethodSetKillSwitch = "Firewall.SetKillSwitch"
+	MethodSetKillSwitch    = "Firewall.SetKillSwitch"
 	MethodSetDNSProtection = "Firewall.SetDNSProtection"
+	MethodSetHealthCheck   = "Monitor.SetHealthCheck"
 )
 
 // Event names (server → client notifications)

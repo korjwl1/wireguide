@@ -122,6 +122,11 @@ func (s *TunnelService) SetDNSProtection(enabled bool) error {
 
 // --- Auto-update ---
 
+// SetHealthCheck enables or disables the tunnel health check monitor.
+func (s *TunnelService) SetHealthCheck(enabled bool) error {
+	return s.call(ipc.MethodSetHealthCheck, ipc.SetHealthCheckRequest{Enabled: enabled}, nil)
+}
+
 // GetVersion returns the current app version string.
 func (s *TunnelService) GetVersion() string {
 	return update.CurrentVersion()

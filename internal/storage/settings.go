@@ -16,7 +16,8 @@ type Settings struct {
 	AutoStart     bool   `json:"auto_start"` // launch GUI on OS login
 	KillSwitch    bool   `json:"kill_switch"`
 	DNSProtection bool   `json:"dns_protection"`
-	LogLevel      string `json:"log_level"` // "debug", "info", "warn", "error"
+	HealthCheck   bool   `json:"health_check"` // periodic handshake age monitoring
+	LogLevel      string `json:"log_level"`    // "debug", "info", "warn", "error"
 }
 
 // DefaultSettings returns settings with sensible defaults.
@@ -27,6 +28,7 @@ func DefaultSettings() *Settings {
 		TrayIconStyle: "color",
 		KillSwitch:    false,
 		DNSProtection: false,
+		HealthCheck:   true, // enabled by default
 		LogLevel:      "info",
 	}
 }

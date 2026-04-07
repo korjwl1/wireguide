@@ -85,17 +85,23 @@ type Monitor struct {
 	// out the full delay.
 	retryCancel context.CancelFunc
 	retryDone   chan struct{} // closed when reconnectWithBackoff exits
+
+	// healthCheckEnabled controls whether the periodic handshake age
+	// check runs in monitorLoop. Can be toggled at runtime via
+	// SetHealthCheck. Default: true.
+	healthCheckEnabled bool
 }
 
 // NewMonitor creates a reconnection monitor.
 func NewMonitor(manager TunnelManager, reconnectFn ReconnectFunc, statusFn StatusChangedFunc, cfg Config) *Monitor {
 	return &Monitor{
-		cfg:           cfg,
-		manager:       manager,
-		reconnectFn:   reconnectFn,
-		statusFn:      statusFn,
-		stopCh:        make(chan struct{}),
-		sleepDetector: NewSleepDetector(),
+		cfg:                cfg,
+		manager:            manager,
+		reconnectFn:        reconnectFn,
+		statusFn:           statusFn,
+		stopCh:             make(chan struct{}),
+		sleepDetector:      NewSleepDetector(),
+		healthCheckEnabled: true, // default ON
 	}
 }
 
@@ -107,6 +113,15 @@ func (m *Monitor) SetFirewallCallbacks(suspend FirewallSuspendFunc, resume Firew
 	defer m.mu.Unlock()
 	m.fwSuspendFn = suspend
 	m.fwResumeFn = resume
+}
+
+// SetHealthCheck enables or disables the periodic handshake age check.
+// Safe to call while the monitor is running.
+func (m *Monitor) SetHealthCheck(enabled bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.healthCheckEnabled = enabled
+	slog.Info("health check toggled", "enabled", enabled)
 }
 
 // Start begins monitoring the tunnel connection.
@@ -216,6 +231,12 @@ func (m *Monitor) monitorLoop() {
 		case <-m.stopCh:
 			return
 		case <-ticker.C:
+			m.mu.Lock()
+			enabled := m.healthCheckEnabled
+			m.mu.Unlock()
+			if !enabled {
+				continue
+			}
 			if !m.manager.IsConnected() {
 				continue
 			}

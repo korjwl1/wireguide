@@ -24,6 +24,7 @@
     auto_start: false,
     kill_switch: false,
     dns_protection: false,
+    health_check: true,
     log_level: 'info',
     tray_icon_style: 'color',
   };
@@ -39,6 +40,7 @@
         settings.auto_start = s.auto_start ?? false;
         settings.kill_switch = s.kill_switch ?? false;
         settings.dns_protection = s.dns_protection ?? false;
+        settings.health_check = s.health_check ?? true;
         settings.log_level = s.log_level || 'info';
         settings.tray_icon_style = s.tray_icon_style || 'color';
       }
@@ -58,6 +60,7 @@
         auto_start: settings.auto_start,
         kill_switch: settings.kill_switch,
         dns_protection: settings.dns_protection,
+        health_check: settings.health_check,
         log_level: settings.log_level,
       });
     } catch (e) {
@@ -139,6 +142,15 @@
         settings.dns_protection = !settings.dns_protection;
       });
     }
+    scheduleSave();
+  }
+
+  function onHealthCheckChange(e) {
+    settings.health_check = e.target.checked;
+    TunnelService.SetHealthCheck(settings.health_check).catch((err) => {
+      console.error('SetHealthCheck failed:', err);
+      settings.health_check = !settings.health_check;
+    });
     scheduleSave();
   }
 
@@ -257,6 +269,14 @@
           on:change={onDnsProtectionChange} />
       </div>
       <p class="setting-hint">{$t('settings.dns_protection_hint')}</p>
+
+      <div class="setting-row">
+        <label for="health-check">{$t('settings.health_check')}</label>
+        <input id="health-check" type="checkbox"
+          checked={settings.health_check}
+          on:change={onHealthCheckChange} />
+      </div>
+      <p class="setting-hint">{$t('settings.health_check_hint')}</p>
     </section>
 
     <div class="modal-footer">

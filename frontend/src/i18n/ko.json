@@ -88,7 +88,9 @@
     "kill_switch": "킬 스위치",
     "kill_switch_hint": "VPN이 끊기면 모든 트래픽을 차단합니다. 연결 시 자동 적용.",
     "dns_protection": "DNS 보호",
-    "dns_protection_hint": "DNS를 VPN 터널로만 강제합니다. 연결 시 자동 적용."
+    "dns_protection_hint": "DNS를 VPN 터널로만 강제합니다. 연결 시 자동 적용.",
+    "health_check": "헬스 체크",
+    "health_check_hint": "핸드셰이크 상태를 모니터링하고 180초 동안 응답 없으면 재연결합니다. PersistentKeepalive 사용 시 권장."
   },
   "confirm": {
     "delete_title": "터널 삭제",

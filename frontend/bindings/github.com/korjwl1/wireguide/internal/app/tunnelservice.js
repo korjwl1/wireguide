@@ -278,6 +278,15 @@ export function SetDNSProtection(enabled) {
 }
 
 /**
+ * SetHealthCheck enables or disables the tunnel health check monitor.
+ * @param {boolean} enabled
+ * @returns {$CancellablePromise<void>}
+ */
+export function SetHealthCheck(enabled) {
+    return $Call.ByID(1079240195, enabled);
+}
+
+/**
  * SetKillSwitch asks the helper to enable or disable the firewall kill switch.
  * @param {boolean} enabled
  * @returns {$CancellablePromise<void>}
