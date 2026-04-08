@@ -163,13 +163,14 @@ func (s *TunnelService) RunUpdate(info *update.UpdateInfo) error {
 	}
 
 	if runtime.GOOS == "darwin" && update.IsBrewInstall() {
+		brewBin := update.BrewPath()
 		// Update tap first to ensure latest cask version is fetched
-		slog.Info("update: running brew update")
-		if out, err := exec.Command("brew", "update").CombinedOutput(); err != nil {
+		slog.Info("update: running brew update", "brew", brewBin)
+		if out, err := exec.Command(brewBin, "update").CombinedOutput(); err != nil {
 			slog.Warn("brew update failed, continuing with upgrade", "error", err, "output", string(out))
 		}
 		slog.Info("update: running brew upgrade --cask wireguide")
-		cmd := exec.Command("brew", "upgrade", "--cask", "wireguide")
+		cmd := exec.Command(brewBin, "upgrade", "--cask", "wireguide")
 		out, err := cmd.CombinedOutput()
 		if err != nil {
 			return fmt.Errorf("brew upgrade failed: %w (%s)", err, string(out))

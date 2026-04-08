@@ -10,7 +10,6 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -310,6 +309,18 @@ func matchAsset(assets []Asset) string {
 	return ""
 }
 
+// BrewPath returns the absolute path to the brew binary, or empty string
+// if brew is not found. GUI apps launched from Finder may not have
+// /opt/homebrew/bin in PATH, so we check common paths directly.
+func BrewPath() string {
+	for _, p := range []string{"/opt/homebrew/bin/brew", "/usr/local/bin/brew"} {
+		if _, err := os.Stat(p); err == nil {
+			return p
+		}
+	}
+	return ""
+}
+
 // IsBrewInstall returns true if WireGuide was installed via Homebrew.
 // Homebrew cask copies (not symlinks) the app to /Applications, so we
 // can't rely on the binary path containing "homebrew". Instead we check
@@ -322,9 +333,7 @@ func IsBrewInstall() bool {
 	}
 	for _, p := range caskroomPaths {
 		if info, err := os.Stat(p); err == nil && info.IsDir() {
-			// Verify brew is actually in PATH — Caskroom dir could be a
-			// leftover from an uninstalled Homebrew.
-			if _, err := exec.LookPath("brew"); err == nil {
+			if BrewPath() != "" {
 				return true
 			}
 		}
