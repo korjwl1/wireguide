@@ -50,6 +50,10 @@ type DarwinManager struct {
 	// bypass routes for families that weren't actually hijacked.
 	lastHasV4Default bool
 	lastHasV6Default bool
+	// lastUpstreamIface is the physical interface (e.g. en0, en5) cached
+	// before split routes are installed. Used by addBypassForIP to pin
+	// bypass routes with -ifscope, preventing flapping on dual-network setups.
+	lastUpstreamIface string
 
 	// Route monitor (wg-quick monitor_daemon equivalent) — only runs for full tunnel.
 	monitor *routeMonitor
@@ -159,6 +163,10 @@ func (m *DarwinManager) AddRoutes(ifaceName string, allowedIPs []string, fullTun
 			return fmt.Errorf("adding route %s: %w", cidr, err)
 		}
 	}
+
+	// Cache the upstream interface BEFORE installing split routes — after
+	// split routes, route-get would return utun instead of the physical iface.
+	m.lastUpstreamIface = getDefaultInterface()
 
 	// Install default routes using the split trick
 	if hasV4Default {
@@ -406,11 +414,12 @@ func (m *DarwinManager) reapply() {
 		}
 	}
 
-	// Update cached endpoints to the live set.
+	// Update cached state including upstream interface for bypass -ifscope.
 	m.mu.Lock()
 	m.lastEndpoints = append([]string(nil), liveEndpoints...)
 	m.lastGatewayV4 = newGwV4
 	m.lastGatewayV6 = newGwV6
+	m.lastUpstreamIface = getDefaultInterface()
 	m.mu.Unlock()
 
 	if len(dns) > 0 {
@@ -523,11 +532,28 @@ func (m *DarwinManager) addBypassForIP(ipStr, gwV4, gwV6 string, gwV4Err, gwV6Er
 		return nil
 	}
 
+	// Use the caller-provided upstream interface to pin the bypass route
+	// with -ifscope. This prevents macOS from flapping between WiFi and
+	// Ethernet when both are active.
+	iface := m.lastUpstreamIface
+
 	// Try `route add` first, fall back to `route change` if the kernel
 	// already has a route for this host (common when reconnecting).
-	if err := run("route", "-q", "-n", "add", family, ipStr, "-gateway", gw); err != nil {
-		if err2 := run("route", "-q", "-n", "change", family, ipStr, "-gateway", gw); err2 != nil {
-			return fmt.Errorf("bypass route %s via %s: add=%v, change=%v", ipStr, gw, err, err2)
+	if iface != "" {
+		if err := run("route", "-q", "-n", "add", family, ipStr, "-gateway", gw, "-ifscope", iface); err != nil {
+			if err2 := run("route", "-q", "-n", "change", family, ipStr, "-gateway", gw, "-ifscope", iface); err2 != nil {
+				// Fallback: try without -ifscope in case the OS rejects it
+				slog.Debug("ifscope route failed, falling back to unscoped", "ip", ipStr, "iface", iface)
+				if err3 := run("route", "-q", "-n", "add", family, ipStr, "-gateway", gw); err3 != nil {
+					_ = run("route", "-q", "-n", "change", family, ipStr, "-gateway", gw)
+				}
+			}
+		}
+	} else {
+		if err := run("route", "-q", "-n", "add", family, ipStr, "-gateway", gw); err != nil {
+			if err2 := run("route", "-q", "-n", "change", family, ipStr, "-gateway", gw); err2 != nil {
+				return fmt.Errorf("bypass route %s via %s: add=%v, change=%v", ipStr, gw, err, err2)
+			}
 		}
 	}
 	recordBypass()
@@ -1085,6 +1111,22 @@ func getDefaultGatewayFor(ipv6 bool) (string, error) {
 // for the `default` row. Dynamic header parsing handles column-order
 // differences across macOS versions; the previous "first lowercase field"
 // heuristic returned `awdl0` (AirDrop) instead of `en0` on some machines.
+// getRouteInterface returns the interface macOS would use to reach the given
+// IP, by parsing `route get <ip>` output. Returns empty string on failure.
+func getRouteInterface(ip string) string {
+	out, err := runOut("route", "-n", "get", ip)
+	if err != nil {
+		return ""
+	}
+	for _, line := range strings.Split(string(out), "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "interface:") {
+			return strings.TrimSpace(strings.TrimPrefix(line, "interface:"))
+		}
+	}
+	return ""
+}
+
 func getDefaultInterface() string {
 	out, err := runOut("netstat", "-nr", "-f", "inet")
 	if err != nil {
