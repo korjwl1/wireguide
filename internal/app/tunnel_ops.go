@@ -137,6 +137,13 @@ func (s *TunnelService) Disconnect() error {
 	return err
 }
 
+// DisconnectTunnel disconnects a specific tunnel by name.
+func (s *TunnelService) DisconnectTunnel(name string) error {
+	s.clients.MarkInflight()
+	defer s.clients.UnmarkInflight()
+	return s.callLong(ipc.MethodDisconnect, ipc.DisconnectRequest{TunnelName: name}, nil)
+}
+
 // isClientClosed returns true for errors caused by the IPC client being closed
 // mid-call (e.g., health monitor swapped clients during recovery).
 func isClientClosed(err error) bool {

@@ -17,17 +17,19 @@ export function subscribeToEvents() {
     const status = event.data;
     connectionStatus.set(status);
 
-    // Sync is_connected flag on tunnel objects so components that depend on
-    // both connectionStatus AND selectedTunnel.is_connected stay consistent
-    // — regardless of whether the connection was initiated from the GUI,
-    // system tray, or auto-reconnect.
-    const isConn = status?.state === 'connected';
-    const activeName = isConn ? status?.tunnel_name : null;
+    // Sync is_connected flag on tunnel objects. The backend now sends
+    // active_tunnels (array of connected tunnel names) to support
+    // multiple simultaneous tunnels.
+    const activeSet = new Set(status?.active_tunnels || []);
+    // Fallback for single-tunnel backward compat
+    if (activeSet.size === 0 && status?.state === 'connected' && status?.tunnel_name) {
+      activeSet.add(status.tunnel_name);
+    }
 
     tunnels.update((list) => {
       let changed = false;
       const next = list.map((t) => {
-        const conn = t.name === activeName;
+        const conn = activeSet.has(t.name);
         if (t.is_connected === conn) return t;
         changed = true;
         return { ...t, is_connected: conn };
@@ -37,7 +39,7 @@ export function subscribeToEvents() {
 
     selectedTunnel.update((sel) => {
       if (!sel) return sel;
-      const nowConnected = sel.name === activeName;
+      const nowConnected = activeSet.has(sel.name);
       if (sel.is_connected === nowConnected) return sel;
       return { ...sel, is_connected: nowConnected };
     });

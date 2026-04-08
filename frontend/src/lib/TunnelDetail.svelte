@@ -17,8 +17,7 @@
   // combine the selected-tunnel flag with the live connection status so the
   // UI can't show a stale "connected" chip briefly after disconnect.
   $: isConnected = $selectedTunnel?.is_connected
-    && $connectionStatus?.state === 'connected'
-    && $connectionStatus?.tunnel_name === $selectedTunnel?.name;
+    && ($connectionStatus?.active_tunnels || []).includes($selectedTunnel?.name);
   $: status = $connectionStatus;
 
   async function loadDetail(name) {
@@ -39,7 +38,7 @@
     error = '';
     loading = true;
     try {
-      await TunnelService.Disconnect();
+      await TunnelService.DisconnectTunnel($selectedTunnel.name);
       // Don't wait for event stream — refresh immediately.
       await refreshTunnels(TunnelService);
       await refreshStatus(TunnelService);

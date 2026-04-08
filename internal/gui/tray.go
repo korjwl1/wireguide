@@ -7,6 +7,7 @@ import (
 	"image/png"
 	"log/slog"
 	"runtime"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -186,10 +187,10 @@ type trayManager struct {
 	svc        *wgapp.TunnelService
 	doShutdown func()
 
-	mu           sync.Mutex
-	activeTunnel string      // cached from status events, avoids MethodActiveName IPC
-	rebuildTimer *time.Timer // debounce timer for rebuildMenu
-	rebuilding   atomic.Bool // guard against concurrent rebuildMenu calls
+	mu            sync.Mutex
+	activeTunnels map[string]bool // cached from status events
+	rebuildTimer  *time.Timer     // debounce timer for rebuildMenu
+	rebuilding    atomic.Bool     // guard against concurrent rebuildMenu calls
 }
 
 func newTrayManager(app *application.App, win *application.WebviewWindow, tray *application.SystemTray, svc *wgapp.TunnelService, doShutdown func()) *trayManager {
@@ -218,15 +219,23 @@ func (t *trayManager) initialBuild() {
 // wanted the dot as a badge on the glyph itself, not as a neighbouring
 // character. Two separate icon assets is the only way to achieve that on
 // macOS's menu bar — template icons can't carry colour.
-func (t *trayManager) setIconState(activeName string) {
+func (t *trayManager) setIconState(activeNames []string) {
+	newSet := make(map[string]bool, len(activeNames))
+	for _, n := range activeNames {
+		newSet[n] = true
+	}
+
 	t.mu.Lock()
-	prev := t.activeTunnel
-	t.activeTunnel = activeName
+	prev := t.activeTunnels
+	t.activeTunnels = newSet
 	t.mu.Unlock()
 
-	if activeName != "" {
+	anyConnected := len(activeNames) > 0
+
+	if anyConnected {
 		t.tray.SetIcon(trayOnIcon)
-		t.tray.SetTooltip("WireGuide — connected: " + activeName)
+		tooltip := "WireGuide — " + strings.Join(activeNames, ", ")
+		t.tray.SetTooltip(tooltip)
 	} else {
 		if runtime.GOOS == "darwin" {
 			t.tray.SetIcon(trayOffIcon)
@@ -234,21 +243,25 @@ func (t *trayManager) setIconState(activeName string) {
 		t.tray.SetTooltip("WireGuide")
 	}
 
-	// Non-macOS: fall back to a text label suffix since they don't
-	// render template icons the same way. Harmless on macOS (label is
-	// only shown alongside template icons, not coloured ones).
 	if runtime.GOOS != "darwin" {
-		if activeName != "" {
+		if anyConnected {
 			t.tray.SetLabel("WireGuide ●")
 		} else {
 			t.tray.SetLabel("WireGuide")
 		}
 	}
 
-	// When the active tunnel actually changes (not just a stats tick), we
-	// also need to update the menu's glyphs. Debounce to 100ms so rapid
-	// state transitions (e.g. disconnect+reconnect) coalesce into one rebuild.
-	if prev != activeName {
+	// Rebuild menu if active set changed.
+	changed := len(prev) != len(newSet)
+	if !changed {
+		for k := range prev {
+			if !newSet[k] {
+				changed = true
+				break
+			}
+		}
+	}
+	if changed {
 		t.scheduleRebuild()
 	}
 }
@@ -280,7 +293,7 @@ func (t *trayManager) rebuildMenu() {
 	}
 
 	t.mu.Lock()
-	activeName := t.activeTunnel
+	activeSet := t.activeTunnels
 	t.mu.Unlock()
 
 	m := t.app.NewMenu()
@@ -289,19 +302,18 @@ func (t *trayManager) rebuildMenu() {
 
 	for _, tun := range tunnels {
 		tun := tun // loop-var capture
-		connected := tun.Name == activeName
+		connected := activeSet[tun.Name]
 		label := "○ " + tun.Name
 		if connected {
 			label = "● " + tun.Name
 		}
 		tunName := tun.Name
 		m.Add(label).OnClick(func(ctx *application.Context) {
-			// Query current state at click time to avoid stale closure capture.
 			t.mu.Lock()
-			isActive := t.activeTunnel == tunName
+			isActive := t.activeTunnels[tunName]
 			t.mu.Unlock()
 			if isActive {
-				if err := t.svc.Disconnect(); err != nil {
+				if err := t.svc.DisconnectTunnel(tunName); err != nil {
 					slog.Warn("tray disconnect failed", "tunnel", tunName, "error", err)
 				}
 			} else {
