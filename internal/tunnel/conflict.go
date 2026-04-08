@@ -260,5 +260,18 @@ func normalizeCIDR(s string) string {
 		}
 		return s + "/32"
 	}
-	return s
+	// macOS netstat abbreviates CIDRs: "0/1" means "0.0.0.0/1",
+	// "128.0/1" means "128.0.0.0/1", "10.99/16" means "10.99.0.0/16".
+	// Expand to full dotted-quad so net.ParseCIDR succeeds.
+	parts := strings.SplitN(s, "/", 2)
+	ip := parts[0]
+	mask := parts[1]
+	if !strings.Contains(ip, ":") {
+		octets := strings.Split(ip, ".")
+		for len(octets) < 4 {
+			octets = append(octets, "0")
+		}
+		ip = strings.Join(octets, ".")
+	}
+	return ip + "/" + mask
 }

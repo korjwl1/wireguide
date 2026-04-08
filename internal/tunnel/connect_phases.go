@@ -175,16 +175,23 @@ func (m *Manager) disconnectPhases(cfg *domain.WireGuardConfig, engine *Engine) 
 	// TUN
 	engine.Close()
 
-	// Network cleanup (also restores DNS internally)
-	_ = m.netMgr.Cleanup(ifaceName)
-
-	// If other tunnels remain connected, re-apply their DNS union so the
-	// system doesn't lose DNS configuration that was set by still-active
-	// tunnels. If no tunnels remain, Cleanup above already restored the
-	// original DNS via RestoreDNS.
+	// Check if other tunnels remain connected BEFORE cleanup.
 	remainingDNS := m.AllDNSServers()
-	if len(remainingDNS) > 0 {
-		// Pick the first remaining connected tunnel's interface for SetDNS.
+	hasOtherTunnels := len(remainingDNS) > 0
+
+	// Network cleanup — but skip RestoreDNS if other tunnels are still
+	// active, because RestoreDNS resets ALL network services to pre-tunnel
+	// DNS, which would break other tunnels' DNS configuration.
+	if hasOtherTunnels {
+		// Only clean up routes for this specific interface, don't touch DNS.
+		m.netMgr.RemoveRoutes(ifaceName, nil, false)
+	} else {
+		// Last tunnel — full cleanup including DNS restore.
+		_ = m.netMgr.Cleanup(ifaceName)
+	}
+
+	// If other tunnels remain, re-apply their DNS union.
+	if hasOtherTunnels {
 		m.mu.Lock()
 		var remainingIface string
 		for _, e := range m.tunnels {
