@@ -265,9 +265,13 @@ func (t *trayManager) rebuildMenu() {
 			isActive := t.activeTunnel == tunName
 			t.mu.Unlock()
 			if isActive {
-				_ = t.svc.Disconnect()
+				if err := t.svc.Disconnect(); err != nil {
+					slog.Warn("tray disconnect failed", "tunnel", tunName, "error", err)
+				}
 			} else {
-				_ = t.svc.Connect(tunName)
+				if err := t.svc.Connect(tunName); err != nil {
+					slog.Warn("tray connect failed", "tunnel", tunName, "error", err)
+				}
 			}
 		})
 	}

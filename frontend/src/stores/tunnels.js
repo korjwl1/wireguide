@@ -14,7 +14,29 @@ export function subscribeToEvents() {
   unsubscribe();
 
   statusUnsub = Events.On('status', (event) => {
-    connectionStatus.set(event.data);
+    const status = event.data;
+    connectionStatus.set(status);
+
+    // Sync is_connected flag on tunnel objects so components that depend on
+    // both connectionStatus AND selectedTunnel.is_connected stay consistent
+    // — regardless of whether the connection was initiated from the GUI,
+    // system tray, or auto-reconnect.
+    const isConn = status?.state === 'connected';
+    const activeName = isConn ? status?.tunnel_name : null;
+
+    tunnels.update((list) =>
+      list.map((t) => ({
+        ...t,
+        is_connected: t.name === activeName,
+      }))
+    );
+
+    selectedTunnel.update((sel) => {
+      if (!sel) return sel;
+      const nowConnected = sel.name === activeName;
+      if (sel.is_connected === nowConnected) return sel;
+      return { ...sel, is_connected: nowConnected };
+    });
   });
 }
 
