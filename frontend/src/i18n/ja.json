@@ -4,6 +4,7 @@
     "disconnected": "未接続",
     "connecting": "接続中…",
     "connected": "接続済み",
+    "no_handshake": "ハンドシェイクなし",
     "error": "エラー"
   },
   "nav": {

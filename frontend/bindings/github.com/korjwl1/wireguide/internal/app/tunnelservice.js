@@ -99,6 +99,15 @@ export function Disconnect() {
 }
 
 /**
+ * DisconnectTunnel disconnects a specific tunnel by name.
+ * @param {string} name
+ * @returns {$CancellablePromise<void>}
+ */
+export function DisconnectTunnel(name) {
+    return $Call.ByID(1584259497, name);
+}
+
+/**
  * ExportConfig returns the serialized text for display in the export dialog.
  * @param {string} name
  * @returns {$CancellablePromise<string>}

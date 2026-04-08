@@ -18,7 +18,21 @@
   // UI can't show a stale "connected" chip briefly after disconnect.
   $: isConnected = $selectedTunnel?.is_connected
     && ($connectionStatus?.active_tunnels || []).includes($selectedTunnel?.name);
-  $: status = $connectionStatus;
+  $: isConnecting = !isConnected
+    && $connectionStatus?.state === 'connecting'
+    && $connectionStatus?.tunnel_name === $selectedTunnel?.name;
+  $: noHandshake = isConnected && !status?.last_handshake;
+  // Use the primary status if it matches the selected tunnel (has full stats).
+  // Otherwise fall back to the lightweight per-tunnel info from the tunnels array
+  // (name + state + handshake only, no rx/tx/duration).
+  $: status = (() => {
+    if ($connectionStatus?.tunnel_name === $selectedTunnel?.name) {
+      return $connectionStatus;
+    }
+    const tunnels = $connectionStatus?.tunnels || [];
+    const match = tunnels.find(t => t.tunnel_name === $selectedTunnel?.name);
+    return match || $connectionStatus;
+  })();
 
   async function loadDetail(name) {
     try {
@@ -151,10 +165,12 @@
         <h2 on:dblclick={startRename} title={$t('tunnel.rename_hint')}>{$selectedTunnel.name}</h2>
         <button class="btn-rename" on:click={startRename} title="Rename">✎</button>
       {/if}
-      <span class="state-badge" class:on={isConnected} class:connecting={status.state === 'connecting'}>
-        {#if isConnected}
+      <span class="state-badge" class:on={isConnected && !noHandshake} class:warning={noHandshake} class:connecting={isConnecting}>
+        {#if isConnected && noHandshake}
+          {$t('app.no_handshake')}
+        {:else if isConnected}
           {$t('app.connected')}
-        {:else if status.state === 'connecting'}
+        {:else if isConnecting}
           {$t('app.connecting')}
         {:else}
           {$t('app.disconnected')}
@@ -333,6 +349,10 @@
   .state-badge.connecting {
     background: var(--yellow-tint);
     color: var(--yellow);
+  }
+  .state-badge.warning {
+    background: var(--orange-tint, rgba(255, 149, 0, 0.12));
+    color: var(--orange, #FF9500);
   }
   @media (prefers-reduced-motion: no-preference) {
     .state-badge.connecting {

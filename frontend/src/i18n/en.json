@@ -4,6 +4,7 @@
     "disconnected": "Disconnected",
     "connecting": "Connecting...",
     "connected": "Connected",
+    "no_handshake": "No Handshake",
     "error": "Error"
   },
   "nav": {

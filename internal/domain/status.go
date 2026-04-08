@@ -41,6 +41,10 @@ type ConnectionStatus struct {
 	// tunnels. Populated by the multi-tunnel manager so the frontend can show
 	// which tunnels are active.
 	ActiveTunnels []string `json:"active_tunnels,omitempty"`
+
+	// Tunnels carries per-tunnel status for multi-tunnel setups. The frontend
+	// uses this to show stats for the selected tunnel rather than the "primary".
+	Tunnels []ConnectionStatus `json:"tunnels,omitempty"`
 }
 
 // FormatDuration renders a duration in a compact "1h 2m 3s" form used by the

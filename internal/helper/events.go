@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"time"
 
+	"github.com/korjwl1/wireguide/internal/domain"
 	"github.com/korjwl1/wireguide/internal/ipc"
 )
 
@@ -17,7 +18,22 @@ func (h *Helper) statusDTO() ipc.ConnectionStatus {
 	if s == nil {
 		return ipc.ConnectionStatus{}
 	}
-	return *s
+	result := *s
+	// Include lightweight per-tunnel info (name + state + handshake presence)
+	// so the frontend can show correct badges. Full stats (rx/tx/duration)
+	// are only in the primary status to avoid sending redundant data every second.
+	if allStats := h.manager.AllStatuses(); len(allStats) > 1 {
+		for _, ts := range allStats {
+			if ts != nil {
+				result.Tunnels = append(result.Tunnels, domain.ConnectionStatus{
+					State:         ts.State,
+					TunnelName:    ts.TunnelName,
+					LastHandshake: ts.LastHandshake,
+				})
+			}
+		}
+	}
+	return result
 }
 
 // eventLoop broadcasts status updates to subscribed GUIs on change. Change

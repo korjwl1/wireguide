@@ -86,6 +86,25 @@ export class ConnectionStatus {
              */
             this["error_message"] = undefined;
         }
+        if (/** @type {any} */(false)) {
+            /**
+             * ActiveTunnels lists the names of all currently connected (or connecting)
+             * tunnels. Populated by the multi-tunnel manager so the frontend can show
+             * which tunnels are active.
+             * @member
+             * @type {string[] | undefined}
+             */
+            this["active_tunnels"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * Tunnels carries per-tunnel status for multi-tunnel setups. The frontend
+             * uses this to show stats for the selected tunnel rather than the "primary".
+             * @member
+             * @type {ConnectionStatus[] | undefined}
+             */
+            this["tunnels"] = undefined;
+        }
 
         Object.assign(this, $$source);
     }
@@ -96,7 +115,15 @@ export class ConnectionStatus {
      * @returns {ConnectionStatus}
      */
     static createFrom($$source = {}) {
+        const $$createField9_0 = $$createType0;
+        const $$createField10_0 = $$createType2;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("active_tunnels" in $$parsedSource) {
+            $$parsedSource["active_tunnels"] = $$createField9_0($$parsedSource["active_tunnels"]);
+        }
+        if ("tunnels" in $$parsedSource) {
+            $$parsedSource["tunnels"] = $$createField10_0($$parsedSource["tunnels"]);
+        }
         return new ConnectionStatus(/** @type {Partial<ConnectionStatus>} */($$parsedSource));
     }
 }
@@ -218,7 +245,7 @@ export class InterfaceConfig {
     static createFrom($$source = {}) {
         const $$createField1_0 = $$createType0;
         const $$createField2_0 = $$createType0;
-        const $$createField11_0 = $$createType1;
+        const $$createField11_0 = $$createType3;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("address" in $$parsedSource) {
             $$parsedSource["address"] = $$createField1_0($$parsedSource["address"]);
@@ -301,7 +328,7 @@ export class PeerConfig {
      */
     static createFrom($$source = {}) {
         const $$createField3_0 = $$createType0;
-        const $$createField5_0 = $$createType1;
+        const $$createField5_0 = $$createType3;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("allowed_ips" in $$parsedSource) {
             $$parsedSource["allowed_ips"] = $$createField3_0($$parsedSource["allowed_ips"]);
@@ -373,8 +400,8 @@ export class WireGuardConfig {
      * @returns {WireGuardConfig}
      */
     static createFrom($$source = {}) {
-        const $$createField1_0 = $$createType2;
-        const $$createField2_0 = $$createType4;
+        const $$createField1_0 = $$createType4;
+        const $$createField2_0 = $$createType6;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("interface" in $$parsedSource) {
             $$parsedSource["interface"] = $$createField1_0($$parsedSource["interface"]);
@@ -388,7 +415,9 @@ export class WireGuardConfig {
 
 // Private type creation functions
 const $$createType0 = $Create.Array($Create.Any);
-const $$createType1 = $Create.Map($Create.Any, $Create.Any);
-const $$createType2 = InterfaceConfig.createFrom;
-const $$createType3 = PeerConfig.createFrom;
-const $$createType4 = $Create.Array($$createType3);
+const $$createType1 = ConnectionStatus.createFrom;
+const $$createType2 = $Create.Array($$createType1);
+const $$createType3 = $Create.Map($Create.Any, $Create.Any);
+const $$createType4 = InterfaceConfig.createFrom;
+const $$createType5 = PeerConfig.createFrom;
+const $$createType6 = $Create.Array($$createType5);
