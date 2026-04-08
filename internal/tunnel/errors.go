@@ -34,6 +34,8 @@ const (
 	ErrStateCorrupt
 	// ErrTimeout: operation timed out (e.g. disconnect wait).
 	ErrTimeout
+	// ErrFullTunnelConflict: a full-tunnel (0.0.0.0/0) is already connected.
+	ErrFullTunnelConflict
 )
 
 func (e *TunnelError) Error() string {

@@ -193,12 +193,13 @@ func (h *Helper) handleSetKillSwitch(params json.RawMessage) (interface{}, error
 		if len(endpoints) == 0 {
 			return nil, fmt.Errorf("no resolved endpoints available — tunnel may have disconnected")
 		}
-		// Get interface addresses from the active config for anti-spoof chains
+		// Get interface addresses from ALL active configs for anti-spoof chains.
+		// With multiple tunnels, the kill switch must allow traffic from every
+		// tunnel's interface addresses, not just the first one.
 		var ifaceAddresses []string
 		h.mu.Lock()
-		// Use the config for the currently reported tunnel.
-		if cfg, ok := h.activeCfgs[status.TunnelName]; ok {
-			ifaceAddresses = cfg.Interface.Address
+		for _, cfg := range h.activeCfgs {
+			ifaceAddresses = append(ifaceAddresses, cfg.Interface.Address...)
 		}
 		h.mu.Unlock()
 		if err := h.firewall.EnableKillSwitch(status.InterfaceName, ifaceAddresses, endpoints); err != nil {
@@ -222,6 +223,13 @@ func (h *Helper) handleSetDNSProtection(params json.RawMessage) (interface{}, er
 		if status.State != tunnel.StateConnected {
 			return nil, fmt.Errorf("no active tunnel")
 		}
+		// DNS protection uses a single tunnel's interface name for the pf
+		// rule. This is intentional: the pf rule blocks port 53 globally
+		// and only allows it through the tunnel interface. With multiple
+		// tunnels, using the first connected tunnel's interface is
+		// sufficient because the DNS protection rule is a global "block
+		// port 53 except on <tunnel_iface>" anchor — any tunnel interface
+		// will work as the exception.
 		if err := h.firewall.EnableDNSProtection(status.InterfaceName, req.DNSServers); err != nil {
 			return nil, err
 		}

@@ -180,21 +180,37 @@ func Run(addr string, ownerUID int, dataDir string) error {
 	return err
 }
 
-// reconnectFn is the callback passed to reconnect.Monitor. It fetches the
-// currently cached active configs under lock and asks the tunnel manager to
-// reconnect all of them. Returns an error if no configs are cached (meaning
-// the user has manually disconnected, in which case reconnection is not
-// desired).
-func (h *Helper) reconnectFn() error {
+// reconnectFn is the callback passed to reconnect.Monitor. When name is
+// non-empty, it reconnects only that specific tunnel. When name is empty
+// (legacy sleep/wake path), it reconnects all cached tunnels.
+// The connectMu is held during Connect to prevent races with concurrent
+// GUI connect/disconnect calls.
+func (h *Helper) reconnectFn(name string) error {
 	h.mu.Lock()
 	cfgs := h.copyActiveCfgs()
 	h.mu.Unlock()
+
+	if name != "" {
+		cfg, ok := cfgs[name]
+		if !ok {
+			return fmt.Errorf("no cached config for tunnel %q", name)
+		}
+		h.connectMu.Lock()
+		err := h.manager.Connect(cfg)
+		h.connectMu.Unlock()
+		return err
+	}
+
+	// Legacy path: reconnect all tunnels.
 	if len(cfgs) == 0 {
 		return fmt.Errorf("no cached config for reconnect")
 	}
 	var lastErr error
 	for _, cfg := range cfgs {
-		if err := h.manager.Connect(cfg); err != nil {
+		h.connectMu.Lock()
+		err := h.manager.Connect(cfg)
+		h.connectMu.Unlock()
+		if err != nil {
 			lastErr = err
 		}
 	}

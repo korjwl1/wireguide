@@ -107,6 +107,18 @@ func (m *Manager) Connect(cfg *domain.WireGuardConfig) error {
 		m.mu.Unlock()
 		return newTunnelError(ErrTransitionInProgress, fmt.Sprintf("tunnel %q: another transition is in progress", name), nil)
 	}
+	// Reject if the new config is full-tunnel and any existing connected tunnel
+	// is also full-tunnel — two 0.0.0.0/0 routes conflict on the route table.
+	if cfg.IsFullTunnel() {
+		for otherName, other := range m.tunnels {
+			if otherName != name && other.state == domain.StateConnected && other.cfg != nil && other.cfg.IsFullTunnel() {
+				m.mu.Unlock()
+				return newTunnelError(ErrFullTunnelConflict,
+					fmt.Sprintf("cannot connect full-tunnel %q: tunnel %q already routes all traffic (0.0.0.0/0)", name, otherName), nil)
+			}
+		}
+	}
+
 	// Stash the tunnel config early so Status() can show "connecting <name>"
 	// while the phases are running.
 	entry.cfg = cfg
@@ -212,12 +224,14 @@ func (m *Manager) DisconnectTunnel(name string) error {
 	return nil
 }
 
-// DisconnectAll tears down all active tunnels. Used during shutdown.
+// DisconnectAll tears down all active tunnels, including those still in the
+// connecting state. DisconnectTunnel internally waits for connecting tunnels
+// to settle before tearing them down. Used during shutdown.
 func (m *Manager) DisconnectAll() {
 	m.mu.Lock()
 	var names []string
 	for n, e := range m.tunnels {
-		if e.state == domain.StateConnected {
+		if e.state == domain.StateConnected || e.state == domain.StateConnecting {
 			names = append(names, n)
 		}
 	}
@@ -503,6 +517,27 @@ func (m *Manager) activeTunnelNamesLocked() []string {
 	}
 	sort.Strings(names)
 	return names
+}
+
+// AllDNSServers returns the union of DNS servers from all connected tunnels'
+// configs. Used to re-apply the combined DNS when a tunnel connects or
+// disconnects, preventing one tunnel from overwriting another's DNS settings.
+func (m *Manager) AllDNSServers() []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	seen := make(map[string]struct{})
+	var all []string
+	for _, e := range m.tunnels {
+		if e.state == domain.StateConnected && e.cfg != nil {
+			for _, dns := range e.cfg.Interface.DNS {
+				if _, ok := seen[dns]; !ok {
+					seen[dns] = struct{}{}
+					all = append(all, dns)
+				}
+			}
+		}
+	}
+	return all
 }
 
 // SetPinInterface enables or disables -ifscope bypass route pinning on macOS.

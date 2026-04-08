@@ -19,7 +19,9 @@ type TunnelManager interface {
 	IsConnected() bool
 	ActiveTunnel() string
 	Status() *tunnel.ConnectionStatus
+	AllStatuses() []*tunnel.ConnectionStatus
 	Disconnect() error
+	DisconnectTunnel(name string) error
 }
 
 // Config holds reconnection parameters.
@@ -48,8 +50,9 @@ type State struct {
 	NextRetry    string `json:"next_retry"`
 }
 
-// ReconnectFunc is called to perform the actual reconnection.
-type ReconnectFunc func() error
+// ReconnectFunc is called to perform the actual reconnection of a specific
+// tunnel identified by name.
+type ReconnectFunc func(name string) error
 
 // StatusChangedFunc is called when reconnection state changes.
 type StatusChangedFunc func(state State)
@@ -240,23 +243,36 @@ func (m *Monitor) monitorLoop() {
 			if !m.manager.IsConnected() {
 				continue
 			}
-			status := m.manager.Status()
-			if status == nil || status.LastHandshakeTime.IsZero() {
-				// No handshake data yet — tunnel may still be initializing.
-				continue
-			}
-			age := time.Since(status.LastHandshakeTime)
-			if age > handshakeStaleThreshold {
-				slog.Warn("handshake stale, triggering reconnect",
-					"last_handshake_age", age.Round(time.Second),
-					"threshold", handshakeStaleThreshold)
-				m.triggerReconnect()
+			// Check EACH tunnel's handshake individually. If a specific
+			// tunnel is stale, disconnect and reconnect only THAT tunnel.
+			statuses := m.manager.AllStatuses()
+			for _, status := range statuses {
+				if status == nil || status.LastHandshakeTime.IsZero() {
+					continue
+				}
+				if status.State != "connected" {
+					continue
+				}
+				age := time.Since(status.LastHandshakeTime)
+				if age > handshakeStaleThreshold {
+					tunnelName := status.TunnelName
+					slog.Warn("handshake stale, triggering per-tunnel reconnect",
+						"tunnel", tunnelName,
+						"last_handshake_age", age.Round(time.Second),
+						"threshold", handshakeStaleThreshold)
+					m.triggerReconnectTunnel(tunnelName)
+				}
 			}
 		}
 	}
 }
 
 func (m *Monitor) triggerReconnect() {
+	// Reconnect all tunnels — used by sleep/wake detection.
+	m.triggerReconnectTunnel("")
+}
+
+func (m *Monitor) triggerReconnectTunnel(tunnelName string) {
 	m.mu.Lock()
 	// Save old cancel/done so we can clean up outside the lock.
 	oldCancel := m.retryCancel
@@ -292,11 +308,15 @@ func (m *Monitor) triggerReconnect() {
 					"stack", string(debug.Stack()))
 			}
 		}()
-		m.reconnectWithBackoff(ctx)
+		m.reconnectWithBackoff(ctx, tunnelName)
 	}()
 }
 
-func (m *Monitor) reconnectWithBackoff(ctx context.Context) {
+// reconnectWithBackoff retries reconnection with exponential backoff.
+// If tunnelName is non-empty, only that specific tunnel is disconnected and
+// reconnected. If tunnelName is empty, the legacy Disconnect()/reconnectFn("")
+// path is used (reconnects all tunnels, used by sleep/wake).
+func (m *Monitor) reconnectWithBackoff(ctx context.Context, tunnelName string) {
 	delay := m.cfg.InitialDelay
 
 	for {
@@ -326,7 +346,7 @@ func (m *Monitor) reconnectWithBackoff(ctx context.Context) {
 			return
 		}
 
-		slog.Info("reconnecting", "attempt", attempt, "delay", delay)
+		slog.Info("reconnecting", "attempt", attempt, "delay", delay, "tunnel", tunnelName)
 		m.notifyStatus(State{
 			Reconnecting: true,
 			Attempt:      attempt,
@@ -369,8 +389,12 @@ func (m *Monitor) reconnectWithBackoff(ctx context.Context) {
 			}
 		}
 
-		// Disconnect first (ignore errors — might already be disconnected)
-		_ = m.manager.Disconnect()
+		// Disconnect the specific tunnel (or first tunnel for legacy path).
+		if tunnelName != "" {
+			_ = m.manager.DisconnectTunnel(tunnelName)
+		} else {
+			_ = m.manager.Disconnect()
+		}
 
 		// One more cancellation check before the actual reconnect — manager
 		// Disconnect can take a moment and the user's cancel may land here.
@@ -386,9 +410,10 @@ func (m *Monitor) reconnectWithBackoff(ctx context.Context) {
 			return
 		}
 
-		// Attempt reconnection
-		if err := m.reconnectFn(); err != nil {
-			slog.Warn("reconnection failed", "attempt", attempt, "error", err)
+		// Attempt reconnection — pass tunnel name so only the specific
+		// tunnel is reconnected when doing per-tunnel health recovery.
+		if err := m.reconnectFn(tunnelName); err != nil {
+			slog.Warn("reconnection failed", "attempt", attempt, "tunnel", tunnelName, "error", err)
 			// Re-enable firewall after failed attempt so the system stays
 			// protected between retries.
 			if firewallWasSuspended && m.fwResumeFn != nil {
@@ -411,7 +436,7 @@ func (m *Monitor) reconnectWithBackoff(ctx context.Context) {
 			}
 		}
 
-		slog.Info("reconnected successfully", "attempt", attempt)
+		slog.Info("reconnected successfully", "attempt", attempt, "tunnel", tunnelName)
 		m.notifyStatus(State{Reconnecting: false})
 		m.mu.Lock()
 		m.attempt = 0

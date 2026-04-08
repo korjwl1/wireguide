@@ -95,7 +95,33 @@ func (m *Manager) connectPhases(cfg *domain.WireGuardConfig) (*Engine, error) {
 	// 7. DNS — fatal when DNS servers are explicitly configured (matching
 	// wg-quick's behaviour). A silent DNS failure leaves the user on their
 	// ISP's resolver, which is a privacy leak for VPN users.
-	if err := m.netMgr.SetDNS(ifaceName, cfg.Interface.DNS); err != nil {
+	//
+	// When multiple tunnels are active, we apply the UNION of all tunnels'
+	// DNS servers so a second tunnel doesn't overwrite the first's DNS.
+	dnsServers := cfg.Interface.DNS
+	if len(dnsServers) > 0 {
+		// Collect DNS from already-connected tunnels and merge.
+		existingDNS := m.AllDNSServers()
+		if len(existingDNS) > 0 {
+			seen := make(map[string]struct{})
+			var merged []string
+			// New tunnel's DNS first, then existing.
+			for _, d := range dnsServers {
+				if _, ok := seen[d]; !ok {
+					seen[d] = struct{}{}
+					merged = append(merged, d)
+				}
+			}
+			for _, d := range existingDNS {
+				if _, ok := seen[d]; !ok {
+					seen[d] = struct{}{}
+					merged = append(merged, d)
+				}
+			}
+			dnsServers = merged
+		}
+	}
+	if err := m.netMgr.SetDNS(ifaceName, dnsServers); err != nil {
 		if len(cfg.Interface.DNS) > 0 {
 			return nil, rollback(newTunnelError(ErrNetwork, "setting DNS", err))
 		}
@@ -151,6 +177,29 @@ func (m *Manager) disconnectPhases(cfg *domain.WireGuardConfig, engine *Engine) 
 
 	// Network cleanup (also restores DNS internally)
 	_ = m.netMgr.Cleanup(ifaceName)
+
+	// If other tunnels remain connected, re-apply their DNS union so the
+	// system doesn't lose DNS configuration that was set by still-active
+	// tunnels. If no tunnels remain, Cleanup above already restored the
+	// original DNS via RestoreDNS.
+	remainingDNS := m.AllDNSServers()
+	if len(remainingDNS) > 0 {
+		// Pick the first remaining connected tunnel's interface for SetDNS.
+		m.mu.Lock()
+		var remainingIface string
+		for _, e := range m.tunnels {
+			if e.state == domain.StateConnected && e.engine != nil && e.cfg != nil && e.cfg.Name != cfg.Name {
+				remainingIface = e.engine.InterfaceName()
+				break
+			}
+		}
+		m.mu.Unlock()
+		if remainingIface != "" {
+			if err := m.netMgr.SetDNS(remainingIface, remainingDNS); err != nil {
+				slog.Warn("failed to re-apply DNS for remaining tunnels", "error", err)
+			}
+		}
+	}
 
 	// Clear crash-recovery state for this specific tunnel
 	_ = ClearActiveState(m.dataDir, cfg.Name)

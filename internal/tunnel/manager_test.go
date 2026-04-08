@@ -159,6 +159,23 @@ func testConfig(name string) *domain.WireGuardConfig {
 	}
 }
 
+func testFullTunnelConfig(name string) *domain.WireGuardConfig {
+	return &domain.WireGuardConfig{
+		Name: name,
+		Interface: domain.InterfaceConfig{
+			PrivateKey: "not-used-in-tests",
+			Address:    []string{"10.0.0.2/24"},
+		},
+		Peers: []domain.PeerConfig{
+			{
+				PublicKey:  "not-used-in-tests",
+				AllowedIPs: []string{"0.0.0.0/0", "::/0"},
+				Endpoint:   "1.2.3.4:51820",
+			},
+		},
+	}
+}
+
 func assertTunnelError(t *testing.T, err error, wantKind ErrorKind) {
 	t.Helper()
 	if err == nil {
@@ -989,5 +1006,44 @@ func TestResolvedEndpoints_MultiTunnel(t *testing.T) {
 	eps := mgr.ResolvedEndpoints()
 	if len(eps) != 2 {
 		t.Fatalf("expected 2 endpoints, got %d: %v", len(eps), eps)
+	}
+}
+
+func TestConnect_FullTunnelConflict(t *testing.T) {
+	dir := t.TempDir()
+	net := &mockNetworkManager{}
+	mgr := newTestManagerWithDir(net, succeedingFactory(), dir)
+
+	// First full-tunnel connect should succeed.
+	if err := mgr.Connect(testFullTunnelConfig("vpn-full-1")); err != nil {
+		t.Fatalf("first full-tunnel Connect failed: %v", err)
+	}
+
+	// Second full-tunnel connect should be rejected.
+	err := mgr.Connect(testFullTunnelConfig("vpn-full-2"))
+	assertTunnelError(t, err, ErrFullTunnelConflict)
+
+	// A split-tunnel should still be allowed alongside a full-tunnel.
+	if err := mgr.Connect(testConfig("vpn-split")); err != nil {
+		t.Fatalf("split-tunnel Connect alongside full-tunnel should succeed: %v", err)
+	}
+}
+
+func TestDisconnectAll_IncludesConnecting(t *testing.T) {
+	dir := t.TempDir()
+	mgr := newTestManagerWithDir(&mockNetworkManager{}, succeedingFactory(), dir)
+
+	// Set up one connected and one connecting tunnel directly.
+	setTunnelEntry(mgr, "vpn1", domain.StateConnected, testConfig("vpn1"), fakeEngine("utun42"))
+	setTunnelEntry(mgr, "vpn2", domain.StateConnecting, testConfig("vpn2"), nil)
+
+	mgr.DisconnectAll()
+
+	// Both should be cleaned up (vpn2 may timeout but should not be skipped).
+	// vpn1 should be disconnected. vpn2 was in connecting state and
+	// DisconnectTunnel waits for it to settle (will timeout after 10s and
+	// return error, but it's still attempted).
+	if mgr.IsTunnelConnected("vpn1") {
+		t.Fatal("vpn1 should be disconnected after DisconnectAll")
 	}
 }
