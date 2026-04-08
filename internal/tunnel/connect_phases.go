@@ -152,8 +152,8 @@ func (m *Manager) disconnectPhases(cfg *domain.WireGuardConfig, engine *Engine) 
 	// Network cleanup (also restores DNS internally)
 	_ = m.netMgr.Cleanup(ifaceName)
 
-	// Clear crash-recovery state
-	_ = ClearActiveState(m.dataDir)
+	// Clear crash-recovery state for this specific tunnel
+	_ = ClearActiveState(m.dataDir, cfg.Name)
 
 	slog.Info("tunnel disconnected", "name", cfg.Name)
 }

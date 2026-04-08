@@ -12,6 +12,7 @@ package tunnel
 import (
 	"fmt"
 	"log/slog"
+	"sort"
 	"sync"
 	"time"
 
@@ -19,7 +20,18 @@ import (
 	"github.com/korjwl1/wireguide/internal/network"
 )
 
-// Manager orchestrates the tunnel lifecycle using a small state machine.
+// tunnelEntry holds the state for a single tunnel within the multi-tunnel
+// manager. Each entry has its own state machine, engine, config, and
+// connected timestamp.
+type tunnelEntry struct {
+	state       domain.State
+	engine      *Engine
+	cfg         *domain.WireGuardConfig
+	connectedAt time.Time
+}
+
+// Manager orchestrates the tunnel lifecycle using a small state machine
+// per tunnel.
 //
 //	disconnected ──Connect──▶ connecting ──phases ok──▶ connected
 //	                                    ──phases err─▶ disconnected
@@ -28,21 +40,11 @@ import (
 // Manager.mu is held ONLY for state reads/writes, NEVER during the slow
 // phase operations (ifconfig, route, networksetup).
 // That keeps Status() / IsConnected() / ActiveTunnel() non-blocking even
-// while a long-running Connect or Disconnect is in flight — critical so
-// that the 1 Hz status broadcast loop in helper/events.go can surface
-// "connecting" and "disconnecting" transitions to the GUI in real time,
-// instead of stalling for 1–2 seconds and then flipping straight to
-// "connected".
-//
-// Disconnect races with an in-progress Connect by polling the state every
-// 100 ms for up to 10 s rather than fighting over the mutex.
+// while a long-running Connect or Disconnect is in flight.
 type Manager struct {
 	mu sync.Mutex
 
-	state       domain.State
-	engine      *Engine
-	activeCfg   *domain.WireGuardConfig
-	connectedAt time.Time
+	tunnels map[string]*tunnelEntry // keyed by tunnel name
 
 	netMgr  network.NetworkManager
 	dataDir string
@@ -64,40 +66,51 @@ func NewManager(dataDir string) *Manager {
 	return &Manager{
 		netMgr:        network.NewPlatformManager(),
 		dataDir:       dataDir,
-		state:         domain.StateDisconnected,
+		tunnels:       make(map[string]*tunnelEntry),
 		engineFactory: NewEngine,
 	}
 }
 
-// setStateLocked mutates state under the lock. Caller MUST hold m.mu.
-// Kept as a helper so future additions (logging, metrics) have one place
-// to hook.
-func (m *Manager) setStateLocked(s domain.State) {
-	m.state = s
+// getOrCreateEntry returns the entry for a tunnel, creating a disconnected
+// one if it doesn't exist. Caller MUST hold m.mu.
+func (m *Manager) getOrCreateEntry(name string) *tunnelEntry {
+	e, ok := m.tunnels[name]
+	if !ok {
+		e = &tunnelEntry{state: domain.StateDisconnected}
+		m.tunnels[name] = e
+	}
+	return e
+}
+
+// removeEntry deletes a tunnel entry from the map. Caller MUST hold m.mu.
+func (m *Manager) removeEntry(name string) {
+	delete(m.tunnels, name)
 }
 
 // Connect establishes a WireGuard tunnel. Runs the expensive phase work
 // WITHOUT holding m.mu, so Status / IsConnected / ActiveTunnel stay
 // responsive for the duration.
+//
+// Multiple tunnels can be connected simultaneously. Only rejected if THIS
+// specific tunnel name is already connected or a transition is in progress.
 func (m *Manager) Connect(cfg *domain.WireGuardConfig) error {
+	name := cfg.Name
+
 	// --- Phase 1: claim the connecting slot under the lock ---
 	m.mu.Lock()
-	switch m.state {
+	entry := m.getOrCreateEntry(name)
+	switch entry.state {
 	case domain.StateConnected:
-		name := ""
-		if m.activeCfg != nil {
-			name = m.activeCfg.Name
-		}
 		m.mu.Unlock()
 		return newTunnelError(ErrAlreadyConnected, fmt.Sprintf("tunnel %q is already connected", name), nil)
 	case domain.StateConnecting, stateDisconnecting:
 		m.mu.Unlock()
-		return newTunnelError(ErrTransitionInProgress, "another transition is in progress", nil)
+		return newTunnelError(ErrTransitionInProgress, fmt.Sprintf("tunnel %q: another transition is in progress", name), nil)
 	}
-	// Stash the tunnel name early so Status() can show "connecting <name>"
+	// Stash the tunnel config early so Status() can show "connecting <name>"
 	// while the phases are running.
-	m.activeCfg = cfg
-	m.setStateLocked(domain.StateConnecting)
+	entry.cfg = cfg
+	entry.state = domain.StateConnecting
 	m.mu.Unlock()
 
 	// --- Phase 2: run the slow operations WITHOUT holding the lock ---
@@ -106,66 +119,87 @@ func (m *Manager) Connect(cfg *domain.WireGuardConfig) error {
 	// --- Phase 3: commit final state under the lock ---
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	entry = m.getOrCreateEntry(name) // re-fetch under lock
 	if err != nil {
 		// Phases failed — roll back to disconnected. connectPhases has
 		// already cleaned up its partial network state via its internal
 		// rollback helper.
-		m.activeCfg = nil
-		m.setStateLocked(domain.StateDisconnected)
+		m.removeEntry(name)
 		return err
 	}
 	// Re-validate state: a Disconnect may have landed while we were outside
 	// the lock. If so, discard the engine we just created.
-	if m.state != domain.StateConnecting {
+	if entry.state != domain.StateConnecting {
 		// A Disconnect landed while we were outside the lock.
 		// Clean up the network state that connectPhases just installed.
 		m.netMgr.RemoveRoutes(engine.InterfaceName(), nil, cfg.IsFullTunnel())
 		m.netMgr.RestoreDNS(engine.InterfaceName())
 		m.netMgr.Cleanup(engine.InterfaceName())
 		engine.Close()
-		m.activeCfg = nil
-		m.setStateLocked(domain.StateDisconnected)
+		m.removeEntry(name)
 		return newTunnelError(ErrStateCorrupt, "connect aborted: state changed during setup", nil)
 	}
-	m.engine = engine
-	m.connectedAt = time.Now()
-	m.setStateLocked(domain.StateConnected)
+	entry.engine = engine
+	entry.connectedAt = time.Now()
+	entry.state = domain.StateConnected
 	return nil
 }
 
-// Disconnect tears down the active tunnel. Like Connect, runs the slow
-// teardown work outside the lock. If a Connect is currently in progress,
-// waits up to 10 seconds for it to finish rather than rejecting the user.
+// Disconnect tears down the first connected tunnel. Kept for backward
+// compatibility with callers that only support a single tunnel (reconnect
+// monitor, tray, etc.). Use DisconnectTunnel for named disconnects.
 func (m *Manager) Disconnect() error {
-	// --- Phase 1: wait for any in-flight transition to settle ---
+	m.mu.Lock()
+	var name string
+	for n, e := range m.tunnels {
+		if e.state == domain.StateConnected || e.state == domain.StateConnecting {
+			name = n
+			break
+		}
+	}
+	m.mu.Unlock()
+	if name == "" {
+		return newTunnelError(ErrNotConnected, "no tunnel is connected", nil)
+	}
+	return m.DisconnectTunnel(name)
+}
+
+// DisconnectTunnel tears down a specific tunnel by name. Like Connect, runs
+// the slow teardown work outside the lock.
+func (m *Manager) DisconnectTunnel(name string) error {
+	// --- Phase 1: wait for any in-flight transition on THIS tunnel to settle ---
 	deadline := time.Now().Add(10 * time.Second)
 	for {
 		m.mu.Lock()
-		if m.state != domain.StateConnecting && m.state != stateDisconnecting {
+		entry, ok := m.tunnels[name]
+		if !ok {
+			m.mu.Unlock()
+			return newTunnelError(ErrNotConnected, fmt.Sprintf("tunnel %q is not connected", name), nil)
+		}
+		if entry.state != domain.StateConnecting && entry.state != stateDisconnecting {
 			break // lock still held, state is stable
 		}
 		m.mu.Unlock()
 		if time.Now().After(deadline) {
-			return newTunnelError(ErrTimeout, "disconnect timeout: another transition is in progress", nil)
+			return newTunnelError(ErrTimeout, fmt.Sprintf("disconnect timeout for tunnel %q: transition in progress", name), nil)
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
 	// m.mu held here, state is Connected / Disconnected / Error.
-	if m.state != domain.StateConnected {
+	entry := m.tunnels[name]
+	if entry.state != domain.StateConnected {
 		m.mu.Unlock()
-		return newTunnelError(ErrNotConnected, "no tunnel is connected", nil)
+		return newTunnelError(ErrNotConnected, fmt.Sprintf("tunnel %q is not connected", name), nil)
 	}
 	// Snapshot the handles we need outside the lock.
-	engine := m.engine
-	cfg := m.activeCfg
+	engine := entry.engine
+	cfg := entry.cfg
 	if engine == nil {
-		// Should never happen given the state check above, but guard against
-		// it to prevent a nil-pointer panic in disconnectPhases.
-		m.setStateLocked(domain.StateDisconnected)
+		m.removeEntry(name)
 		m.mu.Unlock()
-		return newTunnelError(ErrStateCorrupt, "engine is nil despite connected state", nil)
+		return newTunnelError(ErrStateCorrupt, fmt.Sprintf("engine is nil for tunnel %q despite connected state", name), nil)
 	}
-	m.setStateLocked(stateDisconnecting)
+	entry.state = stateDisconnecting
 	m.mu.Unlock()
 
 	// --- Phase 2: slow teardown outside the lock ---
@@ -173,103 +207,302 @@ func (m *Manager) Disconnect() error {
 
 	// --- Phase 3: commit final state ---
 	m.mu.Lock()
-	m.engine = nil
-	m.activeCfg = nil
-	m.connectedAt = time.Time{}
-	m.setStateLocked(domain.StateDisconnected)
+	m.removeEntry(name)
 	m.mu.Unlock()
 	return nil
 }
 
-// Status returns the current connection status. Fast — only holds m.mu long
-// enough to snapshot the state, then queries wgctrl (which talks to a unix
-// socket) outside the lock. Safe to call at 1 Hz from the event broadcast
-// loop even when a Connect / Disconnect is in flight.
+// DisconnectAll tears down all active tunnels. Used during shutdown.
+func (m *Manager) DisconnectAll() {
+	m.mu.Lock()
+	var names []string
+	for n, e := range m.tunnels {
+		if e.state == domain.StateConnected {
+			names = append(names, n)
+		}
+	}
+	m.mu.Unlock()
+
+	for _, name := range names {
+		if err := m.DisconnectTunnel(name); err != nil {
+			slog.Warn("DisconnectAll: failed to disconnect tunnel", "tunnel", name, "error", err)
+		}
+	}
+}
+
+// Status returns the status of the first connected (or connecting) tunnel.
+// For backward compatibility with single-tunnel callers. The returned
+// ConnectionStatus includes ActiveTunnels listing all active tunnel names.
 func (m *Manager) Status() *ConnectionStatus {
 	m.mu.Lock()
-	state := m.state
-	engine := m.engine
-	var cfgName string
-	if m.activeCfg != nil {
-		cfgName = m.activeCfg.Name
+	// Find the "primary" tunnel (first connected, or first connecting).
+	var primary *tunnelEntry
+	var primaryName string
+	activeTunnels := m.activeTunnelNamesLocked()
+	for _, name := range activeTunnels {
+		e := m.tunnels[name]
+		if e.state == domain.StateConnected {
+			primary = e
+			primaryName = name
+			break
+		}
 	}
-	connectedAt := m.connectedAt
+	if primary == nil {
+		for _, name := range activeTunnels {
+			e := m.tunnels[name]
+			if e.state == domain.StateConnecting || e.state == stateDisconnecting {
+				primary = e
+				primaryName = name
+				break
+			}
+		}
+	}
+	// Check for error state tunnels if nothing else found.
+	if primary == nil {
+		for name, e := range m.tunnels {
+			if e.state == domain.StateError {
+				primary = e
+				primaryName = name
+				break
+			}
+		}
+	}
+
+	if primary == nil {
+		m.mu.Unlock()
+		return &ConnectionStatus{
+			State:         domain.StateDisconnected,
+			ActiveTunnels: activeTunnels,
+		}
+	}
+
+	state := primary.state
+	engine := primary.engine
+	connectedAt := primary.connectedAt
+	_ = primaryName // used for logging only
+	cfgName := ""
+	if primary.cfg != nil {
+		cfgName = primary.cfg.Name
+	}
 	m.mu.Unlock()
 
 	switch state {
 	case domain.StateConnecting, stateDisconnecting:
-		// Surface transient states as "connecting" on the wire — the GUI
-		// already has CSS for that (yellow pulsing badge) and doesn't need
-		// to distinguish between "bringing up" vs "tearing down".
 		return &ConnectionStatus{
-			State:      domain.StateConnecting,
-			TunnelName: cfgName,
+			State:         domain.StateConnecting,
+			TunnelName:    cfgName,
+			ActiveTunnels: activeTunnels,
 		}
 	case domain.StateDisconnected:
-		return &ConnectionStatus{State: domain.StateDisconnected}
+		return &ConnectionStatus{
+			State:         domain.StateDisconnected,
+			ActiveTunnels: activeTunnels,
+		}
 	case domain.StateError:
-		return &ConnectionStatus{State: domain.StateError, TunnelName: cfgName}
+		return &ConnectionStatus{
+			State:         domain.StateError,
+			TunnelName:    cfgName,
+			ActiveTunnels: activeTunnels,
+		}
 	}
 
-	// StateConnected — talk to wgctrl without holding m.mu. If Disconnect
-	// races us and closes the engine right now, the wgctrl call either
-	// succeeds with stale data (harmless — next tick will show disconnected)
-	// or errors out (we return a minimal "error" status).
+	// StateConnected — talk to wgctrl without holding m.mu.
 	if engine == nil {
-		return &ConnectionStatus{State: domain.StateDisconnected}
+		return &ConnectionStatus{
+			State:         domain.StateDisconnected,
+			ActiveTunnels: activeTunnels,
+		}
 	}
 	status, err := GetStatus(engine.InterfaceName(), cfgName, connectedAt)
 	if err != nil {
 		slog.Warn("failed to get status", "error", err)
+		return &ConnectionStatus{
+			State:         domain.StateError,
+			TunnelName:    cfgName,
+			ActiveTunnels: activeTunnels,
+		}
+	}
+	status.ActiveTunnels = activeTunnels
+	return status
+}
+
+// StatusFor returns the status of a specific tunnel by name.
+func (m *Manager) StatusFor(name string) *ConnectionStatus {
+	m.mu.Lock()
+	entry, ok := m.tunnels[name]
+	if !ok {
+		m.mu.Unlock()
+		return &ConnectionStatus{State: domain.StateDisconnected, TunnelName: name}
+	}
+	state := entry.state
+	engine := entry.engine
+	connectedAt := entry.connectedAt
+	cfgName := ""
+	if entry.cfg != nil {
+		cfgName = entry.cfg.Name
+	}
+	m.mu.Unlock()
+
+	switch state {
+	case domain.StateConnecting, stateDisconnecting:
+		return &ConnectionStatus{State: domain.StateConnecting, TunnelName: cfgName}
+	case domain.StateDisconnected:
+		return &ConnectionStatus{State: domain.StateDisconnected, TunnelName: cfgName}
+	case domain.StateError:
+		return &ConnectionStatus{State: domain.StateError, TunnelName: cfgName}
+	}
+
+	if engine == nil {
+		return &ConnectionStatus{State: domain.StateDisconnected, TunnelName: cfgName}
+	}
+	status, err := GetStatus(engine.InterfaceName(), cfgName, connectedAt)
+	if err != nil {
 		return &ConnectionStatus{State: domain.StateError, TunnelName: cfgName}
 	}
 	return status
 }
 
-// IsConnected returns true if a tunnel is fully established. Connecting /
-// disconnecting are both considered "not yet connected" so that callers
-// gating on this (e.g. the reconnect monitor's health check) don't do work
-// on a tunnel that's half-up.
+// AllStatuses returns the status of every tunnel that has an entry.
+func (m *Manager) AllStatuses() []*ConnectionStatus {
+	m.mu.Lock()
+	type snap struct {
+		name        string
+		state       domain.State
+		engine      *Engine
+		connectedAt time.Time
+		cfgName     string
+	}
+	var snaps []snap
+	for name, e := range m.tunnels {
+		cfgName := ""
+		if e.cfg != nil {
+			cfgName = e.cfg.Name
+		}
+		snaps = append(snaps, snap{name, e.state, e.engine, e.connectedAt, cfgName})
+	}
+	m.mu.Unlock()
+
+	var out []*ConnectionStatus
+	for _, s := range snaps {
+		switch s.state {
+		case domain.StateConnecting, stateDisconnecting:
+			out = append(out, &ConnectionStatus{State: domain.StateConnecting, TunnelName: s.cfgName})
+		case domain.StateDisconnected:
+			out = append(out, &ConnectionStatus{State: domain.StateDisconnected, TunnelName: s.cfgName})
+		case domain.StateError:
+			out = append(out, &ConnectionStatus{State: domain.StateError, TunnelName: s.cfgName})
+		case domain.StateConnected:
+			if s.engine == nil {
+				out = append(out, &ConnectionStatus{State: domain.StateDisconnected, TunnelName: s.cfgName})
+				continue
+			}
+			st, err := GetStatus(s.engine.InterfaceName(), s.cfgName, s.connectedAt)
+			if err != nil {
+				out = append(out, &ConnectionStatus{State: domain.StateError, TunnelName: s.cfgName})
+			} else {
+				out = append(out, st)
+			}
+		}
+	}
+	return out
+}
+
+// IsConnected returns true if ANY tunnel is fully established.
 func (m *Manager) IsConnected() bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.state == domain.StateConnected
+	for _, e := range m.tunnels {
+		if e.state == domain.StateConnected {
+			return true
+		}
+	}
+	return false
 }
 
-// ResolvedEndpointIPs returns the pre-resolved endpoint IP addresses from the
-// active engine. Returns nil if no tunnel is connected.
+// IsTunnelConnected returns true if the named tunnel is fully established.
+func (m *Manager) IsTunnelConnected(name string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	e, ok := m.tunnels[name]
+	return ok && e.state == domain.StateConnected
+}
+
+// ResolvedEndpointIPs returns the union of pre-resolved endpoint IP addresses
+// from all active engines. Returns nil if no tunnel is connected.
 func (m *Manager) ResolvedEndpointIPs() []string {
 	m.mu.Lock()
-	engine := m.engine
+	var engines []*Engine
+	for _, e := range m.tunnels {
+		if e.engine != nil {
+			engines = append(engines, e.engine)
+		}
+	}
 	m.mu.Unlock()
-	if engine == nil {
+
+	if len(engines) == 0 {
 		return nil
 	}
-	return engine.ResolvedEndpointIPs()
+	var all []string
+	for _, eng := range engines {
+		all = append(all, eng.ResolvedEndpointIPs()...)
+	}
+	return all
 }
 
-// ResolvedEndpoints returns the pre-resolved endpoint ip:port pairs from the
-// active engine. Returns nil if no tunnel is connected.
+// ResolvedEndpoints returns the union of pre-resolved endpoint ip:port pairs
+// from all active engines. Returns nil if no tunnel is connected.
 func (m *Manager) ResolvedEndpoints() []string {
 	m.mu.Lock()
-	engine := m.engine
+	var engines []*Engine
+	for _, e := range m.tunnels {
+		if e.engine != nil {
+			engines = append(engines, e.engine)
+		}
+	}
 	m.mu.Unlock()
-	if engine == nil {
+
+	if len(engines) == 0 {
 		return nil
 	}
-	return engine.ResolvedEndpoints()
+	var all []string
+	for _, eng := range engines {
+		all = append(all, eng.ResolvedEndpoints()...)
+	}
+	return all
 }
 
-// ActiveTunnel returns the name of the currently connected (or connecting)
-// tunnel, or "" if none. Returning the name during Connecting lets the GUI
-// show "connecting <name>" rather than a blank placeholder.
+// ActiveTunnel returns the name of the first connected (or connecting)
+// tunnel, or "" if none. Kept for backward compatibility — callers that
+// only support a single tunnel can use this.
 func (m *Manager) ActiveTunnel() string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.activeCfg == nil {
+	names := m.activeTunnelNamesLocked()
+	if len(names) == 0 {
 		return ""
 	}
-	return m.activeCfg.Name
+	return names[0]
+}
+
+// ActiveTunnels returns the names of all connected or connecting tunnels,
+// sorted alphabetically for deterministic ordering.
+func (m *Manager) ActiveTunnels() []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.activeTunnelNamesLocked()
+}
+
+// activeTunnelNamesLocked returns sorted names of all active tunnels.
+// Caller MUST hold m.mu.
+func (m *Manager) activeTunnelNamesLocked() []string {
+	var names []string
+	for name, e := range m.tunnels {
+		if e.state == domain.StateConnected || e.state == domain.StateConnecting || e.state == stateDisconnecting {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	return names
 }
 
 // SetPinInterface enables or disables -ifscope bypass route pinning on macOS.

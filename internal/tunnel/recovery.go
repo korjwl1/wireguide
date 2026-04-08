@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/korjwl1/wireguide/internal/firewall"
 	"github.com/korjwl1/wireguide/internal/network"
@@ -26,107 +27,154 @@ type ActiveTunnelState struct {
 	PreModDNS map[string][]string `json:"pre_mod_dns,omitempty"`
 }
 
+// Legacy single-tunnel state file (kept for backward-compatible migration).
 const activeTunnelFile = "active-tunnel.json"
 
-// SaveActiveState writes the active tunnel state to disk.
+// tunnelStatesDir is the directory that stores per-tunnel state files.
+const tunnelStatesDir = "tunnel-states"
+
+// stateFileName returns the per-tunnel state file name inside tunnelStatesDir.
+func stateFileName(tunnelName string) string {
+	// Sanitize the tunnel name so it's safe as a file name.
+	safe := strings.NewReplacer("/", "_", "\\", "_", "..", "_").Replace(tunnelName)
+	return safe + ".json"
+}
+
+// SaveActiveState writes the active tunnel state to disk in a per-tunnel file.
 func SaveActiveState(dataDir string, state *ActiveTunnelState) error {
-	if err := os.MkdirAll(dataDir, 0755); err != nil {
+	dir := filepath.Join(dataDir, tunnelStatesDir)
+	if err := os.MkdirAll(dir, 0755); err != nil {
 		return err
 	}
 	data, err := json.MarshalIndent(state, "", "  ")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(dataDir, activeTunnelFile), data, 0600)
+	return os.WriteFile(filepath.Join(dir, stateFileName(state.TunnelName)), data, 0600)
 }
 
-// ClearActiveState removes the active tunnel state file (called on clean disconnect).
-func ClearActiveState(dataDir string) error {
-	path := filepath.Join(dataDir, activeTunnelFile)
+// ClearActiveState removes the state file for a specific tunnel.
+func ClearActiveState(dataDir string, tunnelName string) error {
+	path := filepath.Join(dataDir, tunnelStatesDir, stateFileName(tunnelName))
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		return err
 	}
 	return nil
 }
 
-// LoadActiveState reads the active tunnel state. Returns nil if no state file exists.
-func LoadActiveState(dataDir string) *ActiveTunnelState {
-	path := filepath.Join(dataDir, activeTunnelFile)
-	data, err := os.ReadFile(path)
+// ClearAllActiveStates removes all per-tunnel state files.
+func ClearAllActiveStates(dataDir string) error {
+	dir := filepath.Join(dataDir, tunnelStatesDir)
+	if err := os.RemoveAll(dir); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
+}
+
+// LoadActiveState reads all active tunnel states from the tunnel-states
+// directory. Falls back to the legacy single-file format for migration.
+func LoadActiveState(dataDir string) []*ActiveTunnelState {
+	// Try per-tunnel directory first.
+	dir := filepath.Join(dataDir, tunnelStatesDir)
+	entries, err := os.ReadDir(dir)
+	if err == nil && len(entries) > 0 {
+		var states []*ActiveTunnelState
+		for _, e := range entries {
+			if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
+				continue
+			}
+			data, err := os.ReadFile(filepath.Join(dir, e.Name()))
+			if err != nil {
+				continue
+			}
+			var st ActiveTunnelState
+			if err := json.Unmarshal(data, &st); err != nil {
+				slog.Warn("corrupt tunnel state file, removing", "file", e.Name(), "error", err)
+				os.Remove(filepath.Join(dir, e.Name()))
+				continue
+			}
+			states = append(states, &st)
+		}
+		if len(states) > 0 {
+			return states
+		}
+	}
+
+	// Fallback: legacy single-file format.
+	legacyPath := filepath.Join(dataDir, activeTunnelFile)
+	data, err := os.ReadFile(legacyPath)
 	if err != nil {
 		return nil
 	}
-	var state ActiveTunnelState
-	if err := json.Unmarshal(data, &state); err != nil {
-		slog.Warn("corrupt active tunnel state file, removing", "error", err)
-		os.Remove(path)
+	var st ActiveTunnelState
+	if err := json.Unmarshal(data, &st); err != nil {
+		slog.Warn("corrupt legacy active tunnel state file, removing", "error", err)
+		os.Remove(legacyPath)
 		return nil
 	}
-	return &state
+	return []*ActiveTunnelState{&st}
 }
 
 // RecoverFromCrash checks for orphaned tunnel state and cleans up.
-// Returns the name of the cleaned-up tunnel, or empty string if none.
+// Returns the names of the cleaned-up tunnels, or nil if none.
 //
 // After a crash the TUN device is already gone (the process that owned it
 // died), but routes, DNS overrides, and firewall rules may still reference
 // the dead interface. We run a best-effort cleanup via the platform network
 // manager to avoid leaving the user stuck on the tunnel's DNS servers or
 // with unreachable bypass routes.
-//
-// Important: RestoreDNS relies on the in-memory "savedDNS" snapshot from
-// SetDNS, which a fresh process doesn't have. We therefore call the
-// state-free ResetDNSToSystemDefault() instead, which clears overrides
-// back to DHCP-provided values for every network service. Users lose any
-// custom DNS preferences on the crash recovery path — an acceptable
-// trade-off vs. being stuck on a dead tunnel's DNS.
-func RecoverFromCrash(dataDir string) string {
-	state := LoadActiveState(dataDir)
-	if state == nil {
-		return ""
+func RecoverFromCrash(dataDir string) []string {
+	states := LoadActiveState(dataDir)
+	if len(states) == 0 {
+		return nil
 	}
-	slog.Warn("detected orphaned tunnel from previous crash",
-		"tunnel", state.TunnelName,
-		"interface", state.InterfaceName)
 
 	mgr := network.NewPlatformManager()
+	var recovered []string
 
-	// Restore routing state (table/fwmark) from persisted values so that
-	// cleanup uses the correct table instead of hardcoded defaults.
-	if rs, ok := mgr.(network.RoutingStateRestorer); ok {
-		rs.RestoreRoutingState(state.Table, state.FwMark)
-	}
+	for _, state := range states {
+		slog.Warn("detected orphaned tunnel from previous crash",
+			"tunnel", state.TunnelName,
+			"interface", state.InterfaceName)
 
-	// DNS: if we have pre-modification DNS state, restore it precisely.
-	// Otherwise fall back to the blunt ResetDNSToSystemDefault which
-	// clears everything to DHCP defaults (loses custom user preferences).
-	if len(state.PreModDNS) > 0 {
-		if restorer, ok := mgr.(network.DNSStateRestorer); ok {
-			if err := restorer.RestoreDNSFromSnapshot(state.PreModDNS); err != nil {
-				slog.Warn("crash recovery: precise DNS restore failed, falling back to reset", "error", err)
-				_ = mgr.ResetDNSToSystemDefault()
+		// Restore routing state (table/fwmark) from persisted values so that
+		// cleanup uses the correct table instead of hardcoded defaults.
+		if rs, ok := mgr.(network.RoutingStateRestorer); ok {
+			rs.RestoreRoutingState(state.Table, state.FwMark)
+		}
+
+		// DNS: if we have pre-modification DNS state, restore it precisely.
+		// Otherwise fall back to the blunt ResetDNSToSystemDefault which
+		// clears everything to DHCP defaults (loses custom user preferences).
+		if len(state.PreModDNS) > 0 {
+			if restorer, ok := mgr.(network.DNSStateRestorer); ok {
+				if err := restorer.RestoreDNSFromSnapshot(state.PreModDNS); err != nil {
+					slog.Warn("crash recovery: precise DNS restore failed, falling back to reset", "error", err)
+					_ = mgr.ResetDNSToSystemDefault()
+				} else {
+					slog.Info("crash recovery: DNS restored from pre-modification snapshot")
+				}
 			} else {
-				slog.Info("crash recovery: DNS restored from pre-modification snapshot")
+				_ = mgr.ResetDNSToSystemDefault()
 			}
 		} else {
-			_ = mgr.ResetDNSToSystemDefault()
+			if err := mgr.ResetDNSToSystemDefault(); err != nil {
+				slog.Warn("crash recovery: DNS reset failed", "error", err)
+			}
 		}
-	} else {
-		if err := mgr.ResetDNSToSystemDefault(); err != nil {
-			slog.Warn("crash recovery: DNS reset failed", "error", err)
-		}
-	}
 
-	// Routes: Cleanup knows how to walk the route table to find stale entries
-	// pointing at the recorded interface name, so this works even on a fresh
-	// process. This also handles policy rules and routing tables on Linux.
-	if state.InterfaceName != "" {
-		if err := mgr.RemoveRoutes(state.InterfaceName, nil, state.FullTunnel); err != nil {
-			slog.Warn("crash recovery: route removal failed", "error", err)
+		// Routes: Cleanup knows how to walk the route table to find stale entries
+		// pointing at the recorded interface name.
+		if state.InterfaceName != "" {
+			if err := mgr.RemoveRoutes(state.InterfaceName, nil, state.FullTunnel); err != nil {
+				slog.Warn("crash recovery: route removal failed", "error", err)
+			}
+			if err := mgr.Cleanup(state.InterfaceName); err != nil {
+				slog.Warn("crash recovery: network cleanup failed", "error", err)
+			}
 		}
-		if err := mgr.Cleanup(state.InterfaceName); err != nil {
-			slog.Warn("crash recovery: network cleanup failed", "error", err)
-		}
+
+		recovered = append(recovered, state.TunnelName)
 	}
 
 	// Firewall: clean up any leftover PF/nftables/netsh rules from the
@@ -136,6 +184,9 @@ func RecoverFromCrash(dataDir string) string {
 		slog.Warn("crash recovery: firewall cleanup failed", "error", err)
 	}
 
-	ClearActiveState(dataDir)
-	return state.TunnelName
+	// Clear all state files (both per-tunnel and legacy).
+	ClearAllActiveStates(dataDir)
+	os.Remove(filepath.Join(dataDir, activeTunnelFile)) // legacy cleanup
+
+	return recovered
 }

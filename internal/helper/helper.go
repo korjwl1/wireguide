@@ -83,8 +83,8 @@ type Helper struct {
 	// every record. Info by default.
 	logLevel *slog.LevelVar
 
-	mu        sync.Mutex
-	activeCfg *domain.WireGuardConfig // cached for reconnect
+	mu         sync.Mutex
+	activeCfgs map[string]*domain.WireGuardConfig // cached for reconnect, keyed by tunnel name
 
 	// Firewall state saved during reconnect suspend/resume cycle.
 	// These track what was active before suspend so resume can restore it.
@@ -115,11 +115,12 @@ func Run(addr string, ownerUID int, dataDir string) error {
 	fw := firewall.NewPlatformFirewall()
 
 	h := &Helper{
-		server:          ipc.NewServer(listener, ownerUID),
-		manager:         manager,
-		firewall:        fw,
-		logLevel: new(slog.LevelVar), // defaults to Info
-		done:     make(chan struct{}),
+		server:     ipc.NewServer(listener, ownerUID),
+		manager:    manager,
+		firewall:   fw,
+		activeCfgs: make(map[string]*domain.WireGuardConfig),
+		logLevel:   new(slog.LevelVar), // defaults to Info
+		done:       make(chan struct{}),
 	}
 
 	// Install the broadcast slog handler BEFORE the first log call so
@@ -133,8 +134,8 @@ func Run(addr string, ownerUID int, dataDir string) error {
 	})))
 
 	// Crash recovery (now logs via broadcast handler)
-	if recovered := tunnel.RecoverFromCrash(dataDir); recovered != "" {
-		slog.Warn("recovered from previous crash", "tunnel", recovered)
+	if recovered := tunnel.RecoverFromCrash(dataDir); len(recovered) > 0 {
+		slog.Warn("recovered from previous crash", "tunnels", recovered)
 	}
 
 	// Reconnect monitor — uses cached config
@@ -180,17 +181,34 @@ func Run(addr string, ownerUID int, dataDir string) error {
 }
 
 // reconnectFn is the callback passed to reconnect.Monitor. It fetches the
-// currently cached active config under lock and asks the tunnel manager to
-// reconnect. Returns an error if no config is cached (meaning the user has
-// manually disconnected, in which case reconnection is not desired).
+// currently cached active configs under lock and asks the tunnel manager to
+// reconnect all of them. Returns an error if no configs are cached (meaning
+// the user has manually disconnected, in which case reconnection is not
+// desired).
 func (h *Helper) reconnectFn() error {
 	h.mu.Lock()
-	cfg := h.activeCfg
+	cfgs := h.copyActiveCfgs()
 	h.mu.Unlock()
-	if cfg == nil {
+	if len(cfgs) == 0 {
 		return fmt.Errorf("no cached config for reconnect")
 	}
-	return h.manager.Connect(cfg)
+	var lastErr error
+	for _, cfg := range cfgs {
+		if err := h.manager.Connect(cfg); err != nil {
+			lastErr = err
+		}
+	}
+	return lastErr
+}
+
+// copyActiveCfgs returns a shallow copy of the active configs map.
+// Caller MUST hold h.mu.
+func (h *Helper) copyActiveCfgs() map[string]*domain.WireGuardConfig {
+	cp := make(map[string]*domain.WireGuardConfig, len(h.activeCfgs))
+	for k, v := range h.activeCfgs {
+		cp[k] = v
+	}
+	return cp
 }
 
 // onReconnectState forwards reconnection state changes to any subscribed GUI.
@@ -276,9 +294,12 @@ func (h *Helper) suspendFirewall() error {
 	h.mu.Lock()
 	h.fwSavedKillSwitch = ksEnabled
 	h.fwSavedDNSProtection = dnsEnabled
-	// DNS servers are stored from the active config's Interface.DNS
-	if h.activeCfg != nil {
-		h.fwSavedDNSServers = h.activeCfg.Interface.DNS
+	// DNS servers are stored from any active config's Interface.DNS
+	for _, cfg := range h.activeCfgs {
+		if len(cfg.Interface.DNS) > 0 {
+			h.fwSavedDNSServers = cfg.Interface.DNS
+			break
+		}
 	}
 	h.mu.Unlock()
 
@@ -314,8 +335,8 @@ func (h *Helper) resumeFirewall() error {
 	restoreDNS := h.fwSavedDNSProtection
 	savedDNSServers := h.fwSavedDNSServers
 	var ifaceAddresses []string
-	if h.activeCfg != nil {
-		ifaceAddresses = h.activeCfg.Interface.Address
+	for _, cfg := range h.activeCfgs {
+		ifaceAddresses = append(ifaceAddresses, cfg.Interface.Address...)
 	}
 	// Clear saved state so a second resume is a no-op.
 	h.fwSavedKillSwitch = false
@@ -386,7 +407,7 @@ func (h *Helper) cleanup() {
 		h.monitor.Stop()
 		h.firewall.Cleanup()
 		if h.manager.IsConnected() {
-			_ = h.manager.Disconnect()
+			h.manager.DisconnectAll()
 		}
 		slog.Info("helper shutdown complete")
 	})

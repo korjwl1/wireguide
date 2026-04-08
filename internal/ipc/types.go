@@ -68,6 +68,25 @@ type SetLogLevelRequest struct {
 	Level string `json:"level"` // "debug" | "info" | "warn" | "error"
 }
 
+// DisconnectRequest is the parameter for Tunnel.Disconnect.
+// If TunnelName is empty, all tunnels are disconnected (backward compat).
+type DisconnectRequest struct {
+	TunnelName string `json:"tunnel_name,omitempty"`
+}
+
+// ActiveTunnelsResponse lists all currently active tunnel names.
+type ActiveTunnelsResponse struct {
+	Names []string `json:"names"`
+}
+
+// MultiStatusResponse carries status for every active tunnel plus an
+// aggregate state. The frontend can iterate Tunnels for per-tunnel detail
+// or use the top-level State for a single-tunnel-compatible view.
+type MultiStatusResponse struct {
+	State   domain.State        `json:"state"`
+	Tunnels []ConnectionStatus  `json:"tunnels"`
+}
+
 // BoolResponse wraps a single bool.
 type BoolResponse struct {
 	Value bool `json:"value"`

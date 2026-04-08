@@ -36,6 +36,11 @@ type ConnectionStatus struct {
 	LastHandshake     string    `json:"last_handshake,omitempty"`
 	Endpoint          string    `json:"endpoint,omitempty"`
 	ErrorMessage      string    `json:"error_message,omitempty"`
+
+	// ActiveTunnels lists the names of all currently connected (or connecting)
+	// tunnels. Populated by the multi-tunnel manager so the frontend can show
+	// which tunnels are active.
+	ActiveTunnels []string `json:"active_tunnels,omitempty"`
 }
 
 // FormatDuration renders a duration in a compact "1h 2m 3s" form used by the

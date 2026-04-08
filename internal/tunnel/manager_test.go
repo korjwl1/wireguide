@@ -137,7 +137,7 @@ func newTestManagerWithDir(netMgr *mockNetworkManager, factory func(*domain.Wire
 	return &Manager{
 		netMgr:        netMgr,
 		dataDir:       dataDir,
-		state:         domain.StateDisconnected,
+		tunnels:       make(map[string]*tunnelEntry),
 		engineFactory: factory,
 	}
 }
@@ -173,6 +173,57 @@ func assertTunnelError(t *testing.T, err error, wantKind ErrorKind) {
 	}
 }
 
+// tunnelState returns the state of a named tunnel, or StateDisconnected if not found.
+func tunnelState(m *Manager, name string) domain.State {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	e, ok := m.tunnels[name]
+	if !ok {
+		return domain.StateDisconnected
+	}
+	return e.state
+}
+
+// tunnelEngine returns the engine for a named tunnel, or nil if not found.
+func tunnelEngine(m *Manager, name string) *Engine {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	e, ok := m.tunnels[name]
+	if !ok {
+		return nil
+	}
+	return e.engine
+}
+
+// tunnelConnectedAt returns the connectedAt time for a named tunnel.
+func tunnelConnectedAt(m *Manager, name string) time.Time {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	e, ok := m.tunnels[name]
+	if !ok {
+		return time.Time{}
+	}
+	return e.connectedAt
+}
+
+// setTunnelState sets the state of a named tunnel directly (for test setup).
+func setTunnelState(m *Manager, name string, state domain.State) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	e := m.getOrCreateEntry(name)
+	e.state = state
+}
+
+// setTunnelEntry sets up a tunnel entry directly (for test setup).
+func setTunnelEntry(m *Manager, name string, state domain.State, cfg *domain.WireGuardConfig, engine *Engine) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	e := m.getOrCreateEntry(name)
+	e.state = state
+	e.cfg = cfg
+	e.engine = engine
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -186,8 +237,8 @@ func TestConnect_Success(t *testing.T) {
 		t.Fatalf("Connect failed: %v", err)
 	}
 
-	if mgr.state != domain.StateConnected {
-		t.Fatalf("expected state connected, got %s", mgr.state)
+	if tunnelState(mgr, "vpn1") != domain.StateConnected {
+		t.Fatalf("expected state connected, got %s", tunnelState(mgr, "vpn1"))
 	}
 	if !mgr.IsConnected() {
 		t.Fatal("IsConnected should be true after successful Connect")
@@ -195,10 +246,10 @@ func TestConnect_Success(t *testing.T) {
 	if mgr.ActiveTunnel() != "vpn1" {
 		t.Fatalf("ActiveTunnel = %q, want %q", mgr.ActiveTunnel(), "vpn1")
 	}
-	if mgr.engine == nil {
+	if tunnelEngine(mgr, "vpn1") == nil {
 		t.Fatal("engine should be non-nil after Connect")
 	}
-	if mgr.connectedAt.IsZero() {
+	if tunnelConnectedAt(mgr, "vpn1").IsZero() {
 		t.Fatal("connectedAt should be set after Connect")
 	}
 }
@@ -212,12 +263,40 @@ func TestConnect_AlreadyConnected(t *testing.T) {
 		t.Fatalf("first Connect failed: %v", err)
 	}
 
-	err := mgr.Connect(testConfig("vpn2"))
+	// Same tunnel name should fail with AlreadyConnected.
+	err := mgr.Connect(testConfig("vpn1"))
 	assertTunnelError(t, err, ErrAlreadyConnected)
 
 	// State should remain connected to the original tunnel.
 	if mgr.ActiveTunnel() != "vpn1" {
 		t.Fatalf("ActiveTunnel should still be vpn1, got %q", mgr.ActiveTunnel())
+	}
+}
+
+func TestConnect_DifferentTunnels(t *testing.T) {
+	dir := t.TempDir()
+	net := &mockNetworkManager{}
+	mgr := newTestManagerWithDir(net, succeedingFactory(), dir)
+
+	if err := mgr.Connect(testConfig("vpn1")); err != nil {
+		t.Fatalf("first Connect failed: %v", err)
+	}
+
+	// Different tunnel name should succeed (multi-tunnel support).
+	if err := mgr.Connect(testConfig("vpn2")); err != nil {
+		t.Fatalf("second Connect failed: %v", err)
+	}
+
+	if !mgr.IsTunnelConnected("vpn1") {
+		t.Fatal("vpn1 should still be connected")
+	}
+	if !mgr.IsTunnelConnected("vpn2") {
+		t.Fatal("vpn2 should be connected")
+	}
+
+	tunnels := mgr.ActiveTunnels()
+	if len(tunnels) != 2 {
+		t.Fatalf("expected 2 active tunnels, got %d: %v", len(tunnels), tunnels)
 	}
 }
 
@@ -238,7 +317,8 @@ func TestConnect_TransitionInProgress(t *testing.T) {
 	// Give the goroutine time to enter connecting state.
 	time.Sleep(50 * time.Millisecond)
 
-	err := mgr.Connect(testConfig("vpn2"))
+	// Same name should get TransitionInProgress.
+	err := mgr.Connect(testConfig("vpn1"))
 	assertTunnelError(t, err, ErrTransitionInProgress)
 
 	// Wait for the first Connect to finish.
@@ -267,18 +347,15 @@ func TestConnect_EngineCreationFailure_RollsBackToDisconnected(t *testing.T) {
 		t.Fatalf("expected ErrEngineCreation, got %d", te.Kind)
 	}
 
-	// State should roll back to disconnected.
-	if mgr.state != domain.StateDisconnected {
-		t.Fatalf("expected disconnected after failure, got %s", mgr.state)
+	// State should roll back — entry should be removed entirely.
+	if tunnelState(mgr, "vpn1") != domain.StateDisconnected {
+		t.Fatalf("expected disconnected after failure, got %s", tunnelState(mgr, "vpn1"))
 	}
 	if mgr.IsConnected() {
 		t.Fatal("IsConnected should be false after failed Connect")
 	}
 	if mgr.ActiveTunnel() != "" {
 		t.Fatalf("ActiveTunnel should be empty after failed Connect, got %q", mgr.ActiveTunnel())
-	}
-	if mgr.activeCfg != nil {
-		t.Fatal("activeCfg should be nil after failed Connect")
 	}
 }
 
@@ -293,11 +370,8 @@ func TestConnect_NetworkPhaseFailure_RollsBack(t *testing.T) {
 	err := mgr.Connect(testConfig("vpn1"))
 	assertTunnelError(t, err, ErrNetwork)
 
-	if mgr.state != domain.StateDisconnected {
-		t.Fatalf("expected disconnected after network failure, got %s", mgr.state)
-	}
-	if mgr.activeCfg != nil {
-		t.Fatal("activeCfg should be nil after rollback")
+	if tunnelState(mgr, "vpn1") != domain.StateDisconnected {
+		t.Fatalf("expected disconnected after network failure, got %s", tunnelState(mgr, "vpn1"))
 	}
 }
 
@@ -311,8 +385,8 @@ func TestConnect_AddressFailure_RollsBack(t *testing.T) {
 	err := mgr.Connect(testConfig("vpn1"))
 	assertTunnelError(t, err, ErrNetwork)
 
-	if mgr.state != domain.StateDisconnected {
-		t.Fatalf("expected disconnected, got %s", mgr.state)
+	if tunnelState(mgr, "vpn1") != domain.StateDisconnected {
+		t.Fatalf("expected disconnected, got %s", tunnelState(mgr, "vpn1"))
 	}
 }
 
@@ -326,8 +400,8 @@ func TestConnect_BringUpFailure_RollsBack(t *testing.T) {
 	err := mgr.Connect(testConfig("vpn1"))
 	assertTunnelError(t, err, ErrNetwork)
 
-	if mgr.state != domain.StateDisconnected {
-		t.Fatalf("expected disconnected, got %s", mgr.state)
+	if tunnelState(mgr, "vpn1") != domain.StateDisconnected {
+		t.Fatalf("expected disconnected, got %s", tunnelState(mgr, "vpn1"))
 	}
 }
 
@@ -341,8 +415,8 @@ func TestConnect_AddRoutesFailure_RollsBack(t *testing.T) {
 	err := mgr.Connect(testConfig("vpn1"))
 	assertTunnelError(t, err, ErrNetwork)
 
-	if mgr.state != domain.StateDisconnected {
-		t.Fatalf("expected disconnected, got %s", mgr.state)
+	if tunnelState(mgr, "vpn1") != domain.StateDisconnected {
+		t.Fatalf("expected disconnected, got %s", tunnelState(mgr, "vpn1"))
 	}
 }
 
@@ -359,8 +433,8 @@ func TestConnect_DNSFailure_FatalWhenServersConfigured(t *testing.T) {
 	err := mgr.Connect(cfg)
 	assertTunnelError(t, err, ErrNetwork)
 
-	if mgr.state != domain.StateDisconnected {
-		t.Fatalf("expected disconnected, got %s", mgr.state)
+	if tunnelState(mgr, "vpn1") != domain.StateDisconnected {
+		t.Fatalf("expected disconnected, got %s", tunnelState(mgr, "vpn1"))
 	}
 }
 
@@ -378,8 +452,8 @@ func TestConnect_DNSFailure_NonFatalWhenNoServers(t *testing.T) {
 	if err := mgr.Connect(cfg); err != nil {
 		t.Fatalf("Connect should succeed when DNS fails with no servers: %v", err)
 	}
-	if mgr.state != domain.StateConnected {
-		t.Fatalf("expected connected, got %s", mgr.state)
+	if tunnelState(mgr, "vpn1") != domain.StateConnected {
+		t.Fatalf("expected connected, got %s", tunnelState(mgr, "vpn1"))
 	}
 }
 
@@ -396,20 +470,14 @@ func TestDisconnect_Success(t *testing.T) {
 		t.Fatalf("Disconnect failed: %v", err)
 	}
 
-	if mgr.state != domain.StateDisconnected {
-		t.Fatalf("expected disconnected, got %s", mgr.state)
+	if tunnelState(mgr, "vpn1") != domain.StateDisconnected {
+		t.Fatalf("expected disconnected, got %s", tunnelState(mgr, "vpn1"))
 	}
 	if mgr.IsConnected() {
 		t.Fatal("IsConnected should be false after Disconnect")
 	}
 	if mgr.ActiveTunnel() != "" {
 		t.Fatalf("ActiveTunnel should be empty, got %q", mgr.ActiveTunnel())
-	}
-	if mgr.engine != nil {
-		t.Fatal("engine should be nil after Disconnect")
-	}
-	if !mgr.connectedAt.IsZero() {
-		t.Fatal("connectedAt should be zero after Disconnect")
 	}
 }
 
@@ -451,8 +519,8 @@ func TestDisconnect_WaitsForConnectToFinish(t *testing.T) {
 		}
 	}
 
-	if mgr.state != domain.StateDisconnected {
-		t.Fatalf("expected disconnected, got %s", mgr.state)
+	if tunnelState(mgr, "vpn1") != domain.StateDisconnected {
+		t.Fatalf("expected disconnected, got %s", tunnelState(mgr, "vpn1"))
 	}
 }
 
@@ -469,20 +537,12 @@ func TestDisconnect_TimeoutWhenConnectNeverFinishes(t *testing.T) {
 	// Wait for connecting state.
 	time.Sleep(50 * time.Millisecond)
 
-	// Override the polling deadline to be short for the test. We can't easily
-	// do this without changing the production code, so we accept this test
-	// will take ~10s. Instead, let's set the state manually to simulate.
-	// Actually, let's just verify the timeout behaviour with a shorter test.
-	// We'll set state to connecting directly and test the timeout loop.
-
-	// Instead, test with a manager stuck in connecting state directly.
+	// Test with a manager stuck in connecting state directly.
 	mgr2 := newTestManagerWithDir(&mockNetworkManager{}, succeedingFactory(), dir)
-	mgr2.mu.Lock()
-	mgr2.state = domain.StateConnecting
-	mgr2.mu.Unlock()
+	setTunnelEntry(mgr2, "vpn1", domain.StateConnecting, testConfig("vpn1"), nil)
 
 	start := time.Now()
-	err := mgr2.Disconnect()
+	err := mgr2.DisconnectTunnel("vpn1")
 	elapsed := time.Since(start)
 
 	assertTunnelError(t, err, ErrTimeout)
@@ -535,10 +595,7 @@ func TestStatus_Disconnecting(t *testing.T) {
 	mgr := newTestManagerWithDir(&mockNetworkManager{}, succeedingFactory(), dir)
 
 	// Set state directly to disconnecting.
-	mgr.mu.Lock()
-	mgr.state = stateDisconnecting
-	mgr.activeCfg = testConfig("vpn1")
-	mgr.mu.Unlock()
+	setTunnelEntry(mgr, "vpn1", stateDisconnecting, testConfig("vpn1"), nil)
 
 	status := mgr.Status()
 	if status.State != domain.StateConnecting {
@@ -553,10 +610,7 @@ func TestStatus_ErrorState(t *testing.T) {
 	dir := t.TempDir()
 	mgr := newTestManagerWithDir(&mockNetworkManager{}, succeedingFactory(), dir)
 
-	mgr.mu.Lock()
-	mgr.state = domain.StateError
-	mgr.activeCfg = testConfig("vpn-err")
-	mgr.mu.Unlock()
+	setTunnelEntry(mgr, "vpn-err", domain.StateError, testConfig("vpn-err"), nil)
 
 	status := mgr.Status()
 	if status.State != domain.StateError {
@@ -573,10 +627,7 @@ func TestStatus_ConnectedWithNilEngine(t *testing.T) {
 	dir := t.TempDir()
 	mgr := newTestManagerWithDir(&mockNetworkManager{}, succeedingFactory(), dir)
 
-	mgr.mu.Lock()
-	mgr.state = domain.StateConnected
-	mgr.engine = nil
-	mgr.mu.Unlock()
+	setTunnelEntry(mgr, "vpn1", domain.StateConnected, testConfig("vpn1"), nil)
 
 	status := mgr.Status()
 	// Should fall back to disconnected rather than panic.
@@ -601,8 +652,12 @@ func TestIsConnected_AllStates(t *testing.T) {
 	}
 
 	for _, tt := range tests {
+		// Reset tunnels
 		mgr.mu.Lock()
-		mgr.state = tt.state
+		mgr.tunnels = make(map[string]*tunnelEntry)
+		if tt.state != domain.StateDisconnected {
+			mgr.tunnels["test"] = &tunnelEntry{state: tt.state}
+		}
 		mgr.mu.Unlock()
 
 		got := mgr.IsConnected()
@@ -756,18 +811,14 @@ func TestDisconnect_NilEngine_StateCorrupt(t *testing.T) {
 	dir := t.TempDir()
 	mgr := newTestManagerWithDir(&mockNetworkManager{}, succeedingFactory(), dir)
 
-	mgr.mu.Lock()
-	mgr.state = domain.StateConnected
-	mgr.engine = nil
-	mgr.activeCfg = testConfig("vpn1")
-	mgr.mu.Unlock()
+	setTunnelEntry(mgr, "vpn1", domain.StateConnected, testConfig("vpn1"), nil)
 
-	err := mgr.Disconnect()
+	err := mgr.DisconnectTunnel("vpn1")
 	assertTunnelError(t, err, ErrStateCorrupt)
 
-	// State should be reset to disconnected.
-	if mgr.state != domain.StateDisconnected {
-		t.Fatalf("expected disconnected, got %s", mgr.state)
+	// State should be reset to disconnected (entry removed).
+	if tunnelState(mgr, "vpn1") != domain.StateDisconnected {
+		t.Fatalf("expected disconnected, got %s", tunnelState(mgr, "vpn1"))
 	}
 }
 
@@ -776,18 +827,15 @@ func TestConnect_DisconnectingState_RejectsConnect(t *testing.T) {
 	dir := t.TempDir()
 	mgr := newTestManagerWithDir(&mockNetworkManager{}, succeedingFactory(), dir)
 
-	mgr.mu.Lock()
-	mgr.state = stateDisconnecting
-	mgr.mu.Unlock()
+	setTunnelState(mgr, "vpn1", stateDisconnecting)
 
 	err := mgr.Connect(testConfig("vpn1"))
 	assertTunnelError(t, err, ErrTransitionInProgress)
 }
 
 func TestConnect_SetsActiveCfgDuringConnecting(t *testing.T) {
-	// Verify that activeCfg is set to the config BEFORE the engine factory
-	// runs, so that Status()/ActiveTunnel() can show the tunnel name during
-	// the connecting phase.
+	// Verify that cfg is set BEFORE the engine factory runs, so that
+	// Status()/ActiveTunnel() can show the tunnel name during connecting.
 	dir := t.TempDir()
 	net := &mockNetworkManager{}
 
@@ -808,5 +856,138 @@ func TestConnect_SetsActiveCfgDuringConnecting(t *testing.T) {
 
 	if capturedName != "my-tunnel" {
 		t.Fatalf("expected ActiveTunnel = my-tunnel during connecting, got %q", capturedName)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Multi-tunnel tests
+// ---------------------------------------------------------------------------
+
+func TestDisconnectTunnel_Specific(t *testing.T) {
+	dir := t.TempDir()
+	net := &mockNetworkManager{}
+	mgr := newTestManagerWithDir(net, succeedingFactory(), dir)
+
+	if err := mgr.Connect(testConfig("vpn1")); err != nil {
+		t.Fatalf("Connect vpn1 failed: %v", err)
+	}
+	if err := mgr.Connect(testConfig("vpn2")); err != nil {
+		t.Fatalf("Connect vpn2 failed: %v", err)
+	}
+
+	// Disconnect only vpn1.
+	if err := mgr.DisconnectTunnel("vpn1"); err != nil {
+		t.Fatalf("DisconnectTunnel vpn1 failed: %v", err)
+	}
+
+	if mgr.IsTunnelConnected("vpn1") {
+		t.Fatal("vpn1 should be disconnected")
+	}
+	if !mgr.IsTunnelConnected("vpn2") {
+		t.Fatal("vpn2 should still be connected")
+	}
+}
+
+func TestDisconnectAll(t *testing.T) {
+	dir := t.TempDir()
+	net := &mockNetworkManager{}
+	mgr := newTestManagerWithDir(net, succeedingFactory(), dir)
+
+	if err := mgr.Connect(testConfig("vpn1")); err != nil {
+		t.Fatalf("Connect vpn1 failed: %v", err)
+	}
+	if err := mgr.Connect(testConfig("vpn2")); err != nil {
+		t.Fatalf("Connect vpn2 failed: %v", err)
+	}
+
+	mgr.DisconnectAll()
+
+	if mgr.IsConnected() {
+		t.Fatal("no tunnels should be connected after DisconnectAll")
+	}
+	if len(mgr.ActiveTunnels()) != 0 {
+		t.Fatalf("expected 0 active tunnels, got %v", mgr.ActiveTunnels())
+	}
+}
+
+func TestActiveTunnels_Sorted(t *testing.T) {
+	dir := t.TempDir()
+	net := &mockNetworkManager{}
+	mgr := newTestManagerWithDir(net, succeedingFactory(), dir)
+
+	if err := mgr.Connect(testConfig("z-vpn")); err != nil {
+		t.Fatalf("Connect failed: %v", err)
+	}
+	if err := mgr.Connect(testConfig("a-vpn")); err != nil {
+		t.Fatalf("Connect failed: %v", err)
+	}
+
+	tunnels := mgr.ActiveTunnels()
+	if len(tunnels) != 2 {
+		t.Fatalf("expected 2 tunnels, got %d", len(tunnels))
+	}
+	if tunnels[0] != "a-vpn" || tunnels[1] != "z-vpn" {
+		t.Fatalf("expected sorted [a-vpn, z-vpn], got %v", tunnels)
+	}
+}
+
+func TestIsTunnelConnected(t *testing.T) {
+	dir := t.TempDir()
+	net := &mockNetworkManager{}
+	mgr := newTestManagerWithDir(net, succeedingFactory(), dir)
+
+	if mgr.IsTunnelConnected("vpn1") {
+		t.Fatal("vpn1 should not be connected initially")
+	}
+
+	if err := mgr.Connect(testConfig("vpn1")); err != nil {
+		t.Fatalf("Connect failed: %v", err)
+	}
+
+	if !mgr.IsTunnelConnected("vpn1") {
+		t.Fatal("vpn1 should be connected")
+	}
+	if mgr.IsTunnelConnected("vpn2") {
+		t.Fatal("vpn2 should not be connected")
+	}
+}
+
+func TestStatusFor(t *testing.T) {
+	dir := t.TempDir()
+	mgr := newTestManagerWithDir(&mockNetworkManager{}, succeedingFactory(), dir)
+
+	// Not connected — should return disconnected.
+	status := mgr.StatusFor("vpn1")
+	if status.State != domain.StateDisconnected {
+		t.Fatalf("expected disconnected, got %s", status.State)
+	}
+
+	// Connect.
+	setTunnelEntry(mgr, "vpn1", domain.StateConnecting, testConfig("vpn1"), nil)
+	status = mgr.StatusFor("vpn1")
+	if status.State != domain.StateConnecting {
+		t.Fatalf("expected connecting, got %s", status.State)
+	}
+}
+
+func TestResolvedEndpoints_MultiTunnel(t *testing.T) {
+	dir := t.TempDir()
+	mgr := newTestManagerWithDir(&mockNetworkManager{}, succeedingFactory(), dir)
+
+	if err := mgr.Connect(testConfig("vpn1")); err != nil {
+		t.Fatalf("Connect vpn1 failed: %v", err)
+	}
+	if err := mgr.Connect(testConfig("vpn2")); err != nil {
+		t.Fatalf("Connect vpn2 failed: %v", err)
+	}
+
+	ips := mgr.ResolvedEndpointIPs()
+	if len(ips) != 2 {
+		t.Fatalf("expected 2 endpoint IPs, got %d: %v", len(ips), ips)
+	}
+
+	eps := mgr.ResolvedEndpoints()
+	if len(eps) != 2 {
+		t.Fatalf("expected 2 endpoints, got %d: %v", len(eps), eps)
 	}
 }

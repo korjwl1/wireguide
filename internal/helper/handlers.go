@@ -26,6 +26,7 @@ func (h *Helper) registerHandlers() {
 	h.server.Handle(ipc.MethodStatus, h.handleStatus)
 	h.server.Handle(ipc.MethodIsConnected, h.handleIsConnected)
 	h.server.Handle(ipc.MethodActiveName, h.handleActiveName)
+	h.server.Handle(ipc.MethodActiveTunnels, h.handleActiveTunnels)
 	h.server.Handle(ipc.MethodSetKillSwitch, h.handleSetKillSwitch)
 	h.server.Handle(ipc.MethodSetDNSProtection, h.handleSetDNSProtection)
 	h.server.Handle(ipc.MethodSetHealthCheck, h.handleSetHealthCheck)
@@ -97,13 +98,17 @@ func (h *Helper) handleConnect(params json.RawMessage) (interface{}, error) {
 	// the reconnect monitor fires during Connect() it sees the new config
 	// (not nil or the previous one). Roll back on failure.
 	h.mu.Lock()
-	prevCfg := h.activeCfg
-	h.activeCfg = req.Config
+	prevCfgs := h.copyActiveCfgs()
+	h.activeCfgs[req.Config.Name] = req.Config
 	h.mu.Unlock()
 
 	if err := h.manager.Connect(req.Config); err != nil {
 		h.mu.Lock()
-		h.activeCfg = prevCfg
+		delete(h.activeCfgs, req.Config.Name)
+		// Restore previous if there was one
+		if prev, ok := prevCfgs[req.Config.Name]; ok {
+			h.activeCfgs[req.Config.Name] = prev
+		}
 		h.mu.Unlock()
 		return nil, err
 	}
@@ -114,18 +119,43 @@ func (h *Helper) handleDisconnect(params json.RawMessage) (interface{}, error) {
 	h.connectMu.Lock()
 	defer h.connectMu.Unlock()
 
+	// Parse optional tunnel name from request.
+	var tunnelName string
+	if params != nil && len(params) > 0 {
+		var req ipc.DisconnectRequest
+		if err := json.Unmarshal(params, &req); err == nil {
+			tunnelName = req.TunnelName
+		}
+		// If unmarshal fails (e.g. empty params), disconnect first tunnel (backward compat).
+	}
+
 	// Cancel any in-flight reconnect backoff first — otherwise the monitor
 	// could wake up seconds after the user clicked Disconnect and re-connect
 	// against their wishes.
 	if h.monitor != nil {
 		h.monitor.CancelRetry()
 	}
-	if err := h.manager.Disconnect(); err != nil {
-		return nil, err
+
+	if tunnelName != "" {
+		if err := h.manager.DisconnectTunnel(tunnelName); err != nil {
+			return nil, err
+		}
+		h.mu.Lock()
+		delete(h.activeCfgs, tunnelName)
+		h.mu.Unlock()
+	} else {
+		// No name specified — disconnect first tunnel (backward compat).
+		// Snapshot active tunnel name before disconnect so we can clear it.
+		activeName := h.manager.ActiveTunnel()
+		if err := h.manager.Disconnect(); err != nil {
+			return nil, err
+		}
+		h.mu.Lock()
+		if activeName != "" {
+			delete(h.activeCfgs, activeName)
+		}
+		h.mu.Unlock()
 	}
-	h.mu.Lock()
-	h.activeCfg = nil
-	h.mu.Unlock()
 	return ipc.Empty{}, nil
 }
 
@@ -139,6 +169,10 @@ func (h *Helper) handleIsConnected(params json.RawMessage) (interface{}, error) 
 
 func (h *Helper) handleActiveName(params json.RawMessage) (interface{}, error) {
 	return ipc.StringResponse{Value: h.manager.ActiveTunnel()}, nil
+}
+
+func (h *Helper) handleActiveTunnels(params json.RawMessage) (interface{}, error) {
+	return ipc.ActiveTunnelsResponse{Names: h.manager.ActiveTunnels()}, nil
 }
 
 func (h *Helper) handleSetKillSwitch(params json.RawMessage) (interface{}, error) {
@@ -162,8 +196,9 @@ func (h *Helper) handleSetKillSwitch(params json.RawMessage) (interface{}, error
 		// Get interface addresses from the active config for anti-spoof chains
 		var ifaceAddresses []string
 		h.mu.Lock()
-		if h.activeCfg != nil {
-			ifaceAddresses = h.activeCfg.Interface.Address
+		// Use the config for the currently reported tunnel.
+		if cfg, ok := h.activeCfgs[status.TunnelName]; ok {
+			ifaceAddresses = cfg.Interface.Address
 		}
 		h.mu.Unlock()
 		if err := h.firewall.EnableKillSwitch(status.InterfaceName, ifaceAddresses, endpoints); err != nil {
