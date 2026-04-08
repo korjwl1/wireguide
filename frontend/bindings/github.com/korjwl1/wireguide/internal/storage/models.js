@@ -69,6 +69,14 @@ export class Settings {
              */
             this["health_check"] = false;
         }
+        if (!("pin_interface" in $$source)) {
+            /**
+             * pin bypass routes to upstream interface (-ifscope)
+             * @member
+             * @type {boolean}
+             */
+            this["pin_interface"] = false;
+        }
         if (!("log_level" in $$source)) {
             /**
              * "debug", "info", "warn", "error"

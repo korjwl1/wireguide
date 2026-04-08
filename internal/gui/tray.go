@@ -45,23 +45,59 @@ func init() {
 // buildTrayOnIcon composites a W glyph (in wColor) with a green dot badge at
 // the bottom-left. Returns a non-template PNG so the green dot keeps its colour.
 // wColor should be black for light menu bars, white for dark menu bars.
+// trimAndSquare finds the bounding box of non-transparent pixels, crops,
+// then centers in a square canvas (max of width/height). Wails forces
+// the tray icon to a thickness×thickness square, so providing a square
+// image avoids distortion and controls the padding ourselves.
+func trimAndSquare(src image.Image) *image.NRGBA {
+	b := src.Bounds()
+	minX, minY, maxX, maxY := b.Max.X, b.Max.Y, b.Min.X, b.Min.Y
+	for y := b.Min.Y; y < b.Max.Y; y++ {
+		for x := b.Min.X; x < b.Max.X; x++ {
+			_, _, _, a := src.At(x, y).RGBA()
+			if a > 0 {
+				if x < minX { minX = x }
+				if y < minY { minY = y }
+				if x > maxX { maxX = x }
+				if y > maxY { maxY = y }
+			}
+		}
+	}
+	if maxX < minX {
+		return image.NewNRGBA(image.Rect(0, 0, 1, 1))
+	}
+	cropW := maxX - minX + 1
+	cropH := maxY - minY + 1
+	// Square canvas: use the larger dimension
+	side := cropW
+	if cropH > side { side = cropH }
+	dst := image.NewNRGBA(image.Rect(0, 0, side, side))
+	offX := (side - cropW) / 2
+	offY := (side - cropH) / 2
+	for y := 0; y < cropH; y++ {
+		for x := 0; x < cropW; x++ {
+			dst.Set(x+offX, y+offY, src.At(x+minX, y+minY))
+		}
+	}
+	return dst
+}
+
 func buildTrayOnIcon(wColor color.NRGBA) []byte {
 	base, err := png.Decode(bytes.NewReader(icons.SystrayMacTemplate))
 	if err != nil {
 		slog.Warn("failed to decode base tray icon, using unmodified", "error", err)
 		return icons.SystrayMacTemplate
 	}
-	bounds := base.Bounds()
-	dst := image.NewNRGBA(bounds)
 
-	// The template icon has black pixels with varying alpha. Re-tint each
-	// pixel to wColor while preserving its alpha — this turns the black W
-	// into a white W (for dark mode) or keeps it black (for light mode).
+	trimmed := trimAndSquare(base)
+	bounds := trimmed.Bounds()
+
+	// Re-tint: replace black pixels with wColor, preserving alpha.
 	for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
 		for x := bounds.Min.X; x < bounds.Max.X; x++ {
-			_, _, _, a := base.At(x, y).RGBA()
+			_, _, _, a := trimmed.At(x, y).RGBA()
 			if a > 0 {
-				dst.SetNRGBA(x, y, color.NRGBA{
+				trimmed.SetNRGBA(x, y, color.NRGBA{
 					R: wColor.R,
 					G: wColor.G,
 					B: wColor.B,
@@ -71,23 +107,22 @@ func buildTrayOnIcon(wColor color.NRGBA) []byte {
 		}
 	}
 
-	// Green badge: filled circle overlapping the W's left leg.
-	// The W occupies roughly x=15-49, y=16-48 in the 64x64 icon.
-	// Placing the dot at (20, 48) with radius 8 centers it on the left
-	// leg's bottom, overlapping the glyph like a notification badge.
-	cx, cy, r := 20, 48, 8
+	// Green badge: bottom-left corner.
+	w, h := bounds.Dx(), bounds.Dy()
+	cx, cy, r := w/5, h-h/5, h/8
+	if r < 3 { r = 3 }
 	green := color.NRGBA{52, 199, 89, 255} // macOS systemGreen
 	for y := cy - r; y <= cy+r; y++ {
 		for x := cx - r; x <= cx+r; x++ {
 			dx, dy := x-cx, y-cy
-			if dx*dx+dy*dy <= r*r {
-				dst.SetNRGBA(x, y, green)
+			if dx*dx+dy*dy <= r*r && x >= 0 && y >= 0 && x < w && y < h {
+				trimmed.SetNRGBA(x, y, green)
 			}
 		}
 	}
 
 	var buf bytes.Buffer
-	if err := png.Encode(&buf, dst); err != nil {
+	if err := png.Encode(&buf, trimmed); err != nil {
 		slog.Warn("failed to encode tray-on icon, using unmodified", "error", err)
 		return icons.SystrayMacTemplate
 	}
@@ -103,14 +138,15 @@ func buildTrayOffIcon(wColor color.NRGBA) []byte {
 		slog.Warn("failed to decode base tray icon, using unmodified", "error", err)
 		return icons.SystrayMacTemplate
 	}
-	bounds := base.Bounds()
-	dst := image.NewNRGBA(bounds)
+
+	trimmed := trimAndSquare(base)
+	bounds := trimmed.Bounds()
 
 	for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
 		for x := bounds.Min.X; x < bounds.Max.X; x++ {
-			_, _, _, a := base.At(x, y).RGBA()
+			_, _, _, a := trimmed.At(x, y).RGBA()
 			if a > 0 {
-				dst.SetNRGBA(x, y, color.NRGBA{
+				trimmed.SetNRGBA(x, y, color.NRGBA{
 					R: wColor.R,
 					G: wColor.G,
 					B: wColor.B,
@@ -121,7 +157,7 @@ func buildTrayOffIcon(wColor color.NRGBA) []byte {
 	}
 
 	var buf bytes.Buffer
-	if err := png.Encode(&buf, dst); err != nil {
+	if err := png.Encode(&buf, trimmed); err != nil {
 		slog.Warn("failed to encode tray-off icon, using unmodified", "error", err)
 		return icons.SystrayMacTemplate
 	}

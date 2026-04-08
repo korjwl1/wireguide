@@ -317,6 +317,15 @@ export function SetLogLevel(level) {
 }
 
 /**
+ * SetPinInterface enables or disables -ifscope bypass route pinning.
+ * @param {boolean} enabled
+ * @returns {$CancellablePromise<void>}
+ */
+export function SetPinInterface(enabled) {
+    return $Call.ByID(1245113173, enabled);
+}
+
+/**
  * TunnelExists reports whether a tunnel with the given name is stored.
  * @param {string} name
  * @returns {$CancellablePromise<boolean>}
