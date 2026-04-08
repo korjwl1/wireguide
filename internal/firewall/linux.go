@@ -43,6 +43,11 @@ func (f *LinuxFirewall) EnableKillSwitch(interfaceName string, ifaceAddresses []
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
+	// Check nftables availability before attempting any rules.
+	if _, err := exec.LookPath("nft"); err != nil {
+		return fmt.Errorf("nftables (nft) is not installed; kill switch requires nftables — install it with your package manager (e.g. apt install nftables)")
+	}
+
 	// Validate interface name before interpolating into nft rules.
 	if !validIfaceName.MatchString(interfaceName) {
 		return fmt.Errorf("invalid interface name %q", interfaceName)
@@ -173,6 +178,11 @@ func (f *LinuxFirewall) EnableDNSProtection(interfaceName string, dnsServers []s
 
 	if len(dnsServers) == 0 {
 		return nil
+	}
+
+	// Check nftables availability.
+	if _, err := exec.LookPath("nft"); err != nil {
+		return fmt.Errorf("nftables (nft) is not installed; DNS protection requires nftables")
 	}
 
 	// Validate interface name before interpolating into nft rules.

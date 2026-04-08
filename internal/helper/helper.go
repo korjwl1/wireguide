@@ -10,7 +10,6 @@ package helper
 import (
 	"fmt"
 	"log/slog"
-	"os"
 	"runtime/debug"
 	"sync"
 	"time"
@@ -260,11 +259,7 @@ func (h *Helper) shutdown() {
 	h.server.Shutdown()
 }
 
-// isDaemon returns true when the helper was started by launchd (LaunchDaemon).
-// launchd always sets the process's parent PID to 1 (init/launchd).
-func isDaemon() bool {
-	return os.Getppid() == 1
-}
+// isDaemon is defined per-platform in daemon_{darwin,linux,windows}.go.
 
 // suspendFirewall saves the current firewall state and disables all firewall
 // rules. Called by the reconnect monitor before Disconnect so that old pf rules

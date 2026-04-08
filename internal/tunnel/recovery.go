@@ -89,7 +89,7 @@ func RecoverFromCrash(dataDir string) string {
 		"tunnel", state.TunnelName,
 		"interface", state.InterfaceName)
 
-	mgr := network.NewPlatformManager()
+	mgr := network.NewPlatformManager(dataDir)
 
 	// Restore routing state (table/fwmark) from persisted values so that
 	// cleanup uses the correct table instead of hardcoded defaults.

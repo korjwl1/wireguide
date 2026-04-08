@@ -22,7 +22,7 @@ type WindowsManager struct {
 	splitRoutes     []string // split-tunnel routes we added (CIDR strings)
 }
 
-func NewPlatformManager() NetworkManager {
+func NewPlatformManager(_ string) NetworkManager {
 	return &WindowsManager{}
 }
 
@@ -255,7 +255,7 @@ func (m *WindowsManager) ResetDNSToSystemDefault() error {
 		return fmt.Errorf("listing interfaces: %w", err)
 	}
 	for _, iface := range ifaces {
-		if strings.HasPrefix(iface.Name, "wg") || strings.HasPrefix(iface.Name, "WireGuard") {
+		if strings.HasPrefix(iface.Name, "wg") || strings.HasPrefix(iface.Name, "WireGuard") || strings.HasPrefix(iface.Name, "WireGuide") {
 			// Best-effort: if the interface still exists, set DNS back to DHCP.
 			if resetErr := runWin("netsh", "interface", "ip", "set", "dns", iface.Name, "dhcp"); resetErr != nil {
 				slog.Warn("crash recovery: failed to reset DNS to DHCP",

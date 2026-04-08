@@ -75,38 +75,49 @@ func scanWireGuardInterfaces() ([]ExistingInterface, error) {
 }
 
 func isWireGuardLike(name string) bool {
+	lower := strings.ToLower(name)
 	return strings.HasPrefix(name, "utun") ||
 		strings.HasPrefix(name, "wg") ||
-		strings.HasPrefix(name, "tun")
+		strings.HasPrefix(name, "tun") ||
+		strings.HasPrefix(lower, "wireguide") ||
+		strings.HasPrefix(lower, "wireguard") ||
+		strings.HasPrefix(lower, "tailscale")
 }
 
-// identifyOwner determines who created this interface by checking UAPI sockets.
+// identifyOwner determines who created this interface by checking UAPI sockets
+// (Unix) or known process names (all platforms).
 func identifyOwner(ifaceName string) string {
-	// Check WireGuide socket
-	if socketExists("/var/run/wireguide/" + ifaceName + ".sock") {
-		return "WireGuide"
-	}
-
-	// Check WireGuard socket
-	if socketExists("/var/run/wireguard/" + ifaceName + ".sock") {
-		return "WireGuard"
-	}
-
-	// Check Tailscale — different socket path
-	tailscalePaths := []string{
-		"/var/run/tailscale/tailscaled.sock",
-		"/var/run/tailscaled.sock",
-	}
-	for _, p := range tailscalePaths {
-		if socketExists(p) {
-			// Check if tailscaled process exists
-			if processExists("tailscaled") {
-				return "Tailscale"
+	if runtime.GOOS != "windows" {
+		// Unix: check UAPI sockets
+		if socketExists("/var/run/wireguide/" + ifaceName + ".sock") {
+			return "WireGuide"
+		}
+		if socketExists("/var/run/wireguard/" + ifaceName + ".sock") {
+			return "WireGuard"
+		}
+		tailscalePaths := []string{
+			"/var/run/tailscale/tailscaled.sock",
+			"/var/run/tailscaled.sock",
+		}
+		for _, p := range tailscalePaths {
+			if socketExists(p) {
+				if processExists("tailscaled") {
+					return "Tailscale"
+				}
 			}
+		}
+	} else {
+		// Windows: check named pipes for WireGuard
+		if pipeExists(`\\.\pipe\ProtectedPrefix\Administrators\WireGuard\` + ifaceName) {
+			return "WireGuard"
+		}
+		// WireGuide on Windows uses a single named pipe, not per-interface
+		if pipeExists(`\\.\pipe\wireguide`) {
+			return "WireGuide"
 		}
 	}
 
-	// Check for known process names
+	// Check for known process names (works on all platforms)
 	if processOwnsInterface(ifaceName, "tailscaled") {
 		return "Tailscale"
 	}
@@ -115,6 +126,15 @@ func identifyOwner(ifaceName string) string {
 	}
 
 	return "Unknown"
+}
+
+// pipeExists checks if a Windows named pipe exists.
+func pipeExists(path string) bool {
+	if runtime.GOOS != "windows" {
+		return false
+	}
+	_, err := os.Stat(path)
+	return err == nil
 }
 
 func socketExists(path string) bool {
@@ -156,9 +176,9 @@ func getInterfaceRoutes(ifaceName string) []string {
 		return getRoutesDarwin(ifaceName)
 	case "linux":
 		return getRoutesLinux(ifaceName)
+	case "windows":
+		return getRoutesWindows(ifaceName)
 	default:
-		// TODO: Implement Windows route enumeration via `route print` or
-		// netsh to detect conflicts on Windows interfaces.
 		return nil
 	}
 }
@@ -227,6 +247,24 @@ func getRoutesLinux(ifaceName string) []string {
 				routes = append(routes, route)
 			}
 		}
+	}
+	return routes
+}
+
+func getRoutesWindows(ifaceName string) []string {
+	// Use PowerShell Get-NetRoute for locale-independent output.
+	out, err := exec.Command("powershell", "-NoProfile", "-Command",
+		fmt.Sprintf(`Get-NetRoute -InterfaceAlias '%s' -ErrorAction SilentlyContinue | Select-Object -ExpandProperty DestinationPrefix`, ifaceName)).CombinedOutput()
+	if err != nil {
+		return nil
+	}
+	var routes []string
+	for _, line := range strings.Split(string(out), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		routes = append(routes, line)
 	}
 	return routes
 }

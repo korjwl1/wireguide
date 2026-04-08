@@ -5,11 +5,11 @@
 	"info": {
 		"0000": {
 			"ProductVersion": "0.1.5",
-			"CompanyName": "My Company",
-			"FileDescription": "A wireguide application",
-			"LegalCopyright": "© 2026, My Company",
-			"ProductName": "My Product",
-			"Comments": "This is a comment"
+			"CompanyName": "WireGuide",
+			"FileDescription": "WireGuide - WireGuard VPN Client",
+			"LegalCopyright": "© 2026, WireGuide Contributors",
+			"ProductName": "WireGuide",
+			"Comments": "A cross-platform WireGuard VPN client"
 		}
 	}
 }

@@ -55,8 +55,8 @@ func (d *windowsSleepDetector) WakeChan() <-chan struct{} {
 
 func (d *windowsSleepDetector) poll() {
 	lastCheck := time.Now()
-	const pollInterval = 10 * time.Second
-	const sleepThreshold = 30 * time.Second
+	const pollInterval = 2 * time.Second
+	const sleepThreshold = 5 * time.Second
 
 	ticker := time.NewTicker(pollInterval)
 	defer ticker.Stop()

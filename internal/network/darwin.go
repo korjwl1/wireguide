@@ -55,7 +55,7 @@ type DarwinManager struct {
 	monitor *routeMonitor
 }
 
-func NewPlatformManager() NetworkManager {
+func NewPlatformManager(_ string) NetworkManager {
 	return &DarwinManager{
 		savedDNS:    make(map[string][]string),
 		savedSearch: make(map[string][]string),

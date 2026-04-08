@@ -114,17 +114,21 @@ func (p *Paths) EnsureDirs() error {
 		}
 		// Enforce permissions even if the directory already existed with
 		// wider permissions (e.g., 0755 from a previous version).
-		if err := os.Chmod(dir, 0700); err != nil {
-			// Chmod fails when the directory is owned by another user (e.g.
-			// root created it during a previous helper spawn). As long as
-			// we can actually write to it, proceed with a warning — crashing
-			// the entire app over a permission tightening failure on a
-			// directory we can still use is worse than running with 0755.
-			if canWriteDir(dir) {
-				slog.Warn("cannot tighten dir permissions (owned by another user)",
-					"dir", dir, "error", err)
-			} else {
-				return fmt.Errorf("directory %s exists but is not writable: %w", dir, err)
+		// On Windows, os.Chmod only affects the read-only attribute and
+		// cannot set Unix-style permissions, so skip this step.
+		if runtime.GOOS != "windows" {
+			if err := os.Chmod(dir, 0700); err != nil {
+				// Chmod fails when the directory is owned by another user (e.g.
+				// root created it during a previous helper spawn). As long as
+				// we can actually write to it, proceed with a warning — crashing
+				// the entire app over a permission tightening failure on a
+				// directory we can still use is worse than running with 0755.
+				if canWriteDir(dir) {
+					slog.Warn("cannot tighten dir permissions (owned by another user)",
+						"dir", dir, "error", err)
+				} else {
+					return fmt.Errorf("directory %s exists but is not writable: %w", dir, err)
+				}
 			}
 		}
 	}
@@ -132,8 +136,10 @@ func (p *Paths) EnsureDirs() error {
 	if p.DataDir != "" {
 		if err := os.MkdirAll(p.DataDir, 0700); err != nil {
 			slog.Warn("cannot create DataDir (may need root)", "dir", p.DataDir, "error", err)
-		} else if err := os.Chmod(p.DataDir, 0700); err != nil {
-			slog.Warn("cannot set DataDir permissions", "dir", p.DataDir, "error", err)
+		} else if runtime.GOOS != "windows" {
+			if err := os.Chmod(p.DataDir, 0700); err != nil {
+				slog.Warn("cannot set DataDir permissions", "dir", p.DataDir, "error", err)
+			}
 		}
 	}
 	return nil

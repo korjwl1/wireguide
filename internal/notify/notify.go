@@ -34,7 +34,16 @@ end run`
 }
 
 func notifyLinux(title, message string) error {
-	return exec.Command("notify-send", title, message, "-a", "WireGuide").Run()
+	// Try notify-send (libnotify) first.
+	if err := exec.Command("notify-send", title, message, "-a", "WireGuide").Run(); err == nil {
+		return nil
+	}
+	// Fallback: direct D-Bus call via gdbus (no extra dependencies needed).
+	return exec.Command("gdbus", "call", "--session",
+		"--dest", "org.freedesktop.Notifications",
+		"--object-path", "/org/freedesktop/Notifications",
+		"--method", "org.freedesktop.Notifications.Notify",
+		"WireGuide", "0", "", title, message, "[]", "{}", "5000").Run()
 }
 
 func notifyWindows(title, message string) error {

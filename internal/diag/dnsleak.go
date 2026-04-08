@@ -132,8 +132,17 @@ func readSystemResolvers() ([]string, error) {
 	}
 }
 
-// readLinuxResolvers parses /etc/resolv.conf for nameserver entries.
+// readLinuxResolvers reads the actual upstream DNS servers in use.
+// On systemd-resolved systems, /etc/resolv.conf typically contains 127.0.0.53
+// (the stub resolver), not the real upstream servers. We try resolvectl first
+// to get the actual servers, then fall back to /etc/resolv.conf.
 func readLinuxResolvers() ([]string, error) {
+	// Try resolvectl for systemd-resolved systems.
+	if servers := readResolvectlServers(); len(servers) > 0 {
+		return servers, nil
+	}
+
+	// Fall back to /etc/resolv.conf.
 	f, err := os.Open("/etc/resolv.conf")
 	if err != nil {
 		return nil, err
@@ -158,6 +167,36 @@ func readLinuxResolvers() ([]string, error) {
 		}
 	}
 	return servers, scanner.Err()
+}
+
+// readResolvectlServers parses `resolvectl status` output to extract
+// upstream DNS servers. Returns nil if resolvectl is not available.
+func readResolvectlServers() []string {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "resolvectl", "status", "--no-pager").CombinedOutput()
+	if err != nil {
+		return nil
+	}
+
+	var servers []string
+	seen := make(map[string]bool)
+	for _, line := range strings.Split(string(out), "\n") {
+		trimmed := strings.TrimSpace(line)
+		// Match lines like "DNS Servers: 8.8.8.8" or "Current DNS Server: 1.1.1.1"
+		for _, prefix := range []string{"DNS Servers:", "Current DNS Server:"} {
+			if strings.HasPrefix(trimmed, prefix) {
+				rest := strings.TrimSpace(strings.TrimPrefix(trimmed, prefix))
+				for _, ip := range strings.Fields(rest) {
+					if net.ParseIP(ip) != nil && !seen[ip] && ip != "127.0.0.53" {
+						seen[ip] = true
+						servers = append(servers, ip)
+					}
+				}
+			}
+		}
+	}
+	return servers
 }
 
 // readWindowsResolvers uses PowerShell to extract DNS server addresses.

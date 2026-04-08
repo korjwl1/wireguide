@@ -81,6 +81,16 @@ func discoverWiFiInterface() string {
 }
 
 func detectLinux() string {
+	if ssid := detectLinuxNmcli(); ssid != "" {
+		return ssid
+	}
+	if ssid := detectLinuxIwgetid(); ssid != "" {
+		return ssid
+	}
+	return detectLinuxIw()
+}
+
+func detectLinuxNmcli() string {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	out, err := exec.CommandContext(ctx, "nmcli", "-t", "-f", "active,ssid", "dev", "wifi").CombinedOutput()
@@ -90,6 +100,33 @@ func detectLinux() string {
 	for _, line := range strings.Split(string(out), "\n") {
 		if strings.HasPrefix(line, "yes:") {
 			return strings.TrimPrefix(line, "yes:")
+		}
+	}
+	return ""
+}
+
+func detectLinuxIwgetid() string {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "iwgetid", "-r").CombinedOutput()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
+func detectLinuxIw() string {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "iw", "dev").CombinedOutput()
+	if err != nil {
+		return ""
+	}
+	// Parse "ssid <name>" from iw dev output
+	for _, line := range strings.Split(string(out), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "ssid ") {
+			return strings.TrimPrefix(trimmed, "ssid ")
 		}
 	}
 	return ""

@@ -119,6 +119,9 @@ func NewEngine(cfg *config.WireGuardConfig) (*Engine, error) {
 
 	tunDev, err := tun.CreateTUN(tunName, mtu)
 	if err != nil {
+		if runtime.GOOS == "windows" {
+			return nil, fmt.Errorf("creating TUN device (ensure wintun.dll is present alongside the executable): %w", err)
+		}
 		return nil, fmt.Errorf("creating TUN device: %w", err)
 	}
 

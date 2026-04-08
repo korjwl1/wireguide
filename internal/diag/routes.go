@@ -1,6 +1,7 @@
 package diag
 
 import (
+	"net"
 	"os/exec"
 	"runtime"
 	"strings"
@@ -89,31 +90,60 @@ func getRoutesLinuxFull() ([]RouteEntry, error) {
 }
 
 func getRoutesWindowsFull() ([]RouteEntry, error) {
+	// Use PowerShell Get-NetRoute for locale-independent output instead of
+	// `route print` which has localized headers.
+	out, err := exec.Command("powershell", "-NoProfile", "-Command",
+		`Get-NetRoute -AddressFamily IPv4 -ErrorAction SilentlyContinue | Select-Object DestinationPrefix, NextHop, InterfaceAlias | ConvertTo-Csv -NoTypeInformation`).CombinedOutput()
+	if err != nil {
+		// Fallback to route print parsing for older Windows versions.
+		return getRoutesWindowsRoutePrint()
+	}
+
+	var routes []RouteEntry
+	lines := strings.Split(string(out), "\n")
+	for i, line := range lines {
+		if i == 0 { // skip CSV header
+			continue
+		}
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		// CSV format: "DestinationPrefix","NextHop","InterfaceAlias"
+		fields := strings.Split(line, ",")
+		if len(fields) >= 3 {
+			dest := strings.Trim(fields[0], `"`)
+			gw := strings.Trim(fields[1], `"`)
+			iface := strings.Trim(fields[2], `"`)
+			routes = append(routes, RouteEntry{
+				Destination: dest,
+				Gateway:     gw,
+				Interface:   iface,
+			})
+		}
+	}
+	return routes, nil
+}
+
+// getRoutesWindowsRoutePrint is the legacy fallback using `route print`.
+func getRoutesWindowsRoutePrint() ([]RouteEntry, error) {
 	out, err := exec.Command("route", "print", "-4").CombinedOutput()
 	if err != nil {
 		return nil, err
 	}
 	var routes []RouteEntry
-	inTable := false
+	// Look for lines that start with an IP address (locale-independent).
 	for _, line := range strings.Split(string(out), "\n") {
-		line = strings.TrimSpace(line)
-		if strings.Contains(line, "Network Destination") {
-			inTable = true
-			continue
-		}
-		if inTable && line == "" {
-			break
-		}
-		if !inTable {
-			continue
-		}
-		fields := strings.Fields(line)
+		fields := strings.Fields(strings.TrimSpace(line))
 		if len(fields) >= 4 {
-			routes = append(routes, RouteEntry{
-				Destination: fields[0],
-				Gateway:     fields[1],
-				Interface:   fields[3],
-			})
+			// Check if first field looks like an IP/CIDR
+			if net.ParseIP(fields[0]) != nil {
+				routes = append(routes, RouteEntry{
+					Destination: fields[0],
+					Gateway:     fields[1],
+					Interface:   fields[3],
+				})
+			}
 		}
 	}
 	return routes, nil

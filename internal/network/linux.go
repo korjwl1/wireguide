@@ -12,6 +12,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 )
 
 // dnsStateFile is persisted alongside the active tunnel state so that crash
@@ -20,6 +22,7 @@ const dnsStateFile = "original-dns.json"
 
 // LinuxManager implements NetworkManager for Linux using netlink/ip commands.
 type LinuxManager struct {
+	mu      sync.Mutex
 	origDNS []string
 	// dataDir is the persistent state directory (e.g. /var/lib/wireguide).
 	// If empty, DNS state persistence is skipped (graceful degradation).
@@ -32,10 +35,19 @@ type LinuxManager struct {
 	// from "table was never set". Without this, removeFullTunnelRoutes
 	// cannot tell whether 0 means main table or uninitialised.
 	tableSet bool
+
+	// Route monitor — watches for network changes and re-applies DNS/MTU.
+	monitor *routeMonitor
+
+	// Reapply context — stashed during AddRoutes so the monitor can
+	// re-apply DNS and MTU on network changes.
+	lastIface string
+	lastDNS   []string
+	lastMTU   int
 }
 
-func NewPlatformManager() NetworkManager {
-	return &LinuxManager{}
+func NewPlatformManager(dataDir string) NetworkManager {
+	return &LinuxManager{dataDir: dataDir}
 }
 
 func (m *LinuxManager) AssignAddress(ifaceName string, addresses []string) error {
@@ -63,6 +75,9 @@ func (m *LinuxManager) SetMTU(ifaceName string, mtu int) error {
 			mtu = 1280
 		}
 	}
+	m.mu.Lock()
+	m.lastMTU = mtu
+	m.mu.Unlock()
 	return runCmd("ip", "link", "set", "dev", ifaceName, "mtu", fmt.Sprintf("%d", mtu))
 }
 
@@ -156,6 +171,13 @@ func (m *LinuxManager) AddRoutes(ifaceName string, allowedIPs []string, fullTunn
 			}
 		}
 	}
+
+	// Stash reapply context and start route monitor.
+	m.mu.Lock()
+	m.lastIface = ifaceName
+	m.mu.Unlock()
+	m.startMonitorIfNeeded(fullTunnel)
+
 	return nil
 }
 
@@ -232,6 +254,11 @@ func (m *LinuxManager) addFullTunnelRoutesWithConfig(ifaceName string, endpoints
 	m.table = table
 	m.tableSet = true
 
+	// Pre-flight check: wg command from wireguard-tools is required for fwmark.
+	if _, err := exec.LookPath("wg"); err != nil {
+		return fmt.Errorf("wireguard-tools not installed: 'wg' command not found (install with: apt install wireguard-tools)")
+	}
+
 	// Step 1: Set fwmark on WireGuard socket (critical -- without this,
 	// encrypted WG packets are unmarked and match the policy rule, creating
 	// a routing loop that kills all connectivity).
@@ -278,10 +305,27 @@ func (m *LinuxManager) addFullTunnelRoutesWithConfig(ifaceName string, endpoints
 		}
 	}
 
+	// Stash reapply context and start route monitor (full-tunnel).
+	m.mu.Lock()
+	m.lastIface = ifaceName
+	m.mu.Unlock()
+	m.startMonitorIfNeeded(true)
+
 	return nil
 }
 
 func (m *LinuxManager) RemoveRoutes(ifaceName string, allowedIPs []string, fullTunnel bool) error {
+	// Stop the route monitor first so its reapply goroutine can't race with
+	// teardown. Stop() blocks until any in-flight reapply callback finishes.
+	if m.monitor != nil {
+		m.monitor.Stop()
+	}
+	m.mu.Lock()
+	m.lastIface = ""
+	m.lastDNS = nil
+	m.lastMTU = 0
+	m.mu.Unlock()
+
 	if fullTunnel {
 		return m.removeFullTunnelRoutes(ifaceName)
 	}
@@ -324,10 +368,8 @@ func (m *LinuxManager) RestoreRoutingState(table, fwmark string) {
 
 func (m *LinuxManager) removeFullTunnelRoutes(ifaceName string) error {
 	tableStr := strconv.Itoa(m.table)
-	fwmarkStr := strconv.Itoa(m.fwmark)
 	if !m.tableSet {
 		tableStr = "51820"
-		fwmarkStr = "51820"
 	}
 
 	// Routes — single delete is sufficient (only one route per table).
@@ -348,7 +390,8 @@ func (m *LinuxManager) removeFullTunnelRoutes(ifaceName string) error {
 			if !strings.Contains(string(out), lookupStr) {
 				break
 			}
-			if err := runCmd(append([]string{"ip", proto, "rule", "delete"}, args...)...); err != nil {
+			cmdArgs := append([]string{proto, "rule", "delete"}, args...)
+			if err := runCmd("ip", cmdArgs...); err != nil {
 				break
 			}
 		}
@@ -375,6 +418,11 @@ func (m *LinuxManager) removeFullTunnelRoutes(ifaceName string) error {
 }
 
 func (m *LinuxManager) SetDNS(ifaceName string, servers []string) error {
+	// Stash DNS for route monitor reapply.
+	m.mu.Lock()
+	m.lastDNS = append([]string(nil), servers...)
+	m.mu.Unlock()
+
 	if len(servers) == 0 {
 		return nil
 	}
@@ -658,6 +706,56 @@ func (m *LinuxManager) Cleanup(ifaceName string) error {
 		slog.Warn("cleanup: failed to delete interface", "iface", ifaceName, "error", err)
 	}
 	return nil
+}
+
+// startMonitorIfNeeded launches the route monitor if DNS is configured or
+// full-tunnel mode is active. DNS can be disrupted by network changes even
+// in split-tunnel mode.
+func (m *LinuxManager) startMonitorIfNeeded(fullTunnel bool) {
+	m.mu.Lock()
+	needsMonitor := fullTunnel || len(m.lastDNS) > 0
+	m.mu.Unlock()
+
+	if !needsMonitor {
+		return
+	}
+	if m.monitor == nil {
+		m.monitor = newRouteMonitor(m.reapply)
+	}
+	mon := m.monitor
+	go func() {
+		time.Sleep(2 * time.Second)
+		mon.Start()
+	}()
+}
+
+// reapply is invoked by the route monitor on network change events.
+// On Linux with fwmark-based routing, bypass routes are not needed (unlike
+// macOS), so the main job is re-applying DNS and MTU.
+func (m *LinuxManager) reapply() {
+	m.mu.Lock()
+	iface := m.lastIface
+	dns := m.lastDNS
+	mtu := m.lastMTU
+	m.mu.Unlock()
+
+	if iface == "" {
+		return
+	}
+
+	slog.Info("route monitor: reapplying DNS/MTU", "iface", iface)
+
+	if len(dns) > 0 {
+		if err := m.SetDNS(iface, dns); err != nil {
+			slog.Warn("reapply: DNS failed", "error", err)
+		}
+	}
+
+	if mtu > 0 {
+		if current := getInterfaceMTU(iface); current != mtu && current > 0 {
+			_ = runCmd("ip", "link", "set", "dev", iface, "mtu", fmt.Sprintf("%d", mtu))
+		}
+	}
 }
 
 func runCmd(name string, args ...string) error {

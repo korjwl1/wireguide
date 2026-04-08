@@ -62,7 +62,7 @@ const (
 // NewManager creates a tunnel manager.
 func NewManager(dataDir string) *Manager {
 	return &Manager{
-		netMgr:        network.NewPlatformManager(),
+		netMgr:        network.NewPlatformManager(dataDir),
 		dataDir:       dataDir,
 		state:         domain.StateDisconnected,
 		engineFactory: NewEngine,
