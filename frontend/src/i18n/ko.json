@@ -91,6 +91,8 @@
     "dns_protection_hint": "DNS를 VPN 터널로만 강제합니다. 연결 시 자동 적용.",
     "health_check": "헬스 체크",
     "health_check_hint": "핸드셰이크 상태를 모니터링하고 180초 동안 응답 없으면 재연결합니다. PersistentKeepalive 사용 시 권장.",
+    "pin_interface": "인터페이스 고정",
+    "pin_interface_hint": "VPN 바이패스 라우트를 활성 네트워크 인터페이스에 고정합니다. WiFi와 이더넷이 동시 연결된 환경에서 지연 스파이크를 방지합니다.",
     "about": "정보",
     "about_desc": "모던 UI와 편의 기능을 갖춘 크로스 플랫폼 WireGuard VPN 클라이언트",
     "about_issues": "문제 신고",

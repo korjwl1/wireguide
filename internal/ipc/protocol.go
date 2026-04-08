@@ -54,6 +54,7 @@ const (
 	MethodSetKillSwitch    = "Firewall.SetKillSwitch"
 	MethodSetDNSProtection = "Firewall.SetDNSProtection"
 	MethodSetHealthCheck   = "Monitor.SetHealthCheck"
+	MethodSetPinInterface  = "Network.SetPinInterface"
 )
 
 // Event names (server → client notifications)

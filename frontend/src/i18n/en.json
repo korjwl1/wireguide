@@ -91,6 +91,8 @@
     "dns_protection_hint": "Forces DNS through VPN only. Applied automatically on connect.",
     "health_check": "Health Check",
     "health_check_hint": "Monitors handshake age and triggers reconnect if tunnel is dead for 180s. Recommended with PersistentKeepalive.",
+    "pin_interface": "Pin Interface",
+    "pin_interface_hint": "Pins VPN bypass routes to the active network interface. Prevents latency spikes when WiFi and Ethernet are both connected.",
     "about": "About",
     "about_desc": "A cross-platform WireGuard VPN client with modern UI and quality-of-life features.",
     "about_issues": "Report Issue",

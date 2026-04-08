@@ -123,6 +123,11 @@ func (s *TunnelService) SetDNSProtection(enabled bool) error {
 
 // --- Auto-update ---
 
+// SetPinInterface enables or disables -ifscope bypass route pinning.
+func (s *TunnelService) SetPinInterface(enabled bool) error {
+	return s.call(ipc.MethodSetPinInterface, ipc.SetPinInterfaceRequest{Enabled: enabled}, nil)
+}
+
 // SetHealthCheck enables or disables the tunnel health check monitor.
 func (s *TunnelService) SetHealthCheck(enabled bool) error {
 	return s.call(ipc.MethodSetHealthCheck, ipc.SetHealthCheckRequest{Enabled: enabled}, nil)

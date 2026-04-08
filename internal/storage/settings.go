@@ -16,8 +16,9 @@ type Settings struct {
 	AutoStart     bool   `json:"auto_start"` // launch GUI on OS login
 	KillSwitch    bool   `json:"kill_switch"`
 	DNSProtection bool   `json:"dns_protection"`
-	HealthCheck   bool   `json:"health_check"` // periodic handshake age monitoring
-	LogLevel      string `json:"log_level"`    // "debug", "info", "warn", "error"
+	HealthCheck   bool   `json:"health_check"`   // periodic handshake age monitoring
+	PinInterface  bool   `json:"pin_interface"`  // pin bypass routes to upstream interface (-ifscope)
+	LogLevel      string `json:"log_level"`      // "debug", "info", "warn", "error"
 }
 
 // DefaultSettings returns settings with sensible defaults.
@@ -29,6 +30,7 @@ func DefaultSettings() *Settings {
 		KillSwitch:    false,
 		DNSProtection: false,
 		HealthCheck:   false,
+		PinInterface:  false, // off by default — enable for dual-network setups
 		LogLevel:      "info",
 	}
 }

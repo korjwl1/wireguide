@@ -53,6 +53,11 @@ type LogEntry struct {
 	Message string `json:"message"` // human-readable text (already includes attrs)
 }
 
+// SetPinInterfaceRequest is the parameter for Network.SetPinInterface.
+type SetPinInterfaceRequest struct {
+	Enabled bool `json:"enabled"`
+}
+
 // SetHealthCheckRequest is the parameter for Monitor.SetHealthCheck.
 type SetHealthCheckRequest struct {
 	Enabled bool `json:"enabled"`

@@ -91,6 +91,8 @@
     "dns_protection_hint": "DNS を VPN トンネル経由のみに強制します。接続時に自動適用。",
     "health_check": "ヘルスチェック",
     "health_check_hint": "ハンドシェイクの状態を監視し、180秒間応答がない場合に再接続します。PersistentKeepalive 使用時に推奨。",
+    "pin_interface": "インターフェース固定",
+    "pin_interface_hint": "VPNバイパスルートをアクティブなネットワークインターフェースに固定します。WiFiとイーサネットが同時接続されている環境で遅延スパイクを防止します。",
     "about": "情報",
     "about_desc": "モダンUIと便利な機能を備えたクロスプラットフォーム WireGuard VPNクライアント",
     "about_issues": "問題を報告",

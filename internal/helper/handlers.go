@@ -29,6 +29,7 @@ func (h *Helper) registerHandlers() {
 	h.server.Handle(ipc.MethodSetKillSwitch, h.handleSetKillSwitch)
 	h.server.Handle(ipc.MethodSetDNSProtection, h.handleSetDNSProtection)
 	h.server.Handle(ipc.MethodSetHealthCheck, h.handleSetHealthCheck)
+	h.server.Handle(ipc.MethodSetPinInterface, h.handleSetPinInterface)
 }
 
 func (h *Helper) handleSetLogLevel(params json.RawMessage) (interface{}, error) {
@@ -205,5 +206,14 @@ func (h *Helper) handleSetHealthCheck(params json.RawMessage) (interface{}, erro
 	if h.monitor != nil {
 		h.monitor.SetHealthCheck(req.Enabled)
 	}
+	return ipc.Empty{}, nil
+}
+
+func (h *Helper) handleSetPinInterface(params json.RawMessage) (interface{}, error) {
+	var req ipc.SetPinInterfaceRequest
+	if err := json.Unmarshal(params, &req); err != nil {
+		return nil, err
+	}
+	h.manager.SetPinInterface(req.Enabled)
 	return ipc.Empty{}, nil
 }

@@ -38,6 +38,7 @@
     kill_switch: false,
     dns_protection: false,
     health_check: false,
+    pin_interface: false,
     log_level: 'info',
     tray_icon_style: 'color',
   };
@@ -54,6 +55,7 @@
         settings.kill_switch = s.kill_switch ?? false;
         settings.dns_protection = s.dns_protection ?? false;
         settings.health_check = s.health_check ?? false;
+        settings.pin_interface = s.pin_interface ?? false;
         settings.log_level = s.log_level || 'info';
         settings.tray_icon_style = s.tray_icon_style || 'color';
       }
@@ -74,6 +76,7 @@
         kill_switch: settings.kill_switch,
         dns_protection: settings.dns_protection,
         health_check: settings.health_check,
+        pin_interface: settings.pin_interface,
         log_level: settings.log_level,
       });
     } catch (e) {
@@ -135,6 +138,15 @@
         settings.dns_protection = !settings.dns_protection;
       });
     }
+    scheduleSave();
+  }
+
+  function onPinInterfaceChange(e) {
+    settings.pin_interface = e.target.checked;
+    TunnelService.SetPinInterface(settings.pin_interface).catch((err) => {
+      console.error('SetPinInterface failed:', err);
+      settings.pin_interface = !settings.pin_interface;
+    });
     scheduleSave();
   }
 
@@ -260,6 +272,14 @@
               on:change={onHealthCheckChange} />
           </div>
           <p class="setting-hint">{$t('settings.health_check_hint')}</p>
+
+          <div class="setting-row">
+            <label for="pin-interface">{$t('settings.pin_interface')}</label>
+            <input id="pin-interface" type="checkbox"
+              checked={settings.pin_interface}
+              on:change={onPinInterfaceChange} />
+          </div>
+          <p class="setting-hint">{$t('settings.pin_interface_hint')}</p>
 
         {:else if activeTab === 'about'}
           <div class="about-section">

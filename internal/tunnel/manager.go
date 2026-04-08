@@ -271,3 +271,10 @@ func (m *Manager) ActiveTunnel() string {
 	}
 	return m.activeCfg.Name
 }
+
+// SetPinInterface enables or disables -ifscope bypass route pinning on macOS.
+func (m *Manager) SetPinInterface(enabled bool) {
+	if dm, ok := m.netMgr.(interface{ SetPinInterface(bool) }); ok {
+		dm.SetPinInterface(enabled)
+	}
+}

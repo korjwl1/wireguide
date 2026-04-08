@@ -53,10 +53,25 @@ type DarwinManager struct {
 	// lastUpstreamIface is the physical interface (e.g. en0, en5) cached
 	// before split routes are installed. Used by addBypassForIP to pin
 	// bypass routes with -ifscope, preventing flapping on dual-network setups.
+	// Only populated when pinInterface is true.
 	lastUpstreamIface string
+	// pinInterface controls whether bypass routes use -ifscope to pin
+	// to the upstream interface. Disabled by default.
+	pinInterface bool
 
 	// Route monitor (wg-quick monitor_daemon equivalent) — only runs for full tunnel.
 	monitor *routeMonitor
+}
+
+// SetPinInterface enables or disables -ifscope bypass route pinning.
+func (m *DarwinManager) SetPinInterface(enabled bool) {
+	m.mu.Lock()
+	m.pinInterface = enabled
+	if !enabled {
+		m.lastUpstreamIface = ""
+	}
+	m.mu.Unlock()
+	slog.Info("pin interface toggled", "enabled", enabled)
 }
 
 func NewPlatformManager() NetworkManager {
@@ -166,7 +181,16 @@ func (m *DarwinManager) AddRoutes(ifaceName string, allowedIPs []string, fullTun
 
 	// Cache the upstream interface BEFORE installing split routes — after
 	// split routes, route-get would return utun instead of the physical iface.
-	m.lastUpstreamIface = getDefaultInterface()
+	// Only when pinInterface is enabled (dual-network stability).
+	m.mu.Lock()
+	pin := m.pinInterface
+	m.mu.Unlock()
+	if pin {
+		upstreamIface := getDefaultInterface()
+		m.mu.Lock()
+		m.lastUpstreamIface = upstreamIface
+		m.mu.Unlock()
+	}
 
 	// Install default routes using the split trick
 	if hasV4Default {
@@ -415,11 +439,16 @@ func (m *DarwinManager) reapply() {
 	}
 
 	// Update cached state including upstream interface for bypass -ifscope.
+	// Resolve interface outside the lock to avoid blocking on netstat.
+	newUpstreamIface := ""
+	if m.pinInterface {
+		newUpstreamIface = getDefaultInterface()
+	}
 	m.mu.Lock()
 	m.lastEndpoints = append([]string(nil), liveEndpoints...)
 	m.lastGatewayV4 = newGwV4
 	m.lastGatewayV6 = newGwV6
-	m.lastUpstreamIface = getDefaultInterface()
+	m.lastUpstreamIface = newUpstreamIface
 	m.mu.Unlock()
 
 	if len(dns) > 0 {
@@ -532,10 +561,12 @@ func (m *DarwinManager) addBypassForIP(ipStr, gwV4, gwV6 string, gwV4Err, gwV6Er
 		return nil
 	}
 
-	// Use the caller-provided upstream interface to pin the bypass route
-	// with -ifscope. This prevents macOS from flapping between WiFi and
+	// Use the cached upstream interface to pin the bypass route with
+	// -ifscope. This prevents macOS from flapping between WiFi and
 	// Ethernet when both are active.
+	m.mu.Lock()
 	iface := m.lastUpstreamIface
+	m.mu.Unlock()
 
 	// Try `route add` first, fall back to `route change` if the kernel
 	// already has a route for this host (common when reconnecting).
@@ -545,7 +576,9 @@ func (m *DarwinManager) addBypassForIP(ipStr, gwV4, gwV6 string, gwV4Err, gwV6Er
 				// Fallback: try without -ifscope in case the OS rejects it
 				slog.Debug("ifscope route failed, falling back to unscoped", "ip", ipStr, "iface", iface)
 				if err3 := run("route", "-q", "-n", "add", family, ipStr, "-gateway", gw); err3 != nil {
-					_ = run("route", "-q", "-n", "change", family, ipStr, "-gateway", gw)
+					if err4 := run("route", "-q", "-n", "change", family, ipStr, "-gateway", gw); err4 != nil {
+						return fmt.Errorf("bypass route %s via %s (ifscope %s failed, unscoped also failed): %v", ipStr, gw, iface, err4)
+					}
 				}
 			}
 		}
