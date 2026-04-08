@@ -189,6 +189,7 @@ type trayManager struct {
 
 	mu            sync.Mutex
 	activeTunnels map[string]bool // cached from status events
+	hasHandshake  map[string]bool // per-tunnel handshake status
 	rebuildTimer  *time.Timer     // debounce timer for rebuildMenu
 	rebuilding    atomic.Bool     // guard against concurrent rebuildMenu calls
 }
@@ -219,7 +220,7 @@ func (t *trayManager) initialBuild() {
 // wanted the dot as a badge on the glyph itself, not as a neighbouring
 // character. Two separate icon assets is the only way to achieve that on
 // macOS's menu bar — template icons can't carry colour.
-func (t *trayManager) setIconState(activeNames []string) {
+func (t *trayManager) setIconState(activeNames []string, handshakeMap map[string]bool) {
 	newSet := make(map[string]bool, len(activeNames))
 	for _, n := range activeNames {
 		newSet[n] = true
@@ -228,6 +229,7 @@ func (t *trayManager) setIconState(activeNames []string) {
 	t.mu.Lock()
 	prev := t.activeTunnels
 	t.activeTunnels = newSet
+	t.hasHandshake = handshakeMap
 	t.mu.Unlock()
 
 	anyConnected := len(activeNames) > 0
@@ -300,12 +302,16 @@ func (t *trayManager) rebuildMenu() {
 	m.Add("WireGuide").SetEnabled(false)
 	m.AddSeparator()
 
+	hsMap := t.hasHandshake
+
 	for _, tun := range tunnels {
 		tun := tun // loop-var capture
 		connected := activeSet[tun.Name]
 		label := "○ " + tun.Name
-		if connected {
-			label = "● " + tun.Name
+		if connected && hsMap[tun.Name] {
+			label = "● " + tun.Name // connected + handshake
+		} else if connected {
+			label = "◐ " + tun.Name // connected, no handshake
 		}
 		tunName := tun.Name
 		m.Add(label).OnClick(func(ctx *application.Context) {

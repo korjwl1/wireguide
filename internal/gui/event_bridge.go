@@ -19,13 +19,13 @@ type eventBridge struct {
 	// onStatusChange is the cheap hook called for every status event — it
 	// updates the tray icon's label/tooltip without any IPC or disk work so
 	// the event loop goroutine never blocks on it.
-	onStatusChange func(activeNames []string)
+	onStatusChange func(activeNames []string, handshakeMap map[string]bool)
 
 	mu           sync.Mutex
 	subscribedTo *ipc.Client // tracks which client we're currently subscribed on
 }
 
-func newEventBridge(app *application.App, clients *ipc.ClientHolder, onStatusChange func(activeNames []string)) *eventBridge {
+func newEventBridge(app *application.App, clients *ipc.ClientHolder, onStatusChange func(activeNames []string, handshakeMap map[string]bool)) *eventBridge {
 	return &eventBridge{
 		app:            app,
 		clients:        clients,
@@ -87,7 +87,14 @@ func (b *eventBridge) handleEvent(method string, params json.RawMessage) {
 		} else {
 			b.app.Event.Emit("status", status)
 			if b.onStatusChange != nil {
-				b.onStatusChange(status.ActiveTunnels)
+				hsMap := make(map[string]bool)
+				for _, ts := range status.Tunnels {
+					hsMap[ts.TunnelName] = ts.LastHandshake != ""
+				}
+				if status.TunnelName != "" {
+					hsMap[status.TunnelName] = status.LastHandshake != ""
+				}
+				b.onStatusChange(status.ActiveTunnels, hsMap)
 			}
 		}
 	case ipc.EventReconnect:
