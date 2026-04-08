@@ -24,12 +24,16 @@ export function subscribeToEvents() {
     const isConn = status?.state === 'connected';
     const activeName = isConn ? status?.tunnel_name : null;
 
-    tunnels.update((list) =>
-      list.map((t) => ({
-        ...t,
-        is_connected: t.name === activeName,
-      }))
-    );
+    tunnels.update((list) => {
+      let changed = false;
+      const next = list.map((t) => {
+        const conn = t.name === activeName;
+        if (t.is_connected === conn) return t;
+        changed = true;
+        return { ...t, is_connected: conn };
+      });
+      return changed ? next : list;
+    });
 
     selectedTunnel.update((sel) => {
       if (!sel) return sel;
