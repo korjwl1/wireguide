@@ -2,6 +2,31 @@
 
 All notable changes to WireGuide will be documented in this file.
 
+## [0.1.7] - 2026-04-09
+
+### Added
+- Multiple simultaneous tunnel support
+- Per-tunnel NetworkManager (independent routes, DNS, route monitor per tunnel)
+- Per-tunnel health check and reconnection
+- Full-tunnel conflict detection (reject two 0.0.0.0/0 configs)
+- DNS union across all active tunnels
+- No-handshake warning: orange dot in tunnel list, ◐ in tray menu
+- Tray menu shows per-tunnel connection + handshake status
+- Architecture & design documentation (docs/DESIGN.md)
+
+### Fixed
+- Disconnect one tunnel no longer breaks other active tunnels
+- Conflict detection: macOS netstat abbreviated CIDRs now parsed correctly
+- GUI not reflecting connection state when tunnel connected via system tray
+- Bypass route race conditions (lock safety, error propagation)
+- Tray icon padding: trimmed transparent pixels for tighter menu bar fit
+- Tunnel list unnecessary re-renders on every status tick
+- README streamlined: removed defensive tone, screenshots moved to top
+
+### Changed
+- Pin Interface toggle added (Settings > Advanced) for dual-network stability
+- Bypass routes pinned to upstream interface with -ifscope when enabled
+
 ## [0.1.6] - 2026-04-08
 
 ### Added
