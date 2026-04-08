@@ -6,7 +6,7 @@ Thanks for your interest in contributing!
 
 ### Prerequisites
 
-- Go 1.26+
+- Go 1.25+
 - Node.js 20+
 - [Wails v3](https://v3alpha.wails.io/) (`go install github.com/wailsapp/wails/v3/cmd/wails3@latest`)
 - macOS with Apple Silicon (for now)
@@ -18,10 +18,10 @@ Thanks for your interest in contributing!
 cd frontend && npm install && cd ..
 
 # Development mode (hot reload)
-wails3 task dev
+task dev
 
 # Production build
-wails3 task package
+task build
 ```
 
 ### Project Structure

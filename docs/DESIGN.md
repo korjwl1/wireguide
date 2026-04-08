@@ -34,14 +34,58 @@ WireGuard requires root to create TUN devices and modify routing tables. Rather 
 
 This mirrors the architecture of `wg-quick` (which also runs as root) but wraps it in a persistent daemon with IPC.
 
+## Multi-Tunnel Architecture
+
+WireGuide supports **multiple simultaneous WireGuard tunnels**. The `tunnel.Manager` maintains a `map[string]*tunnelEntry` keyed by tunnel name, where each entry holds its own independent state:
+
+```go
+type tunnelEntry struct {
+    state       domain.State
+    engine      *Engine
+    cfg         *domain.WireGuardConfig
+    connectedAt time.Time
+    netMgr      network.NetworkManager  // per-tunnel network state
+}
+```
+
+### Per-Tunnel NetworkManager
+
+Each tunnel gets its **own `NetworkManager` instance** created via `netMgrFactory` during `Connect()`. This ensures one tunnel's route/DNS cleanup cannot affect another. The manager propagates global settings (like pin interface) to each tunnel's `NetworkManager`.
+
+### DNS Union
+
+When multiple tunnels are active, DNS servers are merged into a **union set**. On connect, the new tunnel's DNS is merged with all existing tunnels' DNS via `AllDNSServers()`. On disconnect, if other tunnels remain, their combined DNS is re-applied through one of the remaining tunnels' `NetworkManager` instances.
+
+### Full-Tunnel Conflict Detection
+
+Only one full-tunnel (`0.0.0.0/0`) can be active at a time. `Connect()` rejects a new full-tunnel config if any existing connected tunnel is already routing all traffic, returning `ErrFullTunnelConflict`.
+
+### Key Methods
+
+| Method | Description |
+|--------|-------------|
+| `Connect(cfg)` | Creates per-tunnel `NetworkManager`, runs connect phases, adds to `tunnels` map |
+| `DisconnectTunnel(name)` | Tears down a specific tunnel by name |
+| `DisconnectAll()` | Tears down all active tunnels (used during shutdown) |
+| `Disconnect()` | Legacy single-tunnel compat: disconnects the first active tunnel |
+| `ActiveTunnels()` | Returns sorted names of all connected/connecting tunnels |
+| `AllStatuses()` | Returns `ConnectionStatus` for every tunnel entry |
+| `StatusFor(name)` | Returns status of a specific tunnel |
+| `AllDNSServers()` | Returns union of DNS servers from all connected tunnels |
+
 ## Connection Lifecycle
 
-### Connect
+### Connect (Multi-Tunnel)
 
 ```
 GUI                          Helper                      OS
  │                            │                           │
  │── Connect(config) ────────▶│                           │
+ │                            │── claim connecting slot   │
+ │                            │   (reject if full-tunnel  │
+ │                            │    conflict detected)     │
+ │                            │── create per-tunnel       │
+ │                            │   NetworkManager          │
  │                            │── NewEngine(config)       │
  │                            │   ├─ resolve endpoints    │
  │                            │   ├─ create TUN ─────────▶│ utunN
@@ -52,12 +96,22 @@ GUI                          Helper                      OS
  │                            │── BringUp ───────────────▶│
  │                            │── AddRoutes ─────────────▶│ 0.0.0.0/1, 128.0.0.0/1
  │                            │   └─ bypass routes ──────▶│ endpoint → gateway
- │                            │── SetDNS ────────────────▶│ networksetup
+ │                            │── SetDNS (union) ────────▶│ networksetup
  │                            │── SaveActiveState         │
  │◀── status: connected ──────│                           │
 ```
 
-### Endpoint DNS Resolution — Chicken-and-Egg
+The manager lock (`mu`) is held only for state reads/writes, never during the slow phase operations (ifconfig, route, networksetup). This keeps `Status()` / `IsConnected()` / `ActiveTunnel()` non-blocking even while a long `Connect` or `Disconnect` is in flight.
+
+### Disconnect
+
+On disconnect, each tunnel cleans up via its own `NetworkManager`. If other tunnels remain active, their DNS union is re-applied. Crash-recovery state is cleared per-tunnel.
+
+### Security Hardening: No Script Execution
+
+Pre/PostUp/Down script execution has been **removed** as a security hardening measure. The config parser still accepts these fields so existing configs import without error, but the scripts are silently ignored.
+
+### Endpoint DNS Resolution -- Chicken-and-Egg
 
 Peer endpoints are resolved **before** installing split routes. If we resolved after, the DNS query itself would route through the tunnel (which isn't established yet), creating a loop.
 
@@ -87,7 +141,16 @@ Original DNS per service is saved in memory, restored on disconnect. For crash r
 
 **Endpoint bypass**: host routes for each peer endpoint via the upstream gateway. This prevents encrypted WG packets from looping through the tunnel.
 
-**`-ifscope` pinning** (optional): when WiFi and Ethernet are both active, macOS can flap between interfaces for bypass routes. `-ifscope <iface>` pins to a specific physical interface. The upstream interface is cached **before** split routes are installed (afterwards, `route get` would return utun).
+### Pin Interface (`-ifscope`)
+
+When WiFi and Ethernet are both active, macOS can flap between interfaces for bypass routes. `-ifscope <iface>` pins to a specific physical interface. The upstream interface is cached **before** split routes are installed (afterwards, `route get` would return utun).
+
+Pin interface is a **Manager-level setting** (`SetPinInterface(bool)`). When toggled:
+1. The setting is stored on the `Manager` struct
+2. Propagated to every active tunnel's `NetworkManager` via the `SetPinInterface` interface
+3. Applied to any future tunnels created via `Connect()`
+
+Controlled via the `Network.SetPinInterface` IPC method from the GUI Settings panel.
 
 ### Route Monitor
 
@@ -129,29 +192,47 @@ Two mechanisms (both send to the same channel):
 
 ### Health Check (optional, off by default)
 
-Polls handshake age via wgctrl every 30 seconds. If no handshake for 180 seconds (`RejectAfterTime`), triggers reconnect. Recommended only with `PersistentKeepalive` — without it, idle tunnels exceed the threshold naturally.
+Polls handshake age via wgctrl every 30 seconds. If no handshake for 180 seconds (`RejectAfterTime`), triggers **per-tunnel reconnect**. The monitor calls `AllStatuses()` to check each tunnel individually -- if a specific tunnel's handshake is stale, only that tunnel is disconnected and reconnected via `triggerReconnectTunnel(name)`.
+
+Recommended only with `PersistentKeepalive` — without it, idle tunnels exceed the threshold naturally.
+
+### Reconnect Callback
+
+`ReconnectFunc` accepts a tunnel name parameter:
+
+```go
+type ReconnectFunc func(name string) error
+```
+
+In the helper, `reconnectFn(name)` looks up the cached config from `activeCfgs map[string]*WireGuardConfig`:
+- **name non-empty**: reconnects only that specific tunnel
+- **name empty** (legacy sleep/wake path): reconnects all cached tunnels
 
 ### Reconnect Flow
 
 ```
-Wake detected
+Health check detects stale handshake on tunnel "work"
+  → triggerReconnectTunnel("work")
+    → suspendFirewall()            # disable kill switch (old utun rules)
+    → manager.DisconnectTunnel("work")
+    → reconnectFn("work")         # manager.Connect(cachedCfgs["work"])
+    → resumeFirewall()            # re-enable with NEW utun + endpoints
+
+Wake detected (all tunnels)
   → triggerReconnect()
-    → suspendFirewall()     # disable kill switch (old utun rules)
-    → manager.Disconnect()
-    → reconnectFn()         # manager.Connect(cachedConfig)
-    → resumeFirewall()      # re-enable with NEW utun + endpoints
+    → triggerReconnectTunnel("")   # reconnects all cached tunnels
 ```
 
 **Exponential backoff**: 5s initial, 60s max, unlimited attempts.
 
-**Firewall suspend/resume**: on reconnect, utun name changes (utun4→utun5). Old kill switch rules block the new interface. Suspending before disconnect and resuming after connect with fresh interface/endpoints prevents this deadlock.
+**Firewall suspend/resume**: on reconnect, utun name changes (utun4->utun5). Old kill switch rules block the new interface. Suspending before disconnect and resuming after connect with fresh interface/endpoints prevents this deadlock.
 
 ## Helper Version Sync
 
 GUI and helper share the same binary (`wireguide` / `wireguide --helper`). On startup, `ensureHelper` pings the helper and compares `AppVersion`:
 
-- Match → use existing helper
-- Mismatch → Shutdown RPC → `ForceReinstall` → `installAndLoadDaemon` (bootout old, copy new binary, bootstrap)
+- Match -> use existing helper
+- Mismatch -> Shutdown RPC -> `ForceReinstall` -> `installAndLoadDaemon` (bootout old, copy new binary, bootstrap)
 
 This handles `brew upgrade` which replaces the app bundle but leaves the old helper running via KeepAlive.
 
@@ -161,15 +242,35 @@ JSON-RPC 2.0 over Unix domain socket. Socket permissions: `0600`, peer UID verif
 
 | Method | Direction | Description |
 |--------|-----------|-------------|
-| `Helper.Ping` | GUI→Helper | Version check, liveness |
-| `Tunnel.Connect` | GUI→Helper | Start VPN tunnel |
-| `Tunnel.Disconnect` | GUI→Helper | Stop specific or all tunnels |
-| `Tunnel.Status` | GUI→Helper | Connection state + stats |
-| `Firewall.SetKillSwitch` | GUI→Helper | Enable/disable pf rules |
-| `Monitor.SetHealthCheck` | GUI→Helper | Toggle health check |
-| `event.status` | Helper→GUI | 1 Hz status broadcast |
-| `event.reconnect` | Helper→GUI | Reconnect state changes |
-| `event.log` | Helper→GUI | Structured log entries |
+| `Helper.Ping` | GUI->Helper | Version check, liveness |
+| `Helper.Shutdown` | GUI->Helper | Graceful helper shutdown |
+| `Helper.Subscribe` | GUI->Helper | Subscribe to event notifications |
+| `Helper.SetLogLevel` | GUI->Helper | Change runtime log level |
+| `Tunnel.Connect` | GUI->Helper | Start VPN tunnel (`ConnectRequest`) |
+| `Tunnel.Disconnect` | GUI->Helper | Stop tunnel (`DisconnectRequest`, optional `TunnelName`) |
+| `Tunnel.Status` | GUI->Helper | Connection state + stats |
+| `Tunnel.IsConnected` | GUI->Helper | Boolean connected check |
+| `Tunnel.ActiveName` | GUI->Helper | Name of first active tunnel |
+| `Tunnel.ActiveTunnels` | GUI->Helper | List all active tunnel names (`ActiveTunnelsResponse`) |
+| `Firewall.SetKillSwitch` | GUI->Helper | Enable/disable pf rules |
+| `Firewall.SetDNSProtection` | GUI->Helper | Enable/disable DNS-only pf rules |
+| `Monitor.SetHealthCheck` | GUI->Helper | Toggle per-tunnel health check |
+| `Network.SetPinInterface` | GUI->Helper | Toggle `-ifscope` route pinning |
+| `event.status` | Helper->GUI | 1 Hz status broadcast |
+| `event.reconnect` | Helper->GUI | Reconnect state changes |
+| `event.log` | Helper->GUI | Structured log entries |
+
+### Key Request/Response Types
+
+| Type | Used By | Notes |
+|------|---------|-------|
+| `ConnectRequest` | `Tunnel.Connect` | Contains `*WireGuardConfig` |
+| `DisconnectRequest` | `Tunnel.Disconnect` | Optional `TunnelName`; empty = disconnect first active tunnel |
+| `ActiveTunnelsResponse` | `Tunnel.ActiveTunnels` | `Names []string` |
+| `SetPinInterfaceRequest` | `Network.SetPinInterface` | `Enabled bool` |
+| `SetHealthCheckRequest` | `Monitor.SetHealthCheck` | `Enabled bool` |
+| `SetLogLevelRequest` | `Helper.SetLogLevel` | `Level string` |
+| `MultiStatusResponse` | `Tunnel.Status` | Aggregate state + per-tunnel `[]ConnectionStatus` |
 
 ## Error Handling
 
@@ -183,7 +284,7 @@ type TunnelError struct {
 }
 ```
 
-Frontend can type-assert `ErrorKind` to show different UI for "already connected" vs "DNS failed" vs "timeout".
+Frontend can type-assert `ErrorKind` to show different UI for "already connected" vs "DNS failed" vs "timeout". Multi-tunnel adds `ErrFullTunnelConflict` (two full-tunnels conflict) and `ErrTransitionInProgress` (another connect/disconnect in flight for the same tunnel name).
 
 ### Crash Recovery
 

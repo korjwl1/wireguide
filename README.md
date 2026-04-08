@@ -39,6 +39,7 @@
 
 | Feature | Description |
 |---------|-------------|
+| **Multi-Tunnel** | Connect multiple WireGuard tunnels simultaneously with per-tunnel state |
 | **Tunnel Management** | Import, create, edit, export `.conf` files. Drag-and-drop import. |
 | **Config Editor** | CodeMirror 6 with WireGuard syntax highlighting and autocompletion |
 | **System Tray** | Connection status badge, 1-click connect/disconnect |
