@@ -21,13 +21,14 @@ import (
 )
 
 // tunnelEntry holds the state for a single tunnel within the multi-tunnel
-// manager. Each entry has its own state machine, engine, config, and
-// connected timestamp.
+// manager. Each entry has its own state machine, engine, config, connected
+// timestamp, and per-tunnel NetworkManager instance.
 type tunnelEntry struct {
 	state       domain.State
 	engine      *Engine
 	cfg         *domain.WireGuardConfig
 	connectedAt time.Time
+	netMgr      network.NetworkManager // per-tunnel network state (routes, DNS, monitor)
 }
 
 // Manager orchestrates the tunnel lifecycle using a small state machine
@@ -46,8 +47,15 @@ type Manager struct {
 
 	tunnels map[string]*tunnelEntry // keyed by tunnel name
 
-	netMgr  network.NetworkManager
 	dataDir string
+
+	// pinInterface is the current -ifscope setting. Stored on Manager so
+	// it can be propagated to each newly-created per-tunnel NetworkManager.
+	pinInterface bool
+
+	// netMgrFactory creates a fresh NetworkManager for each tunnel.
+	// Defaults to network.NewPlatformManager. Overridable in tests.
+	netMgrFactory func() network.NetworkManager
 
 	// engineFactory creates the WireGuard engine. Defaults to NewEngine.
 	// Overridable in tests to avoid requiring root / TUN device access.
@@ -61,12 +69,14 @@ const (
 	stateDisconnecting domain.State = "disconnecting"
 )
 
-// NewManager creates a tunnel manager.
+// NewManager creates a tunnel manager. Each tunnel gets its own
+// NetworkManager instance created via netMgrFactory, so one tunnel's
+// route/DNS cleanup cannot affect another.
 func NewManager(dataDir string) *Manager {
 	return &Manager{
-		netMgr:        network.NewPlatformManager(),
 		dataDir:       dataDir,
 		tunnels:       make(map[string]*tunnelEntry),
+		netMgrFactory: func() network.NetworkManager { return network.NewPlatformManager() },
 		engineFactory: NewEngine,
 	}
 }
@@ -123,10 +133,20 @@ func (m *Manager) Connect(cfg *domain.WireGuardConfig) error {
 	// while the phases are running.
 	entry.cfg = cfg
 	entry.state = domain.StateConnecting
+
+	// Create a per-tunnel NetworkManager so this tunnel's routes, DNS
+	// snapshot, and route monitor are independent of other tunnels.
+	netMgr := m.netMgrFactory()
+	if m.pinInterface {
+		if dm, ok := netMgr.(interface{ SetPinInterface(bool) }); ok {
+			dm.SetPinInterface(true)
+		}
+	}
+	entry.netMgr = netMgr
 	m.mu.Unlock()
 
 	// --- Phase 2: run the slow operations WITHOUT holding the lock ---
-	engine, err := m.connectPhases(cfg)
+	engine, err := m.connectPhases(cfg, netMgr)
 
 	// --- Phase 3: commit final state under the lock ---
 	m.mu.Lock()
@@ -144,9 +164,9 @@ func (m *Manager) Connect(cfg *domain.WireGuardConfig) error {
 	if entry.state != domain.StateConnecting {
 		// A Disconnect landed while we were outside the lock.
 		// Clean up the network state that connectPhases just installed.
-		m.netMgr.RemoveRoutes(engine.InterfaceName(), nil, cfg.IsFullTunnel())
-		m.netMgr.RestoreDNS(engine.InterfaceName())
-		m.netMgr.Cleanup(engine.InterfaceName())
+		netMgr.RemoveRoutes(engine.InterfaceName(), nil, cfg.IsFullTunnel())
+		netMgr.RestoreDNS(engine.InterfaceName())
+		netMgr.Cleanup(engine.InterfaceName())
 		engine.Close()
 		m.removeEntry(name)
 		return newTunnelError(ErrStateCorrupt, "connect aborted: state changed during setup", nil)
@@ -206,6 +226,7 @@ func (m *Manager) DisconnectTunnel(name string) error {
 	// Snapshot the handles we need outside the lock.
 	engine := entry.engine
 	cfg := entry.cfg
+	netMgr := entry.netMgr
 	if engine == nil {
 		m.removeEntry(name)
 		m.mu.Unlock()
@@ -215,7 +236,7 @@ func (m *Manager) DisconnectTunnel(name string) error {
 	m.mu.Unlock()
 
 	// --- Phase 2: slow teardown outside the lock ---
-	m.disconnectPhases(cfg, engine)
+	m.disconnectPhases(cfg, engine, netMgr)
 
 	// --- Phase 3: commit final state ---
 	m.mu.Lock()
@@ -541,8 +562,18 @@ func (m *Manager) AllDNSServers() []string {
 }
 
 // SetPinInterface enables or disables -ifscope bypass route pinning on macOS.
+// The setting is stored on the Manager and propagated to every active
+// tunnel's NetworkManager, as well as any future tunnels created via Connect.
 func (m *Manager) SetPinInterface(enabled bool) {
-	if dm, ok := m.netMgr.(interface{ SetPinInterface(bool) }); ok {
-		dm.SetPinInterface(enabled)
+	m.mu.Lock()
+	m.pinInterface = enabled
+	// Propagate to all active per-tunnel NetworkManagers.
+	for _, e := range m.tunnels {
+		if e.netMgr != nil {
+			if dm, ok := e.netMgr.(interface{ SetPinInterface(bool) }); ok {
+				dm.SetPinInterface(enabled)
+			}
+		}
 	}
+	m.mu.Unlock()
 }

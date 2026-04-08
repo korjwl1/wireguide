@@ -23,7 +23,7 @@ import (
 // Note: Pre/PostUp/Down script execution was removed as a security hardening
 // measure. The config parser still accepts these fields so existing configs
 // import without error, but the scripts are silently ignored.
-func (m *Manager) connectPhases(cfg *domain.WireGuardConfig) (*Engine, error) {
+func (m *Manager) connectPhases(cfg *domain.WireGuardConfig, netMgr network.NetworkManager) (*Engine, error) {
 	// Compute fullTunnel early — needed by the rollback closure and later
 	// by AddRoutes. It only depends on cfg which is a parameter.
 	fullTunnel := cfg.IsFullTunnel()
@@ -44,10 +44,10 @@ func (m *Manager) connectPhases(cfg *domain.WireGuardConfig) (*Engine, error) {
 	// errors because we already have a primary failure to report.
 	rollback := func(primary error) error {
 		// Undo routes that may have been installed before the failure.
-		if err := m.netMgr.RemoveRoutes(ifaceName, nil, fullTunnel); err != nil {
+		if err := netMgr.RemoveRoutes(ifaceName, nil, fullTunnel); err != nil {
 			slog.Warn("rollback: RemoveRoutes failed", "error", err)
 		}
-		_ = m.netMgr.Cleanup(ifaceName)
+		_ = netMgr.Cleanup(ifaceName)
 		engine.Close()
 		return primary
 	}
@@ -57,17 +57,17 @@ func (m *Manager) connectPhases(cfg *domain.WireGuardConfig) (*Engine, error) {
 	// auto-detection. Do NOT default to 1420 here: that would shadow the
 	// auto-detection and force the wrong MTU on links like PPPoE (1492)
 	// or USB-tether (often 1500 but varies) or jumbo-frame LANs.
-	if err := m.netMgr.SetMTU(ifaceName, cfg.Interface.MTU); err != nil {
+	if err := netMgr.SetMTU(ifaceName, cfg.Interface.MTU); err != nil {
 		return nil, rollback(newTunnelError(ErrNetwork, "setting MTU", err))
 	}
 
 	// 4. Address
-	if err := m.netMgr.AssignAddress(ifaceName, cfg.Interface.Address); err != nil {
+	if err := netMgr.AssignAddress(ifaceName, cfg.Interface.Address); err != nil {
 		return nil, rollback(newTunnelError(ErrNetwork, "assigning address", err))
 	}
 
 	// 5. Bring up
-	if err := m.netMgr.BringUp(ifaceName); err != nil {
+	if err := netMgr.BringUp(ifaceName); err != nil {
 		return nil, rollback(newTunnelError(ErrNetwork, "bringing up interface", err))
 	}
 
@@ -88,7 +88,7 @@ func (m *Manager) connectPhases(cfg *domain.WireGuardConfig) (*Engine, error) {
 		allAllowedIPs = append(allAllowedIPs, peer.AllowedIPs...)
 	}
 	endpointIPs := engine.ResolvedEndpointIPs()
-	if err := m.netMgr.AddRoutes(ifaceName, allAllowedIPs, fullTunnel, endpointIPs, cfg.Interface.Table, cfg.Interface.FwMark); err != nil {
+	if err := netMgr.AddRoutes(ifaceName, allAllowedIPs, fullTunnel, endpointIPs, cfg.Interface.Table, cfg.Interface.FwMark); err != nil {
 		return nil, rollback(newTunnelError(ErrNetwork, "adding routes", err))
 	}
 
@@ -121,7 +121,7 @@ func (m *Manager) connectPhases(cfg *domain.WireGuardConfig) (*Engine, error) {
 			dnsServers = merged
 		}
 	}
-	if err := m.netMgr.SetDNS(ifaceName, dnsServers); err != nil {
+	if err := netMgr.SetDNS(ifaceName, dnsServers); err != nil {
 		if len(cfg.Interface.DNS) > 0 {
 			return nil, rollback(newTunnelError(ErrNetwork, "setting DNS", err))
 		}
@@ -135,7 +135,7 @@ func (m *Manager) connectPhases(cfg *domain.WireGuardConfig) (*Engine, error) {
 	// up, we just won't be able to recover automatically next boot.
 	// Capture pre-modification DNS snapshot for precise crash recovery.
 	var preModDNS map[string][]string
-	if provider, ok := m.netMgr.(network.DNSSnapshotProvider); ok {
+	if provider, ok := netMgr.(network.DNSSnapshotProvider); ok {
 		preModDNS = provider.SavedDNSSnapshot()
 	}
 
@@ -162,15 +162,17 @@ func (m *Manager) connectPhases(cfg *domain.WireGuardConfig) (*Engine, error) {
 // from Manager.Disconnect under the manager's mutex. All steps are best-effort
 // — we log errors rather than returning them because partial teardown is
 // better than none.
-func (m *Manager) disconnectPhases(cfg *domain.WireGuardConfig, engine *Engine) {
+func (m *Manager) disconnectPhases(cfg *domain.WireGuardConfig, engine *Engine, netMgr network.NetworkManager) {
 	ifaceName := engine.InterfaceName()
 
-	// Routes
+	// Routes — remove only THIS tunnel's routes via its own netMgr.
 	var allAllowedIPs []string
 	for _, peer := range cfg.Peers {
 		allAllowedIPs = append(allAllowedIPs, peer.AllowedIPs...)
 	}
-	_ = m.netMgr.RemoveRoutes(ifaceName, allAllowedIPs, cfg.IsFullTunnel())
+	if netMgr != nil {
+		_ = netMgr.RemoveRoutes(ifaceName, allAllowedIPs, cfg.IsFullTunnel())
+	}
 
 	// TUN
 	engine.Close()
@@ -179,30 +181,31 @@ func (m *Manager) disconnectPhases(cfg *domain.WireGuardConfig, engine *Engine) 
 	remainingDNS := m.AllDNSServers()
 	hasOtherTunnels := len(remainingDNS) > 0
 
-	// Network cleanup — but skip RestoreDNS if other tunnels are still
-	// active, because RestoreDNS resets ALL network services to pre-tunnel
-	// DNS, which would break other tunnels' DNS configuration.
-	if hasOtherTunnels {
-		// Only clean up routes for this specific interface, don't touch DNS.
-		m.netMgr.RemoveRoutes(ifaceName, nil, false)
-	} else {
-		// Last tunnel — full cleanup including DNS restore.
-		_ = m.netMgr.Cleanup(ifaceName)
+	// Network cleanup — each tunnel has its own netMgr, so Cleanup only
+	// affects this tunnel's state (route monitor, bypass routes, DNS snapshot).
+	if netMgr != nil {
+		if !hasOtherTunnels {
+			// Last tunnel — full cleanup including DNS restore.
+			_ = netMgr.Cleanup(ifaceName)
+		}
 	}
 
-	// If other tunnels remain, re-apply their DNS union.
+	// If other tunnels remain, re-apply their DNS union via one of the
+	// remaining tunnels' netMgr instances.
 	if hasOtherTunnels {
 		m.mu.Lock()
+		var remainingNetMgr network.NetworkManager
 		var remainingIface string
 		for _, e := range m.tunnels {
-			if e.state == domain.StateConnected && e.engine != nil && e.cfg != nil && e.cfg.Name != cfg.Name {
+			if e.state == domain.StateConnected && e.engine != nil && e.cfg != nil && e.cfg.Name != cfg.Name && e.netMgr != nil {
+				remainingNetMgr = e.netMgr
 				remainingIface = e.engine.InterfaceName()
 				break
 			}
 		}
 		m.mu.Unlock()
-		if remainingIface != "" {
-			if err := m.netMgr.SetDNS(remainingIface, remainingDNS); err != nil {
+		if remainingNetMgr != nil && remainingIface != "" {
+			if err := remainingNetMgr.SetDNS(remainingIface, remainingDNS); err != nil {
 				slog.Warn("failed to re-apply DNS for remaining tunnels", "error", err)
 			}
 		}

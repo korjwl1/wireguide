@@ -10,13 +10,21 @@
     tun.name.toLowerCase().includes(search.toLowerCase())
   );
 
-  // Connected indicator comes from the live status event, not the stale
-  // `is_connected` flag on the list item — that way the dot transitions in
-  // real time when a tunnel comes up.
-  $: activeName =
-    $connectionStatus?.state === 'connected'
-      ? $connectionStatus?.tunnel_name
-      : null;
+  // Connected indicators from active_tunnels array (multi-tunnel aware).
+  $: activeSet = new Set($connectionStatus?.active_tunnels || []);
+  // Build a map of tunnel name → has handshake for dot color.
+  $: tunnelHandshakes = (() => {
+    const map = {};
+    const tunnelStatuses = $connectionStatus?.tunnels || [];
+    for (const ts of tunnelStatuses) {
+      map[ts.tunnel_name] = !!ts.last_handshake;
+    }
+    // Primary tunnel status
+    if ($connectionStatus?.tunnel_name) {
+      map[$connectionStatus.tunnel_name] = !!$connectionStatus.last_handshake;
+    }
+    return map;
+  })();
 
   function select(tun) {
     selectedTunnel.set(tun);
@@ -43,10 +51,10 @@
         <button
           class="tunnel-item"
           class:active={$selectedTunnel?.name === tun.name}
-          class:connected={activeName === tun.name}
+          class:connected={activeSet.has(tun.name)}
           on:click={() => select(tun)}
         >
-          <span class="status-dot" class:on={activeName === tun.name}></span>
+          <span class="status-dot" class:on={activeSet.has(tun.name) && tunnelHandshakes[tun.name]} class:warning={activeSet.has(tun.name) && !tunnelHandshakes[tun.name]}></span>
           <span class="tunnel-name">{tun.name}</span>
         </button>
       {/each}
@@ -162,6 +170,10 @@
   .status-dot.on {
     background: var(--green);
     box-shadow: 0 0 0 2px color-mix(in srgb, var(--green) 25%, transparent);
+  }
+  .status-dot.warning {
+    background: var(--orange, #FF9500);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--orange, #FF9500) 25%, transparent);
   }
 
   .tunnel-name {

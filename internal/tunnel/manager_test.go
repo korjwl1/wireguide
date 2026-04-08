@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/korjwl1/wireguide/internal/domain"
+	"github.com/korjwl1/wireguide/internal/network"
 )
 
 // ---------------------------------------------------------------------------
@@ -133,11 +134,13 @@ func slowFactory(d time.Duration) func(*domain.WireGuardConfig) (*Engine, error)
 // ---------------------------------------------------------------------------
 
 // newTestManagerWithDir creates a test manager with an explicit data dir.
+// Each tunnel gets the same mock via the factory, which mirrors the real
+// Manager creating a fresh NetworkManager per tunnel.
 func newTestManagerWithDir(netMgr *mockNetworkManager, factory func(*domain.WireGuardConfig) (*Engine, error), dataDir string) *Manager {
 	return &Manager{
-		netMgr:        netMgr,
 		dataDir:       dataDir,
 		tunnels:       make(map[string]*tunnelEntry),
+		netMgrFactory: func() network.NetworkManager { return netMgr },
 		engineFactory: factory,
 	}
 }
