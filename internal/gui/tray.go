@@ -336,6 +336,7 @@ func (t *trayManager) rebuildMenu() {
 	m.AddSeparator()
 	m.Add("Quit").OnClick(func(ctx *application.Context) {
 		t.doShutdown()
+		t.tray.Destroy()
 		t.app.Quit()
 	})
 	t.tray.SetMenu(m)

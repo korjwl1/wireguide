@@ -205,6 +205,7 @@ func Run(assetsHandler http.Handler, dataDir string) error {
 	if runtime.GOOS == "darwin" {
 		app.Event.OnApplicationEvent(events.Mac.ApplicationWillTerminate, func(_ *application.ApplicationEvent) {
 			doShutdown()
+			tray.Destroy()
 		})
 	}
 
