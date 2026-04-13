@@ -7,7 +7,6 @@
   import ConfigEditor from './lib/ConfigEditor.svelte';
   import Settings from './lib/Settings.svelte';
   import LogViewer from './lib/LogViewer.svelte';
-  import Diagnostics from './lib/Diagnostics.svelte';
   import DNSLeakTest from './lib/DNSLeakTest.svelte';
   import RouteVisualization from './lib/RouteVisualization.svelte';
   import StatsDashboard from './lib/StatsDashboard.svelte';
@@ -20,8 +19,9 @@
   import { TunnelService } from '../bindings/github.com/korjwl1/wireguide/internal/app';
 
   // View state
-  let currentView = 'tunnels'; // 'tunnels' | 'tools' | 'settings' | 'logs'
-  let toolsTab = 'diagnostics'; // 'diagnostics' | 'dnsleak' | 'routes'
+  let currentView = 'tunnels'; // 'tunnels' | 'dnsleak' | 'routes' | 'logs'
+
+  $: isToolsView = currentView === 'dnsleak' || currentView === 'routes';
 
   // Modal state
   let showEditor = false;
@@ -174,6 +174,7 @@
     // Directly open the native file picker — no modal needed.
     const input = document.createElement('input');
     input.type = 'file';
+    input.accept = '.conf';
     input.onchange = async (e) => {
       const file = e.target.files[0];
       await importFile(file);
@@ -358,8 +359,14 @@
       <button class="nav-item" class:active={currentView === 'tunnels'} on:click={() => currentView = 'tunnels'}>
         <span class="nav-icon">◎</span> {$t('nav.tunnels')}
       </button>
-      <button class="nav-item" class:active={currentView === 'tools'} on:click={() => currentView = 'tools'}>
+      <button class="nav-item nav-section" class:section-active={isToolsView} on:click={() => currentView = 'dnsleak'}>
         <span class="nav-icon">◈</span> {$t('nav.tools')}
+      </button>
+      <button class="nav-sub-item" class:active={currentView === 'dnsleak'} on:click={() => currentView = 'dnsleak'}>
+        {$t('tools.tab_dns_leak')}
+      </button>
+      <button class="nav-sub-item" class:active={currentView === 'routes'} on:click={() => currentView = 'routes'}>
+        {$t('tools.tab_routes')}
       </button>
       <button class="nav-item" class:active={currentView === 'logs'} on:click={() => currentView = 'logs'}>
         <span class="nav-icon">≡</span> {$t('nav.logs')}
@@ -406,22 +413,13 @@
             {/if}
           </div>
         </div>
-      {:else if currentView === 'tools'}
-        <div class="tools-view">
-          <div class="tools-tabs">
-            <button class:active={toolsTab === 'diagnostics'} on:click={() => toolsTab = 'diagnostics'}>{$t('tools.tab_diagnostics')}</button>
-            <button class:active={toolsTab === 'dnsleak'} on:click={() => toolsTab = 'dnsleak'}>{$t('tools.tab_dns_leak')}</button>
-            <button class:active={toolsTab === 'routes'} on:click={() => toolsTab = 'routes'}>{$t('tools.tab_routes')}</button>
-          </div>
-          <div class="tools-content">
-            {#if toolsTab === 'diagnostics'}
-              <Diagnostics />
-            {:else if toolsTab === 'dnsleak'}
-              <DNSLeakTest />
-            {:else if toolsTab === 'routes'}
-              <RouteVisualization />
-            {/if}
-          </div>
+      {:else if currentView === 'dnsleak'}
+        <div class="tool-view">
+          <DNSLeakTest />
+        </div>
+      {:else if currentView === 'routes'}
+        <div class="tool-view">
+          <RouteVisualization />
         </div>
       {:else if currentView === 'logs'}
         <div class="logs-view">
@@ -608,6 +606,42 @@
     padding: 0 var(--space-4);
     border-radius: 0;
   }
+  /* Tools section header — no background highlight, just text colour change */
+  .nav-section.section-active {
+    color: var(--text-primary);
+    font-weight: 500;
+    background: transparent;
+  }
+
+  /* Sidebar sub-items (Tools children) */
+  .nav-sub-item {
+    display: flex;
+    align-items: center;
+    height: var(--row-compact);
+    padding: 0 var(--space-2) 0 var(--space-8);
+    margin: 0 var(--space-2);
+    background: transparent;
+    border: 0;
+    border-radius: var(--radius-sm);
+    color: var(--text-secondary);
+    font: var(--text-callout);
+    text-align: left;
+    cursor: pointer;
+    width: calc(100% - var(--space-4));
+  }
+  @media (prefers-reduced-motion: no-preference) {
+    .nav-sub-item {
+      transition: background-color var(--dur-fast) var(--ease-out),
+                  color var(--dur-fast) var(--ease-out);
+    }
+  }
+  .nav-sub-item:hover { background: var(--bg-hover); color: var(--text-primary); }
+  .nav-sub-item.active {
+    background: var(--bg-selected);
+    color: var(--text-primary);
+    font-weight: 500;
+  }
+
   .nav-footer .nav-item:hover {
     background: var(--bg-hover);
   }
@@ -690,45 +724,13 @@
     }
   }
 
-  /* ---------- Tools view (tab bar + content) ---------- */
-  .tools-view {
+  /* ---------- Tool view (individual tool panel) ---------- */
+  .tool-view {
     flex: 1;
     display: flex;
     flex-direction: column;
     padding-top: 52px;
-  }
-  .tools-tabs {
-    display: flex;
-    gap: var(--space-1);
-    padding: 0 var(--space-4);
-    border-bottom: 0.5px solid var(--border);
-  }
-  .tools-tabs button {
-    height: 32px;
-    padding: 0 var(--space-3);
-    background: transparent;
-    border: 0;
-    border-bottom: 2px solid transparent;
-    color: var(--text-secondary);
-    cursor: pointer;
-    font: var(--text-body);
-  }
-  @media (prefers-reduced-motion: no-preference) {
-    .tools-tabs button {
-      transition: color var(--dur-fast) var(--ease-out),
-                  border-color var(--dur-fast) var(--ease-out);
-    }
-  }
-  .tools-tabs button:hover { color: var(--text-primary); }
-  .tools-tabs button.active {
-    color: var(--text-primary);
-    border-bottom-color: var(--accent);
-    font-weight: 500;
-  }
-  .tools-content {
-    flex: 1;
-    overflow-y: auto;
-    padding: var(--space-4);
+    overflow: hidden;
   }
 
   .logs-view {

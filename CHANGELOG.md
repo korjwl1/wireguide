@@ -2,6 +2,23 @@
 
 All notable changes to WireGuide will be documented in this file.
 
+## [0.1.8] - 2026-04-13
+
+### Changed
+- Sidebar navigation: removed Tools tab bar, DNS Leak Test and Route Table are now direct sidebar sub-items
+- Settings modal: fixed size regardless of active tab (no more resize when switching to Advanced)
+- Settings sidebar active state: tint highlight instead of solid blue (macOS HIG)
+- Dropdown controls: custom styled per macOS HIG (28px height, 6px radius, theme-aware chevron)
+
+### Improved
+- Route table: sticky column header, legend pinned to bottom, table fills remaining space with scroll
+- DNS Leak Test and Route Table now call real backend (previously stub implementations)
+- macOS HIG design tokens: added `--border-strong` for input control borders
+
+### Removed
+- Network Diagnostics (Ping) tool — not meaningfully useful as a standalone feature
+- Unused i18n keys for removed Diagnostics feature
+
 ## [0.1.7] - 2026-04-09
 
 ### Added

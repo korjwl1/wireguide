@@ -136,11 +136,21 @@ export function GetConfigText(name) {
 }
 
 /**
+ * GetRoutingTable returns the current OS routing table.
+ * @returns {$CancellablePromise<$models.RouteEntry[]>}
+ */
+export function GetRoutingTable() {
+    return $Call.ByID(3049102509).then(/** @type {($result: any) => any} */(($result) => {
+        return $$createType5($result);
+    }));
+}
+
+/**
  * @returns {$CancellablePromise<storage$0.Settings | null>}
  */
 export function GetSettings() {
     return $Call.ByID(2393200110).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType5($result);
+        return $$createType7($result);
     }));
 }
 
@@ -152,7 +162,7 @@ export function GetSettings() {
  */
 export function GetStatus() {
     return $Call.ByID(3544552149).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType7($result);
+        return $$createType9($result);
     }));
 }
 
@@ -164,7 +174,7 @@ export function GetStatus() {
  */
 export function GetTunnelDetail(name) {
     return $Call.ByID(3171898132, name).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType9($result);
+        return $$createType11($result);
     }));
 }
 
@@ -185,7 +195,7 @@ export function GetVersion() {
  */
 export function ImportConfig(name, content) {
     return $Call.ByID(2459134310, name, content).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType11($result);
+        return $$createType13($result);
     }));
 }
 
@@ -203,7 +213,7 @@ export function ImportConfig(name, content) {
  */
 export function ListTunnels() {
     return $Call.ByID(3587038916).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType12($result);
+        return $$createType14($result);
     }));
 }
 
@@ -218,7 +228,7 @@ export function ListTunnels() {
  */
 export function ListTunnelsLocal() {
     return $Call.ByID(3031176175).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType12($result);
+        return $$createType14($result);
     }));
 }
 
@@ -251,6 +261,18 @@ export function ReadFile(path) {
  */
 export function RenameTunnel(oldName, newName) {
     return $Call.ByID(576069505, oldName, newName);
+}
+
+/**
+ * RunDNSLeakTest performs a DNS leak test using the currently active tunnel's
+ * DNS servers as the expected (VPN) resolvers. If no tunnel is connected, the
+ * expected set is empty — all detected resolvers will be flagged as leaks.
+ * @returns {$CancellablePromise<$models.DNSLeakResult | null>}
+ */
+export function RunDNSLeakTest() {
+    return $Call.ByID(2469114850).then(/** @type {($result: any) => any} */(($result) => {
+        return $$createType16($result);
+    }));
 }
 
 /**
@@ -362,7 +384,7 @@ export function UpdateConfig(name, content) {
  */
 export function ValidateConfig(content) {
     return $Call.ByID(592398029, content).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType13($result);
+        return $$createType17($result);
     }));
 }
 
@@ -371,13 +393,17 @@ const $$createType0 = tunnel$0.ConflictInfo.createFrom;
 const $$createType1 = $Create.Array($$createType0);
 const $$createType2 = update$0.UpdateInfo.createFrom;
 const $$createType3 = $Create.Nullable($$createType2);
-const $$createType4 = storage$0.Settings.createFrom;
-const $$createType5 = $Create.Nullable($$createType4);
-const $$createType6 = domain$0.ConnectionStatus.createFrom;
+const $$createType4 = $models.RouteEntry.createFrom;
+const $$createType5 = $Create.Array($$createType4);
+const $$createType6 = storage$0.Settings.createFrom;
 const $$createType7 = $Create.Nullable($$createType6);
-const $$createType8 = domain$0.WireGuardConfig.createFrom;
+const $$createType8 = domain$0.ConnectionStatus.createFrom;
 const $$createType9 = $Create.Nullable($$createType8);
-const $$createType10 = $models.TunnelInfo.createFrom;
+const $$createType10 = domain$0.WireGuardConfig.createFrom;
 const $$createType11 = $Create.Nullable($$createType10);
-const $$createType12 = $Create.Array($$createType10);
-const $$createType13 = $Create.Array($Create.Any);
+const $$createType12 = $models.TunnelInfo.createFrom;
+const $$createType13 = $Create.Nullable($$createType12);
+const $$createType14 = $Create.Array($$createType12);
+const $$createType15 = $models.DNSLeakResult.createFrom;
+const $$createType16 = $Create.Nullable($$createType15);
+const $$createType17 = $Create.Array($Create.Any);

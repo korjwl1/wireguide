@@ -25,6 +25,159 @@ export const ConnectionStatus = domain$0.ConnectionStatus;
  */
 
 /**
+ * DNSLeakResult mirrors diag.DNSLeakResult for Wails JSON serialisation.
+ */
+export class DNSLeakResult {
+    /**
+     * Creates a new DNSLeakResult instance.
+     * @param {Partial<DNSLeakResult>} [$$source = {}] - The source object to create the DNSLeakResult.
+     */
+    constructor($$source = {}) {
+        if (!("leaked" in $$source)) {
+            /**
+             * @member
+             * @type {boolean}
+             */
+            this["leaked"] = false;
+        }
+        if (!("dns_servers" in $$source)) {
+            /**
+             * @member
+             * @type {DNSServer[]}
+             */
+            this["dns_servers"] = [];
+        }
+        if (!("test_domain" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["test_domain"] = "";
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {string | undefined}
+             */
+            this["error"] = undefined;
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new DNSLeakResult instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {DNSLeakResult}
+     */
+    static createFrom($$source = {}) {
+        const $$createField1_0 = $$createType1;
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("dns_servers" in $$parsedSource) {
+            $$parsedSource["dns_servers"] = $$createField1_0($$parsedSource["dns_servers"]);
+        }
+        return new DNSLeakResult(/** @type {Partial<DNSLeakResult>} */($$parsedSource));
+    }
+}
+
+/**
+ * DNSServer mirrors diag.DNSServer.
+ */
+export class DNSServer {
+    /**
+     * Creates a new DNSServer instance.
+     * @param {Partial<DNSServer>} [$$source = {}] - The source object to create the DNSServer.
+     */
+    constructor($$source = {}) {
+        if (!("ip" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["ip"] = "";
+        }
+        if (!("hostname" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["hostname"] = "";
+        }
+        if (!("is_vpn" in $$source)) {
+            /**
+             * @member
+             * @type {boolean}
+             */
+            this["is_vpn"] = false;
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new DNSServer instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {DNSServer}
+     */
+    static createFrom($$source = {}) {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new DNSServer(/** @type {Partial<DNSServer>} */($$parsedSource));
+    }
+}
+
+/**
+ * RouteEntry mirrors diag.RouteEntry for Wails JSON serialisation.
+ */
+export class RouteEntry {
+    /**
+     * Creates a new RouteEntry instance.
+     * @param {Partial<RouteEntry>} [$$source = {}] - The source object to create the RouteEntry.
+     */
+    constructor($$source = {}) {
+        if (!("destination" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["destination"] = "";
+        }
+        if (!("gateway" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["gateway"] = "";
+        }
+        if (!("interface" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["interface"] = "";
+        }
+        if (!("flags" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["flags"] = "";
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new RouteEntry instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {RouteEntry}
+     */
+    static createFrom($$source = {}) {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new RouteEntry(/** @type {Partial<RouteEntry>} */($$parsedSource));
+    }
+}
+
+/**
  * TunnelInfo is the summary shown in the tunnel list.
  */
 export class TunnelInfo {
@@ -68,3 +221,7 @@ export class TunnelInfo {
         return new TunnelInfo(/** @type {Partial<TunnelInfo>} */($$parsedSource));
     }
 }
+
+// Private type creation functions
+const $$createType0 = DNSServer.createFrom;
+const $$createType1 = $Create.Array($$createType0);

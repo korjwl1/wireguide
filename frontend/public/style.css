@@ -29,6 +29,7 @@
     --bg-active:    rgba(255, 255, 255, 0.12);        /* pressed state */
     --bg-selected:  rgba(10, 132, 255, 0.22);         /* accent-tinted row */
     --border:       rgba(84, 84, 88, 0.65);           /* AppKit separatorColor */
+    --border-strong: rgba(84, 84, 88, 0.72);          /* input control border */
 
     /* --- Text (alphas over white, matches NSColor.labelColor dynamic) --- */
     --text-primary:   rgba(255, 255, 255, 0.90);      /* labelColor */
@@ -161,6 +162,7 @@
     --bg-active:    rgba(0, 0, 0, 0.10);
     --bg-selected:  rgba(0, 122, 255, 0.12);
     --border:       rgba(60, 60, 67, 0.29);           /* AppKit separator light */
+    --border-strong: rgba(60, 60, 67, 0.50);          /* input control border */
 
     --text-primary:   rgba(0, 0, 0, 0.88);
     --text-secondary: rgba(0, 0, 0, 0.56);

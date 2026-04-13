@@ -9,5 +9,8 @@ export {
 
 export {
     ConnectionStatus,
+    DNSLeakResult,
+    DNSServer,
+    RouteEntry,
     TunnelInfo
 } from "./models.js";
