@@ -18,8 +18,8 @@
     "search": "検索…",
     "no_tunnels": "設定済みのトンネルがありません",
     "no_selection": "トンネルを選択するか、新しく作成してください",
-    "drop_hint": ".conf ファイルをここにドロップするか、インポートをクリック",
-    "drop_overlay": ".conf ファイルをドロップしてインポート",
+    "drop_hint": ".conf または .zip ファイルをここにドロップするか、インポートをクリック",
+    "drop_overlay": ".conf または .zip をドロップしてインポート",
     "import": "インポート",
     "new_tunnel": "新しいトンネル",
     "connect": "接続",
@@ -52,7 +52,12 @@
     "cancel": "キャンセル",
     "success": "トンネルをインポートしました",
     "exists": "トンネル \"{name}\" はすでに存在します。上書きしますか?",
-    "overwrite": "上書き"
+    "overwrite": "上書き",
+    "zip_result_title": "インポート結果",
+    "zip_ok": "完了",
+    "zip_none": "zip 内に .conf ファイルが見つかりませんでした",
+    "zip_summary": "{ok}件インポート、{fail}件失敗",
+    "zip_summary_ok": "{ok}件インポート"
   },
   "editor": {
     "title": "トンネル編集: {name}",

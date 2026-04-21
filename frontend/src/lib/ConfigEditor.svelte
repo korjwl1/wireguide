@@ -2,7 +2,7 @@
   import { onMount, onDestroy, createEventDispatcher } from 'svelte';
   import { EditorView, keymap, lineNumbers, highlightActiveLine } from '@codemirror/view';
   import { EditorState, Compartment } from '@codemirror/state';
-  import { defaultKeymap, history, historyKeymap } from '@codemirror/commands';
+  import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands';
   import { oneDark } from '@codemirror/theme-one-dark';
   import { HighlightStyle, syntaxHighlighting } from '@codemirror/language';
   import { tags as tg } from '@lezer/highlight';
@@ -125,7 +125,7 @@ PersistentKeepalive = 25
         lineNumbers(),
         highlightActiveLine(),
         history(),
-        keymap.of([...defaultKeymap, ...historyKeymap]),
+        keymap.of([indentWithTab, ...defaultKeymap, ...historyKeymap]),
         wireguardLanguage,
         autocompletion({ override: [wireguardCompletion] }),
         themeCompartment.of(initialThemeExt),

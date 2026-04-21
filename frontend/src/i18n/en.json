@@ -18,8 +18,8 @@
     "search": "Search...",
     "no_tunnels": "No tunnels configured",
     "no_selection": "Select a tunnel or create a new one",
-    "drop_hint": "Drop a .conf file here or click Import",
-    "drop_overlay": "Drop .conf file to import",
+    "drop_hint": "Drop a .conf or .zip file here or click Import",
+    "drop_overlay": "Drop .conf or .zip to import",
     "import": "Import",
     "new_tunnel": "New Tunnel",
     "connect": "Connect",
@@ -52,7 +52,12 @@
     "cancel": "Cancel",
     "success": "Tunnel imported successfully",
     "exists": "Tunnel \"{name}\" already exists. Overwrite?",
-    "overwrite": "Overwrite"
+    "overwrite": "Overwrite",
+    "zip_result_title": "Import Results",
+    "zip_ok": "Done",
+    "zip_none": "No .conf files found in zip",
+    "zip_summary": "{ok} imported, {fail} failed",
+    "zip_summary_ok": "{ok} imported"
   },
   "editor": {
     "title": "Edit Tunnel: {name}",

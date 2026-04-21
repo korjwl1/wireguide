@@ -200,6 +200,30 @@ export function ImportConfig(name, content) {
 }
 
 /**
+ * ImportZip extracts all .conf files from a zip archive and imports each one.
+ * Returns per-file results; an error is only returned for zip-level failures.
+ * @param {string} path
+ * @returns {$CancellablePromise<$models.ZipImportResult[]>}
+ */
+export function ImportZip(path) {
+    return $Call.ByID(976469479, path).then(/** @type {($result: any) => any} */(($result) => {
+        return $$createType15($result);
+    }));
+}
+
+/**
+ * ImportZipData imports a zip supplied as raw bytes (used by the file picker,
+ * which provides a File object rather than a filesystem path).
+ * @param {string} data
+ * @returns {$CancellablePromise<$models.ZipImportResult[]>}
+ */
+export function ImportZipData(data) {
+    return $Call.ByID(2432663343, data).then(/** @type {($result: any) => any} */(($result) => {
+        return $$createType15($result);
+    }));
+}
+
+/**
  * ListTunnels returns every stored tunnel with its summary info.
  * 
  * The active-tunnel marker used to come from an IPC round-trip on every call.
@@ -213,7 +237,7 @@ export function ImportConfig(name, content) {
  */
 export function ListTunnels() {
     return $Call.ByID(3587038916).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType14($result);
+        return $$createType16($result);
     }));
 }
 
@@ -228,7 +252,7 @@ export function ListTunnels() {
  */
 export function ListTunnelsLocal() {
     return $Call.ByID(3031176175).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType14($result);
+        return $$createType16($result);
     }));
 }
 
@@ -271,7 +295,7 @@ export function RenameTunnel(oldName, newName) {
  */
 export function RunDNSLeakTest() {
     return $Call.ByID(2469114850).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType16($result);
+        return $$createType18($result);
     }));
 }
 
@@ -384,7 +408,7 @@ export function UpdateConfig(name, content) {
  */
 export function ValidateConfig(content) {
     return $Call.ByID(592398029, content).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType17($result);
+        return $$createType19($result);
     }));
 }
 
@@ -403,7 +427,9 @@ const $$createType10 = domain$0.WireGuardConfig.createFrom;
 const $$createType11 = $Create.Nullable($$createType10);
 const $$createType12 = $models.TunnelInfo.createFrom;
 const $$createType13 = $Create.Nullable($$createType12);
-const $$createType14 = $Create.Array($$createType12);
-const $$createType15 = $models.DNSLeakResult.createFrom;
-const $$createType16 = $Create.Nullable($$createType15);
-const $$createType17 = $Create.Array($Create.Any);
+const $$createType14 = $models.ZipImportResult.createFrom;
+const $$createType15 = $Create.Array($$createType14);
+const $$createType16 = $Create.Array($$createType12);
+const $$createType17 = $models.DNSLeakResult.createFrom;
+const $$createType18 = $Create.Nullable($$createType17);
+const $$createType19 = $Create.Array($Create.Any);
