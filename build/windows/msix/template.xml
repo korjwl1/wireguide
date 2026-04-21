@@ -17,7 +17,7 @@
         PackageDisplayName="My Product"
         PublisherName="CN=My Company"
         PublisherDisplayName="My Company"
-        Version="0.1.0.0"
+        Version="0.1.9.0"
         PackageDescription="A wireguide application">
         <Capabilities>
             <Capability Name="runFullTrust" />
