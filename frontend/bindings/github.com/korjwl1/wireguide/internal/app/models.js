@@ -222,6 +222,44 @@ export class TunnelInfo {
     }
 }
 
+/**
+ * ZipImportResult holds the outcome of importing one .conf entry from a zip.
+ */
+export class ZipImportResult {
+    /**
+     * Creates a new ZipImportResult instance.
+     * @param {Partial<ZipImportResult>} [$$source = {}] - The source object to create the ZipImportResult.
+     */
+    constructor($$source = {}) {
+        if (!("name" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["name"] = "";
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {string | undefined}
+             */
+            this["error"] = undefined;
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new ZipImportResult instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {ZipImportResult}
+     */
+    static createFrom($$source = {}) {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new ZipImportResult(/** @type {Partial<ZipImportResult>} */($$parsedSource));
+    }
+}
+
 // Private type creation functions
 const $$createType0 = DNSServer.createFrom;
 const $$createType1 = $Create.Array($$createType0);

@@ -12,5 +12,6 @@ export {
     DNSLeakResult,
     DNSServer,
     RouteEntry,
-    TunnelInfo
+    TunnelInfo,
+    ZipImportResult
 } from "./models.js";

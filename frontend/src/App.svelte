@@ -27,6 +27,8 @@
   let showEditor = false;
   let showSettings = false;
   let showConflictWarning = false;
+  let showZipResult = false;
+  let zipResults = [];
   let conflictList = [];
   let pendingConnectName = '';
   let editName = '';
@@ -82,8 +84,10 @@
       for (const path of paths) {
         if (path.toLowerCase().endsWith('.conf')) {
           await importFromPath(path);
+        } else if (path.toLowerCase().endsWith('.zip')) {
+          await importZipFromPath(path);
         } else {
-          showToast('Only .conf files are supported');
+          showToast('Only .conf and .zip files are supported');
         }
       }
     });
@@ -131,6 +135,46 @@
     return baseName + '-' + Date.now();
   }
 
+  // Show zip import result modal.
+  function showZipResults(results) {
+    zipResults = results;
+    showZipResult = true;
+    if (results.some(r => !r.error)) {
+      refreshTunnels(TunnelService);
+    }
+  }
+
+  // Import a .zip from a filesystem path (used by native file drop).
+  async function importZipFromPath(path) {
+    try {
+      const results = await TunnelService.ImportZip(path);
+      showZipResults(results);
+    } catch (e) {
+      showToast('Import failed: ' + errText(e));
+    }
+  }
+
+  // Import a .zip from a browser File object (used by file picker).
+  // Wails serialises []byte as a base64 JSON string, so we must encode manually.
+  // btoa(String.fromCharCode(...bytes)) blows the call stack on large files, so
+  // we process in 8 KB chunks.
+  async function importZipFromFile(file) {
+    if (!file) return;
+    try {
+      const buf = await file.arrayBuffer();
+      const bytes = new Uint8Array(buf);
+      let binary = '';
+      const CHUNK = 8192;
+      for (let i = 0; i < bytes.length; i += CHUNK) {
+        binary += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
+      }
+      const results = await TunnelService.ImportZipData(btoa(binary));
+      showZipResults(results);
+    } catch (e) {
+      showToast('Import failed: ' + errText(e));
+    }
+  }
+
   // Import from a file path (used by native file drop).
   async function importFromPath(path) {
     try {
@@ -174,10 +218,15 @@
     // Directly open the native file picker — no modal needed.
     const input = document.createElement('input');
     input.type = 'file';
-    input.accept = '.conf';
+    input.accept = '.conf,.zip';
     input.onchange = async (e) => {
       const file = e.target.files[0];
-      await importFile(file);
+      if (!file) return;
+      if (file.name.toLowerCase().endsWith('.zip')) {
+        await importZipFromFile(file);
+      } else {
+        await importFile(file);
+      }
     };
     input.click();
   }
@@ -333,14 +382,14 @@
      separate components mounted conditionally below; they pick up the new
      language on their next open (deliberate — otherwise changing language
      mid-interaction would destroy the modal). -->
-<div class="app" class:modal-open={showSettings || showEditor || showConflictWarning} data-file-drop-target={!(showSettings || showEditor || showConflictWarning) && currentView === 'tunnels' ? true : undefined}>
+<div class="app" class:modal-open={showSettings || showEditor || showConflictWarning || showZipResult} data-file-drop-target={!(showSettings || showEditor || showConflictWarning || showZipResult) && currentView === 'tunnels' ? true : undefined}>
   <!-- Wails adds .file-drop-target-active class to .app when dragging files.
        We only render the overlay when drop-target is actually active — i.e.
        on the tunnels view with no modal open — so it can never steal clicks
        from modals. The data-file-drop-target attribute above also removes
        the drop affordance entirely in those states so Wails doesn't even
        detect the drag. -->
-  {#if currentView === 'tunnels' && !(showSettings || showEditor || showConflictWarning)}
+  {#if currentView === 'tunnels' && !(showSettings || showEditor || showConflictWarning || showZipResult)}
     <div class="drop-overlay">
       <div class="drop-overlay-content">
         <div class="drop-icon">↓</div>
@@ -454,6 +503,33 @@
       conflicts={conflictList}
       on:proceed={handleConflictProceed}
       on:cancel={handleConflictCancel} />
+  {/if}
+
+  {#if showZipResult}
+    <div class="modal-backdrop" on:click={() => showZipResult = false}>
+      <div class="modal modal-zip-result" on:click|stopPropagation>
+        <h3>{$t('import.zip_result_title')}</h3>
+        <div class="zip-result-list">
+          {#each zipResults as r}
+            <div class="zip-result-row">
+              <span class="zip-result-icon" class:zip-ok={!r.error} class:zip-err={!!r.error}>{r.error ? '✕' : '✓'}</span>
+              <span class="zip-result-name" class:zip-err={!!r.error}>{r.name}</span>
+              {#if r.error}<span class="zip-result-msg">{r.error}</span>{/if}
+            </div>
+          {/each}
+        </div>
+        <div class="zip-result-footer">
+          <span class="zip-result-summary">
+            {#if zipResults.some(r => !!r.error)}
+              {$t('import.zip_summary', { ok: zipResults.filter(r => !r.error).length, fail: zipResults.filter(r => !!r.error).length })}
+            {:else}
+              {$t('import.zip_summary_ok', { ok: zipResults.length })}
+            {/if}
+          </span>
+          <button class="btn-primary" on:click={() => showZipResult = false}>{$t('import.zip_ok')}</button>
+        </div>
+      </div>
+    </div>
   {/if}
 </div>
 
@@ -756,6 +832,9 @@
     font: var(--text-body);
     box-shadow: var(--shadow-md);
     z-index: 300;
+    max-width: 480px;
+    white-space: normal;
+    word-break: break-word;
   }
 
   /* ---------- Modal (shared) ---------- */
@@ -789,7 +868,72 @@
     height: 520px;
     padding: 0;
     overflow: hidden;
+    resize: both;
+    min-width: 480px;
+    min-height: 380px;
+    max-width: calc(100vw - 40px);
+    max-height: calc(100vh - 40px);
   }
+  .modal-zip-result {
+    max-width: 90vw;
+    max-height: 70vh;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-4);
+  }
+  /* Use .modal.modal-zip-result h3 (specificity 0,3,1) to beat
+     .modal h3 (0,2,1 after Svelte scoping) which appears later. */
+  .modal.modal-zip-result h3 {
+    margin: 0;
+    flex-shrink: 0;
+  }
+  .zip-result-list {
+    /* flex: 1 + min-height: 0 is the correct pattern for a scrollable
+       child inside a max-height flex container. Without min-height: 0
+       the child refuses to shrink below its content size, causing the
+       outer container to overflow and clip content instead of scroll. */
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .zip-result-footer {
+    flex-shrink: 0;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: var(--space-3);
+  }
+  .zip-result-row {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    font-size: 13px;
+    color: var(--text-primary);
+  }
+  .zip-result-icon {
+    flex-shrink: 0;
+    font-size: 11px;
+  }
+  .zip-ok { color: var(--green); }
+  .zip-err { color: var(--red); }
+  .zip-result-name {
+    font-weight: 500;
+    word-break: break-all;
+  }
+  .zip-result-msg {
+    color: var(--text-secondary);
+    font-size: 12px;
+    word-break: break-word;
+  }
+  .zip-result-summary {
+    font-size: 12px;
+    color: var(--text-secondary);
+  }
+
   .modal h3 {
     margin: 0 0 var(--space-4);
     color: var(--text-primary);

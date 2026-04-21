@@ -18,8 +18,8 @@
     "search": "검색…",
     "no_tunnels": "구성된 터널이 없습니다",
     "no_selection": "왼쪽에서 터널을 선택하거나 새로 만드세요",
-    "drop_hint": ".conf 파일을 끌어다 놓거나 가져오기를 누르세요",
-    "drop_overlay": ".conf 파일을 놓으면 가져옵니다",
+    "drop_hint": ".conf 또는 .zip 파일을 끌어다 놓거나 가져오기를 누르세요",
+    "drop_overlay": ".conf 또는 .zip을 놓으면 가져옵니다",
     "import": "가져오기",
     "new_tunnel": "새 터널",
     "connect": "연결",
@@ -52,7 +52,12 @@
     "cancel": "취소",
     "success": "터널을 가져왔습니다",
     "exists": "터널 \"{name}\"이(가) 이미 있습니다. 덮어쓰시겠습니까?",
-    "overwrite": "덮어쓰기"
+    "overwrite": "덮어쓰기",
+    "zip_result_title": "가져오기 결과",
+    "zip_ok": "완료",
+    "zip_none": "zip에서 .conf 파일을 찾을 수 없습니다",
+    "zip_summary": "{ok}개 가져옴, {fail}개 실패",
+    "zip_summary_ok": "{ok}개 가져옴"
   },
   "editor": {
     "title": "터널 편집: {name}",

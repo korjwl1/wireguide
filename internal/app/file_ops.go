@@ -1,14 +1,91 @@
 package app
 
 import (
+	"archive/zip"
+	"bytes"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/korjwl1/wireguide/internal/config"
 	"github.com/korjwl1/wireguide/internal/ipc"
 )
+
+// ZipImportResult holds the outcome of importing one .conf entry from a zip.
+type ZipImportResult struct {
+	Name  string `json:"name"`
+	Error string `json:"error,omitempty"`
+}
+
+// zipUniqueName returns a tunnel name that doesn't conflict with existing ones.
+func (s *TunnelService) zipUniqueName(base string) string {
+	if !s.tunnelStore.Exists(base) {
+		return base
+	}
+	for i := 1; i < 1000; i++ {
+		candidate := fmt.Sprintf("%s-%d", base, i)
+		if !s.tunnelStore.Exists(candidate) {
+			return candidate
+		}
+	}
+	return fmt.Sprintf("%s-%d", base, time.Now().UnixMilli())
+}
+
+// ImportZip extracts all .conf files from a zip archive and imports each one.
+// Returns per-file results; an error is only returned for zip-level failures.
+func (s *TunnelService) ImportZip(path string) ([]ZipImportResult, error) {
+	r, err := zip.OpenReader(path)
+	if err != nil {
+		return nil, fmt.Errorf("opening zip: %w", err)
+	}
+	defer r.Close()
+	return s.importZipReader(r.Reader)
+}
+
+// ImportZipData imports a zip supplied as raw bytes (used by the file picker,
+// which provides a File object rather than a filesystem path).
+func (s *TunnelService) ImportZipData(data []byte) ([]ZipImportResult, error) {
+	r, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		return nil, fmt.Errorf("reading zip: %w", err)
+	}
+	return s.importZipReader(*r)
+}
+
+// importZipReader is the shared implementation for ImportZip and ImportZipData.
+func (s *TunnelService) importZipReader(r zip.Reader) ([]ZipImportResult, error) {
+	var results []ZipImportResult
+	for _, f := range r.File {
+		if !strings.HasSuffix(strings.ToLower(f.Name), ".conf") {
+			continue
+		}
+		rc, err := f.Open()
+		if err != nil {
+			results = append(results, ZipImportResult{Name: filepath.Base(f.Name), Error: err.Error()})
+			continue
+		}
+		data, err := io.ReadAll(rc)
+		rc.Close()
+		if err != nil {
+			results = append(results, ZipImportResult{Name: filepath.Base(f.Name), Error: err.Error()})
+			continue
+		}
+		baseName := strings.TrimSuffix(filepath.Base(f.Name), ".conf")
+		name := s.zipUniqueName(baseName)
+		if _, err := s.ImportConfig(name, string(data)); err != nil {
+			results = append(results, ZipImportResult{Name: baseName, Error: err.Error()})
+		} else {
+			results = append(results, ZipImportResult{Name: name})
+		}
+	}
+	if len(results) == 0 {
+		return nil, fmt.Errorf("no .conf files found in zip")
+	}
+	return results, nil
+}
 
 // ImportConfig parses, validates, and saves a tunnel config under the given
 // name. Returns a TunnelInfo for optimistic UI display.
