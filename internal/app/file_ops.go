@@ -41,7 +41,7 @@ func (s *TunnelService) ImportZip(path string) ([]ZipImportResult, error) {
 		return nil, fmt.Errorf("opening zip: %w", err)
 	}
 	defer r.Close()
-	return s.importZipReader(r.Reader)
+	return s.importZipReader(&r.Reader)
 }
 
 // ImportZipData imports a zip supplied as raw bytes (used by the file picker,
@@ -51,11 +51,11 @@ func (s *TunnelService) ImportZipData(data []byte) ([]ZipImportResult, error) {
 	if err != nil {
 		return nil, fmt.Errorf("reading zip: %w", err)
 	}
-	return s.importZipReader(*r)
+	return s.importZipReader(r)
 }
 
 // importZipReader is the shared implementation for ImportZip and ImportZipData.
-func (s *TunnelService) importZipReader(r zip.Reader) ([]ZipImportResult, error) {
+func (s *TunnelService) importZipReader(r *zip.Reader) ([]ZipImportResult, error) {
 	var results []ZipImportResult
 	for _, f := range r.File {
 		if !strings.HasSuffix(strings.ToLower(f.Name), ".conf") {

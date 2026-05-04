@@ -237,6 +237,11 @@
     "proceed": "Update Now",
     "cancel": "Later"
   },
+  "wifi_permission": {
+    "title": "Location Services required",
+    "desc": "Wi-Fi auto-connect rules need access to your current network name. Grant permission in System Settings → Privacy & Security → Location Services.",
+    "open_settings": "Open Settings"
+  },
   "wifi_rules": {
     "trusted_ssids": "Trusted Networks",
     "trusted_hint": "On these networks, all auto-managed tunnels disconnect automatically.",

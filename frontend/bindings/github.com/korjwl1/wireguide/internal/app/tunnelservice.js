@@ -29,6 +29,9 @@ import * as tunnel$0 from "../tunnel/models.js";
 import * as update$0 from "../update/models.js";
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
+import * as wifi$0 from "../wifi/models.js";
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore: Unused imports
 import * as application$0 from "../../../../wailsapp/wails/v3/pkg/application/models.js";
 
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
@@ -65,6 +68,18 @@ export function CheckConflicts(name) {
 export function CheckForUpdate() {
     return $Call.ByID(3781738431).then(/** @type {($result: any) => any} */(($result) => {
         return $$createType3($result);
+    }));
+}
+
+/**
+ * CheckSSIDPermission reports whether the process can read the current SSID.
+ * Used by the frontend to prompt the user for Location Services access before
+ * Wi-Fi auto-connect rules can fire.
+ * @returns {$CancellablePromise<wifi$0.SSIDPermissionStatus>}
+ */
+export function CheckSSIDPermission() {
+    return $Call.ByID(2549221651).then(/** @type {($result: any) => any} */(($result) => {
+        return $$createType4($result);
     }));
 }
 
@@ -147,7 +162,7 @@ export function GetConfigText(name) {
  */
 export function GetKnownSSIDs() {
     return $Call.ByID(57262338).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType4($result);
+        return $$createType5($result);
     }));
 }
 
@@ -157,7 +172,7 @@ export function GetKnownSSIDs() {
  */
 export function GetRoutingTable() {
     return $Call.ByID(3049102509).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType6($result);
+        return $$createType7($result);
     }));
 }
 
@@ -166,7 +181,7 @@ export function GetRoutingTable() {
  */
 export function GetSettings() {
     return $Call.ByID(2393200110).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType8($result);
+        return $$createType9($result);
     }));
 }
 
@@ -178,7 +193,7 @@ export function GetSettings() {
  */
 export function GetStatus() {
     return $Call.ByID(3544552149).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType10($result);
+        return $$createType11($result);
     }));
 }
 
@@ -190,7 +205,7 @@ export function GetStatus() {
  */
 export function GetTunnelDetail(name) {
     return $Call.ByID(3171898132, name).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType12($result);
+        return $$createType13($result);
     }));
 }
 
@@ -211,7 +226,7 @@ export function GetVersion() {
  */
 export function ImportConfig(name, content) {
     return $Call.ByID(2459134310, name, content).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType14($result);
+        return $$createType15($result);
     }));
 }
 
@@ -223,7 +238,7 @@ export function ImportConfig(name, content) {
  */
 export function ImportZip(path) {
     return $Call.ByID(976469479, path).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType16($result);
+        return $$createType17($result);
     }));
 }
 
@@ -235,7 +250,7 @@ export function ImportZip(path) {
  */
 export function ImportZipData(data) {
     return $Call.ByID(2432663343, data).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType16($result);
+        return $$createType17($result);
     }));
 }
 
@@ -253,7 +268,7 @@ export function ImportZipData(data) {
  */
 export function ListTunnels() {
     return $Call.ByID(3587038916).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType17($result);
+        return $$createType18($result);
     }));
 }
 
@@ -268,8 +283,17 @@ export function ListTunnels() {
  */
 export function ListTunnelsLocal() {
     return $Call.ByID(3031176175).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType17($result);
+        return $$createType18($result);
     }));
+}
+
+/**
+ * OpenLocationSettings opens System Settings to the Location Services page so
+ * the user can grant SSID access without navigating there manually.
+ * @returns {$CancellablePromise<void>}
+ */
+export function OpenLocationSettings() {
+    return $Call.ByID(2515541851);
 }
 
 /**
@@ -319,7 +343,7 @@ export function RenameTunnel(oldName, newName) {
  */
 export function RunDNSLeakTest() {
     return $Call.ByID(2469114850).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType19($result);
+        return $$createType20($result);
     }));
 }
 
@@ -432,7 +456,7 @@ export function UpdateConfig(name, content) {
  */
 export function ValidateConfig(content) {
     return $Call.ByID(592398029, content).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType20($result);
+        return $$createType21($result);
     }));
 }
 
@@ -441,20 +465,21 @@ const $$createType0 = tunnel$0.ConflictInfo.createFrom;
 const $$createType1 = $Create.Array($$createType0);
 const $$createType2 = update$0.UpdateInfo.createFrom;
 const $$createType3 = $Create.Nullable($$createType2);
-const $$createType4 = $models.KnownSSIDs.createFrom;
-const $$createType5 = $models.RouteEntry.createFrom;
-const $$createType6 = $Create.Array($$createType5);
-const $$createType7 = storage$0.Settings.createFrom;
-const $$createType8 = $Create.Nullable($$createType7);
-const $$createType9 = domain$0.ConnectionStatus.createFrom;
-const $$createType10 = $Create.Nullable($$createType9);
-const $$createType11 = domain$0.WireGuardConfig.createFrom;
-const $$createType12 = $Create.Nullable($$createType11);
-const $$createType13 = $models.TunnelInfo.createFrom;
-const $$createType14 = $Create.Nullable($$createType13);
-const $$createType15 = $models.ZipImportResult.createFrom;
-const $$createType16 = $Create.Array($$createType15);
-const $$createType17 = $Create.Array($$createType13);
-const $$createType18 = $models.DNSLeakResult.createFrom;
-const $$createType19 = $Create.Nullable($$createType18);
-const $$createType20 = $Create.Array($Create.Any);
+const $$createType4 = wifi$0.SSIDPermissionStatus.createFrom;
+const $$createType5 = $models.KnownSSIDs.createFrom;
+const $$createType6 = $models.RouteEntry.createFrom;
+const $$createType7 = $Create.Array($$createType6);
+const $$createType8 = storage$0.Settings.createFrom;
+const $$createType9 = $Create.Nullable($$createType8);
+const $$createType10 = domain$0.ConnectionStatus.createFrom;
+const $$createType11 = $Create.Nullable($$createType10);
+const $$createType12 = domain$0.WireGuardConfig.createFrom;
+const $$createType13 = $Create.Nullable($$createType12);
+const $$createType14 = $models.TunnelInfo.createFrom;
+const $$createType15 = $Create.Nullable($$createType14);
+const $$createType16 = $models.ZipImportResult.createFrom;
+const $$createType17 = $Create.Array($$createType16);
+const $$createType18 = $Create.Array($$createType14);
+const $$createType19 = $models.DNSLeakResult.createFrom;
+const $$createType20 = $Create.Nullable($$createType19);
+const $$createType21 = $Create.Array($Create.Any);

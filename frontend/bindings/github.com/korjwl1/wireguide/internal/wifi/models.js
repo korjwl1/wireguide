@@ -58,6 +58,46 @@ export class Rules {
 }
 
 /**
+ * SSIDPermissionStatus describes whether the process can read the current SSID.
+ */
+export class SSIDPermissionStatus {
+    /**
+     * Creates a new SSIDPermissionStatus instance.
+     * @param {Partial<SSIDPermissionStatus>} [$$source = {}] - The source object to create the SSIDPermissionStatus.
+     */
+    constructor($$source = {}) {
+        if (!("has_wifi" in $$source)) {
+            /**
+             * Wi-Fi hardware found
+             * @member
+             * @type {boolean}
+             */
+            this["has_wifi"] = false;
+        }
+        if (!("has_permission" in $$source)) {
+            /**
+             * SSID access granted (or no WiFi to check)
+             * @member
+             * @type {boolean}
+             */
+            this["has_permission"] = false;
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new SSIDPermissionStatus instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {SSIDPermissionStatus}
+     */
+    static createFrom($$source = {}) {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new SSIDPermissionStatus(/** @type {Partial<SSIDPermissionStatus>} */($$parsedSource));
+    }
+}
+
+/**
  * TunnelSSIDs holds the per-tunnel auto-connect list. Wrapped in a
  * struct (rather than just []string) so future per-tunnel fields can
  * be added without changing the JSON shape.

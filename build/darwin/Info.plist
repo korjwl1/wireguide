@@ -10,11 +10,11 @@
         <key>CFBundleIdentifier</key>
             <string>com.korjwl1.wireguide</string>
         <key>CFBundleVersion</key>
-            <string>0.1.9</string>
+            <string>0.2.0</string>
         <key>CFBundleGetInfoString</key>
             <string>WireGuide - WireGuard VPN Client</string>
         <key>CFBundleShortVersionString</key>
-            <string>0.1.9</string>
+            <string>0.2.0</string>
         <key>CFBundleIconFile</key>
             <string>icons</string>
         <key>LSMinimumSystemVersion</key>
@@ -23,5 +23,7 @@
             <string>true</string>
         <key>NSHumanReadableCopyright</key>
             <string>© 2026 korjwl1</string>
+        <key>NSLocationWhenInUseUsageDescription</key>
+            <string>WireGuide reads your current Wi-Fi network name to apply auto-connect and trusted-network rules.</string>
     </dict>
 </plist>

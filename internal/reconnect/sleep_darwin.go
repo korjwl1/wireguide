@@ -9,9 +9,10 @@ package reconnect
 #include <IOKit/IOMessage.h>
 #include <IOKit/pwr_mgt/IOPMLib.h>
 #include <CoreFoundation/CoreFoundation.h>
+#include <stdint.h>
 #include <stdlib.h>
 
-extern void goWakeCallback(void *ctx);
+extern void goWakeCallback(uintptr_t handle);
 
 // wake_monitor_t holds the IOKit handles + run loop captured for shutdown.
 typedef struct {
@@ -19,7 +20,7 @@ typedef struct {
     IONotificationPortRef notify_port;
     io_object_t           notifier;
     CFRunLoopRef          run_loop;
-    void                 *handle;
+    uintptr_t             handle;
 } wake_monitor_t;
 
 // wakeMonitorCallback is invoked by IOKit on power state transitions.
@@ -46,7 +47,7 @@ static void wakeMonitorCallback(void *refcon, io_service_t service,
 // thread and adds the source to that thread's run loop. Caller must
 // then invoke runWakeMonitor() to enter the loop. Returns NULL if
 // registration fails (e.g. sandboxing prevents IORegisterForSystemPower).
-static wake_monitor_t* startWakeMonitor(void *handle) {
+static wake_monitor_t* startWakeMonitor(uintptr_t handle) {
     wake_monitor_t *m = (wake_monitor_t *)calloc(1, sizeof(wake_monitor_t));
     if (m == NULL) {
         return NULL;
@@ -122,9 +123,9 @@ import "C"
 import (
 	"log/slog"
 	"runtime"
+	"runtime/cgo"
 	"sync"
 	"time"
-	"unsafe"
 )
 
 // darwinSleepDetector detects sleep/wake on macOS using two mechanisms:
@@ -139,7 +140,7 @@ type darwinSleepDetector struct {
 	wakeCh     chan struct{}
 	stopCh     chan struct{}
 	monitor    *C.wake_monitor_t
-	handle     uintptr
+	handle     cgo.Handle
 	threadDone chan struct{}
 }
 
@@ -154,7 +155,7 @@ func (d *darwinSleepDetector) Start() {
 	d.mu.Lock()
 	d.stopCh = make(chan struct{})
 	d.threadDone = make(chan struct{})
-	d.handle = registerDetector(d)
+	d.handle = cgo.NewHandle(d)
 	d.mu.Unlock()
 
 	started := make(chan struct{})
@@ -168,15 +169,7 @@ func (d *darwinSleepDetector) Start() {
 		defer runtime.UnlockOSThread()
 		defer close(d.threadDone)
 
-		// Pass the registry handle as a uintptr cast directly to
-		// unsafe.Pointer. The earlier `*(*unsafe.Pointer)(unsafe.Pointer(&d.handle))`
-		// took the *address* of the handle field and reinterpreted
-		// it as a pointer — which violates cgo's pointer-passing
-		// rules and only worked accidentally because of layout. The
-		// new form sends the integer value through the void* slot,
-		// which goWakeCallback recovers via uintptr(ctx).
-		ctx := unsafe.Pointer(d.handle) //nolint:govet // intentional uintptr→unsafe.Pointer
-		m := C.startWakeMonitor(ctx)
+		m := C.startWakeMonitor(C.uintptr_t(d.handle))
 		if m == nil {
 			slog.Warn("IORegisterForSystemPower failed — relying on polling fallback for wake detection")
 			close(started)
@@ -223,7 +216,7 @@ func (d *darwinSleepDetector) Stop() {
 		<-threadDone
 	}
 	if handle != 0 {
-		unregisterDetector(handle)
+		handle.Delete()
 	}
 }
 
@@ -268,36 +261,10 @@ func (d *darwinSleepDetector) poll() {
 	}
 }
 
-// wakeDetectors maps numeric handles to their darwinSleepDetector. Numeric
-// handles (uintptr cast to void*) are used instead of Go pointers to satisfy
-// cgo's pointer-passing rules.
-var (
-	wakeDetectorsMu  sync.Mutex
-	wakeDetectors    = make(map[uintptr]*darwinSleepDetector)
-	wakeDetectorNext uintptr
-)
-
-func registerDetector(d *darwinSleepDetector) uintptr {
-	wakeDetectorsMu.Lock()
-	wakeDetectorNext++
-	h := wakeDetectorNext
-	wakeDetectors[h] = d
-	wakeDetectorsMu.Unlock()
-	return h
-}
-
-func unregisterDetector(h uintptr) {
-	wakeDetectorsMu.Lock()
-	delete(wakeDetectors, h)
-	wakeDetectorsMu.Unlock()
-}
 
 //export goWakeCallback
-func goWakeCallback(ctx unsafe.Pointer) {
-	h := uintptr(ctx)
-	wakeDetectorsMu.Lock()
-	d, ok := wakeDetectors[h]
-	wakeDetectorsMu.Unlock()
+func goWakeCallback(handle C.uintptr_t) {
+	d, ok := cgo.Handle(handle).Value().(*darwinSleepDetector)
 	if !ok {
 		return
 	}

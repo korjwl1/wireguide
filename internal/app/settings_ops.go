@@ -34,6 +34,21 @@ func (s *TunnelService) GetKnownSSIDs() KnownSSIDs {
 	}
 }
 
+// CheckSSIDPermission reports whether the process can read the current SSID.
+// Used by the frontend to prompt the user for Location Services access before
+// Wi-Fi auto-connect rules can fire.
+func (s *TunnelService) CheckSSIDPermission() wifi.SSIDPermissionStatus {
+	return wifi.CheckSSIDPermission()
+}
+
+// OpenLocationSettings opens System Settings to the Location Services page so
+// the user can grant SSID access without navigating there manually.
+func (s *TunnelService) OpenLocationSettings() {
+	if runtime.GOOS == "darwin" {
+		exec.Command("open", "x-apple.systempreferences:com.apple.preference.security?Privacy_LocationServices").Start() //nolint:errcheck
+	}
+}
+
 // guiLogLevelSetter is set by internal/gui at startup so the app package
 // (which is Wails-bound) can update the GUI process's own log level at
 // runtime without importing internal/gui (which would create an import

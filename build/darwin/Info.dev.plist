@@ -10,11 +10,11 @@
         <key>CFBundleIdentifier</key>
             <string>com.example.wireguide</string>
         <key>CFBundleVersion</key>
-            <string>0.1.9</string>
+            <string>0.2.0</string>
         <key>CFBundleGetInfoString</key>
             <string>This is a comment</string>
         <key>CFBundleShortVersionString</key>
-            <string>0.1.9</string>
+            <string>0.2.0</string>
         <key>CFBundleIconFile</key>
             <string>icons</string>
         <key>LSMinimumSystemVersion</key>
@@ -28,5 +28,7 @@
             <key>NSAllowsLocalNetworking</key>
             <true/>
         </dict>
+        <key>NSLocationWhenInUseUsageDescription</key>
+            <string>WireGuide reads your current Wi-Fi network name to apply auto-connect and trusted-network rules.</string>
     </dict>
 </plist>

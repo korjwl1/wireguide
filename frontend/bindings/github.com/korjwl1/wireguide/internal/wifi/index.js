@@ -4,5 +4,6 @@
 
 export {
     Rules,
+    SSIDPermissionStatus,
     TunnelSSIDs
 } from "./models.js";

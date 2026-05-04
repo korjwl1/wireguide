@@ -3,6 +3,7 @@
   import { t } from '../i18n/index.js';
   import { errText } from './errors.js';
   import { createEventDispatcher, tick, onDestroy } from 'svelte';
+  import SSIDPermissionBanner from './SSIDPermissionBanner.svelte';
 
   export let TunnelService;
   const dispatch = createEventDispatcher();
@@ -454,6 +455,8 @@
     <div class="confirm-dialog wifi-dialog" on:click|stopPropagation role="dialog" aria-modal="true" aria-label={$t('tunnel.wifi_auto_connect')}>
       <h3>{$t('tunnel.wifi_auto_connect')} — {$selectedTunnel.name}</h3>
       <p>{$t('tunnel.wifi_auto_connect_hint')}</p>
+
+      <SSIDPermissionBanner {TunnelService} />
 
       <div class="wifi-add-row">
         <div class="wifi-combo">

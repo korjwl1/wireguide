@@ -4,6 +4,7 @@
   // Per-tunnel auto-connect SSIDs live in each tunnel's detail panel.
   import { createEventDispatcher, onMount } from 'svelte';
   import { t } from '../i18n/index.js';
+  import SSIDPermissionBanner from './SSIDPermissionBanner.svelte';
 
   export let rules = {
     trusted_ssids: [],
@@ -103,6 +104,7 @@
 </script>
 
 <div class="wifi-rules">
+  <SSIDPermissionBanner {TunnelService} />
   <p class="section-hint">{$t('wifi_rules.trusted_hint')}</p>
 
   <div class="add-row">

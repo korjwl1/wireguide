@@ -38,44 +38,25 @@ func CurrentSSID() string {
 }
 
 func detectDarwin() string {
-	// The PrivateFrameworks `airport` binary was removed in macOS 15
-	// (Sequoia) and stopped reporting SSIDs reliably in 14.4 once Apple
-	// gated the API behind Location Services. networksetup is the
-	// supported path on every macOS we still target — drop the airport
-	// shell-out so we don't burn ~5s waiting for a binary that's gone.
-	wifiIface := discoverWiFiInterface()
-	if wifiIface == "" {
-		return ""
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	out, err := exec.CommandContext(ctx, "networksetup", "-getairportnetwork", wifiIface).CombinedOutput()
-	if err != nil {
-		return ""
-	}
-	// Output: "Current Wi-Fi Network: MySSID" on success, or
-	// "You are not associated with an AirPort network." on
-	// failure / Location-permission denied. The latter has no
-	// ": " separator so we'll return "" — but we also log a
-	// hint so users debugging "rules don't fire" know to check
-	// Settings → Privacy → Location Services.
-	s := strings.TrimSpace(string(out))
-	if strings.Contains(s, "not associated") {
+	// Use CoreWLAN (CWWiFiClient) instead of the `networksetup` shell command.
+	// CoreWLAN registers the process with CoreLocation so WireGuide appears in
+	// System Settings → Privacy & Security → Location Services and the user
+	// can grant SSID access. networksetup never triggers that prompt.
+	ssid := currentSSIDCoreWLAN()
+	if ssid == "" {
 		logLocationHintOnce()
-		return ""
 	}
-	if idx := strings.Index(s, ": "); idx >= 0 {
-		return s[idx+2:]
-	}
-	return ""
+	return ssid
 }
 
-// discoverWiFiInterface finds the BSD interface name for the Wi-Fi
-// hardware port. Returns "" when no Wi-Fi port is found — the old
-// behaviour of falling back to "en0" silently misled callers on
-// Mac minis / desktops where en0 is Ethernet, producing empty SSID
-// reads forever instead of a clear "no Wi-Fi here" signal.
+// discoverWiFiInterface finds the BSD interface name for the Wi-Fi hardware
+// port. Tries CoreWLAN first (fast, no subprocess), falls back to parsing
+// `networksetup -listallhardwareports` for edge cases. Returns "" on machines
+// without Wi-Fi.
 func discoverWiFiInterface() string {
+	if name := wifiInterfaceNameCoreWLAN(); name != "" {
+		return name
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	out, err := exec.CommandContext(ctx, "networksetup", "-listallhardwareports").CombinedOutput()
@@ -85,7 +66,6 @@ func discoverWiFiInterface() string {
 	lines := strings.Split(string(out), "\n")
 	for i, line := range lines {
 		if strings.Contains(line, "Wi-Fi") || strings.Contains(line, "AirPort") {
-			// Next line should be "Device: en0" or similar
 			if i+1 < len(lines) {
 				parts := strings.SplitN(lines[i+1], ":", 2)
 				if len(parts) == 2 {
@@ -110,6 +90,42 @@ func detectLinux() string {
 		}
 	}
 	return ""
+}
+
+// SSIDPermissionStatus describes whether the process can read the current SSID.
+type SSIDPermissionStatus struct {
+	HasWifi       bool `json:"has_wifi"`       // Wi-Fi hardware found
+	HasPermission bool `json:"has_permission"` // SSID access granted (or no WiFi to check)
+}
+
+// CheckSSIDPermission returns whether the process can read the current SSID.
+// On macOS 14+, SSID access requires Location Services permission. We detect
+// the "permission denied" case by checking if the WiFi interface has an IP
+// (we're connected) but networksetup still returns "not associated".
+func CheckSSIDPermission() SSIDPermissionStatus {
+	if runtime.GOOS != "darwin" {
+		return SSIDPermissionStatus{HasWifi: false, HasPermission: true}
+	}
+	iface := discoverWiFiInterface()
+	if iface == "" {
+		return SSIDPermissionStatus{HasWifi: false, HasPermission: true}
+	}
+	// If we can read a non-empty SSID, permission is clearly granted.
+	if CurrentSSID() != "" {
+		return SSIDPermissionStatus{HasWifi: true, HasPermission: true}
+	}
+	// SSID is empty — could be "not on WiFi" or "permission denied".
+	// Check if the interface has an IP: if yes, we're connected but can't
+	// read the SSID → permission denied.
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "ipconfig", "getifaddr", iface).Output()
+	if err != nil || strings.TrimSpace(string(out)) == "" {
+		// Not connected to WiFi — permission state is unknown but irrelevant.
+		return SSIDPermissionStatus{HasWifi: true, HasPermission: true}
+	}
+	// Connected but can't see SSID → permission denied.
+	return SSIDPermissionStatus{HasWifi: true, HasPermission: false}
 }
 
 // KnownSSIDs returns the system's saved wireless network names so the

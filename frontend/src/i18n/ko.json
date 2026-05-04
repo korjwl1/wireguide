@@ -237,6 +237,11 @@
     "proceed": "업데이트",
     "cancel": "나중에"
   },
+  "wifi_permission": {
+    "title": "위치 서비스 권한 필요",
+    "desc": "Wi-Fi 자동 연결 규칙이 동작하려면 현재 Wi-Fi 이름에 접근할 수 있어야 합니다. System Settings → 개인 정보 보호 및 보안 → 위치 서비스에서 허용해주세요.",
+    "open_settings": "설정 열기"
+  },
   "wifi_rules": {
     "trusted_ssids": "신뢰하는 네트워크",
     "trusted_hint": "이 네트워크에 접속하면 자동 연결된 모든 터널이 자동으로 해제됩니다.",
