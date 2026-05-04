@@ -235,9 +235,22 @@ func (s *Server) handleConn(conn net.Conn) {
 			}
 		}
 
+		// Reject notifications (id=0) for every method. Allowing a
+		// client to invoke side-effecting handlers without a request
+		// ID skipped both the response and the audit trail — e.g.
+		// `{"id":0,"method":"Helper.Shutdown"}` would silently kill
+		// the daemon. We don't currently have any method that's
+		// legitimately notification-only; if one is added later, opt
+		// it in to a dedicated allowlist rather than reverting this.
+		if req.IsNotification() {
+			slog.Warn("ipc: rejected notification (id=0)",
+				"conn", remoteDesc, "method", req.Method)
+			continue
+		}
+
 		// Dispatch RPC
 		resp := s.dispatch(&req)
-		if resp != nil && !req.IsNotification() {
+		if resp != nil {
 			if err := WriteFrame(conn, resp); err != nil {
 				slog.Debug("ipc: WriteFrame error, closing conn",
 					"conn", remoteDesc,

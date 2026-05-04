@@ -81,6 +81,21 @@
   load();
 
   async function save() {
+    // Re-fetch the freshest settings.json before writing so per-tunnel
+    // wifi rule edits made in TunnelDetail (which calls SaveSettings
+    // independently with its own modified per_tunnel map) aren't
+    // silently overwritten by our stale snapshot. We own the global
+    // wifi_rules fields (enabled, trusted_ssids); per_tunnel is owned
+    // by TunnelDetail, so we merge the disk's value forward.
+    let perTunnel = settings.wifi_rules?.per_tunnel || {};
+    try {
+      const fresh = await TunnelService.GetSettings();
+      if (fresh?.wifi_rules?.per_tunnel) {
+        perTunnel = fresh.wifi_rules.per_tunnel;
+      }
+    } catch (_) {
+      // Best-effort merge; fall back to our last-known per_tunnel.
+    }
     try {
       await TunnelService.SaveSettings({
         language: settings.language,
@@ -92,7 +107,11 @@
         health_check: settings.health_check,
         pin_interface: settings.pin_interface,
         log_level: settings.log_level,
-        wifi_rules: settings.wifi_rules,
+        wifi_rules: {
+          enabled: settings.wifi_rules?.enabled ?? false,
+          trusted_ssids: settings.wifi_rules?.trusted_ssids || [],
+          per_tunnel: perTunnel,
+        },
       });
     } catch (e) {
       console.error('save settings:', e);
@@ -175,6 +194,7 @@
   }
 
   onDestroy(() => {
+    window.removeEventListener('keydown', onKeyDown);
     if (saveTimer) {
       clearTimeout(saveTimer);
       save();
@@ -203,10 +223,16 @@
     }
   }
 
-  onMount(async () => {
+  // Register the listener synchronously and tear it down via
+  // onDestroy. An `onMount(async ...)` callback returns a Promise,
+  // not a cleanup function, so the cleanup we used to put after the
+  // `await` was silently dropped — every Settings open leaked another
+  // window-level keydown listener that called save() on stale state.
+  onMount(() => {
     window.addEventListener('keydown', onKeyDown);
-    try { appVersion = await TunnelService.GetVersion(); } catch (_) {}
-    return () => window.removeEventListener('keydown', onKeyDown);
+    (async () => {
+      try { appVersion = await TunnelService.GetVersion(); } catch (_) {}
+    })();
   });
 </script>
 

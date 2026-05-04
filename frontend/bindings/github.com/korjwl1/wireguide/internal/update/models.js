@@ -95,6 +95,14 @@ export class UpdateInfo {
              */
             this["hash_verified"] = false;
         }
+        if (!("signature_verified" in $$source)) {
+            /**
+             * true iff Ed25519 .sig also verified
+             * @member
+             * @type {boolean}
+             */
+            this["signature_verified"] = false;
+        }
 
         Object.assign(this, $$source);
     }

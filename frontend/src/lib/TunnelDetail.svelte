@@ -92,7 +92,15 @@
     return list;
   })();
 
-  $: if ($selectedTunnel) {
+  // Track the last name we issued loadDetail/loadWifiRules for. The
+  // selectedTunnel store emits a fresh object reference on every
+  // status change (refreshTunnels and the per-tick is_connected
+  // diff both call .set/.update), which without this gate would
+  // trigger two RPCs every second. We only re-fetch when the
+  // *name* actually changes.
+  let lastLoadedName = '';
+  $: if ($selectedTunnel && $selectedTunnel.name !== lastLoadedName) {
+    lastLoadedName = $selectedTunnel.name;
     loadDetail($selectedTunnel.name);
     loadWifiRules($selectedTunnel.name);
   }
@@ -106,6 +114,7 @@
     } catch (e) {
       wifiSsids = [];
       wifiEnabled = false;
+      console.error('loadWifiRules:', e);
     }
   }
 
@@ -121,6 +130,10 @@
       }
       await TunnelService.SaveSettings({ ...s, wifi_rules: rules });
     } catch (e) {
+      // Surface to the user — silently failing here meant the
+      // checkbox state in the modal got out of sync with what's on
+      // disk and the rule didn't fire on next SSID change.
+      error = `Wi-Fi rule save failed: ${errText(e)}`;
       console.error('save wifi rule:', e);
     }
   }
@@ -192,8 +205,13 @@
   async function loadDetail(name) {
     try {
       detail = await TunnelService.GetTunnelDetail(name);
+      error = '';
     } catch (e) {
       detail = null;
+      // Surface the failure rather than silently leaving the panel
+      // blank — most failures here are "tunnel was deleted" or
+      // "config is corrupt" which the user can act on.
+      error = errText(e);
     }
   }
 

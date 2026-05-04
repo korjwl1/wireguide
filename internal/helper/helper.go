@@ -224,6 +224,30 @@ func Run(addr string, ownerUID int, dataDir string) error {
 	})
 	h.wifiMon.Start()
 
+	// Re-evaluate rules once on startup. The autoConnectedBy map is
+	// in-memory only, so a helper crash + LaunchDaemon restart loses
+	// the "this tunnel was rule-managed" markers. Without this synthetic
+	// re-eval, a tunnel recovered from crash on a SSID with no rule
+	// stays up indefinitely until the user manually disconnects.
+	// Running it here, after wifiMon starts, also handles the boot
+	// case where the helper starts before the Wi-Fi has joined.
+	goSafe("ssidStartupRule", func() {
+		// Brief delay to let the network stack settle and crash
+		// recovery finish — racing handleSSIDChange against an
+		// in-flight RecoverFromCrash would corrupt activeCfgs.
+		select {
+		case <-h.done:
+			return
+		case <-time.After(3 * time.Second):
+		}
+		ssid := wifi.CurrentSSID()
+		if ssid == "" {
+			return
+		}
+		slog.Info("startup rule re-evaluation", "ssid", ssid)
+		h.handleSSIDChange("", ssid)
+	})
+
 	// Top-level panic recovery for the Serve loop itself. If Accept or any
 	// per-conn handler panics unrecovered, we at least want a stack trace.
 	defer func() {
@@ -486,10 +510,16 @@ func (h *Helper) cleanup() {
 			h.wifiMon.Stop()
 		}
 		h.monitor.Stop()
-		h.firewall.Cleanup()
+		// Tear down tunnels BEFORE removing kill-switch / pf rules.
+		// Doing it the other way around — flushing pf first — leaves
+		// a small but real window where the user's traffic flows
+		// over the underlying network unprotected while utun*
+		// devices are being closed (DisconnectAll can take seconds
+		// per tunnel as wireguard-go drains).
 		if h.manager.IsConnected() {
 			h.manager.DisconnectAll()
 		}
+		h.firewall.Cleanup()
 		slog.Info("helper shutdown complete")
 	})
 }

@@ -43,9 +43,10 @@ func CalculateCIDR(cidr string) (*CIDRInfo, error) {
 		hostBits := 32 - ones
 
 		if hostBits >= 32 {
-			// /0 or /1 — the shift would overflow int64/uint32.
-			// Return simplified results for these edge-case networks.
-			info.TotalHosts = math.MaxInt64
+			// /0 — the shift would overflow uint32. Use the exact
+			// IPv4 host count (2^32 − 2 = 4294967294) instead of
+			// math.MaxInt64, which was misleadingly large.
+			info.TotalHosts = (int64(1) << 32) - 2
 			info.FirstHost = "0.0.0.1"
 			info.LastHost = "255.255.255.254"
 			info.Broadcast = "255.255.255.255"

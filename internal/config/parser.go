@@ -18,11 +18,23 @@ func Parse(content string) (*WireGuardConfig, error) {
 	var currentPeer *PeerConfig
 
 	scanner := bufio.NewScanner(strings.NewReader(content))
+	// bufio's default 64 KiB token cap is hit by configs with very
+	// long AllowedIPs lists — legitimate when a peer covers a lot of
+	// /32 routes. Bump to 1 MiB; the file as a whole is already
+	// bounded by the config-import filesize check.
+	scanner.Buffer(make([]byte, 0, 64*1024), 1<<20)
 	lineNum := 0
 
 	for scanner.Scan() {
 		lineNum++
 		line := strings.TrimSpace(scanner.Text())
+		// Reject embedded NULs anywhere in the line. They survive
+		// TrimSpace and break the round-trip serialization (NUL is
+		// our internal scriptSeparator) — far better to fail fast
+		// here than to corrupt data on save.
+		if strings.ContainsRune(line, 0) {
+			return nil, fmt.Errorf("line %d: NUL byte in value", lineNum)
+		}
 
 		// Skip empty lines and comments
 		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, ";") {

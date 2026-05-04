@@ -99,7 +99,11 @@ export function Disconnect() {
 }
 
 /**
- * DisconnectTunnel disconnects a specific tunnel by name.
+ * DisconnectTunnel disconnects a specific tunnel by name. Mirrors
+ * Disconnect()'s "client closed" retry: a helper recovery during a
+ * per-tunnel disconnect (e.g. user clicks the tray's per-tunnel
+ * item right when the health monitor swaps clients) should be
+ * transparent, not surfaced as a confusing error.
  * @param {string} name
  * @returns {$CancellablePromise<void>}
  */

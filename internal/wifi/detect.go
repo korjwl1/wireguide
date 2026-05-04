@@ -3,11 +3,26 @@ package wifi
 
 import (
 	"context"
+	"log/slog"
 	"os/exec"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 )
+
+// locationHintOnce ensures we log the macOS Location-permission hint
+// at most once per helper lifetime. Without this guard the helper
+// log fills with the same message every 5s if the user denied access.
+var locationHintOnce sync.Once
+
+func logLocationHintOnce() {
+	locationHintOnce.Do(func() {
+		slog.Warn("CurrentSSID returned empty: macOS reports 'not associated' " +
+			"— Wi-Fi rules require Location Services permission. " +
+			"Grant it in System Settings → Privacy & Security → Location Services → System Services.")
+	})
+}
 
 // CurrentSSID returns the currently connected WiFi SSID, or "" if not connected.
 func CurrentSSID() string {
@@ -40,8 +55,17 @@ func detectDarwin() string {
 		if err != nil {
 			return ""
 		}
-		// Output: "Current Wi-Fi Network: MySSID"
+		// Output: "Current Wi-Fi Network: MySSID" on success, or
+		// "You are not associated with an AirPort network." on
+		// failure / Location-permission denied. The latter has no
+		// ": " separator so we'll return "" — but we also log a
+		// hint so users debugging "rules don't fire" know to check
+		// Settings → Privacy → Location Services.
 		s := strings.TrimSpace(string(out))
+		if strings.Contains(s, "not associated") {
+			logLocationHintOnce()
+			return ""
+		}
 		if idx := strings.Index(s, ": "); idx >= 0 {
 			return s[idx+2:]
 		}
@@ -57,13 +81,17 @@ func detectDarwin() string {
 	return ""
 }
 
-// discoverWiFiInterface finds the BSD interface name for the Wi-Fi hardware port.
+// discoverWiFiInterface finds the BSD interface name for the Wi-Fi
+// hardware port. Returns "" when no Wi-Fi port is found — the old
+// behaviour of falling back to "en0" silently misled callers on
+// Mac minis / desktops where en0 is Ethernet, producing empty SSID
+// reads forever instead of a clear "no Wi-Fi here" signal.
 func discoverWiFiInterface() string {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	out, err := exec.CommandContext(ctx, "networksetup", "-listallhardwareports").CombinedOutput()
 	if err != nil {
-		return "en0" // fallback
+		return ""
 	}
 	lines := strings.Split(string(out), "\n")
 	for i, line := range lines {
@@ -77,7 +105,7 @@ func discoverWiFiInterface() string {
 			}
 		}
 	}
-	return "en0" // fallback
+	return ""
 }
 
 func detectLinux() string {

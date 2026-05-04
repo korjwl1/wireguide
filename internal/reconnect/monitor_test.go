@@ -353,7 +353,10 @@ func TestCancelRetry_StopsInProgressReconnect(t *testing.T) {
 
 	// Wait for the retry goroutine to fully exit.
 	mon.mu.Lock()
-	retryDone := mon.retryDone
+	var retryDone chan struct{}
+	if r, ok := mon.retries[""]; ok {
+		retryDone = r.done
+	}
 	mon.mu.Unlock()
 	if retryDone != nil {
 		select {
@@ -406,7 +409,10 @@ func TestFirewallCallbacks_CalledInOrder(t *testing.T) {
 
 	// Wait for the retry goroutine to finish by watching retryDone.
 	mon.mu.Lock()
-	retryDone := mon.retryDone
+	var retryDone chan struct{}
+	if r, ok := mon.retries[""]; ok {
+		retryDone = r.done
+	}
 	mon.mu.Unlock()
 	select {
 	case <-retryDone:

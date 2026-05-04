@@ -74,23 +74,46 @@ static void runWakeMonitor(wake_monitor_t *m) {
 }
 
 // stopWakeMonitor signals the run loop to exit. Safe to call from any
-// thread. The freeing happens on the run-loop thread after exit.
+// thread. We deregister the IOKit notification BEFORE stopping the
+// run loop so the deregister's internal Mach IPC drains while the
+// loop is still pumping events — calling IODeregisterForSystemPower
+// after CFRunLoopStop returned has been observed to hang under
+// kernel back-pressure (Apple QA1340 sample shows the same order).
 static void stopWakeMonitor(wake_monitor_t *m) {
     if (m == NULL || m->run_loop == NULL) {
         return;
     }
+    if (m->notifier != IO_OBJECT_NULL) {
+        IODeregisterForSystemPower(&m->notifier);
+        m->notifier = IO_OBJECT_NULL;
+    }
     CFRunLoopStop(m->run_loop);
 }
 
-// freeWakeMonitor releases IOKit resources. Must be called from the
-// same thread that ran the run loop, after runWakeMonitor returned.
+// freeWakeMonitor releases the remaining IOKit resources. Must be
+// called from the same thread that ran the run loop, after
+// runWakeMonitor returned. Order matters: remove the run-loop
+// source first so a future CFRunLoopRun on this OS thread (Go may
+// reuse the thread once UnlockOSThread runs) doesn't dereference a
+// freed source list inside the run loop. Then close the connection
+// and destroy the notification port.
 static void freeWakeMonitor(wake_monitor_t *m) {
     if (m == NULL) {
         return;
     }
-    IODeregisterForSystemPower(&m->notifier);
-    IOServiceClose(m->root_port);
-    IONotificationPortDestroy(m->notify_port);
+    if (m->run_loop != NULL && m->notify_port != NULL) {
+        CFRunLoopRemoveSource(m->run_loop,
+                              IONotificationPortGetRunLoopSource(m->notify_port),
+                              kCFRunLoopCommonModes);
+    }
+    if (m->root_port != MACH_PORT_NULL) {
+        IOServiceClose(m->root_port);
+        m->root_port = MACH_PORT_NULL;
+    }
+    if (m->notify_port != NULL) {
+        IONotificationPortDestroy(m->notify_port);
+        m->notify_port = NULL;
+    }
     free(m);
 }
 */
@@ -145,7 +168,14 @@ func (d *darwinSleepDetector) Start() {
 		defer runtime.UnlockOSThread()
 		defer close(d.threadDone)
 
-		ctx := *(*unsafe.Pointer)(unsafe.Pointer(&d.handle))
+		// Pass the registry handle as a uintptr cast directly to
+		// unsafe.Pointer. The earlier `*(*unsafe.Pointer)(unsafe.Pointer(&d.handle))`
+		// took the *address* of the handle field and reinterpreted
+		// it as a pointer — which violates cgo's pointer-passing
+		// rules and only worked accidentally because of layout. The
+		// new form sends the integer value through the void* slot,
+		// which goWakeCallback recovers via uintptr(ctx).
+		ctx := unsafe.Pointer(d.handle) //nolint:govet // intentional uintptr→unsafe.Pointer
 		m := C.startWakeMonitor(ctx)
 		if m == nil {
 			slog.Warn("IORegisterForSystemPower failed — relying on polling fallback for wake detection")

@@ -17,6 +17,7 @@ type Monitor struct {
 	lastSSID  string
 	stopCh    chan struct{}
 	running   bool
+	wg        sync.WaitGroup
 }
 
 // NewMonitor creates a WiFi monitor.
@@ -38,20 +39,30 @@ func (m *Monitor) Start() {
 	}
 	m.running = true
 	m.stopCh = make(chan struct{})
+	m.wg.Add(1)
 	m.mu.Unlock()
-	go m.poll()
+	go func() {
+		defer m.wg.Done()
+		m.poll()
+	}()
 	slog.Info("WiFi monitor started")
 }
 
-// Stop stops the monitor.
+// Stop stops the monitor and waits for the poll goroutine to exit.
+// The wait matters: an in-flight onChanged callback that runs after
+// the helper begins teardown can dereference the helper's
+// userTunnelStore / manager fields after they've been niled. Joining
+// the goroutine here removes that race.
 func (m *Monitor) Stop() {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	if !m.running {
+		m.mu.Unlock()
 		return
 	}
 	m.running = false
 	close(m.stopCh)
+	m.mu.Unlock()
+	m.wg.Wait()
 }
 
 // UpdateRules updates the auto-connect rules.

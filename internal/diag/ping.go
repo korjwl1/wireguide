@@ -27,10 +27,15 @@ func PingEndpoint(endpoint string) *PingResult {
 		host = endpoint
 	}
 
-	// Resolve hostname
+	// Resolve hostname. LookupHost can return (nil, nil) on some
+	// resolver edge cases, so the empty-slice check is mandatory
+	// before indexing.
 	ips, err := net.LookupHost(host)
 	if err != nil {
 		return &PingResult{Host: host, Error: fmt.Sprintf("DNS resolution failed: %v", err)}
+	}
+	if len(ips) == 0 {
+		return &PingResult{Host: host, Error: "DNS returned no addresses"}
 	}
 	ip := ips[0]
 

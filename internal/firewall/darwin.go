@@ -42,6 +42,13 @@ type DarwinFirewall struct {
 	// pfWasEnabled tracks whether pf was already enabled before we started,
 	// so we know whether to turn pf back off on disable/cleanup.
 	pfWasEnabled bool
+	// savedDNSInterface / savedDNSServers cache the most recent
+	// EnableDNSProtection arguments so EnableKillSwitch can re-load
+	// the DNS sub-anchor after rewriting the main anchor — without
+	// this, enabling KS *after* DNS protection silently wipes the
+	// DNS rules and DNS leaks despite dnsProtectionEnabled==true.
+	savedDNSInterface string
+	savedDNSServers   []string
 }
 
 func NewPlatformFirewall() FirewallManager {
@@ -113,6 +120,26 @@ func (f *DarwinFirewall) EnableKillSwitch(interfaceName string, _ []string, endp
 		return fmt.Errorf("loading kill switch rules into anchor: %w", err)
 	}
 
+	// If DNS protection was enabled before this call, the previous
+	// invocation wrote rules to the MAIN anchor (line 194 in
+	// EnableDNSProtection). The loadAnchorRules call above just
+	// overwrote those rules — leaving the `com.apple.wireguide/dns`
+	// sub-anchor empty even though dnsProtectionEnabled==true. Re-
+	// populate the sub-anchor here so DNS leaks don't silently start.
+	f.mu.Lock()
+	dnsActive := f.dnsProtectionEnabled
+	dnsIface := f.savedDNSInterface
+	dnsServers := append([]string(nil), f.savedDNSServers...)
+	f.mu.Unlock()
+	if dnsActive && dnsIface != "" && len(dnsServers) > 0 {
+		if err := loadDNSSubAnchor(dnsIface, dnsServers); err != nil {
+			slog.Warn("re-loading DNS sub-anchor after kill switch enable failed",
+				"error", err)
+		} else {
+			slog.Info("DNS protection sub-anchor re-loaded after kill switch enable")
+		}
+	}
+
 	// Enable pf if not already.
 	if err := enablePf(); err != nil {
 		slog.Warn("pfctl -e failed", "error", err)
@@ -124,6 +151,25 @@ func (f *DarwinFirewall) EnableKillSwitch(interfaceName string, _ []string, endp
 	f.mu.Unlock()
 	slog.Info("kill switch enabled", "interface", interfaceName, "endpoints", len(endpoints))
 	return nil
+}
+
+// loadDNSSubAnchor builds the DNS-protection rule set for a given
+// interface + server list and loads it into the sub-anchor. Pulled
+// out of EnableDNSProtection so EnableKillSwitch can re-apply rules
+// after rewriting the main anchor.
+func loadDNSSubAnchor(interfaceName string, dnsServers []string) error {
+	if !validIfaceName.MatchString(interfaceName) {
+		return fmt.Errorf("invalid interface name %q", interfaceName)
+	}
+	var dnsRules strings.Builder
+	for _, dns := range dnsServers {
+		if net.ParseIP(dns) == nil {
+			return fmt.Errorf("invalid DNS server IP %q", dns)
+		}
+		fmt.Fprintf(&dnsRules, "pass out quick on %s proto {tcp, udp} to %s port 53\n", interfaceName, dns)
+	}
+	dnsRules.WriteString("block drop out quick proto {tcp, udp} to any port 53\n")
+	return loadAnchorRules(dnsAnchorName, dnsRules.String())
 }
 
 func (f *DarwinFirewall) DisableKillSwitch() error {
@@ -206,6 +252,8 @@ func (f *DarwinFirewall) EnableDNSProtection(interfaceName string, dnsServers []
 
 	f.mu.Lock()
 	f.dnsProtectionEnabled = true
+	f.savedDNSInterface = interfaceName
+	f.savedDNSServers = append([]string(nil), dnsServers...)
 	f.mu.Unlock()
 	slog.Info("DNS protection enabled", "interface", interfaceName, "dns_servers", dnsServers)
 	return nil
@@ -241,6 +289,8 @@ func (f *DarwinFirewall) DisableDNSProtection() error {
 
 	f.mu.Lock()
 	f.dnsProtectionEnabled = false
+	f.savedDNSInterface = ""
+	f.savedDNSServers = nil
 	f.mu.Unlock()
 	slog.Info("DNS protection disabled")
 	return nil

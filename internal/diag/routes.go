@@ -29,19 +29,34 @@ func GetRoutingTable() ([]RouteEntry, error) {
 }
 
 func getRoutesDarwinFull() ([]RouteEntry, error) {
-	out, err := exec.Command("netstat", "-rn", "-f", "inet").CombinedOutput()
+	// Run both `inet` and `inet6` so IPv6 routes (Tailscale, full
+	// IPv6 tunnels, ULA prefixes) show up in diagnostics. Without
+	// `-f inet6` an IPv6-only tunnel was completely invisible.
+	v4, err := exec.Command("netstat", "-rn", "-f", "inet").CombinedOutput()
 	if err != nil {
 		return nil, err
 	}
+	v6, err := exec.Command("netstat", "-rn", "-f", "inet6").CombinedOutput()
+	if err != nil {
+		// Non-fatal: IPv6 may be disabled on this system. Return
+		// just the v4 routes rather than the whole call failing.
+		return parseDarwinRouteOutput(string(v4)), nil
+	}
+	routes := parseDarwinRouteOutput(string(v4))
+	routes = append(routes, parseDarwinRouteOutput(string(v6))...)
+	return routes, nil
+}
+
+func parseDarwinRouteOutput(out string) []RouteEntry {
 	var routes []RouteEntry
-	lines := strings.Split(string(out), "\n")
-	for _, line := range lines {
+	for _, line := range strings.Split(out, "\n") {
 		fields := strings.Fields(line)
 		if len(fields) < 4 {
 			continue
 		}
-		// Skip header lines
-		if fields[0] == "Destination" || fields[0] == "Routing" || fields[0] == "Internet:" {
+		// Skip header / banner lines (`Internet:`, `Internet6:`, etc.)
+		if fields[0] == "Destination" || fields[0] == "Routing" ||
+			strings.HasPrefix(fields[0], "Internet") {
 			continue
 		}
 		entry := RouteEntry{
@@ -56,7 +71,7 @@ func getRoutesDarwinFull() ([]RouteEntry, error) {
 		}
 		routes = append(routes, entry)
 	}
-	return routes, nil
+	return routes
 }
 
 func getRoutesLinuxFull() ([]RouteEntry, error) {

@@ -163,9 +163,14 @@ func startHelperHealthMonitor(app *application.App, clients *ipc.ClientHolder, d
 				}
 
 			case alive && !wasAlive:
-				// Unexpected: ping succeeded without a recoverHelper call.
-				// Happens if a new helper accepted the old socket somehow.
+				// Unexpected: ping succeeded without a recoverHelper
+				// call. Happens if a new helper accepted the old
+				// socket somehow. Force a Resubscribe so we don't
+				// silently miss status / log / wifi_ssid events from
+				// the new helper — the previous Subscribe failed
+				// during recovery and was never retried.
 				slog.Info("helper reachable again")
+				bridge.Resubscribe()
 				app.Event.Emit("helper", HelperEvent{Alive: true})
 				wasAlive = true
 			}

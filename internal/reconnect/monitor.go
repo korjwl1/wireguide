@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/korjwl1/wireguide/internal/domain"
 	"github.com/korjwl1/wireguide/internal/tunnel"
 )
 
@@ -67,6 +68,22 @@ type FirewallSuspendFunc func() error
 // firewall rules with the new interface name and endpoints.
 type FirewallResumeFunc func() error
 
+// retryState holds the cancel/done/attempt counters for a single
+// in-flight reconnect goroutine. Each tunnel gets its own — mixing
+// retries (e.g. "tunnel A is on backoff for stale handshake" vs
+// "system woke and triggered an all-tunnel reconnect") into a single
+// piece of state caused them to stomp on each other and reset
+// backoff to InitialDelay on every cross-cause trigger.
+//
+// The empty-string key "" represents the legacy "reconnect all
+// tunnels" path used by the sleep/wake and network-change triggers.
+type retryState struct {
+	cancel  context.CancelFunc
+	done    chan struct{}
+	attempt int
+	delay   time.Duration
+}
+
 // Monitor watches tunnel health and triggers reconnection.
 type Monitor struct {
 	mu              sync.Mutex
@@ -79,16 +96,15 @@ type Monitor struct {
 	stopCh          chan struct{}
 	wg              sync.WaitGroup
 	running         bool
-	attempt         int
 	sleepDetector   SleepDetector
 	networkDetector NetworkChangeDetector
 
-	// retryCancel cancels the current reconnectWithBackoff goroutine.
-	// Called from Stop() and from CancelRetry() (manual Disconnect) so that a
-	// pending exponential-backoff sleep returns immediately instead of waiting
-	// out the full delay.
-	retryCancel context.CancelFunc
-	retryDone   chan struct{} // closed when reconnectWithBackoff exits
+	// retries holds in-flight reconnect goroutines keyed by tunnel
+	// name. Per-tunnel state preserves backoff across cross-cause
+	// triggers (sleep/wake, network change, health check) and lets
+	// the all-tunnels path coexist with per-tunnel health recovery
+	// without canceling each other.
+	retries map[string]*retryState
 
 	// healthCheckEnabled controls whether the periodic handshake age
 	// check runs in monitorLoop. Can be toggled at runtime via
@@ -106,6 +122,7 @@ func NewMonitor(manager TunnelManager, reconnectFn ReconnectFunc, statusFn Statu
 		stopCh:             make(chan struct{}),
 		sleepDetector:      NewSleepDetector(),
 		networkDetector:    NewNetworkChangeDetector(),
+		retries:            make(map[string]*retryState),
 		healthCheckEnabled: false, // default OFF — enable in Settings
 	}
 }
@@ -176,17 +193,26 @@ func (m *Monitor) Stop() {
 	}
 	m.running = false
 	close(m.stopCh)
-	if m.retryCancel != nil {
-		m.retryCancel()
-		m.retryCancel = nil
+	for _, r := range m.retries {
+		if r.cancel != nil {
+			r.cancel()
+		}
 	}
-	if m.sleepDetector != nil {
-		m.sleepDetector.Stop()
-	}
-	if m.networkDetector != nil {
-		m.networkDetector.Stop()
-	}
+	// Snapshot the detectors under the lock, then call Stop() OUTSIDE
+	// the lock — sleep/network detector Stop()s wait on cgo run-loop
+	// threads and have been seen to take seconds when IOKit is back-
+	// pressured. Holding m.mu through that wait deadlocks any
+	// concurrent triggerReconnectTunnel / monitorLoop / GetState
+	// caller, which then prevents wg.Wait() from ever returning.
+	sd := m.sleepDetector
+	nd := m.networkDetector
 	m.mu.Unlock()
+	if sd != nil {
+		sd.Stop()
+	}
+	if nd != nil {
+		nd.Stop()
+	}
 
 	// Wait for goroutines to exit outside the lock to avoid deadlock.
 	// Use a timeout so a stuck goroutine doesn't block helper cleanup forever.
@@ -203,26 +229,40 @@ func (m *Monitor) Stop() {
 	}
 }
 
-// CancelRetry aborts any in-flight reconnection attempt. Called by the helper
-// when the user manually disconnects — we don't want a backoff sleep to wake
-// up seconds later and re-connect against the user's wishes.
+// CancelRetry aborts every in-flight reconnection attempt. Called by
+// the helper when the user manually disconnects — we don't want a
+// backoff sleep to wake up seconds later and re-connect against the
+// user's wishes.
 func (m *Monitor) CancelRetry() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.retryCancel != nil {
-		m.retryCancel()
-		m.retryCancel = nil
+	for name, r := range m.retries {
+		if r.cancel != nil {
+			r.cancel()
+		}
+		delete(m.retries, name)
 	}
-	m.attempt = 0
 }
 
-// GetState returns the current reconnection state.
+// GetState returns the aggregate reconnection state across all
+// tunnels. The frontend currently shows a single spinner; reporting
+// the maximum attempt count gives the most informative single number.
 func (m *Monitor) GetState() State {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	var maxAttempt int
+	reconnecting := false
+	for _, r := range m.retries {
+		if r.attempt > 0 {
+			reconnecting = true
+		}
+		if r.attempt > maxAttempt {
+			maxAttempt = r.attempt
+		}
+	}
 	return State{
-		Reconnecting: m.attempt > 0,
-		Attempt:      m.attempt,
+		Reconnecting: reconnecting,
+		Attempt:      maxAttempt,
 		MaxAttempts:  m.cfg.MaxAttempts,
 	}
 }
@@ -255,7 +295,7 @@ func (m *Monitor) monitorLoop() {
 				if status == nil || status.LastHandshakeTime.IsZero() {
 					continue
 				}
-				if status.State != "connected" {
+				if status.State != domain.StateConnected {
 					continue
 				}
 				age := time.Since(status.LastHandshakeTime)
@@ -279,33 +319,54 @@ func (m *Monitor) triggerReconnect() {
 
 func (m *Monitor) triggerReconnectTunnel(tunnelName string) {
 	m.mu.Lock()
-	// Save old cancel/done so we can clean up outside the lock.
-	oldCancel := m.retryCancel
-	oldDone := m.retryDone
 
-	// Create new context and goroutine under the lock — no gap for another
-	// goroutine to sneak in and create a duplicate reconnectWithBackoff.
+	// Cancel ONLY the previous retry for this same key — per-tunnel
+	// triggers preserve other tunnels' backoff state. The empty-string
+	// key ("") is the legacy all-tunnels path; an all-tunnels trigger
+	// also cancels every per-tunnel retry because those tunnels are
+	// about to be torn down by Disconnect().
+	var oldEntries []*retryState
+	if tunnelName == "" {
+		for k, r := range m.retries {
+			oldEntries = append(oldEntries, r)
+			delete(m.retries, k)
+		}
+	} else if r, ok := m.retries[tunnelName]; ok {
+		oldEntries = append(oldEntries, r)
+		delete(m.retries, tunnelName)
+	}
+
+	// Create new context + retry slot under the lock so two concurrent
+	// triggers for the same key can't both spawn goroutines.
 	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan struct{})
-	m.retryCancel = cancel
-	m.retryDone = done
-	m.attempt = 0
+	entry := &retryState{
+		cancel: cancel,
+		done:   make(chan struct{}),
+	}
+	m.retries[tunnelName] = entry
 	m.mu.Unlock()
 
-	// Cancel the old retry goroutine outside the lock to avoid deadlock.
-	if oldCancel != nil {
-		oldCancel()
-	}
-	if oldDone != nil {
-		select {
-		case <-oldDone:
-		case <-time.After(5 * time.Second):
-			slog.Warn("timed out waiting for previous retry goroutine to exit")
+	// Cancel old goroutines outside the lock. Bound the wait by stopCh
+	// in addition to the 5-second timeout — Stop() needs to be able to
+	// preempt this so helper cleanup isn't blocked by a hung retry.
+	for _, old := range oldEntries {
+		if old.cancel != nil {
+			old.cancel()
+		}
+		if old.done != nil {
+			select {
+			case <-old.done:
+			case <-m.stopCh:
+				return
+			case <-time.After(5 * time.Second):
+				slog.Warn("timed out waiting for previous retry goroutine to exit",
+					"tunnel", tunnelName)
+			}
 		}
 	}
 
 	go func() {
-		defer close(done)
+		defer close(entry.done)
 		defer func() {
 			if r := recover(); r != nil {
 				slog.Error("reconnectWithBackoff panic (recovered)",
@@ -313,16 +374,20 @@ func (m *Monitor) triggerReconnectTunnel(tunnelName string) {
 					"stack", string(debug.Stack()))
 			}
 		}()
-		m.reconnectWithBackoff(ctx, tunnelName)
+		m.reconnectWithBackoff(ctx, tunnelName, entry)
 	}()
 }
 
 // reconnectWithBackoff retries reconnection with exponential backoff.
 // If tunnelName is non-empty, only that specific tunnel is disconnected and
 // reconnected. If tunnelName is empty, the legacy Disconnect()/reconnectFn("")
-// path is used (reconnects all tunnels, used by sleep/wake).
-func (m *Monitor) reconnectWithBackoff(ctx context.Context, tunnelName string) {
-	delay := m.cfg.InitialDelay
+// path is used (reconnects all tunnels, used by sleep/wake). The entry's
+// `attempt` and `delay` are mutated in place under m.mu so GetState
+// can read a consistent snapshot.
+func (m *Monitor) reconnectWithBackoff(ctx context.Context, tunnelName string, entry *retryState) {
+	m.mu.Lock()
+	entry.delay = m.cfg.InitialDelay
+	m.mu.Unlock()
 
 	for {
 		m.mu.Lock()
@@ -330,22 +395,21 @@ func (m *Monitor) reconnectWithBackoff(ctx context.Context, tunnelName string) {
 			m.mu.Unlock()
 			return
 		}
-		m.attempt++
-		attempt := m.attempt
+		entry.attempt++
+		attempt := entry.attempt
+		delay := entry.delay
 		m.mu.Unlock()
 
 		if m.cfg.MaxAttempts > 0 && attempt > m.cfg.MaxAttempts {
-			slog.Error("max reconnection attempts reached", "attempts", m.cfg.MaxAttempts)
+			slog.Error("max reconnection attempts reached", "attempts", m.cfg.MaxAttempts, "tunnel", tunnelName)
 			m.notifyStatus(State{
 				Reconnecting: false,
 				Attempt:      attempt - 1,
 				MaxAttempts:  m.cfg.MaxAttempts,
 			})
 			m.mu.Lock()
-			m.attempt = 0
-			if m.retryCancel != nil {
-				m.retryCancel()
-				m.retryCancel = nil
+			if cur, ok := m.retries[tunnelName]; ok && cur == entry {
+				delete(m.retries, tunnelName)
 			}
 			m.mu.Unlock()
 			return
@@ -426,11 +490,17 @@ func (m *Monitor) reconnectWithBackoff(ctx context.Context, tunnelName string) {
 					slog.Warn("failed to resume firewall after failed reconnect", "error", err)
 				}
 			}
-			// Exponential backoff
-			delay *= 2
-			if delay > m.cfg.MaxDelay {
-				delay = m.cfg.MaxDelay
+			// Exponential backoff stored on the entry so a sibling
+			// trigger (e.g. CancelRetry + new triggerReconnectTunnel)
+			// can read it for an informative GetState snapshot, and so
+			// future reconnects of THIS tunnel don't reset to
+			// InitialDelay if the same goroutine is later reused.
+			m.mu.Lock()
+			entry.delay = delay * 2
+			if entry.delay > m.cfg.MaxDelay {
+				entry.delay = m.cfg.MaxDelay
 			}
+			m.mu.Unlock()
 			continue
 		}
 
@@ -444,10 +514,11 @@ func (m *Monitor) reconnectWithBackoff(ctx context.Context, tunnelName string) {
 		slog.Info("reconnected successfully", "attempt", attempt, "tunnel", tunnelName)
 		m.notifyStatus(State{Reconnecting: false})
 		m.mu.Lock()
-		m.attempt = 0
-		if m.retryCancel != nil {
-			m.retryCancel()
-			m.retryCancel = nil
+		// Only clear if this entry is still the current one for the
+		// key — a concurrent triggerReconnectTunnel may have already
+		// installed a fresh retry slot.
+		if cur, ok := m.retries[tunnelName]; ok && cur == entry {
+			delete(m.retries, tunnelName)
 		}
 		m.mu.Unlock()
 		return

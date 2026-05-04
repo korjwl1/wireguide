@@ -65,13 +65,24 @@ func validateInterface(iface *InterfaceConfig, result *ValidationResult) {
 		result.addError("Interface.PrivateKey", "invalid key format (must be Base64-encoded 32 bytes)")
 	}
 
-	// Address: required, valid CIDR
+	// Address: required, valid CIDR. We additionally reject /0
+	// prefixes here — assigning 0.0.0.0/0 (or ::/0) to a TUN
+	// interface is structurally meaningless: it would claim every
+	// possible address as "ours" and break local-network access.
+	// Such a value is almost certainly a misconfiguration where the
+	// user pasted AllowedIPs into Address.
 	if len(iface.Address) == 0 {
 		result.addError("Interface.Address", "Address is required")
 	} else {
 		for _, addr := range iface.Address {
-			if _, _, err := net.ParseCIDR(addr); err != nil {
+			_, network, err := net.ParseCIDR(addr)
+			if err != nil {
 				result.addError("Interface.Address", fmt.Sprintf("invalid CIDR format: %q", addr))
+				continue
+			}
+			if ones, _ := network.Mask.Size(); ones == 0 {
+				result.addError("Interface.Address",
+					fmt.Sprintf("/0 is not a valid Interface address (%q) — did you mean to put this in AllowedIPs?", addr))
 			}
 		}
 	}

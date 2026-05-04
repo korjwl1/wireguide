@@ -153,6 +153,14 @@ func fetchPrimaryInterface() (string, bool) {
 	return string(buf[:n]), true
 }
 
+// fireCooldown is the minimum interval between two sendChange()
+// calls. Without it, a rapid Wi-Fi flap (none→en0→none in <2s when
+// the user briefly toggles Wi-Fi) fires two reconnect cycles whose
+// backoffs pile up. With it, the second transition is logged as
+// "suppressed" and only the next stable change after the cooldown
+// triggers a fresh reconnect.
+const fireCooldown = 2 * time.Second
+
 func (d *darwinNetworkChangeDetector) poll() {
 	defer d.wg.Done()
 
@@ -164,6 +172,7 @@ func (d *darwinNetworkChangeDetector) poll() {
 	var lastIface string
 	var hasInitial bool
 	var heartbeat int
+	var lastFire time.Time
 
 	for {
 		select {
@@ -191,6 +200,15 @@ func (d *darwinNetworkChangeDetector) poll() {
 			}
 			prev := lastIface
 			lastIface = iface
+
+			if !lastFire.IsZero() && time.Since(lastFire) < fireCooldown {
+				slog.Info("network primary interface changed (suppressed by cooldown)",
+					"prev", prev, "now", iface,
+					"since_last_fire", time.Since(lastFire).Round(time.Millisecond))
+				continue
+			}
+
+			lastFire = time.Now()
 			slog.Info("network primary interface changed",
 				"prev", prev, "now", iface)
 			d.sendChange()

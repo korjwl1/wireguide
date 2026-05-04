@@ -102,11 +102,20 @@ func (h *Helper) handleSSIDChange(oldSSID, newSSID string) {
 
 	switch action {
 	case "disconnect":
-		slog.Info("wifi rule: trusted SSID, disconnecting all", "ssid", newSSID)
-		_ = h.manager.Disconnect()
-		h.wifiMu.Lock()
-		h.autoConnectedBy = make(map[string]string)
-		h.wifiMu.Unlock()
+		// Trusted SSID: only tear down tunnels that the helper auto-
+		// connected. Disconnecting everything (including manually-
+		// connected tunnels) was a privacy/UX surprise — a user who
+		// manually started a personal tunnel and walked into the
+		// office shouldn't have it killed by a "trusted networks"
+		// rule meant for "I don't need ANY auto-VPN here."
+		for name := range autoSnapshot {
+			slog.Info("wifi rule: trusted SSID, disconnecting auto-managed",
+				"ssid", newSSID, "tunnel", name)
+			_ = h.manager.DisconnectTunnel(name)
+			h.wifiMu.Lock()
+			delete(h.autoConnectedBy, name)
+			h.wifiMu.Unlock()
+		}
 
 	case "connect":
 		// Disconnect every other auto-managed tunnel — switching
@@ -131,8 +140,22 @@ func (h *Helper) handleSSIDChange(oldSSID, newSSID string) {
 			}
 		}
 		if alreadyUp {
+			// Tunnel is already up. We must NOT silently mark it as
+			// auto-managed here, because that would adopt manually-
+			// connected tunnels into the auto-managed set and cause
+			// them to get disconnected the next time the user roams
+			// to a no-rule SSID. Only tunnels that were actually
+			// brought up by THIS function get an autoConnectedBy
+			// entry — manual connects stay manual.
+			//
+			// We do, however, refresh the SSID slot if this tunnel
+			// is *already* in autoConnectedBy (it was auto-connected
+			// for the previous SSID; now the same rule still
+			// applies for the current SSID).
 			h.wifiMu.Lock()
-			h.autoConnectedBy[tunnelName] = newSSID
+			if _, owned := h.autoConnectedBy[tunnelName]; owned {
+				h.autoConnectedBy[tunnelName] = newSSID
+			}
 			h.wifiMu.Unlock()
 			return
 		}

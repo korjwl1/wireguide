@@ -144,18 +144,36 @@ func (h *Helper) handleDisconnect(params json.RawMessage) (interface{}, error) {
 		delete(h.activeCfgs, tunnelName)
 		h.mu.Unlock()
 	} else {
-		// No name specified — disconnect first tunnel (backward compat).
-		// Snapshot active tunnel name before disconnect so we can clear it.
-		activeName := h.manager.ActiveTunnel()
+		// No name specified — backward-compat path that disconnects
+		// the "first" tunnel. We snapshot ALL active names up front
+		// and disconnect them one by one so that:
+		//   (a) the activeCfgs cache stays consistent regardless of
+		//       which tunnel manager.Disconnect() picked, and
+		//   (b) a concurrent reconnect can't race a stale name into
+		//       the delete above and corrupt the cache for an
+		//       unrelated tunnel.
+		// Modern callers always pass tunnelName; this path mostly
+		// serves the legacy single-tunnel tray menu.
+		toDisconnect := h.manager.ActiveTunnels()
 		if err := h.manager.Disconnect(); err != nil {
 			return nil, err
 		}
 		h.mu.Lock()
-		if activeName != "" {
-			delete(h.activeCfgs, activeName)
+		for _, name := range toDisconnect {
+			delete(h.activeCfgs, name)
 		}
 		h.mu.Unlock()
 	}
+	// On any successful disconnect, clear the auto-managed marker so
+	// a subsequent SSID-rule cycle can't try to re-disconnect a
+	// tunnel the user already brought down manually.
+	h.wifiMu.Lock()
+	if tunnelName != "" {
+		delete(h.autoConnectedBy, tunnelName)
+	} else {
+		h.autoConnectedBy = make(map[string]string)
+	}
+	h.wifiMu.Unlock()
 	return ipc.Empty{}, nil
 }
 

@@ -3,8 +3,9 @@ package diag
 import (
 	"bufio"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
-	"math/rand"
 	"net"
 	"os"
 	"os/exec"
@@ -34,10 +35,18 @@ type DNSServer struct {
 func RunDNSLeakTest(expectedDNS []string) *DNSLeakResult {
 	result := &DNSLeakResult{}
 
-	// Generate a random domain to prevent caching.
-	// Use the global rand which is auto-seeded since Go 1.20.
-	randomSub := fmt.Sprintf("wireguide-test-%d", rand.Intn(999999))
-	testDomain := randomSub + ".example.com"
+	// Generate a fresh random subdomain so the test query can't be
+	// served from any resolver's cache. crypto/rand (16 bytes hex)
+	// gives 128 bits of randomness — far beyond any feasible cache
+	// pre-population. .invalid is reserved by RFC 6761 for "must
+	// always return NXDOMAIN" so the test can't accidentally hit a
+	// real domain or load a third-party authoritative server.
+	var nonce [16]byte
+	if _, err := rand.Read(nonce[:]); err != nil {
+		result.Error = "cannot generate random domain"
+		return result
+	}
+	testDomain := "wireguide-" + hex.EncodeToString(nonce[:]) + ".invalid"
 	result.TestDomain = testDomain
 
 	// Check system resolver configuration

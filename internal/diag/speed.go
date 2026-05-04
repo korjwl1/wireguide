@@ -1,6 +1,7 @@
 package diag
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -16,13 +17,21 @@ type SpeedTestResult struct {
 }
 
 // RunSpeedTest performs a simple download speed test.
-// Uses a public HTTP endpoint to measure throughput.
-func RunSpeedTest() *SpeedTestResult {
+// Uses a public HTTP endpoint to measure throughput. The caller
+// passes a context so the GUI can cancel mid-test (e.g. user closes
+// the diagnostics tab) without leaving a 10MB download draining in
+// the background.
+func RunSpeedTest(ctx context.Context) *SpeedTestResult {
 	result := &SpeedTestResult{}
 
 	// Measure latency first
 	start := time.Now()
-	resp, err := http.Head("https://www.google.com")
+	headReq, err := http.NewRequestWithContext(ctx, http.MethodHead, "https://www.google.com", nil)
+	if err != nil {
+		result.Error = fmt.Sprintf("connectivity check setup: %v", err)
+		return result
+	}
+	resp, err := http.DefaultClient.Do(headReq)
 	if err != nil {
 		result.Error = fmt.Sprintf("connectivity check failed: %v", err)
 		return result
@@ -30,13 +39,21 @@ func RunSpeedTest() *SpeedTestResult {
 	resp.Body.Close()
 	result.LatencyMs = float64(time.Since(start).Milliseconds())
 
-	// Download test — use a known file
-	// Cloudflare speed test endpoint (100MB)
-	testURL := "https://speed.cloudflare.com/__down?bytes=10000000" // 10MB
-	client := &http.Client{Timeout: 30 * time.Second}
+	// Download test — Cloudflare speed test endpoint (10 MB). Wrap
+	// the per-request context with a 30s deadline so a slow link
+	// can't stretch the test forever, but a faster outer ctx
+	// cancellation still preempts.
+	dlCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	testURL := "https://speed.cloudflare.com/__down?bytes=10000000"
+	dlReq, err := http.NewRequestWithContext(dlCtx, http.MethodGet, testURL, nil)
+	if err != nil {
+		result.Error = fmt.Sprintf("download test setup: %v", err)
+		return result
+	}
 
 	start = time.Now()
-	dlResp, err := client.Get(testURL)
+	dlResp, err := http.DefaultClient.Do(dlReq)
 	if err != nil {
 		result.Error = fmt.Sprintf("download test failed: %v", err)
 		return result

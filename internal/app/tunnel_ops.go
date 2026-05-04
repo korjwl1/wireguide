@@ -137,11 +137,21 @@ func (s *TunnelService) Disconnect() error {
 	return err
 }
 
-// DisconnectTunnel disconnects a specific tunnel by name.
+// DisconnectTunnel disconnects a specific tunnel by name. Mirrors
+// Disconnect()'s "client closed" retry: a helper recovery during a
+// per-tunnel disconnect (e.g. user clicks the tray's per-tunnel
+// item right when the health monitor swaps clients) should be
+// transparent, not surfaced as a confusing error.
 func (s *TunnelService) DisconnectTunnel(name string) error {
 	s.clients.MarkInflight()
 	defer s.clients.UnmarkInflight()
-	return s.callLong(ipc.MethodDisconnect, ipc.DisconnectRequest{TunnelName: name}, nil)
+	err := s.callLong(ipc.MethodDisconnect, ipc.DisconnectRequest{TunnelName: name}, nil)
+	if err != nil && isClientClosed(err) {
+		slog.Info("disconnect-tunnel got client-closed, retrying with fresh client",
+			"tunnel", name)
+		err = s.callLong(ipc.MethodDisconnect, ipc.DisconnectRequest{TunnelName: name}, nil)
+	}
+	return err
 }
 
 // isClientClosed returns true for errors caused by the IPC client being closed

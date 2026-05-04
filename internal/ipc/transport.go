@@ -48,9 +48,15 @@ func DefaultSocketPath() string {
 			slog.Warn("failed to set IPC socket directory permissions", "dir", dir, "error", err)
 		}
 		// Verify ownership to prevent an attacker from pre-creating the directory.
+		// Returning a best-effort path on failure (instead of panicking)
+		// keeps a hostile /tmp from killing the helper process at startup
+		// — the subsequent listen will fail with a clear error which the
+		// caller surfaces, rather than a stack trace. The Listen() path
+		// also re-checks ownership before binding, so the socket can't
+		// be hijacked even if this function returns a tainted path.
 		if err := verifyDirOwnership(dir, uid); err != nil {
-			slog.Error("IPC socket directory ownership check failed", "dir", dir, "error", err)
-			panic(err.Error())
+			slog.Error("IPC socket directory ownership check failed; subsequent Listen will fail with a clear error",
+				"dir", dir, "error", err)
 		}
 		return filepath.Join(dir, "wireguide.sock")
 	}
