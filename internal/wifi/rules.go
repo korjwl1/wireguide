@@ -4,11 +4,9 @@ import "sort"
 
 // Rules defines WiFi auto-connect behavior. The model is per-tunnel:
 // each tunnel owns the list of SSIDs that should auto-activate it.
-// The "trusted" list is a global override that disconnects all
-// tunnels regardless of which one a per-tunnel rule would otherwise
-// activate.
+// The "trusted" list is a global override that disconnects auto-managed
+// tunnels when joining those networks.
 type Rules struct {
-	Enabled      bool                   `json:"enabled"`       // master switch
 	TrustedSSIDs []string               `json:"trusted_ssids"` // override: VPN off on these networks
 	PerTunnel    map[string]TunnelSSIDs `json:"per_tunnel"`    // keyed by tunnel name
 }
@@ -20,11 +18,10 @@ type TunnelSSIDs struct {
 	AutoConnectSSIDs []string `json:"auto_connect_ssids"`
 }
 
-// DefaultRules returns disabled rules with empty maps initialized so
+// DefaultRules returns empty rules with maps initialized so
 // JSON marshaling produces {} rather than null for empty per-tunnel.
 func DefaultRules() *Rules {
 	return &Rules{
-		Enabled:   false,
 		PerTunnel: make(map[string]TunnelSSIDs),
 	}
 }
@@ -32,15 +29,15 @@ func DefaultRules() *Rules {
 // Action determines what to do when the system joins the given SSID.
 // Returns:
 //
-//	"disconnect", ""           — SSID is trusted, drop all tunnels
+//	"disconnect", ""            — SSID is trusted, drop auto-managed tunnels
 //	"connect",    "tunnel-name" — SSID matches a tunnel's auto-connect list
-//	"none",       ""           — no rule applies
+//	"none",       ""            — no rule applies
 //
 // When multiple tunnels would match the same SSID, the lexicographically
 // first tunnel wins. Sorting yields deterministic behavior across runs
 // and makes the choice predictable for the user.
 func (r *Rules) Action(ssid string) (action string, tunnelName string) {
-	if !r.Enabled || ssid == "" {
+	if ssid == "" {
 		return "none", ""
 	}
 	for _, trusted := range r.TrustedSSIDs {

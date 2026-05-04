@@ -295,6 +295,14 @@ export function ReadFile(path) {
 /**
  * RenameTunnel changes a tunnel's name. Rejects rename of the connected
  * tunnel since the interface name is derived from it.
+ * 
+ * Routes through the helper's Tunnel.Rename so the active-tunnel check and
+ * the file rename both happen under the helper's connectMu — closing the
+ * race where a Connect arriving between the GUI's check and the rename
+ * could leave the new name in activeCfgs while the file path moved.
+ * 
+ * Falls back to a direct local rename if the helper rejects the method
+ * (older helper that hasn't been upgraded yet).
  * @param {string} oldName
  * @param {string} newName
  * @returns {$CancellablePromise<void>}

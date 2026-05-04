@@ -4,7 +4,6 @@ import "testing"
 
 func TestActionTrustedSSID(t *testing.T) {
 	rules := &Rules{
-		Enabled:      true,
 		TrustedSSIDs: []string{"HomeWiFi", "Office"},
 	}
 	action, _ := rules.Action("HomeWiFi")
@@ -15,7 +14,6 @@ func TestActionTrustedSSID(t *testing.T) {
 
 func TestActionPerTunnelMatch(t *testing.T) {
 	rules := &Rules{
-		Enabled: true,
 		PerTunnel: map[string]TunnelSSIDs{
 			"vpn-secure": {AutoConnectSSIDs: []string{"CafeWiFi", "Airport"}},
 		},
@@ -32,7 +30,6 @@ func TestActionMultiTunnelDeterministic(t *testing.T) {
 	// tunnel — Go map iteration order is randomized, so we exercise
 	// the sort path.
 	rules := &Rules{
-		Enabled: true,
 		PerTunnel: map[string]TunnelSSIDs{
 			"zebra-vpn":  {AutoConnectSSIDs: []string{"Shared"}},
 			"alpha-vpn":  {AutoConnectSSIDs: []string{"Shared"}},
@@ -51,7 +48,6 @@ func TestActionTrustedOverridesPerTunnel(t *testing.T) {
 	// A trusted SSID disconnects even when a tunnel rule would also
 	// match — trust is the higher-priority signal.
 	rules := &Rules{
-		Enabled:      true,
 		TrustedSSIDs: []string{"home"},
 		PerTunnel: map[string]TunnelSSIDs{
 			"work-vpn": {AutoConnectSSIDs: []string{"home"}},
@@ -63,21 +59,8 @@ func TestActionTrustedOverridesPerTunnel(t *testing.T) {
 	}
 }
 
-func TestActionDisabled(t *testing.T) {
-	rules := &Rules{
-		Enabled: false,
-		PerTunnel: map[string]TunnelSSIDs{
-			"vpn": {AutoConnectSSIDs: []string{"AnySSID"}},
-		},
-	}
-	action, _ := rules.Action("AnySSID")
-	if action != "none" {
-		t.Errorf("expected none when disabled, got %s", action)
-	}
-}
-
 func TestActionEmptySSID(t *testing.T) {
-	rules := &Rules{Enabled: true}
+	rules := &Rules{}
 	action, _ := rules.Action("")
 	if action != "none" {
 		t.Errorf("expected none for empty SSID, got %s", action)
@@ -86,7 +69,6 @@ func TestActionEmptySSID(t *testing.T) {
 
 func TestActionNoMatch(t *testing.T) {
 	rules := &Rules{
-		Enabled: true,
 		PerTunnel: map[string]TunnelSSIDs{
 			"vpn": {AutoConnectSSIDs: []string{"OfficeWiFi"}},
 		},

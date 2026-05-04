@@ -39,8 +39,6 @@
     "latency": "지연 시간",
     "wifi_auto_connect": "자동 연결",
     "wifi_auto_connect_hint": "이 네트워크에 접속하면 이 터널이 자동으로 켜집니다.",
-    "wifi_disabled": "규칙 꺼짐",
-    "wifi_master_off": "현재 Wi-Fi 규칙이 Settings → Wi-Fi 규칙에서 꺼져있습니다. 아래 목록은 저장되지만 규칙을 켜야 동작합니다.",
     "wifi_empty": "추가된 네트워크가 없습니다.",
     "wifi_added": "자동 연결 네트워크",
     "wifi_known": "저장된 네트워크",
@@ -240,11 +238,9 @@
     "cancel": "나중에"
   },
   "wifi_rules": {
-    "title": "Wi-Fi 규칙 사용",
-    "hint": "접속한 Wi-Fi 네트워크에 따라 터널이 자동으로 켜지거나 꺼집니다.",
     "trusted_ssids": "신뢰하는 네트워크",
-    "trusted_hint": "이 네트워크에서는 모든 터널이 자동으로 해제됩니다.",
-    "per_tunnel_location": "터널별 자동 연결 SSID는 해당 터널 상세 패널에서 설정합니다.",
+    "trusted_hint": "이 네트워크에 접속하면 자동 연결된 모든 터널이 자동으로 해제됩니다.",
+    "no_trusted": "추가된 신뢰 네트워크가 없습니다.",
     "add": "추가",
     "ssid_placeholder": "네트워크 이름 (SSID)"
   }

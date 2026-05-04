@@ -85,9 +85,6 @@ func (h *Helper) handleSSIDChange(oldSSID, newSSID string) {
 		return
 	}
 	rules := &settings.WifiRules
-	if !rules.Enabled {
-		return
-	}
 	action, tunnelName := rules.Action(newSSID)
 
 	// Snapshot the auto-managed map under the lock, then operate

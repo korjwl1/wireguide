@@ -39,8 +39,6 @@
     "latency": "Latency",
     "wifi_auto_connect": "Auto-Connect",
     "wifi_auto_connect_hint": "This tunnel activates when you join one of these networks.",
-    "wifi_disabled": "rules off",
-    "wifi_master_off": "Wi-Fi rules are currently disabled in Settings → Wi-Fi Rules. The list below is saved but won't fire until rules are enabled.",
     "wifi_empty": "No networks added yet.",
     "wifi_added": "Auto-connect networks",
     "wifi_known": "Saved networks",
@@ -240,11 +238,9 @@
     "cancel": "Later"
   },
   "wifi_rules": {
-    "title": "Enable Wi-Fi Rules",
-    "hint": "Auto-connect tunnels based on the Wi-Fi network you join.",
     "trusted_ssids": "Trusted Networks",
-    "trusted_hint": "On these networks, all tunnels disconnect automatically.",
-    "per_tunnel_location": "Per-tunnel Wi-Fi auto-connect lives in each tunnel's detail panel.",
+    "trusted_hint": "On these networks, all auto-managed tunnels disconnect automatically.",
+    "no_trusted": "No trusted networks added.",
     "add": "Add",
     "ssid_placeholder": "Network name (SSID)"
   }

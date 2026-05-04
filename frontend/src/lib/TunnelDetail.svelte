@@ -13,10 +13,8 @@
 
   // Per-tunnel Wi-Fi auto-connect rules. Loaded from Settings.WifiRules.PerTunnel
   // for the currently-selected tunnel; mutations here SaveSettings the
-  // entire object back. Master enable + global trusted SSIDs live in
-  // Settings → Wi-Fi 규칙 instead.
+  // entire object back. Global trusted SSIDs live in Settings → Wi-Fi 규칙.
   let wifiSsids = [];
-  let wifiEnabled = false;
   let newWifiSsid = '';
   let showWifiModal = false;
   let wifiAddInput = null;
@@ -108,12 +106,10 @@
   async function loadWifiRules(name) {
     try {
       const s = await TunnelService.GetSettings();
-      wifiEnabled = s?.wifi_rules?.enabled ?? false;
       const perTunnel = s?.wifi_rules?.per_tunnel || {};
       wifiSsids = perTunnel[name]?.auto_connect_ssids || [];
     } catch (e) {
       wifiSsids = [];
-      wifiEnabled = false;
       console.error('loadWifiRules:', e);
     }
   }
@@ -121,7 +117,7 @@
   async function saveWifiSsidsForTunnel(name, ssids) {
     try {
       const s = await TunnelService.GetSettings();
-      const rules = s?.wifi_rules || { enabled: false, trusted_ssids: [], per_tunnel: {} };
+      const rules = s?.wifi_rules || { trusted_ssids: [], per_tunnel: {} };
       rules.per_tunnel = rules.per_tunnel || {};
       if (ssids.length === 0) {
         delete rules.per_tunnel[name];
@@ -459,10 +455,6 @@
       <h3>{$t('tunnel.wifi_auto_connect')} — {$selectedTunnel.name}</h3>
       <p>{$t('tunnel.wifi_auto_connect_hint')}</p>
 
-      {#if !wifiEnabled}
-        <div class="wifi-warn" role="status">{$t('tunnel.wifi_master_off')}</div>
-      {/if}
-
       <div class="wifi-add-row">
         <div class="wifi-combo">
           <input
@@ -584,47 +576,6 @@
     letter-spacing: 0.05em;
     margin: var(--space-4) 0 var(--space-2);
   }
-  .wifi-empty-row {
-    font: var(--text-footnote);
-    color: var(--text-muted);
-    padding: var(--space-2) 0;
-    font-style: italic;
-  }
-  .wifi-list {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-    max-height: 160px;
-    overflow-y: auto;
-  }
-  .wifi-item {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding: var(--space-2) var(--space-3);
-    background: var(--bg-card);
-    border-radius: var(--radius-sm, 6px);
-    font: var(--text-body);
-    min-height: 28px;
-  }
-  .wifi-ssid-label {
-    color: var(--text-primary);
-  }
-  .wifi-remove {
-    background: none;
-    border: none;
-    color: var(--text-muted);
-    cursor: pointer;
-    font-size: 13px;
-    padding: 4px 8px;
-    border-radius: 4px;
-    min-width: 24px;
-    min-height: 24px;
-  }
-  .wifi-remove:hover {
-    background: color-mix(in srgb, var(--accent-red, #FF3B30) 12%, transparent);
-    color: var(--accent-red, #FF3B30);
-  }
   .wifi-list-block {
     border: 0.5px solid var(--border);
     border-radius: var(--radius-sm, 6px);
@@ -706,13 +657,6 @@
     border-radius: 999px;
     background: color-mix(in srgb, var(--accent-green, #34C759) 14%, transparent);
   }
-  .wifi-empty-row-text {
-    font: var(--text-footnote);
-    color: var(--text-muted);
-    font-style: italic;
-    padding: var(--space-3);
-    text-align: center;
-  }
   .wifi-add-row {
     display: flex;
     gap: var(--space-2);
@@ -771,26 +715,6 @@
     background: color-mix(in srgb, var(--accent-blue, #007AFF) 12%, transparent);
   }
   .wifi-combo-name { flex: 1; }
-  .wifi-add {
-    display: flex;
-    gap: var(--space-2);
-    margin-bottom: var(--space-4);
-  }
-  .wifi-add input {
-    flex: 1;
-    padding: var(--space-2) var(--space-3);
-    background: var(--bg-input);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm, 6px);
-    color: var(--text-primary);
-    font: var(--text-body);
-    min-height: 28px;
-  }
-  .wifi-add input:focus-visible {
-    outline: 2px solid var(--accent-blue, #007AFF);
-    outline-offset: 0;
-    border-color: var(--accent-blue, #007AFF);
-  }
 
   /* ---------- Layout ---------- */
   .detail-panel {

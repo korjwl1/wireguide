@@ -92,9 +92,8 @@ export class Settings {
         if (!("wifi_rules" in $$source)) {
             /**
              * WifiRules holds the SSID-based auto-connect / auto-disconnect
-             * policy. Disabled by default; the frontend Settings panel toggles
-             * it and per-SSID mappings. Evaluated by the GUI on each SSID
-             * change broadcast from the helper.
+             * policy. Per-tunnel auto-connect SSIDs are managed in TunnelDetail;
+             * trusted SSIDs (global disconnect on join) are managed in Settings.
              * @member
              * @type {wifi$0.Rules}
              */

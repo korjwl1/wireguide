@@ -43,7 +43,6 @@
     log_level: 'info',
     tray_icon_style: 'color',
     wifi_rules: {
-      enabled: false,
       trusted_ssids: [],
       per_tunnel: {},
     },
@@ -67,7 +66,6 @@
         settings.tray_icon_style = s.tray_icon_style || 'color';
         if (s.wifi_rules) {
           settings.wifi_rules = {
-            enabled: s.wifi_rules.enabled ?? false,
             trusted_ssids: s.wifi_rules.trusted_ssids || [],
             per_tunnel: s.wifi_rules.per_tunnel || {},
           };
@@ -84,12 +82,11 @@
     // Re-fetch the freshest settings.json before writing so per-tunnel
     // wifi rule edits made in TunnelDetail (which calls SaveSettings
     // independently with its own modified per_tunnel map) aren't
-    // silently overwritten. We own only `enabled` and `trusted_ssids`
-    // in wifi_rules; `per_tunnel` belongs to TunnelDetail. If the
-    // fresh fetch fails (helper restarting, IPC flake) we abort
-    // rather than write our potentially-stale per_tunnel snapshot —
-    // a deferred save is far better than clobbering the user's
-    // per-tunnel edits.
+    // silently overwritten. We own only `trusted_ssids` in wifi_rules;
+    // `per_tunnel` belongs to TunnelDetail. If the fresh fetch fails
+    // (helper restarting, IPC flake) we abort rather than write our
+    // potentially-stale per_tunnel snapshot — a deferred save is far
+    // better than clobbering the user's per-tunnel edits.
     let fresh;
     try {
       fresh = await TunnelService.GetSettings();
@@ -110,7 +107,6 @@
         pin_interface: settings.pin_interface,
         log_level: settings.log_level,
         wifi_rules: {
-          enabled: settings.wifi_rules?.enabled ?? false,
           trusted_ssids: settings.wifi_rules?.trusted_ssids || [],
           per_tunnel: perTunnel,
         },
@@ -330,6 +326,7 @@
         {:else if activeTab === 'wifi_rules'}
           <WifiRules
             rules={settings.wifi_rules}
+            {TunnelService}
             on:change={(e) => { settings.wifi_rules = e.detail; scheduleSave(); }} />
 
         {:else if activeTab === 'about'}

@@ -9,9 +9,8 @@ import { Create as $Create } from "@wailsio/runtime";
 /**
  * Rules defines WiFi auto-connect behavior. The model is per-tunnel:
  * each tunnel owns the list of SSIDs that should auto-activate it.
- * The "trusted" list is a global override that disconnects all
- * tunnels regardless of which one a per-tunnel rule would otherwise
- * activate.
+ * The "trusted" list is a global override that disconnects auto-managed
+ * tunnels when joining those networks.
  */
 export class Rules {
     /**
@@ -19,14 +18,6 @@ export class Rules {
      * @param {Partial<Rules>} [$$source = {}] - The source object to create the Rules.
      */
     constructor($$source = {}) {
-        if (!("enabled" in $$source)) {
-            /**
-             * master switch
-             * @member
-             * @type {boolean}
-             */
-            this["enabled"] = false;
-        }
         if (!("trusted_ssids" in $$source)) {
             /**
              * override: VPN off on these networks
@@ -53,14 +44,14 @@ export class Rules {
      * @returns {Rules}
      */
     static createFrom($$source = {}) {
-        const $$createField1_0 = $$createType0;
-        const $$createField2_0 = $$createType2;
+        const $$createField0_0 = $$createType0;
+        const $$createField1_0 = $$createType2;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("trusted_ssids" in $$parsedSource) {
-            $$parsedSource["trusted_ssids"] = $$createField1_0($$parsedSource["trusted_ssids"]);
+            $$parsedSource["trusted_ssids"] = $$createField0_0($$parsedSource["trusted_ssids"]);
         }
         if ("per_tunnel" in $$parsedSource) {
-            $$parsedSource["per_tunnel"] = $$createField2_0($$parsedSource["per_tunnel"]);
+            $$parsedSource["per_tunnel"] = $$createField1_0($$parsedSource["per_tunnel"]);
         }
         return new Rules(/** @type {Partial<Rules>} */($$parsedSource));
     }
