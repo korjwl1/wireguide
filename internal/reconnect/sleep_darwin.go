@@ -3,53 +3,121 @@
 package reconnect
 
 /*
-#cgo CFLAGS: -x objective-c
-#cgo LDFLAGS: -framework Cocoa
+#cgo LDFLAGS: -framework IOKit -framework CoreFoundation
 
-#import <Cocoa/Cocoa.h>
+#include <IOKit/IOKitLib.h>
+#include <IOKit/IOMessage.h>
+#include <IOKit/pwr_mgt/IOPMLib.h>
+#include <CoreFoundation/CoreFoundation.h>
+#include <stdlib.h>
 
-// C callback type — invoked from the Objective-C notification observer.
 extern void goWakeCallback(void *ctx);
 
-// Registers an NSWorkspace didWakeNotification observer. Returns an opaque
-// handle (the observer object pointer) so we can unregister later.
-static void* registerWakeNotification(void *ctx) {
-	id observer = [[[NSWorkspace sharedWorkspace] notificationCenter]
-		addObserverForName:NSWorkspaceDidWakeNotification
-		object:nil
-		queue:nil
-		usingBlock:^(NSNotification *note) {
-			goWakeCallback(ctx);
-		}];
-	return (void *)observer;
+// wake_monitor_t holds the IOKit handles + run loop captured for shutdown.
+typedef struct {
+    io_connect_t          root_port;
+    IONotificationPortRef notify_port;
+    io_object_t           notifier;
+    CFRunLoopRef          run_loop;
+    void                 *handle;
+} wake_monitor_t;
+
+// wakeMonitorCallback is invoked by IOKit on power state transitions.
+// IOKit IPC works in any bootstrap context (system or user) — unlike
+// NSWorkspace, it reaches root LaunchDaemons.
+static void wakeMonitorCallback(void *refcon, io_service_t service,
+                                natural_t messageType, void *messageArgument) {
+    wake_monitor_t *m = (wake_monitor_t *)refcon;
+    switch (messageType) {
+        case kIOMessageSystemWillSleep:
+        case kIOMessageCanSystemSleep:
+            // Must acknowledge or macOS forces sleep after a 30s timeout —
+            // delaying every sleep transition unnecessarily.
+            IOAllowPowerChange(m->root_port, (long)messageArgument);
+            break;
+        case kIOMessageSystemHasPoweredOn:
+            // System fully woken; networking is up. Trigger reconnect.
+            goWakeCallback(m->handle);
+            break;
+    }
 }
 
-// Unregisters a previously registered observer.
-static void unregisterWakeNotification(void *observer) {
-	if (observer == NULL) return;
-	id obs = (id)observer;
-	[[[NSWorkspace sharedWorkspace] notificationCenter] removeObserver:obs];
+// startWakeMonitor registers IOKit power notifications on the calling
+// thread and adds the source to that thread's run loop. Caller must
+// then invoke runWakeMonitor() to enter the loop. Returns NULL if
+// registration fails (e.g. sandboxing prevents IORegisterForSystemPower).
+static wake_monitor_t* startWakeMonitor(void *handle) {
+    wake_monitor_t *m = (wake_monitor_t *)calloc(1, sizeof(wake_monitor_t));
+    if (m == NULL) {
+        return NULL;
+    }
+    m->handle = handle;
+
+    m->root_port = IORegisterForSystemPower(m, &m->notify_port,
+                                            wakeMonitorCallback, &m->notifier);
+    if (m->root_port == MACH_PORT_NULL) {
+        free(m);
+        return NULL;
+    }
+
+    m->run_loop = CFRunLoopGetCurrent();
+    CFRunLoopAddSource(m->run_loop,
+                       IONotificationPortGetRunLoopSource(m->notify_port),
+                       kCFRunLoopCommonModes);
+    return m;
+}
+
+// runWakeMonitor blocks until stopWakeMonitor causes CFRunLoopStop.
+static void runWakeMonitor(wake_monitor_t *m) {
+    (void)m;
+    CFRunLoopRun();
+}
+
+// stopWakeMonitor signals the run loop to exit. Safe to call from any
+// thread. The freeing happens on the run-loop thread after exit.
+static void stopWakeMonitor(wake_monitor_t *m) {
+    if (m == NULL || m->run_loop == NULL) {
+        return;
+    }
+    CFRunLoopStop(m->run_loop);
+}
+
+// freeWakeMonitor releases IOKit resources. Must be called from the
+// same thread that ran the run loop, after runWakeMonitor returned.
+static void freeWakeMonitor(wake_monitor_t *m) {
+    if (m == NULL) {
+        return;
+    }
+    IODeregisterForSystemPower(&m->notifier);
+    IOServiceClose(m->root_port);
+    IONotificationPortDestroy(m->notify_port);
+    free(m);
 }
 */
 import "C"
 
 import (
 	"log/slog"
+	"runtime"
 	"sync"
 	"time"
 	"unsafe"
 )
 
 // darwinSleepDetector detects sleep/wake on macOS using two mechanisms:
-//  1. NSWorkspace didWakeNotification via cgo — immediate notification on wake.
-//  2. Wall-clock polling as fallback — catches wake events if the notification
-//     doesn't fire (e.g. if the NSRunLoop isn't pumped in this process).
+//  1. IOKit IORegisterForSystemPower — primary path. Apple QA1340 documents
+//     this as the only wake API that reaches root LaunchDaemons (NSWorkspace
+//     distributed notifications never cross the user→system bootstrap
+//     namespace boundary, so they were silently dead in our prior helper).
+//  2. Wall-clock polling — fallback that catches wake events if IOKit
+//     registration fails (sandboxing, kernel quirk) or the callback is lost.
 type darwinSleepDetector struct {
-	mu       sync.Mutex
-	wakeCh   chan struct{}
-	stopCh   chan struct{}
-	observer unsafe.Pointer // opaque NSObject observer handle
-	handle   uintptr        // numeric handle for cgo callback lookup
+	mu         sync.Mutex
+	wakeCh     chan struct{}
+	stopCh     chan struct{}
+	monitor    *C.wake_monitor_t
+	handle     uintptr
+	threadDone chan struct{}
 }
 
 func NewSleepDetector() SleepDetector {
@@ -61,41 +129,71 @@ func NewSleepDetector() SleepDetector {
 
 func (d *darwinSleepDetector) Start() {
 	d.mu.Lock()
-	defer d.mu.Unlock()
-	// Reinitialize stopCh so the detector is reusable after Stop().
 	d.stopCh = make(chan struct{})
-
-	// Register in the lookup table and pass the numeric handle to C.
-	// We use a uintptr handle (cast to void*) instead of a Go pointer,
-	// which satisfies cgo's pointer-passing rules.
+	d.threadDone = make(chan struct{})
 	d.handle = registerDetector(d)
-	// The handle is a small integer (not a Go pointer), so casting it to
-	// unsafe.Pointer for the C call is safe — it's an opaque token the C
-	// side passes back to goWakeCallback unchanged.
-	//nolint:govet // uintptr->unsafe.Pointer is intentional: handle is not a Go pointer
-	ctx := *(*unsafe.Pointer)(unsafe.Pointer(&d.handle))
-	d.observer = C.registerWakeNotification(ctx)
+	d.mu.Unlock()
 
-	// Start polling fallback.
+	started := make(chan struct{})
+
+	go func() {
+		// CFRunLoop is per-thread. We must lock to a single OS thread so
+		// the run loop set up by startWakeMonitor is the one we then run
+		// and stop. Without LockOSThread the goroutine could migrate and
+		// the source we added would never be serviced.
+		runtime.LockOSThread()
+		defer runtime.UnlockOSThread()
+		defer close(d.threadDone)
+
+		ctx := *(*unsafe.Pointer)(unsafe.Pointer(&d.handle))
+		m := C.startWakeMonitor(ctx)
+		if m == nil {
+			slog.Warn("IORegisterForSystemPower failed — relying on polling fallback for wake detection")
+			close(started)
+			return
+		}
+
+		d.mu.Lock()
+		d.monitor = m
+		d.mu.Unlock()
+		close(started)
+
+		// Blocks until Stop() → CFRunLoopStop.
+		C.runWakeMonitor(m)
+		C.freeWakeMonitor(m)
+	}()
+
+	<-started
+
+	// Polling fallback (safety net — runs alongside IOKit, so a missed
+	// IOKit wake event still gets caught).
 	go d.poll()
 }
 
 func (d *darwinSleepDetector) Stop() {
 	d.mu.Lock()
-	defer d.mu.Unlock()
 	select {
 	case <-d.stopCh:
-		// Already closed; nothing to do.
+		d.mu.Unlock()
+		return
 	default:
 		close(d.stopCh)
 	}
-	if d.observer != nil {
-		C.unregisterWakeNotification(d.observer)
-		d.observer = nil
+	m := d.monitor
+	d.monitor = nil
+	threadDone := d.threadDone
+	handle := d.handle
+	d.handle = 0
+	d.mu.Unlock()
+
+	if m != nil {
+		C.stopWakeMonitor(m)
 	}
-	if d.handle != 0 {
-		unregisterDetector(d.handle)
-		d.handle = 0
+	if threadDone != nil {
+		<-threadDone
+	}
+	if handle != 0 {
+		unregisterDetector(handle)
 	}
 }
 
@@ -173,7 +271,6 @@ func goWakeCallback(ctx unsafe.Pointer) {
 	if !ok {
 		return
 	}
-	slog.Info("sleep/wake detected via NSWorkspace notification")
+	slog.Info("sleep/wake detected via IOKit notification")
 	d.sendWake()
 }
-

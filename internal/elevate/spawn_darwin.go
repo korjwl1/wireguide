@@ -101,9 +101,16 @@ func installAndLoadDaemon(args Args) error {
 	// 4. Set ownership/permissions
 	// 5. Bootout old daemon (ignore errors — may not exist)
 	// 6. Bootstrap new daemon
+	// xattr -d strips com.apple.quarantine from the freshly copied helper
+	// binary. macOS adds this attr to anything downloaded (e.g. inside a
+	// dmg/zip release) and Gatekeeper blocks quarantined binaries from
+	// running as root LaunchDaemons. Trailing `;` (not `&&`): on dev
+	// builds without quarantine the command is a no-op + nonzero exit,
+	// which we don't want to abort the install.
 	shellScript := fmt.Sprintf(
 		`mkdir -p /Library/PrivilegedHelperTools && `+
 			`cp -f %s %s && `+
+			`xattr -d com.apple.quarantine %s 2>/dev/null; `+
 			`chown root:wheel %s && `+
 			`chmod 755 %s && `+
 			`cp -f %s %s && `+
@@ -112,6 +119,7 @@ func installAndLoadDaemon(args Args) error {
 			`launchctl bootout system/%s 2>/dev/null; `+
 			`launchctl bootstrap system %s`,
 		shellQuote(exe), shellQuote(daemonBinary),
+		shellQuote(daemonBinary),
 		shellQuote(daemonBinary),
 		shellQuote(daemonBinary),
 		shellQuote(tmpPlist), shellQuote(daemonPlist),
