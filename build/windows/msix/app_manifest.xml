@@ -10,7 +10,7 @@
   <Identity 
     Name="com.example.wireguide"
     Publisher="CN=My Company"
-    Version="0.1.9.0" 
+    Version="0.2.0.0"
     ProcessorArchitecture="x64" />
   
   <Properties>
