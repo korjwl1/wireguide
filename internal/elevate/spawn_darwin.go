@@ -107,6 +107,15 @@ func installAndLoadDaemon(args Args) error {
 	// running as root LaunchDaemons. Trailing `;` (not `&&`): on dev
 	// builds without quarantine the command is a no-op + nonzero exit,
 	// which we don't want to abort the install.
+	//
+	// `launchctl bootout` returns immediately, but the actual teardown
+	// is asynchronous. If `launchctl bootstrap` runs while the old
+	// service is still being torn down, it fails with "service already
+	// loaded" and the whole script exits non-zero — which surfaces as
+	// the macOS "An error occurred. Try again?" osascript dialog the
+	// user has been hitting on every install. The polling loop after
+	// bootout waits up to 2 seconds for `launchctl print` to stop
+	// finding the service, then bootstrap races no longer occur.
 	shellScript := fmt.Sprintf(
 		`mkdir -p /Library/PrivilegedHelperTools && `+
 			`cp -f %s %s && `+
@@ -117,6 +126,7 @@ func installAndLoadDaemon(args Args) error {
 			`chown root:wheel %s && `+
 			`chmod 644 %s && `+
 			`launchctl bootout system/%s 2>/dev/null; `+
+			`i=0; while [ $i -lt 20 ] && launchctl print system/%s >/dev/null 2>&1; do sleep 0.1; i=$((i+1)); done; `+
 			`launchctl bootstrap system %s`,
 		shellQuote(exe), shellQuote(daemonBinary),
 		shellQuote(daemonBinary),
@@ -125,6 +135,7 @@ func installAndLoadDaemon(args Args) error {
 		shellQuote(tmpPlist), shellQuote(daemonPlist),
 		shellQuote(daemonPlist),
 		shellQuote(daemonPlist),
+		daemonLabel,
 		daemonLabel,
 		shellQuote(daemonPlist),
 	)

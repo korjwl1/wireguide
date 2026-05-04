@@ -69,18 +69,19 @@ type FirewallResumeFunc func() error
 
 // Monitor watches tunnel health and triggers reconnection.
 type Monitor struct {
-	mu            sync.Mutex
-	cfg           Config
-	manager       TunnelManager
-	reconnectFn   ReconnectFunc
-	statusFn      StatusChangedFunc
-	fwSuspendFn   FirewallSuspendFunc
-	fwResumeFn    FirewallResumeFunc
-	stopCh        chan struct{}
-	wg            sync.WaitGroup
-	running       bool
-	attempt       int
-	sleepDetector SleepDetector
+	mu              sync.Mutex
+	cfg             Config
+	manager         TunnelManager
+	reconnectFn     ReconnectFunc
+	statusFn        StatusChangedFunc
+	fwSuspendFn     FirewallSuspendFunc
+	fwResumeFn      FirewallResumeFunc
+	stopCh          chan struct{}
+	wg              sync.WaitGroup
+	running         bool
+	attempt         int
+	sleepDetector   SleepDetector
+	networkDetector NetworkChangeDetector
 
 	// retryCancel cancels the current reconnectWithBackoff goroutine.
 	// Called from Stop() and from CancelRetry() (manual Disconnect) so that a
@@ -104,6 +105,7 @@ func NewMonitor(manager TunnelManager, reconnectFn ReconnectFunc, statusFn Statu
 		statusFn:           statusFn,
 		stopCh:             make(chan struct{}),
 		sleepDetector:      NewSleepDetector(),
+		networkDetector:    NewNetworkChangeDetector(),
 		healthCheckEnabled: false, // default OFF — enable in Settings
 	}
 }
@@ -155,12 +157,12 @@ func (m *Monitor) Start() {
 		defer m.wg.Done()
 		defer func() {
 			if r := recover(); r != nil {
-				slog.Error("sleepWakeLoop panic (recovered)",
+				slog.Error("triggerLoop panic (recovered)",
 					"panic", fmt.Sprintf("%v", r),
 					"stack", string(debug.Stack()))
 			}
 		}()
-		m.sleepWakeLoop()
+		m.triggerLoop()
 	}()
 	slog.Info("reconnect monitor started")
 }
@@ -180,6 +182,9 @@ func (m *Monitor) Stop() {
 	}
 	if m.sleepDetector != nil {
 		m.sleepDetector.Stop()
+	}
+	if m.networkDetector != nil {
+		m.networkDetector.Stop()
 	}
 	m.mu.Unlock()
 
@@ -449,19 +454,38 @@ func (m *Monitor) reconnectWithBackoff(ctx context.Context, tunnelName string) {
 	}
 }
 
-func (m *Monitor) sleepWakeLoop() {
-	if m.sleepDetector == nil {
-		return
+// triggerLoop fans both wake and network-change events into the same
+// reconnect path. They share the same response — drop the tunnel and
+// rebuild it against the (potentially new) underlying network — so a
+// single select keeps the logic visible.
+func (m *Monitor) triggerLoop() {
+	if m.sleepDetector != nil {
+		m.sleepDetector.Start()
 	}
-	m.sleepDetector.Start()
+	if m.networkDetector != nil {
+		m.networkDetector.Start()
+	}
 
-	wakeCh := m.sleepDetector.WakeChan()
+	var wakeCh <-chan struct{}
+	if m.sleepDetector != nil {
+		wakeCh = m.sleepDetector.WakeChan()
+	}
+	var netCh <-chan struct{}
+	if m.networkDetector != nil {
+		netCh = m.networkDetector.ChangeChan()
+	}
+
 	for {
 		select {
 		case <-m.stopCh:
 			return
 		case <-wakeCh:
 			slog.Info("system wake detected, triggering reconnect")
+			if m.manager.IsConnected() || m.manager.ActiveTunnel() != "" {
+				m.triggerReconnect()
+			}
+		case <-netCh:
+			slog.Info("primary interface change detected, triggering reconnect")
 			if m.manager.IsConnected() || m.manager.ActiveTunnel() != "" {
 				m.triggerReconnect()
 			}
