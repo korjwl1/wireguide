@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net"
 	"os/exec"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -608,6 +609,11 @@ func (m *DarwinManager) RemoveRoutes(ifaceName string, allowedIPs []string, full
 	m.deleteInterfaceRoutes(ifaceName, "inet6")
 
 	// Snapshot bypass list under the lock, then delete outside.
+	// Also clear lastDNS / lastMTU here so a delayed reapply
+	// callback that the monitor.Stop() above couldn't preempt
+	// (e.g. callback was past its mu.Unlock() but before its
+	// applyDNS call) doesn't re-write the now-defunct DNS overrides
+	// on every networksetup service.
 	m.mu.Lock()
 	bypass := m.bypassEndpoints
 	m.bypassEndpoints = nil
@@ -617,6 +623,8 @@ func (m *DarwinManager) RemoveRoutes(ifaceName string, allowedIPs []string, full
 	m.lastGatewayV6 = ""
 	m.lastHasV4Default = false
 	m.lastHasV6Default = false
+	m.lastDNS = nil
+	m.lastMTU = 0
 	m.mu.Unlock()
 
 	for _, ip := range bypass {
@@ -888,8 +896,19 @@ func flushDNSCache() {
 	_ = run("killall", "-HUP", "mDNSResponder")
 }
 
+// validHostnameChars matches RFC 1123 hostname characters plus '.'.
+// Reject anything else so a malicious DNS entry like `foo;rm -rf ~`
+// can't end up in `networksetup -setsearchdomains` arguments (even
+// though Go's exec.Command isn't shell-interpreting, the string still
+// lands in /Library/Preferences/SystemConfiguration/preferences.plist
+// and persists there).
+var validHostnameRegex = regexp.MustCompile(`^[a-zA-Z0-9]([a-zA-Z0-9-]{0,62}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,62}[a-zA-Z0-9])?)*$`)
+
 // splitDNSEntries partitions a mixed DNS list into IP servers and hostname
 // search domains, matching wg-quick's parse of `DNS = 1.1.1.1, corp.example.com`.
+// Entries that are neither valid IPs nor valid RFC-1123 hostnames are
+// dropped (with a debug log) — letting them through risked persisting
+// attacker-supplied strings into system DNS config.
 func splitDNSEntries(entries []string) (servers, search []string) {
 	for _, e := range entries {
 		e = strings.TrimSpace(e)
@@ -898,9 +917,13 @@ func splitDNSEntries(entries []string) (servers, search []string) {
 		}
 		if net.ParseIP(e) != nil {
 			servers = append(servers, e)
-		} else {
-			search = append(search, e)
+			continue
 		}
+		if len(e) <= 253 && validHostnameRegex.MatchString(e) {
+			search = append(search, e)
+			continue
+		}
+		slog.Debug("splitDNSEntries: dropping invalid DNS entry", "entry", e)
 	}
 	return
 }

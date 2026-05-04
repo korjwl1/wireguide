@@ -240,6 +240,15 @@ func Run(addr string, ownerUID int, dataDir string) error {
 			return
 		case <-time.After(3 * time.Second):
 		}
+		// Re-check shutdown after the sleep — `cleanup()` running
+		// concurrently calls h.manager.DisconnectAll(), and we'd
+		// otherwise race handleSSIDChange's manager.Connect against
+		// a torn-down manager.
+		select {
+		case <-h.done:
+			return
+		default:
+		}
 		ssid := wifi.CurrentSSID()
 		if ssid == "" {
 			return
@@ -414,13 +423,37 @@ func (h *Helper) suspendFirewall() error {
 		"kill_switch", ksEnabled, "dns_protection", dnsEnabled)
 
 	// Disable DNS protection first (it may be a sub-anchor of the kill switch).
+	dnsDisabled := false
 	if dnsEnabled {
 		if err := h.firewall.DisableDNSProtection(); err != nil {
 			slog.Warn("suspendFirewall: failed to disable DNS protection", "error", err)
+		} else {
+			dnsDisabled = true
 		}
 	}
 	if ksEnabled {
 		if err := h.firewall.DisableKillSwitch(); err != nil {
+			// We just turned DNS protection off but the kill switch
+			// is still on — that's an inconsistent state. Try to
+			// re-enable DNS protection so the system goes back to
+			// where it was, and surface the error to the caller so
+			// resumeFirewall isn't called against a state that
+			// already half-resumed.
+			if dnsDisabled {
+				h.mu.Lock()
+				dnsServers := h.fwSavedDNSServers
+				h.mu.Unlock()
+				ifaceName := ""
+				if status := h.manager.Status(); status != nil {
+					ifaceName = status.InterfaceName
+				}
+				if ifaceName != "" && len(dnsServers) > 0 {
+					if rollbackErr := h.firewall.EnableDNSProtection(ifaceName, dnsServers); rollbackErr != nil {
+						slog.Error("suspendFirewall: DNS protection rollback ALSO failed",
+							"error", rollbackErr)
+					}
+				}
+			}
 			return fmt.Errorf("suspendFirewall: disable kill switch: %w", err)
 		}
 	}

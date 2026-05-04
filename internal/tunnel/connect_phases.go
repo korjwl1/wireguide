@@ -121,6 +121,26 @@ func (m *Manager) connectPhases(cfg *domain.WireGuardConfig, netMgr network.Netw
 			dnsServers = merged
 		}
 	}
+	// Pre-DNS crash recovery checkpoint. The DNS modification phase
+	// is the first step that leaves persistent state on disk (the
+	// per-service DNS overrides written by `networksetup` survive a
+	// helper crash). If the helper dies between SetDNS and the
+	// FINAL state write below, the user is stuck on the tunnel's
+	// DNS — this checkpoint guarantees crash recovery sees a state
+	// file and falls back to ResetDNSToSystemDefault (which clears
+	// the per-service overrides to DHCP defaults). Empty PreModDNS
+	// triggers the fallback path in RecoverFromCrash.
+	if err := SaveActiveState(m.dataDir, &ActiveTunnelState{
+		TunnelName:    cfg.Name,
+		InterfaceName: ifaceName,
+		DNSServers:    cfg.Interface.DNS,
+		FullTunnel:    fullTunnel,
+		Table:         cfg.Interface.Table,
+		FwMark:        cfg.Interface.FwMark,
+	}); err != nil {
+		slog.Warn("failed to persist pre-DNS crash recovery state", "error", err)
+	}
+
 	if err := netMgr.SetDNS(ifaceName, dnsServers); err != nil {
 		if len(cfg.Interface.DNS) > 0 {
 			return nil, rollback(newTunnelError(ErrNetwork, "setting DNS", err))
@@ -128,12 +148,9 @@ func (m *Manager) connectPhases(cfg *domain.WireGuardConfig, netMgr network.Netw
 		slog.Warn("failed to set DNS", "error", err)
 	}
 
-	// 8. Crash recovery state — persisted AFTER all fallible phases so a
-	// mid-connect failure doesn't leave an orphan state file pointing at a
-	// tunnel that was never actually brought up. Non-fatal: if we can't
-	// write the recovery file (disk full, permissions) the tunnel is still
-	// up, we just won't be able to recover automatically next boot.
-	// Capture pre-modification DNS snapshot for precise crash recovery.
+	// 8. Final state file with the precise per-service DNS snapshot
+	// captured by SetDNS. Lets crash recovery restore exact prior
+	// DNS instead of the blunt DHCP-defaults fallback.
 	var preModDNS map[string][]string
 	if provider, ok := netMgr.(network.DNSSnapshotProvider); ok {
 		preModDNS = provider.SavedDNSSnapshot()

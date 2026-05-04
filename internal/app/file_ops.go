@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/korjwl1/wireguide/internal/config"
-	"github.com/korjwl1/wireguide/internal/ipc"
 )
 
 // ZipImportResult holds the outcome of importing one .conf entry from a zip.
@@ -157,11 +156,15 @@ func (s *TunnelService) GetConfigText(name string) (string, error) {
 // UpdateConfig parses, validates, and overwrites an existing tunnel's config.
 // Rejects edits of the connected tunnel.
 func (s *TunnelService) UpdateConfig(name, content string) error {
-	var active ipc.StringResponse
-	if err := s.call(ipc.MethodActiveName, nil, &active); err != nil {
+	// Use the multi-tunnel ActiveTunnels list, not ActiveName which
+	// only returns the lexicographically-first connected tunnel —
+	// editing a non-primary connected tunnel was previously
+	// permitted and silently desynced helper state from disk.
+	active, err := s.isActiveTunnel(name)
+	if err != nil {
 		return fmt.Errorf("cannot verify tunnel state: %w", err)
 	}
-	if active.Value == name {
+	if active {
 		return fmt.Errorf("cannot edit connected tunnel %q — disconnect first", name)
 	}
 	cfg, err := config.Parse(content)

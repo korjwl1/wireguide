@@ -111,10 +111,7 @@ func (h *Helper) handleSSIDChange(oldSSID, newSSID string) {
 		for name := range autoSnapshot {
 			slog.Info("wifi rule: trusted SSID, disconnecting auto-managed",
 				"ssid", newSSID, "tunnel", name)
-			_ = h.manager.DisconnectTunnel(name)
-			h.wifiMu.Lock()
-			delete(h.autoConnectedBy, name)
-			h.wifiMu.Unlock()
+			h.disconnectAutoManaged(name)
 		}
 
 	case "connect":
@@ -126,10 +123,7 @@ func (h *Helper) handleSSIDChange(oldSSID, newSSID string) {
 			}
 			slog.Info("wifi rule: leaving SSID, disconnecting auto-managed",
 				"tunnel", name, "old_ssid", autoSnapshot[name], "new_ssid", newSSID)
-			_ = h.manager.DisconnectTunnel(name)
-			h.wifiMu.Lock()
-			delete(h.autoConnectedBy, name)
-			h.wifiMu.Unlock()
+			h.disconnectAutoManaged(name)
 		}
 		// Connect the matched tunnel if it isn't already up.
 		alreadyUp := false
@@ -193,10 +187,29 @@ func (h *Helper) handleSSIDChange(oldSSID, newSSID string) {
 		for name := range autoSnapshot {
 			slog.Info("wifi rule: SSID no longer in auto-connect list, disconnecting",
 				"tunnel", name, "previous_ssid", autoSnapshot[name], "new_ssid", newSSID)
-			_ = h.manager.DisconnectTunnel(name)
-			h.wifiMu.Lock()
-			delete(h.autoConnectedBy, name)
-			h.wifiMu.Unlock()
+			h.disconnectAutoManaged(name)
 		}
 	}
+}
+
+// disconnectAutoManaged tears down a tunnel that the wifi-rule
+// engine auto-connected, then clears every cache that referenced it
+// (activeCfgs, autoConnectedBy, in-flight retry). Without each of
+// these cleanups the helper's various recovery paths would
+// resurrect the tunnel: the reconnect monitor would fire its
+// pending retry; manager.Disconnect()'s legacy "all tunnels" path
+// would re-Connect from a stale activeCfgs entry; and the next
+// SSID change handler would try to disconnect a tunnel already
+// gone.
+func (h *Helper) disconnectAutoManaged(name string) {
+	if h.monitor != nil {
+		h.monitor.CancelRetryFor(name)
+	}
+	_ = h.manager.DisconnectTunnel(name)
+	h.mu.Lock()
+	delete(h.activeCfgs, name)
+	h.mu.Unlock()
+	h.wifiMu.Lock()
+	delete(h.autoConnectedBy, name)
+	h.wifiMu.Unlock()
 }

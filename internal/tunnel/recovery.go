@@ -129,17 +129,25 @@ func RecoverFromCrash(dataDir string) []string {
 		return nil
 	}
 
-	mgr := network.NewPlatformManager()
 	var recovered []string
+	var fullySucceeded []string // names whose state we'll clear
 
 	for _, state := range states {
 		slog.Warn("detected orphaned tunnel from previous crash",
 			"tunnel", state.TunnelName,
 			"interface", state.InterfaceName)
 
+		// Each tunnel gets a fresh manager so DNS-savedSnapshot and
+		// route-monitor state from one recovery doesn't bleed into
+		// the next (the previous shared-manager pattern accumulated
+		// per-tunnel state across iterations and double-restored
+		// overlapping services).
+		mgr := network.NewPlatformManager()
+		ok := true
+
 		// Restore routing state (table/fwmark) from persisted values so that
 		// cleanup uses the correct table instead of hardcoded defaults.
-		if rs, ok := mgr.(network.RoutingStateRestorer); ok {
+		if rs, mok := mgr.(network.RoutingStateRestorer); mok {
 			rs.RestoreRoutingState(state.Table, state.FwMark)
 		}
 
@@ -147,19 +155,24 @@ func RecoverFromCrash(dataDir string) []string {
 		// Otherwise fall back to the blunt ResetDNSToSystemDefault which
 		// clears everything to DHCP defaults (loses custom user preferences).
 		if len(state.PreModDNS) > 0 {
-			if restorer, ok := mgr.(network.DNSStateRestorer); ok {
+			if restorer, mok := mgr.(network.DNSStateRestorer); mok {
 				if err := restorer.RestoreDNSFromSnapshot(state.PreModDNS); err != nil {
 					slog.Warn("crash recovery: precise DNS restore failed, falling back to reset", "error", err)
-					_ = mgr.ResetDNSToSystemDefault()
+					if err := mgr.ResetDNSToSystemDefault(); err != nil {
+						ok = false
+					}
 				} else {
 					slog.Info("crash recovery: DNS restored from pre-modification snapshot")
 				}
 			} else {
-				_ = mgr.ResetDNSToSystemDefault()
+				if err := mgr.ResetDNSToSystemDefault(); err != nil {
+					ok = false
+				}
 			}
 		} else {
 			if err := mgr.ResetDNSToSystemDefault(); err != nil {
 				slog.Warn("crash recovery: DNS reset failed", "error", err)
+				ok = false
 			}
 		}
 
@@ -168,13 +181,18 @@ func RecoverFromCrash(dataDir string) []string {
 		if state.InterfaceName != "" {
 			if err := mgr.RemoveRoutes(state.InterfaceName, nil, state.FullTunnel); err != nil {
 				slog.Warn("crash recovery: route removal failed", "error", err)
+				ok = false
 			}
 			if err := mgr.Cleanup(state.InterfaceName); err != nil {
 				slog.Warn("crash recovery: network cleanup failed", "error", err)
+				ok = false
 			}
 		}
 
 		recovered = append(recovered, state.TunnelName)
+		if ok {
+			fullySucceeded = append(fullySucceeded, state.TunnelName)
+		}
 	}
 
 	// Firewall: clean up any leftover PF/nftables/netsh rules from the
@@ -184,8 +202,13 @@ func RecoverFromCrash(dataDir string) []string {
 		slog.Warn("crash recovery: firewall cleanup failed", "error", err)
 	}
 
-	// Clear all state files (both per-tunnel and legacy).
-	ClearAllActiveStates(dataDir)
+	// Clear ONLY the state files whose recovery fully succeeded.
+	// States that hit any error stay on disk so the next boot has
+	// another chance — silently dropping them via ClearAllActiveStates
+	// stranded the bug for users.
+	for _, name := range fullySucceeded {
+		ClearActiveState(dataDir, name)
+	}
 	os.Remove(filepath.Join(dataDir, activeTunnelFile)) // legacy cleanup
 
 	return recovered

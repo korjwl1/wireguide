@@ -229,14 +229,29 @@ func (m *Monitor) Stop() {
 	}
 }
 
-// CancelRetry aborts every in-flight reconnection attempt. Called by
-// the helper when the user manually disconnects — we don't want a
-// backoff sleep to wake up seconds later and re-connect against the
-// user's wishes.
+// CancelRetry aborts every in-flight reconnection attempt. Called
+// from the all-tunnels disconnect path (legacy tray menu, helper
+// shutdown). For per-tunnel disconnects use CancelRetryFor instead —
+// a manual disconnect of A shouldn't kill a healthy in-flight retry
+// for an unrelated tunnel B.
 func (m *Monitor) CancelRetry() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for name, r := range m.retries {
+		if r.cancel != nil {
+			r.cancel()
+		}
+		delete(m.retries, name)
+	}
+}
+
+// CancelRetryFor aborts the in-flight reconnect attempt for a
+// specific tunnel name (or the legacy all-tunnels retry when name is
+// ""). Other tunnels' retries are left running.
+func (m *Monitor) CancelRetryFor(name string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if r, ok := m.retries[name]; ok {
 		if r.cancel != nil {
 			r.cancel()
 		}

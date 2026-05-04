@@ -129,11 +129,15 @@ func (h *Helper) handleDisconnect(params json.RawMessage) (interface{}, error) {
 		// If unmarshal fails (e.g. empty params), disconnect first tunnel (backward compat).
 	}
 
-	// Cancel any in-flight reconnect backoff first — otherwise the monitor
-	// could wake up seconds after the user clicked Disconnect and re-connect
-	// against their wishes.
+	// Cancel only the in-flight reconnect for the tunnel(s) being
+	// torn down — a per-tunnel disconnect of A must not abort a
+	// healthy retry for B.
 	if h.monitor != nil {
-		h.monitor.CancelRetry()
+		if tunnelName != "" {
+			h.monitor.CancelRetryFor(tunnelName)
+		} else {
+			h.monitor.CancelRetry()
+		}
 	}
 
 	if tunnelName != "" {
@@ -143,37 +147,39 @@ func (h *Helper) handleDisconnect(params json.RawMessage) (interface{}, error) {
 		h.mu.Lock()
 		delete(h.activeCfgs, tunnelName)
 		h.mu.Unlock()
-	} else {
-		// No name specified — backward-compat path that disconnects
-		// the "first" tunnel. We snapshot ALL active names up front
-		// and disconnect them one by one so that:
-		//   (a) the activeCfgs cache stays consistent regardless of
-		//       which tunnel manager.Disconnect() picked, and
-		//   (b) a concurrent reconnect can't race a stale name into
-		//       the delete above and corrupt the cache for an
-		//       unrelated tunnel.
-		// Modern callers always pass tunnelName; this path mostly
-		// serves the legacy single-tunnel tray menu.
-		toDisconnect := h.manager.ActiveTunnels()
-		if err := h.manager.Disconnect(); err != nil {
-			return nil, err
-		}
-		h.mu.Lock()
-		for _, name := range toDisconnect {
-			delete(h.activeCfgs, name)
-		}
-		h.mu.Unlock()
-	}
-	// On any successful disconnect, clear the auto-managed marker so
-	// a subsequent SSID-rule cycle can't try to re-disconnect a
-	// tunnel the user already brought down manually.
-	h.wifiMu.Lock()
-	if tunnelName != "" {
+		h.wifiMu.Lock()
 		delete(h.autoConnectedBy, tunnelName)
+		h.wifiMu.Unlock()
 	} else {
-		h.autoConnectedBy = make(map[string]string)
+		// Legacy "no name" path: tear down EVERY active tunnel via
+		// per-tunnel calls so manager.Disconnect()'s "pick the first"
+		// semantic doesn't leave half the snapshot still up while we
+		// blanket-evict their cached configs. Each successful per-
+		// tunnel disconnect drops its cache entry; partial failures
+		// leave the still-up tunnels intact in activeCfgs so the
+		// reconnect monitor can still recover them.
+		toDisconnect := h.manager.ActiveTunnels()
+		var firstErr error
+		for _, name := range toDisconnect {
+			if err := h.manager.DisconnectTunnel(name); err != nil {
+				if firstErr == nil {
+					firstErr = err
+				}
+				slog.Warn("legacy disconnect: tunnel teardown failed",
+					"tunnel", name, "error", err)
+				continue
+			}
+			h.mu.Lock()
+			delete(h.activeCfgs, name)
+			h.mu.Unlock()
+			h.wifiMu.Lock()
+			delete(h.autoConnectedBy, name)
+			h.wifiMu.Unlock()
+		}
+		if firstErr != nil {
+			return nil, firstErr
+		}
 	}
-	h.wifiMu.Unlock()
 	return ipc.Empty{}, nil
 }
 

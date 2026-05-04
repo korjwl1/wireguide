@@ -1,8 +1,10 @@
 package ipc
 
 import (
+	"log/slog"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 // ClientHolder wraps a *Client so that multiple goroutines can share a single
@@ -38,16 +40,39 @@ func (h *ClientHolder) Get() *Client {
 	return h.client
 }
 
-// Set installs a new client and closes the previous one (if any).
+// Set installs a new client and closes the previous one. Waits up
+// to inflightDrainDeadline for in-flight long-running RPCs (Connect,
+// Disconnect) to complete before closing the previous client —
+// closing it earlier would error those calls with "client closed"
+// and the upper-layer retry path would re-fire them against the new
+// helper, double-applying state mutations. After the deadline we
+// proceed regardless: a hung RPC can't block the helper-recovery
+// path forever.
 func (h *ClientHolder) Set(c *Client) {
 	h.mu.Lock()
 	prev := h.client
 	h.client = c
 	h.mu.Unlock()
-	if prev != nil && prev != c {
-		prev.Close()
+	if prev == nil || prev == c {
+		return
 	}
+	deadline := time.Now().Add(inflightDrainDeadline)
+	for h.inflight.Load() > 0 && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if h.inflight.Load() > 0 {
+		slog.Warn("ipc holder: closing previous client with in-flight RPCs after drain timeout",
+			"inflight", h.inflight.Load(),
+			"deadline_ms", inflightDrainDeadline.Milliseconds())
+	}
+	prev.Close()
 }
+
+// inflightDrainDeadline bounds how long Set will wait for in-flight
+// RPCs on the old client to finish. Tunnel Connect under the worst
+// observed conditions takes ~15 s; 5 s past the typical case is a
+// reasonable cap before we give up and close anyway.
+const inflightDrainDeadline = 20 * time.Second
 
 // Close closes the current client. Safe to call multiple times.
 func (h *ClientHolder) Close() {

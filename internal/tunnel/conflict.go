@@ -16,25 +16,57 @@ type ConflictInfo struct {
 	OverlappingIPs []string `json:"overlapping_ips"` // CIDRs that overlap
 }
 
-// CheckConflicts scans existing interfaces for routing conflicts with the given AllowedIPs.
+// CheckConflicts scans existing interfaces for routing conflicts
+// with the given AllowedIPs. When the same logical conflict appears
+// for both IPv4 and IPv6 against the same other-tunnel (e.g.
+// 0.0.0.0/0 vs ::/0 against Tailscale), the entries are merged so
+// the user sees one warning per conflicting interface, not two.
 func CheckConflicts(newAllowedIPs []string) ([]ConflictInfo, error) {
 	interfaces, err := scanWireGuardInterfaces()
 	if err != nil {
 		return nil, err
 	}
 
-	var conflicts []ConflictInfo
+	merged := make(map[string]*ConflictInfo)
+	var order []string
 	for _, iface := range interfaces {
 		overlaps := findOverlaps(newAllowedIPs, iface.Routes)
-		if len(overlaps) > 0 {
-			conflicts = append(conflicts, ConflictInfo{
-				InterfaceName:  iface.Name,
-				Owner:          iface.Owner,
-				OverlappingIPs: overlaps,
-			})
+		if len(overlaps) == 0 {
+			continue
 		}
+		key := iface.Name + "\x00" + iface.Owner
+		if existing, ok := merged[key]; ok {
+			existing.OverlappingIPs = appendUnique(existing.OverlappingIPs, overlaps)
+			continue
+		}
+		ci := &ConflictInfo{
+			InterfaceName:  iface.Name,
+			Owner:          iface.Owner,
+			OverlappingIPs: overlaps,
+		}
+		merged[key] = ci
+		order = append(order, key)
+	}
+	conflicts := make([]ConflictInfo, 0, len(order))
+	for _, key := range order {
+		conflicts = append(conflicts, *merged[key])
 	}
 	return conflicts, nil
+}
+
+func appendUnique(dst, src []string) []string {
+	seen := make(map[string]struct{}, len(dst))
+	for _, s := range dst {
+		seen[s] = struct{}{}
+	}
+	for _, s := range src {
+		if _, ok := seen[s]; ok {
+			continue
+		}
+		seen[s] = struct{}{}
+		dst = append(dst, s)
+	}
+	return dst
 }
 
 // ExistingInterface represents a detected WireGuard-like interface.

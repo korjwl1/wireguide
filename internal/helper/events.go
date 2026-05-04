@@ -82,16 +82,39 @@ func pingTargetForTunnel(cfg *domain.WireGuardConfig, fallbackEndpoint string) s
 }
 
 
-// statusDTO returns the current connection status for broadcast. Since the
-// tunnel package's ConnectionStatus is already an alias for the domain type
-// with wire-safe JSON tags, we just dereference and return it — no field-by-
-// field translation.
+// statusDTO returns the current connection status for broadcast.
+// Pulled from manager.AllStatuses() in a single call — the previous
+// version queried the primary tunnel via Status() AND again via
+// AllStatuses(), doubling UAPI round-trips on every 1Hz tick for the
+// common single-tunnel case.
 func (h *Helper) statusDTO() ipc.ConnectionStatus {
-	s := h.manager.Status()
-	if s == nil {
-		return ipc.ConnectionStatus{}
+	allStats := h.manager.AllStatuses()
+	if len(allStats) == 0 {
+		// Mirror the previous Status()==nil behavior with an empty
+		// disconnected struct so subscribers don't spuriously see
+		// "tunnel disappeared" events on idle helpers.
+		return ipc.ConnectionStatus{State: domain.StateDisconnected}
 	}
-	result := *s
+
+	// Pick the primary the same way manager.Status() did: prefer
+	// the first connected tunnel; otherwise the first non-nil entry.
+	var primary *domain.ConnectionStatus
+	for _, ts := range allStats {
+		if ts == nil {
+			continue
+		}
+		if ts.State == domain.StateConnected {
+			primary = ts
+			break
+		}
+		if primary == nil {
+			primary = ts
+		}
+	}
+	if primary == nil {
+		return ipc.ConnectionStatus{State: domain.StateDisconnected}
+	}
+	result := *primary
 
 	// Snapshot the latency cache once per call so we don't take the
 	// lock per-tunnel inside the loop.
@@ -106,23 +129,25 @@ func (h *Helper) statusDTO() ipc.ConnectionStatus {
 		result.LatencyMs = lat
 	}
 
-	// Include lightweight per-tunnel info (name + state + handshake presence
-	// + latency) so the frontend can show correct badges. Full stats
-	// (rx/tx/duration) are only in the primary status to avoid sending
-	// redundant data every second.
-	if allStats := h.manager.AllStatuses(); len(allStats) > 1 {
+	// Include lightweight per-tunnel info (name + state + handshake
+	// presence + latency) so the frontend can show correct badges.
+	// Pre-allocate to avoid the latent-bug of `append` aliasing a
+	// slice on the manager-returned struct.
+	if len(allStats) > 1 {
+		result.Tunnels = make([]domain.ConnectionStatus, 0, len(allStats))
 		for _, ts := range allStats {
-			if ts != nil {
-				sub := domain.ConnectionStatus{
-					State:         ts.State,
-					TunnelName:    ts.TunnelName,
-					LastHandshake: ts.LastHandshake,
-				}
-				if lat, ok := latencies[ts.TunnelName]; ok {
-					sub.LatencyMs = lat
-				}
-				result.Tunnels = append(result.Tunnels, sub)
+			if ts == nil {
+				continue
 			}
+			sub := domain.ConnectionStatus{
+				State:         ts.State,
+				TunnelName:    ts.TunnelName,
+				LastHandshake: ts.LastHandshake,
+			}
+			if lat, ok := latencies[ts.TunnelName]; ok {
+				sub.LatencyMs = lat
+			}
+			result.Tunnels = append(result.Tunnels, sub)
 		}
 	}
 	return result

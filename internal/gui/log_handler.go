@@ -29,7 +29,15 @@ type guiLogHandler struct {
 
 	mu    sync.Mutex
 	attrs []slog.Attr
+	// pending buffers records emitted before bindAppToLogHandler so
+	// the user-visible log viewer doesn't miss the entire bootstrap
+	// (helper spawn, ensureHelper, version checks). Flushed on bind;
+	// capped at pendingCap to avoid unbounded growth if Wails fails
+	// to bootstrap entirely.
+	pending []ipc.LogEntry
 }
+
+const pendingCap = 200
 
 var guiLogLevel = new(slog.LevelVar)
 
@@ -57,14 +65,21 @@ func installGUILogHandler() {
 
 // bindAppToLogHandler tells the handler about the Wails app so subsequent
 // records can be emitted as events. Called from gui.Run right after
-// application.New.
+// application.New. Flushes any records buffered before bind so the
+// log viewer can display the bootstrap diagnostics.
 func bindAppToLogHandler(app *application.App) {
 	guiLogRefMu.Lock()
 	defer guiLogRefMu.Unlock()
-	if guiLogRef != nil {
-		guiLogRef.mu.Lock()
-		guiLogRef.app = app
-		guiLogRef.mu.Unlock()
+	if guiLogRef == nil {
+		return
+	}
+	guiLogRef.mu.Lock()
+	guiLogRef.app = app
+	pending := guiLogRef.pending
+	guiLogRef.pending = nil
+	guiLogRef.mu.Unlock()
+	for _, entry := range pending {
+		app.Event.Emit("log", entry)
 	}
 }
 
@@ -107,13 +122,22 @@ func (h *guiLogHandler) Handle(ctx context.Context, r slog.Record) error {
 		return true
 	})
 
+	entry := ipc.LogEntry{
+		Time:    r.Time.UTC().Format(time.RFC3339Nano),
+		Level:   strings.ToLower(r.Level.String()),
+		Source:  "gui",
+		Message: b.String(),
+	}
 	if app != nil {
-		app.Event.Emit("log", ipc.LogEntry{
-			Time:    r.Time.UTC().Format(time.RFC3339Nano),
-			Level:   strings.ToLower(r.Level.String()),
-			Source:  "gui",
-			Message: b.String(),
-		})
+		app.Event.Emit("log", entry)
+	} else {
+		// App not bound yet — buffer for replay so the bootstrap
+		// records actually reach the log viewer.
+		h.mu.Lock()
+		if len(h.pending) < pendingCap {
+			h.pending = append(h.pending, entry)
+		}
+		h.mu.Unlock()
 	}
 	return nil
 }

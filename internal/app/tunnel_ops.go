@@ -177,14 +177,32 @@ func (s *TunnelService) GetTunnelDetail(name string) (*domain.WireGuardConfig, e
 	return s.tunnelStore.Load(name)
 }
 
+// isActiveTunnel returns true if `name` is currently up. Uses the
+// multi-tunnel ActiveTunnels list, NOT ActiveName, because the
+// latter only returns the lexicographically-first connected tunnel
+// — which made delete/rename/update incorrectly succeed against a
+// non-primary connected tunnel and orphan the live interface.
+func (s *TunnelService) isActiveTunnel(name string) (bool, error) {
+	var resp ipc.ActiveTunnelsResponse
+	if err := s.call(ipc.MethodActiveTunnels, nil, &resp); err != nil {
+		return false, err
+	}
+	for _, n := range resp.Names {
+		if n == name {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 // DeleteTunnel removes a tunnel from local storage. Rejects deletion of the
 // currently connected tunnel (would orphan the interface).
 func (s *TunnelService) DeleteTunnel(name string) error {
-	var active ipc.StringResponse
-	if err := s.call(ipc.MethodActiveName, nil, &active); err != nil {
+	active, err := s.isActiveTunnel(name)
+	if err != nil {
 		return fmt.Errorf("cannot verify tunnel state (helper unreachable): %w", err)
 	}
-	if active.Value == name {
+	if active {
 		return fmt.Errorf("cannot delete connected tunnel %q — disconnect first", name)
 	}
 	return s.tunnelStore.Delete(name)
@@ -196,11 +214,11 @@ func (s *TunnelService) RenameTunnel(oldName, newName string) error {
 	if err := storage.ValidateTunnelName(newName); err != nil {
 		return err
 	}
-	var active ipc.StringResponse
-	if err := s.call(ipc.MethodActiveName, nil, &active); err != nil {
+	active, err := s.isActiveTunnel(oldName)
+	if err != nil {
 		return fmt.Errorf("cannot verify tunnel state (helper unreachable): %w", err)
 	}
-	if active.Value == oldName {
+	if active {
 		return fmt.Errorf("cannot rename connected tunnel %q — disconnect first", oldName)
 	}
 	return s.tunnelStore.Rename(oldName, newName)

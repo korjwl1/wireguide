@@ -229,42 +229,57 @@ func (t *trayManager) setIconState(activeNames []string, handshakeMap map[string
 	t.mu.Lock()
 	prev := t.activeTunnels
 	prevHandshake := t.hasHandshake
+	prevAnyConnected := len(prev) > 0
 	t.activeTunnels = newSet
 	t.hasHandshake = handshakeMap
 	t.mu.Unlock()
 
 	anyConnected := len(activeNames) > 0
 
-	if anyConnected {
-		t.tray.SetIcon(trayOnIcon)
-		tooltip := "WireGuide — " + strings.Join(activeNames, ", ")
-		t.tray.SetTooltip(tooltip)
-	} else {
-		if runtime.GOOS == "darwin" {
-			t.tray.SetIcon(trayOffIcon)
-		}
-		t.tray.SetTooltip("WireGuide")
-	}
-
-	if runtime.GOOS != "darwin" {
-		if anyConnected {
-			t.tray.SetLabel("WireGuide ●")
-		} else {
-			t.tray.SetLabel("WireGuide")
-		}
-	}
-
-	// Rebuild menu if active set changed OR if handshake state changed for
-	// any active tunnel (◐ → ● flip without a connect/disconnect event).
-	changed := len(prev) != len(newSet)
-	if !changed {
+	// Compute "did the active-set change" up front so we can both
+	// (a) gate the SetIcon/SetTooltip cgo calls (they're cheap but
+	// at 1Hz they add up) and (b) reuse the result for the menu
+	// rebuild gate below.
+	activeChanged := prevAnyConnected != anyConnected || len(prev) != len(newSet)
+	if !activeChanged {
 		for k := range prev {
 			if !newSet[k] {
-				changed = true
+				activeChanged = true
 				break
 			}
 		}
 	}
+
+	if activeChanged {
+		if anyConnected {
+			t.tray.SetIcon(trayOnIcon)
+			tooltip := "WireGuide — " + strings.Join(activeNames, ", ")
+			t.tray.SetTooltip(tooltip)
+		} else {
+			if runtime.GOOS == "darwin" {
+				t.tray.SetIcon(trayOffIcon)
+			}
+			t.tray.SetTooltip("WireGuide")
+		}
+		if runtime.GOOS != "darwin" {
+			if anyConnected {
+				t.tray.SetLabel("WireGuide ●")
+			} else {
+				t.tray.SetLabel("WireGuide")
+			}
+		}
+	} else if anyConnected {
+		// Active names may have reordered without count changing.
+		// Refresh tooltip only when names differ from last broadcast.
+		newTooltip := "WireGuide — " + strings.Join(activeNames, ", ")
+		t.tray.SetTooltip(newTooltip)
+	}
+
+	// Rebuild menu if active set changed OR if handshake state changed for
+	// any active tunnel (◐ → ● flip without a connect/disconnect event).
+	// Reuse activeChanged from the SetIcon gate above; only check
+	// handshake transitions if the active-set itself didn't change.
+	changed := activeChanged
 	if !changed {
 		for name := range newSet {
 			if handshakeMap[name] != prevHandshake[name] {

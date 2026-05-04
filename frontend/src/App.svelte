@@ -43,21 +43,23 @@
   let helperResetUnsub = null;
   let wifiSsidUnsub = null;
 
-  // App-level ESC handler: close the editor modal. Other modals
-  // (Settings, TunnelDetail's wifi/delete/rename, ConflictWarning,
-  // ZipResult) own their own ESC handling, but ConfigEditor wraps a
-  // CodeMirror instance that swallows ESC, so we have to catch it
-  // here in capture phase.
+  // App-level ESC handler: close the editor modal. ConfigEditor wraps
+  // a CodeMirror instance whose own keymaps may handle ESC for things
+  // like closing autocomplete dropdowns; we register in CAPTURE phase
+  // so we close the modal as soon as the editor isn't doing something
+  // else with ESC. stopPropagation prevents CodeMirror from also
+  // running its handler when we've decided to close.
   function appEscHandler(e) {
     if (e.key !== 'Escape') return;
     if (showEditor) {
       showEditor = false;
       e.preventDefault();
+      e.stopPropagation();
     }
   }
   if (typeof window !== 'undefined') {
-    window.addEventListener('keydown', appEscHandler);
-    onDestroy(() => window.removeEventListener('keydown', appEscHandler));
+    window.addEventListener('keydown', appEscHandler, { capture: true });
+    onDestroy(() => window.removeEventListener('keydown', appEscHandler, { capture: true }));
   }
 
   onMount(async () => {
@@ -85,6 +87,16 @@
 
     await initialLoad(TunnelService);
     subscribeToEvents();
+    // Refresh status once on launch — the helper's eventLoop only
+    // BROADCASTS on diff, so a fresh GUI subscriber connecting to a
+    // long-running helper would otherwise see no status events
+    // until the next state change. Without this, the tray and detail
+    // pane lie about connection state for an unbounded window.
+    try {
+      await refreshStatus(TunnelService);
+    } catch (_) {
+      /* helper may be mid-restart; status will arrive via events */
+    }
 
     // Auto-check for updates (non-blocking, best-effort)
     try {
@@ -311,6 +323,12 @@
 
   async function doSave(e) {
     const { name: saveName, content: saveContent } = e.detail;
+    // Capture the original name into a local at the top of doSave —
+    // editorOriginalName is reset by handleEdit on every Edit click,
+    // and an Edit on a *different* tunnel arriving while UpdateConfig
+    // is in flight would otherwise make the rollback rename to the
+    // wrong target.
+    const originalName = editorOriginalName;
     editorErrors = [];
 
     if (!saveName) {
@@ -327,26 +345,22 @@
       if (editorIsNew) {
         await TunnelService.ImportConfig(saveName, saveContent);
       } else {
-        // Compare against the ORIGINAL name (snapshot before bind could
-        // mutate editName). bind:name={editName} updates editName live
-        // as the user types, so by save-time editName === saveName always
-        // — which meant RenameTunnel was never called, and UpdateConfig
-        // created a new file instead of overwriting the old one.
-        const renamed = saveName !== editorOriginalName;
+        const renamed = saveName !== originalName;
         if (renamed) {
-          await TunnelService.RenameTunnel(editorOriginalName, saveName);
+          await TunnelService.RenameTunnel(originalName, saveName);
         }
         try {
           await TunnelService.UpdateConfig(saveName, saveContent);
         } catch (err) {
-          // UpdateConfig failed AFTER the rename succeeded. The tunnel
-          // has been renamed on disk but its content wasn't updated —
-          // the user is in a confusing state. Roll the rename back so
-          // the file system matches the user's mental model (still on
-          // the original name with the original content).
+          // UpdateConfig failed AFTER the rename succeeded. Roll
+          // the rename back so the file system matches the user's
+          // mental model. If rollback itself fails (e.g. the
+          // original name now collides with another freshly-imported
+          // tunnel), surface BOTH errors so the user understands the
+          // genuinely-broken state.
           if (renamed) {
             try {
-              await TunnelService.RenameTunnel(saveName, editorOriginalName);
+              await TunnelService.RenameTunnel(saveName, originalName);
             } catch (rollbackErr) {
               showToast(`Rename rollback failed: ${errText(rollbackErr)}`);
             }
@@ -354,10 +368,6 @@
           throw err;
         }
         if (renamed) {
-          // Only update selectedTunnel after BOTH operations
-          // succeeded — otherwise an UpdateConfig failure would
-          // leave the detail pane pointing at a name that doesn't
-          // match what's on disk.
           selectedTunnel.update(sel => sel ? { ...sel, name: saveName } : sel);
         }
       }

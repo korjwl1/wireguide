@@ -84,18 +84,20 @@
     // Re-fetch the freshest settings.json before writing so per-tunnel
     // wifi rule edits made in TunnelDetail (which calls SaveSettings
     // independently with its own modified per_tunnel map) aren't
-    // silently overwritten by our stale snapshot. We own the global
-    // wifi_rules fields (enabled, trusted_ssids); per_tunnel is owned
-    // by TunnelDetail, so we merge the disk's value forward.
-    let perTunnel = settings.wifi_rules?.per_tunnel || {};
+    // silently overwritten. We own only `enabled` and `trusted_ssids`
+    // in wifi_rules; `per_tunnel` belongs to TunnelDetail. If the
+    // fresh fetch fails (helper restarting, IPC flake) we abort
+    // rather than write our potentially-stale per_tunnel snapshot —
+    // a deferred save is far better than clobbering the user's
+    // per-tunnel edits.
+    let fresh;
     try {
-      const fresh = await TunnelService.GetSettings();
-      if (fresh?.wifi_rules?.per_tunnel) {
-        perTunnel = fresh.wifi_rules.per_tunnel;
-      }
-    } catch (_) {
-      // Best-effort merge; fall back to our last-known per_tunnel.
+      fresh = await TunnelService.GetSettings();
+    } catch (e) {
+      console.warn('settings save aborted: fresh fetch failed (will retry on next change)', e);
+      return;
     }
+    const perTunnel = fresh?.wifi_rules?.per_tunnel || {};
     try {
       await TunnelService.SaveSettings({
         language: settings.language,
