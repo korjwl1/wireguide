@@ -232,8 +232,12 @@ func getRoutesLinux(ifaceName string) []string {
 }
 
 // findOverlaps checks if any of newIPs overlap with existingIPs.
+// To avoid producing hundreds of entries when newCIDR is a supernet
+// (e.g. full-tunnel 0.0.0.0/0 matching every existing route), each
+// newCIDR contributes at most one overlap entry.
 func findOverlaps(newIPs, existingIPs []string) []string {
 	var overlaps []string
+	seen := map[string]bool{}
 	for _, newCIDR := range newIPs {
 		_, newNet, err := net.ParseCIDR(normalizeCIDR(newCIDR))
 		if err != nil {
@@ -245,7 +249,11 @@ func findOverlaps(newIPs, existingIPs []string) []string {
 				continue
 			}
 			if newNet.Contains(existNet.IP) || existNet.Contains(newNet.IP) {
+				if seen[newCIDR] {
+					continue
+				}
 				overlaps = append(overlaps, fmt.Sprintf("%s <> %s", newCIDR, existCIDR))
+				seen[newCIDR] = true
 			}
 		}
 	}

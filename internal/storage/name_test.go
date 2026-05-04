@@ -17,8 +17,11 @@ func TestValidateTunnelName(t *testing.T) {
 		{"mixed case and digits", "ProdRegion2", false},
 
 		{"empty", "", true},
+		{"space in middle", "my vpn", false},
+		{"space in name with digits", "Work VPN 2", false},
+		{"leading space", " vpn", true},
+		{"trailing space", "vpn ", true},
 		{"dot (would confuse extension)", "work.vpn", true},
-		{"space", "my vpn", true},
 		{"slash (path traversal)", "a/b", true},
 		{"backslash", "a\\b", true},
 		{"dot dot", "..", true},

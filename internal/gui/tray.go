@@ -228,6 +228,7 @@ func (t *trayManager) setIconState(activeNames []string, handshakeMap map[string
 
 	t.mu.Lock()
 	prev := t.activeTunnels
+	prevHandshake := t.hasHandshake
 	t.activeTunnels = newSet
 	t.hasHandshake = handshakeMap
 	t.mu.Unlock()
@@ -253,11 +254,20 @@ func (t *trayManager) setIconState(activeNames []string, handshakeMap map[string
 		}
 	}
 
-	// Rebuild menu if active set changed.
+	// Rebuild menu if active set changed OR if handshake state changed for
+	// any active tunnel (◐ → ● flip without a connect/disconnect event).
 	changed := len(prev) != len(newSet)
 	if !changed {
 		for k := range prev {
 			if !newSet[k] {
+				changed = true
+				break
+			}
+		}
+	}
+	if !changed {
+		for name := range newSet {
+			if handshakeMap[name] != prevHandshake[name] {
 				changed = true
 				break
 			}

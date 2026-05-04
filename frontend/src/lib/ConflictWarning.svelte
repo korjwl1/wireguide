@@ -18,9 +18,12 @@
             <span class="owner">({conflict.owner})</span>
           </div>
           <div class="overlap-list">
-            {#each conflict.overlapping_ips as overlap}
+            {#each conflict.overlapping_ips.slice(0, 3) as overlap}
               <code class="overlap">{overlap}</code>
             {/each}
+            {#if conflict.overlapping_ips.length > 3}
+              <span class="overlap-more">… and {conflict.overlapping_ips.length - 3} more</span>
+            {/if}
           </div>
         </div>
       {/each}
@@ -73,6 +76,12 @@
     font-size: 12px;
     color: var(--yellow);
     margin-top: 2px;
+  }
+  .overlap-more {
+    font-size: 12px;
+    color: var(--text-muted);
+    margin-top: 2px;
+    display: block;
   }
   .warning-text {
     font-size: 13px;
