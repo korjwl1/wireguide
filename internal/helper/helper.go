@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"runtime/debug"
 	"sync"
 	"time"
@@ -19,7 +20,9 @@ import (
 	"github.com/korjwl1/wireguide/internal/firewall"
 	"github.com/korjwl1/wireguide/internal/ipc"
 	"github.com/korjwl1/wireguide/internal/reconnect"
+	"github.com/korjwl1/wireguide/internal/storage"
 	"github.com/korjwl1/wireguide/internal/tunnel"
+	"github.com/korjwl1/wireguide/internal/wifi"
 )
 
 // goSafe runs fn in a goroutine with panic recovery. Without this, a panic
@@ -105,6 +108,27 @@ type Helper struct {
 	latencyMu       sync.Mutex
 	latencyByTunnel map[string]float64
 
+	// wifiMon polls CurrentSSID every 5s. The helper itself evaluates
+	// the user's wifi rules on every change so auto-connect /
+	// auto-disconnect work whether or not a GUI is running. The
+	// EventWifiSSID broadcast is still sent so a live GUI can react
+	// (e.g. show a toast).
+	wifiMon *wifi.Monitor
+
+	// wifiMu guards autoConnectedBy. The map records "this tunnel
+	// was last activated by a wifi rule on this SSID" so a later
+	// SSID change can tell auto-managed tunnels apart from manually
+	// connected ones and only touch the former.
+	wifiMu          sync.Mutex
+	autoConnectedBy map[string]string
+
+	// userTunnelStore reads .conf files from the user's home dir
+	// (derived from the uid passed at launch). Needed so wifi rules
+	// can connect tunnels that aren't already in activeCfgs — i.e.
+	// the user has never opened them via the GUI in this session.
+	userTunnelStore *storage.TunnelStore
+	userAppSupport  string
+
 	done        chan struct{}
 	cleanupOnce sync.Once
 }
@@ -127,8 +151,19 @@ func Run(addr string, ownerUID int, dataDir string) error {
 		firewall:        fw,
 		activeCfgs:      make(map[string]*domain.WireGuardConfig),
 		latencyByTunnel: make(map[string]float64),
+		autoConnectedBy: make(map[string]string),
 		logLevel:        new(slog.LevelVar), // defaults to Info
 		done:            make(chan struct{}),
+	}
+
+	// Derive the user's Application Support dir from the uid the
+	// LaunchDaemon plist passed in (`--uid=501` typically). Helper
+	// runs as root, so os.UserHomeDir() returns /var/root — useless.
+	// On platforms we haven't wired up (linux/windows), this returns
+	// empty and the wifi-rules helper-side path stays a no-op.
+	if appSupport, err := deriveUserAppSupport(ownerUID); err == nil && appSupport != "" {
+		h.userAppSupport = appSupport
+		h.userTunnelStore = storage.NewTunnelStore(filepath.Join(appSupport, "tunnels"))
 	}
 
 	// Install the broadcast slog handler BEFORE the first log call so
@@ -175,6 +210,19 @@ func Run(addr string, ownerUID int, dataDir string) error {
 	// goroutine is supervised by goSafe like every other long-running
 	// helper background task.
 	goSafe("latencyLoop", h.latencyLoop)
+
+	// Start Wi-Fi SSID monitor. On change we broadcast the event for
+	// any GUI listener AND evaluate the user's wifi rules right here
+	// so auto-connect / auto-disconnect keep working when the GUI is
+	// closed.
+	h.wifiMon = wifi.NewMonitor(nil, func(oldSSID, newSSID string) {
+		h.server.Broadcast(ipc.EventWifiSSID, ipc.WifiSSIDPayload{
+			OldSSID: oldSSID,
+			NewSSID: newSSID,
+		})
+		h.handleSSIDChange(oldSSID, newSSID)
+	})
+	h.wifiMon.Start()
 
 	// Top-level panic recovery for the Serve loop itself. If Accept or any
 	// per-conn handler panics unrecovered, we at least want a stack trace.
@@ -433,6 +481,9 @@ func (h *Helper) cleanup() {
 		h.mu.Unlock()
 		if t != nil {
 			t.Stop()
+		}
+		if h.wifiMon != nil {
+			h.wifiMon.Stop()
 		}
 		h.monitor.Stop()
 		h.firewall.Cleanup()

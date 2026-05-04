@@ -36,6 +36,20 @@
     "rx": "ダウンロード",
     "tx": "アップロード",
     "latency": "遅延",
+    "wifi_auto_connect": "自動接続",
+    "wifi_auto_connect_hint": "これらのネットワークに接続するとこのトンネルが自動で起動します。",
+    "wifi_disabled": "ルール無効",
+    "wifi_master_off": "Wi-Fi ルールは現在 Settings → Wi-Fi ルールで無効です。下のリストは保存されますがルールを有効化するまで発動しません。",
+    "wifi_empty": "登録されたネットワークがありません。",
+    "wifi_added": "自動接続ネットワーク",
+    "wifi_known": "保存済みネットワーク",
+    "wifi_current": "現在",
+    "wifi_current_tooltip": "現在このネットワークに接続中です",
+    "wifi_manual": "リストにないネットワークを追加",
+    "wifi_manual_hint": "対象ネットワークの SSID を正確に入力してください。",
+    "wifi_no_known": "保存済み Wi-Fi ネットワークが見つかりませんでした。下から手動で入力してください。",
+    "wifi_pick_label": "このトンネルを自動で起動するネットワーク",
+    "wifi_combo_placeholder": "ネットワークを入力または選択…",
     "kill_switch": "キルスイッチ",
     "dns_protection": "DNS 保護",
     "details": "詳細",
@@ -87,6 +101,7 @@
     "lang_auto": "自動",
     "close": "閉じる",
     "advanced": "詳細",
+    "wifi_rules": "Wi-Fi ルール",
     "log_level": "ログレベル",
     "log_level_debug": "デバッグ",
     "log_level_info": "情報",
@@ -111,6 +126,7 @@
     "delete_message": "\"{name}\" を削除しますか?",
     "yes": "削除",
     "no": "キャンセル",
+    "close": "閉じる",
     "disconnect_first": "先にトンネルを切断してください"
   },
   "error": {
@@ -223,12 +239,12 @@
     "cancel": "あとで"
   },
   "wifi_rules": {
-    "title": "Wi-Fi ルール",
-    "connect_untrusted": "信頼できない Wi-Fi で自動接続",
+    "title": "Wi-Fi ルールを有効化",
+    "hint": "接続した Wi-Fi ネットワークに応じてトンネルが自動で切り替わります。",
     "trusted_ssids": "信頼するネットワーク",
-    "ssid_tunnel_map": "SSID 別自動接続",
-    "add_trusted": "追加",
-    "ssid_placeholder": "ネットワーク名 (SSID)",
-    "select_tunnel": "トンネルを選択…"
+    "trusted_hint": "これらのネットワークではすべてのトンネルが自動的に切断されます。",
+    "per_tunnel_location": "トンネルごとの自動接続 SSID は各トンネルの詳細パネルで設定します。",
+    "add": "追加",
+    "ssid_placeholder": "ネットワーク名 (SSID)"
   }
 }

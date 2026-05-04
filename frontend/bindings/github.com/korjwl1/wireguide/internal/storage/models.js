@@ -6,6 +6,10 @@
 // @ts-ignore: Unused imports
 import { Create as $Create } from "@wailsio/runtime";
 
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore: Unused imports
+import * as wifi$0 from "../wifi/models.js";
+
 /**
  * Settings holds application-wide settings.
  */
@@ -85,6 +89,17 @@ export class Settings {
              */
             this["log_level"] = "";
         }
+        if (!("wifi_rules" in $$source)) {
+            /**
+             * WifiRules holds the SSID-based auto-connect / auto-disconnect
+             * policy. Disabled by default; the frontend Settings panel toggles
+             * it and per-SSID mappings. Evaluated by the GUI on each SSID
+             * change broadcast from the helper.
+             * @member
+             * @type {wifi$0.Rules}
+             */
+            this["wifi_rules"] = (new wifi$0.Rules());
+        }
 
         Object.assign(this, $$source);
     }
@@ -95,7 +110,14 @@ export class Settings {
      * @returns {Settings}
      */
     static createFrom($$source = {}) {
+        const $$createField9_0 = $$createType0;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("wifi_rules" in $$parsedSource) {
+            $$parsedSource["wifi_rules"] = $$createField9_0($$parsedSource["wifi_rules"]);
+        }
         return new Settings(/** @type {Partial<Settings>} */($$parsedSource));
     }
 }
+
+// Private type creation functions
+const $$createType0 = wifi$0.Rules.createFrom;

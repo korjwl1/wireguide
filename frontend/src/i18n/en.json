@@ -36,6 +36,20 @@
     "rx": "Download",
     "tx": "Upload",
     "latency": "Latency",
+    "wifi_auto_connect": "Auto-Connect",
+    "wifi_auto_connect_hint": "This tunnel activates when you join one of these networks.",
+    "wifi_disabled": "rules off",
+    "wifi_master_off": "Wi-Fi rules are currently disabled in Settings → Wi-Fi Rules. The list below is saved but won't fire until rules are enabled.",
+    "wifi_empty": "No networks added yet.",
+    "wifi_added": "Auto-connect networks",
+    "wifi_known": "Saved networks",
+    "wifi_current": "Current",
+    "wifi_current_tooltip": "You are connected to this network now",
+    "wifi_manual": "Add a network not listed above",
+    "wifi_manual_hint": "Type an SSID exactly as it appears on the network you want to match.",
+    "wifi_no_known": "No saved Wi-Fi networks were found. Use the manual input below.",
+    "wifi_pick_label": "Networks that should auto-connect this tunnel",
+    "wifi_combo_placeholder": "Type or pick a network…",
     "kill_switch": "Kill Switch",
     "dns_protection": "DNS Protection",
     "details": "Details",
@@ -87,6 +101,7 @@
     "lang_auto": "Auto",
     "close": "Close",
     "advanced": "Advanced",
+    "wifi_rules": "Wi-Fi Rules",
     "log_level": "Log Level",
     "log_level_debug": "Debug",
     "log_level_info": "Info",
@@ -111,6 +126,7 @@
     "delete_message": "Are you sure you want to delete \"{name}\"?",
     "yes": "Delete",
     "no": "Cancel",
+    "close": "Close",
     "disconnect_first": "Disconnect the tunnel first"
   },
   "error": {
@@ -223,12 +239,12 @@
     "cancel": "Later"
   },
   "wifi_rules": {
-    "title": "Wi-Fi Rules",
-    "connect_untrusted": "Connect on untrusted Wi-Fi",
+    "title": "Enable Wi-Fi Rules",
+    "hint": "Auto-connect tunnels based on the Wi-Fi network you join.",
     "trusted_ssids": "Trusted Networks",
-    "ssid_tunnel_map": "Auto-connect per SSID",
-    "add_trusted": "Add",
-    "ssid_placeholder": "Network name (SSID)",
-    "select_tunnel": "Choose tunnel..."
+    "trusted_hint": "On these networks, all tunnels disconnect automatically.",
+    "per_tunnel_location": "Per-tunnel Wi-Fi auto-connect lives in each tunnel's detail panel.",
+    "add": "Add",
+    "ssid_placeholder": "Network name (SSID)"
   }
 }

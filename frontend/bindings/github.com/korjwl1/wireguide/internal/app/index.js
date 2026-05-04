@@ -11,6 +11,7 @@ export {
     ConnectionStatus,
     DNSLeakResult,
     DNSServer,
+    KnownSSIDs,
     RouteEntry,
     TunnelInfo,
     ZipImportResult

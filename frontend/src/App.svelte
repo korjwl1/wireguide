@@ -41,6 +41,7 @@
   let filesDroppedUnsub = null;
   let helperUnsub = null;
   let helperResetUnsub = null;
+  let wifiSsidUnsub = null;
 
   onMount(async () => {
     // Load and apply saved theme before loading other data.
@@ -108,6 +109,20 @@
       await initialLoad(TunnelService);
       await refreshStatus(TunnelService);
     });
+
+    // Wi-Fi SSID change events are still broadcast by the helper for
+    // observability, but rule evaluation now lives in the helper
+    // itself (internal/helper/wifi_rules_darwin.go). That keeps
+    // auto-connect / auto-disconnect working when the GUI is fully
+    // quit — the helper has KeepAlive=true and runs the rules
+    // independently. We just show a brief toast here so the user
+    // sees what happened.
+    wifiSsidUnsub = Events.On('wifi_ssid', (event) => {
+      const { new_ssid } = event.data || {};
+      if (new_ssid) {
+        showToast(`Wi-Fi: ${new_ssid}`);
+      }
+    });
   });
 
   onDestroy(() => {
@@ -116,6 +131,7 @@
     if (filesDroppedUnsub) filesDroppedUnsub();
     if (helperUnsub) helperUnsub();
     if (helperResetUnsub) helperResetUnsub();
+    if (wifiSsidUnsub) wifiSsidUnsub();
     if (toastTimer) clearTimeout(toastTimer);
   });
 

@@ -2,7 +2,8 @@
   import { onDestroy, onMount } from 'svelte';
   import { t, setLanguage, getLanguage, detectLanguage } from '../i18n/index.js';
   import { applyTheme } from '../stores/theme.js';
-  import { connectionStatus } from '../stores/tunnels.js';
+  import { connectionStatus, tunnels } from '../stores/tunnels.js';
+  import WifiRules from './WifiRules.svelte';
 
   export let TunnelService;
   export let onClose = () => {};
@@ -41,7 +42,13 @@
     pin_interface: false,
     log_level: 'info',
     tray_icon_style: 'color',
+    wifi_rules: {
+      enabled: false,
+      trusted_ssids: [],
+      per_tunnel: {},
+    },
   };
+  $: tunnelNames = ($tunnels || []).map(t => t.name);
   let loaded = false;
   let appVersion = '';
 
@@ -58,6 +65,13 @@
         settings.pin_interface = s.pin_interface ?? false;
         settings.log_level = s.log_level || 'info';
         settings.tray_icon_style = s.tray_icon_style || 'color';
+        if (s.wifi_rules) {
+          settings.wifi_rules = {
+            enabled: s.wifi_rules.enabled ?? false,
+            trusted_ssids: s.wifi_rules.trusted_ssids || [],
+            per_tunnel: s.wifi_rules.per_tunnel || {},
+          };
+        }
       }
     } catch (e) {
       console.error('load settings:', e);
@@ -78,6 +92,7 @@
         health_check: settings.health_check,
         pin_interface: settings.pin_interface,
         log_level: settings.log_level,
+        wifi_rules: settings.wifi_rules,
       });
     } catch (e) {
       console.error('save settings:', e);
@@ -207,6 +222,9 @@
         <button role="tab" aria-selected={activeTab === 'advanced'} class:active={activeTab === 'advanced'} on:click={() => activeTab = 'advanced'}>
           {$t('settings.advanced')}
         </button>
+        <button role="tab" aria-selected={activeTab === 'wifi_rules'} class:active={activeTab === 'wifi_rules'} on:click={() => activeTab = 'wifi_rules'}>
+          {$t('settings.wifi_rules')}
+        </button>
         <button role="tab" aria-selected={activeTab === 'about'} class:active={activeTab === 'about'} on:click={() => activeTab = 'about'}>
           {$t('settings.about')}
         </button>
@@ -280,6 +298,11 @@
               on:change={onPinInterfaceChange} />
           </div>
           <p class="setting-hint">{$t('settings.pin_interface_hint')}</p>
+
+        {:else if activeTab === 'wifi_rules'}
+          <WifiRules
+            rules={settings.wifi_rules}
+            on:change={(e) => { settings.wifi_rules = e.detail; scheduleSave(); }} />
 
         {:else if activeTab === 'about'}
           <div class="about-section">

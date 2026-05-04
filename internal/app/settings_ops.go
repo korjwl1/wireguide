@@ -13,7 +13,26 @@ import (
 	"github.com/korjwl1/wireguide/internal/ipc"
 	"github.com/korjwl1/wireguide/internal/storage"
 	"github.com/korjwl1/wireguide/internal/update"
+	"github.com/korjwl1/wireguide/internal/wifi"
 )
+
+// KnownSSIDs is the response shape for GetKnownSSIDs. The frontend uses
+// it to render a picker so users can tap saved networks instead of
+// retyping SSIDs they've already joined.
+type KnownSSIDs struct {
+	Current string   `json:"current"` // currently-connected SSID (empty if not on Wi-Fi)
+	Known   []string `json:"known"`   // saved/preferred networks reported by the OS
+}
+
+// GetKnownSSIDs returns the currently-connected SSID (if any) plus the
+// system's saved wireless networks. Both are best-effort — empty values
+// are normal on a Mac that's only ever been on Ethernet.
+func (s *TunnelService) GetKnownSSIDs() KnownSSIDs {
+	return KnownSSIDs{
+		Current: wifi.CurrentSSID(),
+		Known:   wifi.KnownSSIDs(),
+	}
+}
 
 // guiLogLevelSetter is set by internal/gui at startup so the app package
 // (which is Wails-bound) can update the GUI process's own log level at

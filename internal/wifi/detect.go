@@ -95,6 +95,47 @@ func detectLinux() string {
 	return ""
 }
 
+// KnownSSIDs returns the system's saved wireless network names so the
+// GUI can show a picker for Wi-Fi auto-connect rules instead of making
+// the user retype every SSID. Empty slice on platforms we haven't wired
+// up yet — the picker degrades to manual input only.
+func KnownSSIDs() []string {
+	switch runtime.GOOS {
+	case "darwin":
+		return knownSSIDsDarwin()
+	}
+	return nil
+}
+
+func knownSSIDsDarwin() []string {
+	iface := discoverWiFiInterface()
+	if iface == "" {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "networksetup", "-listpreferredwirelessnetworks", iface).CombinedOutput()
+	if err != nil {
+		return nil
+	}
+	// Output:
+	//   Preferred networks on en0:
+	//   <TAB>MyHomeWiFi
+	//   <TAB>Office
+	var result []string
+	for i, line := range strings.Split(string(out), "\n") {
+		if i == 0 {
+			continue
+		}
+		s := strings.TrimSpace(line)
+		if s == "" {
+			continue
+		}
+		result = append(result, s)
+	}
+	return result
+}
+
 func detectWindows() string {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()

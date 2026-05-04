@@ -63,6 +63,7 @@ const (
 	EventStatus    = "event.status"
 	EventReconnect = "event.reconnect"
 	EventLog       = "event.log"
+	EventWifiSSID  = "event.wifi_ssid"
 )
 
 // CodedError is an error that carries a specific JSON-RPC error code.

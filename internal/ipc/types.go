@@ -96,3 +96,11 @@ type BoolResponse struct {
 type StringResponse struct {
 	Value string `json:"value"`
 }
+
+// WifiSSIDPayload is broadcast by the helper whenever the system's
+// active Wi-Fi SSID changes. The GUI evaluates Settings.WifiRules and
+// triggers Connect / Disconnect accordingly.
+type WifiSSIDPayload struct {
+	OldSSID string `json:"old_ssid"`
+	NewSSID string `json:"new_ssid"`
+}

@@ -126,6 +126,52 @@ export class DNSServer {
 }
 
 /**
+ * KnownSSIDs is the response shape for GetKnownSSIDs. The frontend uses
+ * it to render a picker so users can tap saved networks instead of
+ * retyping SSIDs they've already joined.
+ */
+export class KnownSSIDs {
+    /**
+     * Creates a new KnownSSIDs instance.
+     * @param {Partial<KnownSSIDs>} [$$source = {}] - The source object to create the KnownSSIDs.
+     */
+    constructor($$source = {}) {
+        if (!("current" in $$source)) {
+            /**
+             * currently-connected SSID (empty if not on Wi-Fi)
+             * @member
+             * @type {string}
+             */
+            this["current"] = "";
+        }
+        if (!("known" in $$source)) {
+            /**
+             * saved/preferred networks reported by the OS
+             * @member
+             * @type {string[]}
+             */
+            this["known"] = [];
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new KnownSSIDs instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {KnownSSIDs}
+     */
+    static createFrom($$source = {}) {
+        const $$createField1_0 = $$createType2;
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("known" in $$parsedSource) {
+            $$parsedSource["known"] = $$createField1_0($$parsedSource["known"]);
+        }
+        return new KnownSSIDs(/** @type {Partial<KnownSSIDs>} */($$parsedSource));
+    }
+}
+
+/**
  * RouteEntry mirrors diag.RouteEntry for Wails JSON serialisation.
  */
 export class RouteEntry {
@@ -263,3 +309,4 @@ export class ZipImportResult {
 // Private type creation functions
 const $$createType0 = DNSServer.createFrom;
 const $$createType1 = $Create.Array($$createType0);
+const $$createType2 = $Create.Array($Create.Any);

@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+
+	"github.com/korjwl1/wireguide/internal/wifi"
 )
 
 // Settings holds application-wide settings.
@@ -13,12 +15,18 @@ type Settings struct {
 	Language      string `json:"language"`        // "auto", "en", "ko", "ja"
 	Theme         string `json:"theme"`           // "dark", "light", "system"
 	TrayIconStyle string `json:"tray_icon_style"` // "color" (MVP: color only)
-	AutoStart     bool   `json:"auto_start"` // launch GUI on OS login
+	AutoStart     bool   `json:"auto_start"`      // launch GUI on OS login
 	KillSwitch    bool   `json:"kill_switch"`
 	DNSProtection bool   `json:"dns_protection"`
-	HealthCheck   bool   `json:"health_check"`   // periodic handshake age monitoring
-	PinInterface  bool   `json:"pin_interface"`  // pin bypass routes to upstream interface (-ifscope)
-	LogLevel      string `json:"log_level"`      // "debug", "info", "warn", "error"
+	HealthCheck   bool   `json:"health_check"`  // periodic handshake age monitoring
+	PinInterface  bool   `json:"pin_interface"` // pin bypass routes to upstream interface (-ifscope)
+	LogLevel      string `json:"log_level"`     // "debug", "info", "warn", "error"
+
+	// WifiRules holds the SSID-based auto-connect / auto-disconnect
+	// policy. Disabled by default; the frontend Settings panel toggles
+	// it and per-SSID mappings. Evaluated by the GUI on each SSID
+	// change broadcast from the helper.
+	WifiRules wifi.Rules `json:"wifi_rules"`
 }
 
 // DefaultSettings returns settings with sensible defaults.
@@ -32,6 +40,11 @@ func DefaultSettings() *Settings {
 		HealthCheck:   false,
 		PinInterface:  false, // off by default — enable for dual-network setups
 		LogLevel:      "info",
+		WifiRules: wifi.Rules{
+			// Initialize the map so JSON serialization round-trips
+			// produce {} rather than null for an empty mapping.
+			PerTunnel: make(map[string]wifi.TunnelSSIDs),
+		},
 	}
 }
 

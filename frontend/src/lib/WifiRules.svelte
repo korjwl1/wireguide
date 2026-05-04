@@ -1,73 +1,50 @@
 <script>
+  // Global Wi-Fi master settings (enable + trusted SSIDs).
+  // Per-tunnel auto-connect SSIDs are edited inside each tunnel's
+  // detail panel — the data lives at rules.per_tunnel[tunnelName] but
+  // this component never touches it.
   import { createEventDispatcher } from 'svelte';
   import { t } from '../i18n/index.js';
 
   export let rules = {
     enabled: false,
-    default_tunnel: '',
-    auto_connect_untrusted: false,
     trusted_ssids: [],
-    ssid_tunnel_map: {}
+    per_tunnel: {},
   };
-  export let tunnelNames = [];
 
   const dispatch = createEventDispatcher();
   let newTrusted = '';
-  let newSSID = '';
-  let newSSIDTunnel = '';
+
+  function emit() {
+    dispatch('change', rules);
+  }
 
   function addTrusted() {
-    if (!newTrusted.trim()) return;
-    if (!rules.trusted_ssids.includes(newTrusted.trim())) {
-      rules.trusted_ssids = [...rules.trusted_ssids, newTrusted.trim()];
-      dispatch('change', rules);
+    const v = newTrusted.trim();
+    if (!v) return;
+    if (!rules.trusted_ssids.includes(v)) {
+      rules.trusted_ssids = [...rules.trusted_ssids, v];
+      emit();
     }
     newTrusted = '';
   }
 
   function removeTrusted(ssid) {
     rules.trusted_ssids = rules.trusted_ssids.filter(s => s !== ssid);
-    dispatch('change', rules);
-  }
-
-  function addMapping() {
-    if (!newSSID.trim() || !newSSIDTunnel) return;
-    rules.ssid_tunnel_map = { ...rules.ssid_tunnel_map, [newSSID.trim()]: newSSIDTunnel };
-    dispatch('change', rules);
-    newSSID = '';
-    newSSIDTunnel = '';
-  }
-
-  function removeMapping(ssid) {
-    const { [ssid]: _, ...rest } = rules.ssid_tunnel_map;
-    rules.ssid_tunnel_map = rest;
-    dispatch('change', rules);
+    emit();
   }
 </script>
 
 <div class="wifi-rules">
   <div class="setting-row">
     <label>{$t('wifi_rules.title')}</label>
-    <input type="checkbox" bind:checked={rules.enabled} on:change={() => dispatch('change', rules)} />
+    <input type="checkbox" bind:checked={rules.enabled} on:change={emit} />
   </div>
+  <p class="setting-hint">{$t('wifi_rules.hint')}</p>
 
   {#if rules.enabled}
-    <div class="setting-row">
-      <label>{$t('wifi_rules.connect_untrusted')}</label>
-      <input type="checkbox" bind:checked={rules.auto_connect_untrusted} on:change={() => dispatch('change', rules)} />
-    </div>
-
-    <div class="setting-row">
-      <label>{$t('tunnel.new_tunnel')}</label>
-      <select bind:value={rules.default_tunnel} on:change={() => dispatch('change', rules)}>
-        <option value="">—</option>
-        {#each tunnelNames as name}
-          <option value={name}>{name}</option>
-        {/each}
-      </select>
-    </div>
-
     <h5>{$t('wifi_rules.trusted_ssids')}</h5>
+    <p class="setting-hint">{$t('wifi_rules.trusted_hint')}</p>
     <div class="list">
       {#each rules.trusted_ssids as ssid}
         <div class="list-item">
@@ -77,29 +54,14 @@
       {/each}
     </div>
     <div class="add-row">
-      <input placeholder={$t('wifi_rules.ssid_placeholder')} bind:value={newTrusted} on:keydown={(e) => e.key === 'Enter' && addTrusted()} />
-      <button on:click={addTrusted}>{$t('wifi_rules.add_trusted')}</button>
+      <input
+        placeholder={$t('wifi_rules.ssid_placeholder')}
+        bind:value={newTrusted}
+        on:keydown={(e) => e.key === 'Enter' && addTrusted()} />
+      <button on:click={addTrusted}>{$t('wifi_rules.add')}</button>
     </div>
 
-    <h5>{$t('wifi_rules.ssid_tunnel_map')}</h5>
-    <div class="list">
-      {#each Object.entries(rules.ssid_tunnel_map) as [ssid, tunnel]}
-        <div class="list-item">
-          <span>{ssid} → {tunnel}</span>
-          <button class="remove" on:click={() => removeMapping(ssid)}>✕</button>
-        </div>
-      {/each}
-    </div>
-    <div class="add-row">
-      <input placeholder={$t('wifi_rules.ssid_placeholder')} bind:value={newSSID} />
-      <select bind:value={newSSIDTunnel}>
-        <option value="">{$t('wifi_rules.select_tunnel')}</option>
-        {#each tunnelNames as name}
-          <option value={name}>{name}</option>
-        {/each}
-      </select>
-      <button on:click={addMapping}>{$t('wifi_rules.add_trusted')}</button>
-    </div>
+    <p class="per_tunnel-pointer">{$t('wifi_rules.per_tunnel_location')}</p>
   {/if}
 </div>
 
@@ -112,10 +74,16 @@
     padding: 6px 0;
   }
   h5 {
-    margin: 12px 0 4px;
+    margin: 16px 0 4px;
     font-size: 12px;
     color: var(--text-secondary);
     text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+  .setting-hint {
+    font-size: 12px;
+    color: var(--text-muted);
+    margin: 0 0 8px;
   }
   .list-item {
     display: flex;
@@ -132,13 +100,14 @@
     border: none;
     color: var(--red);
     cursor: pointer;
+    font-size: 14px;
   }
   .add-row {
     display: flex;
     gap: 4px;
     margin-top: 4px;
   }
-  .add-row input, .add-row select {
+  .add-row input {
     flex: 1;
     padding: 4px 8px;
     background: var(--bg-input);
@@ -156,6 +125,11 @@
     cursor: pointer;
     font-size: 12px;
   }
-  select { min-width: 80px; }
+  .per_tunnel-pointer {
+    margin: 16px 0 0;
+    font-size: 12px;
+    color: var(--text-muted);
+    font-style: italic;
+  }
   input[type="checkbox"] { accent-color: var(--green); }
 </style>

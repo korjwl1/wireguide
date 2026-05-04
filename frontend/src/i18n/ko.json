@@ -36,6 +36,20 @@
     "rx": "다운로드",
     "tx": "업로드",
     "latency": "지연 시간",
+    "wifi_auto_connect": "자동 연결",
+    "wifi_auto_connect_hint": "이 네트워크에 접속하면 이 터널이 자동으로 켜집니다.",
+    "wifi_disabled": "규칙 꺼짐",
+    "wifi_master_off": "현재 Wi-Fi 규칙이 Settings → Wi-Fi 규칙에서 꺼져있습니다. 아래 목록은 저장되지만 규칙을 켜야 동작합니다.",
+    "wifi_empty": "추가된 네트워크가 없습니다.",
+    "wifi_added": "자동 연결 네트워크",
+    "wifi_known": "저장된 네트워크",
+    "wifi_current": "현재",
+    "wifi_current_tooltip": "지금 이 네트워크에 연결되어 있습니다",
+    "wifi_manual": "목록에 없는 네트워크 추가",
+    "wifi_manual_hint": "원하는 네트워크의 SSID를 정확히 입력하세요.",
+    "wifi_no_known": "저장된 Wi-Fi 네트워크를 찾지 못했습니다. 아래에서 직접 입력하세요.",
+    "wifi_pick_label": "이 터널을 자동으로 켤 네트워크",
+    "wifi_combo_placeholder": "네트워크 입력 또는 선택…",
     "kill_switch": "킬 스위치",
     "dns_protection": "DNS 보호",
     "details": "상세 정보",
@@ -87,6 +101,7 @@
     "lang_auto": "자동",
     "close": "닫기",
     "advanced": "고급",
+    "wifi_rules": "Wi-Fi 규칙",
     "log_level": "로그 수준",
     "log_level_debug": "디버그",
     "log_level_info": "정보",
@@ -111,6 +126,7 @@
     "delete_message": "\"{name}\"을(를) 삭제하시겠습니까?",
     "yes": "삭제",
     "no": "취소",
+    "close": "닫기",
     "disconnect_first": "먼저 연결을 해제하세요"
   },
   "error": {
@@ -223,12 +239,12 @@
     "cancel": "나중에"
   },
   "wifi_rules": {
-    "title": "Wi-Fi 규칙",
-    "connect_untrusted": "신뢰하지 않는 Wi-Fi에서 자동 연결",
+    "title": "Wi-Fi 규칙 사용",
+    "hint": "접속한 Wi-Fi 네트워크에 따라 터널이 자동으로 켜지거나 꺼집니다.",
     "trusted_ssids": "신뢰하는 네트워크",
-    "ssid_tunnel_map": "SSID별 자동 연결",
-    "add_trusted": "추가",
-    "ssid_placeholder": "네트워크 이름 (SSID)",
-    "select_tunnel": "터널 선택…"
+    "trusted_hint": "이 네트워크에서는 모든 터널이 자동으로 해제됩니다.",
+    "per_tunnel_location": "터널별 자동 연결 SSID는 해당 터널 상세 패널에서 설정합니다.",
+    "add": "추가",
+    "ssid_placeholder": "네트워크 이름 (SSID)"
   }
 }
