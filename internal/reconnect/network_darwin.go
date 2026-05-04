@@ -184,7 +184,7 @@ func (d *darwinNetworkChangeDetector) poll() {
 			}
 			heartbeat++
 			if heartbeat%30 == 0 {
-				slog.Info("network polling heartbeat", "iface", iface)
+				slog.Debug("network polling heartbeat", "iface", iface)
 			}
 			if iface == lastIface {
 				continue

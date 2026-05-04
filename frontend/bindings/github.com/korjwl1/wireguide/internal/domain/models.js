@@ -81,6 +81,16 @@ export class ConnectionStatus {
         }
         if (/** @type {any} */(false)) {
             /**
+             * LatencyMs is the most recent measured round-trip time to the
+             * endpoint in milliseconds. 0 means "no measurement yet" or "endpoint
+             * unreachable" — the frontend treats both the same (renders "—").
+             * @member
+             * @type {number | undefined}
+             */
+            this["latency_ms"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
              * @member
              * @type {string | undefined}
              */
@@ -115,14 +125,14 @@ export class ConnectionStatus {
      * @returns {ConnectionStatus}
      */
     static createFrom($$source = {}) {
-        const $$createField9_0 = $$createType0;
-        const $$createField10_0 = $$createType2;
+        const $$createField10_0 = $$createType0;
+        const $$createField11_0 = $$createType2;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("active_tunnels" in $$parsedSource) {
-            $$parsedSource["active_tunnels"] = $$createField9_0($$parsedSource["active_tunnels"]);
+            $$parsedSource["active_tunnels"] = $$createField10_0($$parsedSource["active_tunnels"]);
         }
         if ("tunnels" in $$parsedSource) {
-            $$parsedSource["tunnels"] = $$createField10_0($$parsedSource["tunnels"]);
+            $$parsedSource["tunnels"] = $$createField11_0($$parsedSource["tunnels"]);
         }
         return new ConnectionStatus(/** @type {Partial<ConnectionStatus>} */($$parsedSource));
     }

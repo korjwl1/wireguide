@@ -35,6 +35,7 @@
     "duration": "연결 시간",
     "rx": "다운로드",
     "tx": "업로드",
+    "latency": "지연 시간",
     "kill_switch": "킬 스위치",
     "dns_protection": "DNS 보호",
     "details": "상세 정보",

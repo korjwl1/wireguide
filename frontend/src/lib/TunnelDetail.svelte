@@ -196,6 +196,10 @@
           <span class="stat-label">{$t('tunnel.duration')}</span>
           <span class="stat-value">{status.duration || '-'}</span>
         </div>
+        <div class="stat">
+          <span class="stat-label">{$t('tunnel.latency')}</span>
+          <span class="stat-value">{status.latency_ms ? `${Math.round(status.latency_ms)} ms` : '—'}</span>
+        </div>
       </div>
     {/if}
 

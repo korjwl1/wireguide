@@ -35,7 +35,11 @@ type ConnectionStatus struct {
 	LastHandshakeTime time.Time `json:"-"`
 	LastHandshake     string    `json:"last_handshake,omitempty"`
 	Endpoint          string    `json:"endpoint,omitempty"`
-	ErrorMessage      string    `json:"error_message,omitempty"`
+	// LatencyMs is the most recent measured round-trip time to the
+	// endpoint in milliseconds. 0 means "no measurement yet" or "endpoint
+	// unreachable" — the frontend treats both the same (renders "—").
+	LatencyMs    float64 `json:"latency_ms,omitempty"`
+	ErrorMessage string  `json:"error_message,omitempty"`
 
 	// ActiveTunnels lists the names of all currently connected (or connecting)
 	// tunnels. Populated by the multi-tunnel manager so the frontend can show

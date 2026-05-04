@@ -35,6 +35,7 @@
     "duration": "Duration",
     "rx": "Download",
     "tx": "Upload",
+    "latency": "Latency",
     "kill_switch": "Kill Switch",
     "dns_protection": "DNS Protection",
     "details": "Details",

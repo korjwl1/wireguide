@@ -98,6 +98,13 @@ type Helper struct {
 	// and multiple shutdowns could race.
 	shutdownTimer *time.Timer
 
+	// latencyByTunnel caches the most recent endpoint round-trip time
+	// (in ms) per tunnel name. Updated by latencyLoop every 30s; read by
+	// statusDTO on every broadcast tick. Keyed by tunnel name so
+	// multi-tunnel setups show per-tunnel latency.
+	latencyMu       sync.Mutex
+	latencyByTunnel map[string]float64
+
 	done        chan struct{}
 	cleanupOnce sync.Once
 }
@@ -115,12 +122,13 @@ func Run(addr string, ownerUID int, dataDir string) error {
 	fw := firewall.NewPlatformFirewall()
 
 	h := &Helper{
-		server:     ipc.NewServer(listener, ownerUID),
-		manager:    manager,
-		firewall:   fw,
-		activeCfgs: make(map[string]*domain.WireGuardConfig),
-		logLevel:   new(slog.LevelVar), // defaults to Info
-		done:       make(chan struct{}),
+		server:          ipc.NewServer(listener, ownerUID),
+		manager:         manager,
+		firewall:        fw,
+		activeCfgs:      make(map[string]*domain.WireGuardConfig),
+		latencyByTunnel: make(map[string]float64),
+		logLevel:        new(slog.LevelVar), // defaults to Info
+		done:            make(chan struct{}),
 	}
 
 	// Install the broadcast slog handler BEFORE the first log call so
@@ -161,6 +169,12 @@ func Run(addr string, ownerUID int, dataDir string) error {
 
 	// Start event emitter (diff loop)
 	goSafe("eventLoop", h.eventLoop)
+
+	// Start endpoint latency probe loop. Runs at a slow tick (~30s) so
+	// it doesn't add measurable load; ICMP pings are blocking and the
+	// goroutine is supervised by goSafe like every other long-running
+	// helper background task.
+	goSafe("latencyLoop", h.latencyLoop)
 
 	// Top-level panic recovery for the Serve loop itself. If Accept or any
 	// per-conn handler panics unrecovered, we at least want a stack trace.
