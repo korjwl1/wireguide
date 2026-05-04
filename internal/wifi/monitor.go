@@ -72,6 +72,24 @@ func (m *Monitor) UpdateRules(rules *Rules) {
 	m.mu.Unlock()
 }
 
+// ReportExternalSSID is called when an external source (e.g. the GUI process
+// on macOS, which holds Location Services permission) provides the current
+// SSID. If it differs from the last known value, onChanged is triggered.
+func (m *Monitor) ReportExternalSSID(ssid string) {
+	m.mu.Lock()
+	if ssid == m.lastSSID {
+		m.mu.Unlock()
+		return
+	}
+	old := m.lastSSID
+	m.lastSSID = ssid
+	m.mu.Unlock()
+	slog.Info("WiFi SSID updated via GUI report", "from", old, "to", ssid)
+	if m.onChanged != nil {
+		m.onChanged(old, ssid)
+	}
+}
+
 func (m *Monitor) poll() {
 	m.mu.Lock()
 	m.lastSSID = CurrentSSID()

@@ -22,6 +22,7 @@ import (
 	"github.com/korjwl1/wireguide/internal/domain"
 	"github.com/korjwl1/wireguide/internal/ipc"
 	"github.com/korjwl1/wireguide/internal/storage"
+	"github.com/korjwl1/wireguide/internal/wifi"
 	"github.com/wailsapp/wails/v3/pkg/application"
 	"github.com/wailsapp/wails/v3/pkg/events"
 )
@@ -121,6 +122,18 @@ func Run(assetsHandler http.Handler, dataDir string) error {
 	})
 	tunnelService.SetApp(app)
 	bindAppToLogHandler(app)
+
+	// Trigger CLLocationManager authorization so this .app bundle appears in
+	// System Settings → Location Services. Must run in the GUI process (not
+	// the helper) because Location Services tracks the calling bundle ID.
+	// cwRequestLocationAuthorization dispatches to the main thread internally.
+	wifi.RequestLocationAuthorization()
+
+	// On macOS 14+ the helper (root LaunchDaemon) cannot read SSID via
+	// CoreWLAN because Location Services permission is bundle-scoped. Poll
+	// here in the GUI process (which holds permission) and forward changes
+	// to the helper via MethodReportSSID so auto-connect rules fire correctly.
+	go startSSIDReporter(clients)
 
 	// Register the log event shape so Wails knows how to marshal it.
 	application.RegisterEvent[ipc.LogEntry]("log")

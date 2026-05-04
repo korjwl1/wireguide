@@ -128,5 +128,15 @@ func (b *eventBridge) handleEvent(method string, params json.RawMessage) {
 		} else {
 			b.app.Event.Emit("wifi_ssid", payload)
 		}
+	case ipc.EventAutoConnect:
+		// Helper auto-connected a tunnel via Wi-Fi rules. Frontend must run
+		// the same post-connect refresh (refreshTunnels + refreshStatus) as
+		// after a manual connect click so the UI and tray update correctly.
+		var payload ipc.AutoConnectPayload
+		if err := json.Unmarshal(params, &payload); err != nil {
+			slog.Debug("event bridge: unmarshal auto_connect failed", "error", err)
+		} else {
+			b.app.Event.Emit("auto_connected", payload)
+		}
 	}
 }

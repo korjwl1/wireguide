@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/korjwl1/wireguide/internal/config"
+	"github.com/korjwl1/wireguide/internal/domain"
 	"github.com/korjwl1/wireguide/internal/ipc"
 	"github.com/korjwl1/wireguide/internal/tunnel"
 	"github.com/korjwl1/wireguide/internal/update"
@@ -32,6 +33,7 @@ func (h *Helper) registerHandlers() {
 	h.server.Handle(ipc.MethodSetDNSProtection, h.handleSetDNSProtection)
 	h.server.Handle(ipc.MethodSetHealthCheck, h.handleSetHealthCheck)
 	h.server.Handle(ipc.MethodSetPinInterface, h.handleSetPinInterface)
+	h.server.Handle(ipc.MethodReportSSID, h.handleReportSSID)
 }
 
 func (h *Helper) handleSetLogLevel(params json.RawMessage) (interface{}, error) {
@@ -94,9 +96,7 @@ func (h *Helper) handleRename(params json.RawMessage) (interface{}, error) {
 		return nil, err
 	}
 
-	// Sync any cached state that uses the old name. The tunnel is not
-	// active per the check above, so activeCfgs shouldn't carry it, but
-	// we keep this defensive in case a future flow caches inactive cfgs.
+	// Sync activeCfgs under h.mu.
 	h.mu.Lock()
 	if cfg, ok := h.activeCfgs[req.OldName]; ok {
 		delete(h.activeCfgs, req.OldName)
@@ -105,12 +105,39 @@ func (h *Helper) handleRename(params json.RawMessage) (interface{}, error) {
 		}
 		h.activeCfgs[req.NewName] = cfg
 	}
+	h.mu.Unlock()
+
+	// Sync autoConnectedBy under h.wifiMu — separate from h.mu to preserve
+	// lock ordering: wifiMu is acquired before connectMu inside handleSSIDChange,
+	// so we must NOT hold both simultaneously here.
+	h.wifiMu.Lock()
 	if owner, ok := h.autoConnectedBy[req.OldName]; ok {
 		delete(h.autoConnectedBy, req.OldName)
 		h.autoConnectedBy[req.NewName] = owner
 	}
-	h.mu.Unlock()
+	h.wifiMu.Unlock()
 	return ipc.Empty{}, nil
+}
+
+// doConnectHeld caches cfg BEFORE calling manager.Connect (so the reconnect
+// monitor sees the config during Connect), then rolls back on failure.
+// Caller MUST hold h.connectMu.
+func (h *Helper) doConnectHeld(cfg *domain.WireGuardConfig) error {
+	h.mu.Lock()
+	prevCfgs := h.copyActiveCfgs()
+	h.activeCfgs[cfg.Name] = cfg
+	h.mu.Unlock()
+
+	if err := h.manager.Connect(cfg); err != nil {
+		h.mu.Lock()
+		delete(h.activeCfgs, cfg.Name)
+		if prev, ok := prevCfgs[cfg.Name]; ok {
+			h.activeCfgs[cfg.Name] = prev
+		}
+		h.mu.Unlock()
+		return err
+	}
+	return nil
 }
 
 func (h *Helper) handleConnect(params json.RawMessage) (interface{}, error) {
@@ -151,25 +178,7 @@ func (h *Helper) handleConnect(params json.RawMessage) (interface{}, error) {
 		}
 	}
 
-	// Cache the active config BEFORE dispatching to the manager, so that if
-	// the reconnect monitor fires during Connect() it sees the new config
-	// (not nil or the previous one). Roll back on failure.
-	h.mu.Lock()
-	prevCfgs := h.copyActiveCfgs()
-	h.activeCfgs[req.Config.Name] = req.Config
-	h.mu.Unlock()
-
-	if err := h.manager.Connect(req.Config); err != nil {
-		h.mu.Lock()
-		delete(h.activeCfgs, req.Config.Name)
-		// Restore previous if there was one
-		if prev, ok := prevCfgs[req.Config.Name]; ok {
-			h.activeCfgs[req.Config.Name] = prev
-		}
-		h.mu.Unlock()
-		return nil, err
-	}
-	return ipc.Empty{}, nil
+	return ipc.Empty{}, h.doConnectHeld(req.Config)
 }
 
 func (h *Helper) handleDisconnect(params json.RawMessage) (interface{}, error) {
@@ -262,10 +271,10 @@ func (h *Helper) handleSetKillSwitch(params json.RawMessage) (interface{}, error
 		return nil, err
 	}
 	if req.Enabled {
-		status := h.manager.Status()
-		if status.State != tunnel.StateConnected {
+		if !h.manager.IsConnected() {
 			return nil, fmt.Errorf("no active tunnel")
 		}
+		status := h.manager.Status()
 		// Use pre-resolved endpoints (resolved before tunnel routes were
 		// installed). Doing DNS resolution here would fail because the kill
 		// switch is about to block non-tunnel traffic and/or the query would
@@ -300,10 +309,10 @@ func (h *Helper) handleSetDNSProtection(params json.RawMessage) (interface{}, er
 		return nil, err
 	}
 	if req.Enabled {
-		status := h.manager.Status()
-		if status.State != tunnel.StateConnected {
+		if !h.manager.IsConnected() {
 			return nil, fmt.Errorf("no active tunnel")
 		}
+		status := h.manager.Status()
 		// DNS protection uses a single tunnel's interface name for the pf
 		// rule. This is intentional: the pf rule blocks port 53 globally
 		// and only allows it through the tunnel interface. With multiple
@@ -339,5 +348,20 @@ func (h *Helper) handleSetPinInterface(params json.RawMessage) (interface{}, err
 		return nil, err
 	}
 	h.manager.SetPinInterface(req.Enabled)
+	return ipc.Empty{}, nil
+}
+
+// handleReportSSID receives the current SSID from the GUI process.
+// On macOS 14+ the helper (root LaunchDaemon) cannot read SSID via
+// CoreWLAN because Location Services permission is bundle-scoped; the
+// GUI holds the permission and forwards changes here.
+func (h *Helper) handleReportSSID(params json.RawMessage) (interface{}, error) {
+	var req ipc.ReportSSIDRequest
+	if err := json.Unmarshal(params, &req); err != nil {
+		return nil, err
+	}
+	if h.wifiMon != nil {
+		h.wifiMon.ReportExternalSSID(req.SSID)
+	}
 	return ipc.Empty{}, nil
 }

@@ -57,14 +57,16 @@ const (
 	MethodSetDNSProtection = "Firewall.SetDNSProtection"
 	MethodSetHealthCheck   = "Monitor.SetHealthCheck"
 	MethodSetPinInterface  = "Network.SetPinInterface"
+	MethodReportSSID       = "Wifi.ReportSSID"
 )
 
 // Event names (server → client notifications)
 const (
-	EventStatus    = "event.status"
-	EventReconnect = "event.reconnect"
-	EventLog       = "event.log"
-	EventWifiSSID  = "event.wifi_ssid"
+	EventStatus      = "event.status"
+	EventReconnect   = "event.reconnect"
+	EventLog         = "event.log"
+	EventWifiSSID    = "event.wifi_ssid"
+	EventAutoConnect = "event.auto_connect"
 )
 
 // CodedError is an error that carries a specific JSON-RPC error code.

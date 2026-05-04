@@ -181,6 +181,59 @@ block drop in all
 
 **Why anchor-only**: previous approach saved main pf rules via `pfctl -sr` and re-loaded with anchor reference. This broke on macOS Tahoe because `pfctl -sr` outputs `scrub-anchor` directives that cause syntax errors when fed back to `pfctl -f`.
 
+## Wi-Fi Auto-Connect
+
+### Architecture
+
+Wi-Fi auto-connect rules are evaluated **entirely inside the helper process**. This means rules fire whether or not a GUI is alive.
+
+```
+macOS CoreWLAN (GUI process)
+  │
+  │  Wifi.ReportSSID (IPC)
+  ▼
+Helper.handleReportSSID
+  └─ handleSSIDChange(oldSSID, newSSID)
+       ├─ load settings.WifiRules
+       ├─ rules.Action(newSSID) → "connect" / "disconnect" / "none"
+       ├─ [connect] doConnectHeld(cfg)   ← same function as manual connect
+       │    └─ Broadcast(event.auto_connect, {TunnelName})
+       └─ [disconnect] DisconnectTunnel(name)
+```
+
+### macOS 14+ Location Services Workaround
+
+On macOS 14+, `CoreWLAN` requires the app to appear in **System Settings → Privacy → Location Services** before it can read the current SSID. Because the helper runs as a root `LaunchDaemon` (not inside the app bundle), it cannot obtain this permission directly.
+
+**Workaround**: the GUI polls SSID via `CoreWLAN` (it does have Location permission) and forwards every SSID change to the helper via the `Wifi.ReportSSID` IPC method. The helper calls `handleSSIDChange` in response.
+
+### Auto-Managed vs Manual Tunnels
+
+The helper tracks which tunnels it auto-connected in `autoConnectedBy map[string]string` (tunnel name → SSID that triggered it), protected by `wifiMu`. This distinction matters for teardown:
+
+| Scenario | Action |
+|----------|--------|
+| New SSID has an auto-connect rule | Connect matched tunnel, disconnect all other *auto-managed* tunnels |
+| New SSID is trusted | Disconnect *auto-managed* tunnels only (manually-connected tunnels untouched) |
+| New SSID has no rule | Disconnect *auto-managed* tunnels only |
+| Tunnel already up when rule fires | Update SSID tracking if already auto-managed; never adopt a manually-connected tunnel |
+
+Manual tunnels — started via the Connect button or tray — are **never torn down** by Wi-Fi rule evaluation.
+
+### Post-Connect Refresh
+
+After `doConnectHeld` succeeds, the helper broadcasts `event.auto_connect`. The GUI handles this event by calling `applyFirewallSettings()` — the same function called after a manual connect — which re-applies kill switch and DNS protection if enabled. The 1Hz `event.status` broadcast (which always includes `active_tunnels`) drives the UI state update.
+
+### Lock Ordering
+
+Three locks are involved:
+
+- `connectMu` — serializes connect/disconnect operations (held outermost)
+- `mu` — protects `activeCfgs` and other manager state
+- `wifiMu` — protects `autoConnectedBy`
+
+Rule: always acquire in the order `connectMu → mu → wifiMu`. Never hold a lower-priority lock when acquiring a higher one.
+
 ## Reconnect
 
 ### Sleep/Wake Detection
@@ -248,6 +301,7 @@ JSON-RPC 2.0 over Unix domain socket. Socket permissions: `0600`, peer UID verif
 | `Helper.SetLogLevel` | GUI->Helper | Change runtime log level |
 | `Tunnel.Connect` | GUI->Helper | Start VPN tunnel (`ConnectRequest`) |
 | `Tunnel.Disconnect` | GUI->Helper | Stop tunnel (`DisconnectRequest`, optional `TunnelName`) |
+| `Tunnel.Rename` | GUI->Helper | Rename tunnel (`RenameRequest`) — atomic update under `connectMu` |
 | `Tunnel.Status` | GUI->Helper | Connection state + stats |
 | `Tunnel.IsConnected` | GUI->Helper | Boolean connected check |
 | `Tunnel.ActiveName` | GUI->Helper | Name of first active tunnel |
@@ -256,9 +310,12 @@ JSON-RPC 2.0 over Unix domain socket. Socket permissions: `0600`, peer UID verif
 | `Firewall.SetDNSProtection` | GUI->Helper | Enable/disable DNS-only pf rules |
 | `Monitor.SetHealthCheck` | GUI->Helper | Toggle per-tunnel health check |
 | `Network.SetPinInterface` | GUI->Helper | Toggle `-ifscope` route pinning |
-| `event.status` | Helper->GUI | 1 Hz status broadcast |
+| `Wifi.ReportSSID` | GUI->Helper | Forward current SSID from GUI (macOS 14+ Location Services workaround) |
+| `event.status` | Helper->GUI | 1 Hz status broadcast (includes `active_tunnels` list) |
 | `event.reconnect` | Helper->GUI | Reconnect state changes |
 | `event.log` | Helper->GUI | Structured log entries |
+| `event.wifi_ssid` | Helper->GUI | SSID changed (`WifiSSIDPayload{OldSSID, NewSSID}`) |
+| `event.auto_connect` | Helper->GUI | Wi-Fi rule fired and connected (`AutoConnectPayload{TunnelName}`) |
 
 ### Key Request/Response Types
 
@@ -266,11 +323,15 @@ JSON-RPC 2.0 over Unix domain socket. Socket permissions: `0600`, peer UID verif
 |------|---------|-------|
 | `ConnectRequest` | `Tunnel.Connect` | Contains `*WireGuardConfig` |
 | `DisconnectRequest` | `Tunnel.Disconnect` | Optional `TunnelName`; empty = disconnect first active tunnel |
+| `RenameRequest` | `Tunnel.Rename` | `OldName`, `NewName` |
 | `ActiveTunnelsResponse` | `Tunnel.ActiveTunnels` | `Names []string` |
 | `SetPinInterfaceRequest` | `Network.SetPinInterface` | `Enabled bool` |
 | `SetHealthCheckRequest` | `Monitor.SetHealthCheck` | `Enabled bool` |
 | `SetLogLevelRequest` | `Helper.SetLogLevel` | `Level string` |
 | `MultiStatusResponse` | `Tunnel.Status` | Aggregate state + per-tunnel `[]ConnectionStatus` |
+| `ReportSSIDRequest` | `Wifi.ReportSSID` | `SSID string` |
+| `WifiSSIDPayload` | `event.wifi_ssid` | `OldSSID`, `NewSSID` |
+| `AutoConnectPayload` | `event.auto_connect` | `TunnelName string` |
 
 ## Error Handling
 

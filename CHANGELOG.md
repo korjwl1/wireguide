@@ -2,6 +2,38 @@
 
 All notable changes to WireGuide will be documented in this file.
 
+## [0.2.0] - 2026-05-05
+
+### Added
+- **Wi-Fi auto-connect rules** — per-tunnel SSID-based auto-connect/disconnect; rules fire in the helper so they work even when the GUI is quit
+- **Trusted SSID support** — designated SSIDs auto-disconnect all VPN tunnels (home/office network detection)
+- **macOS 14+ Location Services integration** — CoreWLAN CGo replaces `networksetup` for SSID detection; app now appears in System Settings → Location Services
+- **GUI→Helper SSID forwarding** — on macOS 14+ the helper (root LaunchDaemon) cannot read SSID itself; the GUI polls via CoreWLAN and forwards changes over IPC so auto-connect rules fire correctly
+- **Ed25519 signature verification** — auto-update downloads verified against a Ed25519 signature over SHA256SUMS; embedded public key prevents tampered binaries from being installed
+
+### Fixed
+- Wi-Fi auto-connect status not updating in GUI/tray after rule fires (`ActiveTunnels` now populated in all status broadcasts)
+- `autoConnectedBy` accessed under wrong mutex in `handleRename` (race condition; changed to `wifiMu`)
+- Lock ordering violation between `handleRename` and `handleSSIDChange` that could cause deadlock
+- Kill switch and DNS protection handlers using `Status().State` instead of `IsConnected()` (broke in multi-tunnel setups where the primary was not the connected tunnel)
+- `handleReportSSID` panic on nil `wifiMon` (non-darwin builds and pre-init race)
+- `sleep_darwin.go` unsafe.Pointer misuse flagged by `go vet`; replaced with `runtime/cgo.Handle`
+- Duplicate SSID appearing in Wi-Fi rules dropdown when current SSID matched a saved rule
+
+### Changed
+- Auto-connect logic moved to helper process (was frontend-side) so rules fire independently of GUI lifecycle
+- `postConnectRefresh` refactored: `refreshTunnels`+`refreshStatus` kept for manual connect UX; auto-connect path calls only `applyFirewallSettings` (event stream handles status update)
+- Dead backward-compat fallback in `subscribeToEvents` removed (active_tunnels now always populated)
+
+## [0.1.9] - 2026-05-05
+
+### Changed
+- Removed Wi-Fi rules master toggle; trusted SSIDs are always active when configured
+
+### Fixed
+- Various regressions, lifecycle, and performance issues from audit rounds (Round 2, Round 3)
+- 30+ fixes from full-codebase review (null guards, lock safety, error propagation)
+
 ## [0.1.8] - 2026-04-13
 
 ### Changed

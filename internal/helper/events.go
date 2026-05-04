@@ -116,6 +116,7 @@ func (h *Helper) statusDTO() ipc.ConnectionStatus {
 		return ipc.ConnectionStatus{State: domain.StateDisconnected}
 	}
 	result := *primary
+	result.ActiveTunnels = h.manager.ActiveTunnels()
 
 	// Snapshot the latency cache once per call so we don't take the
 	// lock per-tunnel inside the loop.

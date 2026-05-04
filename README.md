@@ -39,6 +39,7 @@
 
 | Feature | Description |
 |---------|-------------|
+| **Wi-Fi Auto-Connect** | Per-tunnel SSID rules: auto-connect on join, auto-disconnect on leave, trusted networks. Runs in the helper — works even when the GUI is closed. |
 | **Multi-Tunnel** | Connect multiple WireGuard tunnels simultaneously with per-tunnel state |
 | **Tunnel Management** | Import, create, edit, export `.conf` files. Drag-and-drop import. |
 | **Config Editor** | CodeMirror 6 with WireGuard syntax highlighting and autocompletion |

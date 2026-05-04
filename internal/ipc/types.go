@@ -113,3 +113,18 @@ type WifiSSIDPayload struct {
 	OldSSID string `json:"old_ssid"`
 	NewSSID string `json:"new_ssid"`
 }
+
+// ReportSSIDRequest is sent by the GUI to push the current SSID into the
+// helper. On macOS 14+ the helper (a root LaunchDaemon) cannot read SSID
+// via CoreWLAN because Location Services permission is tied to the GUI
+// bundle. The GUI polls and forwards changes via this method.
+type ReportSSIDRequest struct {
+	SSID string `json:"ssid"`
+}
+
+// AutoConnectPayload is broadcast by the helper after a Wi-Fi rule auto-connects
+// a tunnel. The GUI handles this by running the same post-connect refresh
+// (refreshTunnels + refreshStatus) as after a manual connect click.
+type AutoConnectPayload struct {
+	TunnelName string `json:"tunnel_name"`
+}

@@ -34,7 +34,7 @@
     const seen = new Set(rules.trusted_ssids || []);
     const candidates = [
       ...(currentSSID && !seen.has(currentSSID) ? [currentSSID] : []),
-      ...(knownSSIDs || []).filter(s => !seen.has(s)),
+      ...(knownSSIDs || []).filter(s => !seen.has(s) && s !== currentSSID),
     ];
     return (q ? candidates.filter(s => s.toLowerCase().includes(q)) : candidates).slice(0, 10);
   })();

@@ -21,10 +21,6 @@ export function subscribeToEvents() {
     // active_tunnels (array of connected tunnel names) to support
     // multiple simultaneous tunnels.
     const activeSet = new Set(status?.active_tunnels || []);
-    // Fallback for single-tunnel backward compat
-    if (activeSet.size === 0 && status?.state === 'connected' && status?.tunnel_name) {
-      activeSet.add(status.tunnel_name);
-    }
 
     tunnels.update((list) => {
       let changed = false;

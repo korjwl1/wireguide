@@ -42,6 +42,7 @@
   let helperUnsub = null;
   let helperResetUnsub = null;
   let wifiSsidUnsub = null;
+  let autoConnectedUnsub = null;
 
   // App-level ESC handler: close the editor modal. ConfigEditor wraps
   // a CodeMirror instance whose own keymaps may handle ESC for things
@@ -158,6 +159,13 @@
         showToast(`Wi-Fi: ${new_ssid}`);
       }
     });
+
+    // Helper auto-connected a tunnel via Wi-Fi rules.
+    // EventStatus broadcast handles tunnel state/status update within 1s.
+    // Only need to apply firewall settings here (same as after manual connect).
+    autoConnectedUnsub = Events.On('auto_connected', async () => {
+      await applyFirewallSettings();
+    });
   });
 
   onDestroy(() => {
@@ -167,6 +175,7 @@
     if (helperUnsub) helperUnsub();
     if (helperResetUnsub) helperResetUnsub();
     if (wifiSsidUnsub) wifiSsidUnsub();
+    if (autoConnectedUnsub) autoConnectedUnsub();
     if (toastTimer) clearTimeout(toastTimer);
   });
 
@@ -394,27 +403,25 @@
     }
   }
 
+  // Apply kill switch and DNS protection based on saved settings.
+  // Called after any successful connect (manual or auto).
+  async function applyFirewallSettings() {
+    try {
+      const s = await TunnelService.GetSettings();
+      if (s?.kill_switch) await TunnelService.SetKillSwitch(true);
+      if (s?.dns_protection) await TunnelService.SetDNSProtection(true);
+    } catch (e) {
+      console.warn('auto-apply firewall settings failed:', e);
+    }
+  }
+
   // Actually perform the connect RPC (after all warnings have been resolved).
-  // After successful connect, auto-apply kill switch and DNS protection
-  // based on saved settings (global preferences, not per-tunnel).
   async function doConnectFinal(name) {
     try {
       await TunnelService.Connect(name);
       await refreshTunnels(TunnelService);
       await refreshStatus(TunnelService);
-
-      // Auto-apply firewall settings after successful connect
-      try {
-        const s = await TunnelService.GetSettings();
-        if (s?.kill_switch) {
-          await TunnelService.SetKillSwitch(true);
-        }
-        if (s?.dns_protection) {
-          await TunnelService.SetDNSProtection(true);
-        }
-      } catch (e) {
-        console.warn('auto-apply firewall settings failed:', e);
-      }
+      await applyFirewallSettings();
     } catch (e) {
       showToast("Connect failed: " + errText(e));
     }

@@ -13,7 +13,6 @@ The helper evaluates rules itself, so these tests verify behavior
 **both with the GUI running and after Cmd+Q'ing the GUI**.
 
 ### Setup
-- [ ] Settings → Wi-Fi 규칙 master toggle ON
 - [ ] In a tunnel's detail panel, open "자동 연결" modal and add the
       current Wi-Fi SSID
 - [ ] (Optional) Add a different SSID to the same tunnel, and a third
@@ -58,6 +57,6 @@ The helper evaluates rules itself, so these tests verify behavior
       `internal/wifi/rules.go`).
 
 ### Negative cases
-- [ ] Master toggle OFF — switching SSIDs does nothing.
+- [ ] No rules configured — switching SSIDs does nothing.
 - [ ] Wi-Fi off (no SSID) — nothing happens (network change detector
       handles real reconnect concerns separately).

@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strconv"
 
+	"github.com/korjwl1/wireguide/internal/ipc"
 	"github.com/korjwl1/wireguide/internal/storage"
 )
 
@@ -164,20 +165,18 @@ func (h *Helper) handleSSIDChange(oldSSID, newSSID string) {
 		slog.Info("wifi rule: matched SSID, connecting",
 			"ssid", newSSID, "tunnel", tunnelName)
 		h.connectMu.Lock()
-		err = h.manager.Connect(cfg)
+		err = h.doConnectHeld(cfg)
 		h.connectMu.Unlock()
 		if err != nil {
 			slog.Warn("wifi rule connect failed", "tunnel", tunnelName, "error", err)
 			return
 		}
-		// Cache the cfg in activeCfgs so reconnect monitor and
-		// recovery treat it the same as a GUI-initiated connect.
-		h.mu.Lock()
-		h.activeCfgs[cfg.Name] = cfg
-		h.mu.Unlock()
 		h.wifiMu.Lock()
 		h.autoConnectedBy[tunnelName] = newSSID
 		h.wifiMu.Unlock()
+		// Notify GUI so it runs the same post-connect refresh (refreshTunnels +
+		// refreshStatus) as after a manual connect click.
+		h.server.Broadcast(ipc.EventAutoConnect, ipc.AutoConnectPayload{TunnelName: tunnelName})
 
 	case "none":
 		// New SSID has no rule. Tear down only auto-managed tunnels.
