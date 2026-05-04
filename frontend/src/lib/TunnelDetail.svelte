@@ -221,16 +221,32 @@
     });
   }
 
+  // Track consecutive "client closed" failures so we can swap the
+  // raw error for a recovering-helper hint on the second attempt.
+  let consecutiveClientClosed = 0;
+
   async function disconnect() {
     error = '';
     loading = true;
     try {
       await TunnelService.DisconnectTunnel($selectedTunnel.name);
+      consecutiveClientClosed = 0;
       // Don't wait for event stream — refresh immediately.
       await refreshTunnels(TunnelService);
       await refreshStatus(TunnelService);
     } catch (e) {
-      error = errText(e);
+      const raw = errText(e);
+      if (/client closed|connection closed|broken pipe|EOF/i.test(raw)) {
+        consecutiveClientClosed += 1;
+        if (consecutiveClientClosed >= 2) {
+          error = $t('tunnel.helper_recovering') || 'Helper recovering, please retry in a moment.';
+        } else {
+          error = raw;
+        }
+      } else {
+        consecutiveClientClosed = 0;
+        error = raw;
+      }
     }
     loading = false;
   }

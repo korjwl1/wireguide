@@ -58,7 +58,7 @@ func ensureHelper(ctx context.Context, dataDir string) (*ipc.Client, error) {
 		DataDir:        dataDir,
 		ForceReinstall: forceReinstall,
 	}
-	if err := elevate.SpawnHelper(args); err != nil {
+	if err := elevate.SpawnHelper(ctx, args); err != nil {
 		return nil, fmt.Errorf("spawn helper: %w", err)
 	}
 

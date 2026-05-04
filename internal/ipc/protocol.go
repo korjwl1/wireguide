@@ -52,6 +52,7 @@ const (
 	MethodIsConnected      = "Tunnel.IsConnected"
 	MethodActiveName    = "Tunnel.ActiveName"
 	MethodActiveTunnels = "Tunnel.ActiveTunnels"
+	MethodRename        = "Tunnel.Rename"
 	MethodSetKillSwitch    = "Firewall.SetKillSwitch"
 	MethodSetDNSProtection = "Firewall.SetDNSProtection"
 	MethodSetHealthCheck   = "Monitor.SetHealthCheck"

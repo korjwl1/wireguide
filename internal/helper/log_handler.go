@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -39,7 +41,8 @@ type broadcastHandler struct {
 
 func newBroadcastHandler(levelVar *slog.LevelVar, getBroadcaster func() func(string, interface{})) *broadcastHandler {
 	stderr := slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
-		Level: levelVar,
+		Level:     levelVar,
+		AddSource: true,
 	})
 	return &broadcastHandler{
 		levelVar:       levelVar,
@@ -70,6 +73,12 @@ func (h *broadcastHandler) Handle(ctx context.Context, r slog.Record) error {
 		fmt.Fprintf(&b, " %s=%v", a.Key, a.Value.Any())
 		return true
 	})
+	if r.PC != 0 {
+		fs := runtime.CallersFrames([]uintptr{r.PC})
+		if frame, _ := fs.Next(); frame.File != "" {
+			fmt.Fprintf(&b, " source=%s:%d", filepath.Base(frame.File), frame.Line)
+		}
+	}
 
 	entry := ipc.LogEntry{
 		Time:    r.Time.UTC().Format(time.RFC3339Nano),

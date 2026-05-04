@@ -192,6 +192,11 @@ type trayManager struct {
 	hasHandshake  map[string]bool // per-tunnel handshake status
 	rebuildTimer  *time.Timer     // debounce timer for rebuildMenu
 	rebuilding    atomic.Bool     // guard against concurrent rebuildMenu calls
+	// quitting flips to true the moment Quit is clicked. Both the
+	// debounce AfterFunc and the rebuildMenu body short-circuit when
+	// set, so a late-firing timer can't call SetMenu on a tray that
+	// has already been Destroy()'d.
+	quitting atomic.Bool
 }
 
 func newTrayManager(app *application.App, win *application.WebviewWindow, tray *application.SystemTray, svc *wgapp.TunnelService, doShutdown func()) *trayManager {
@@ -296,18 +301,29 @@ func (t *trayManager) setIconState(activeNames []string, handshakeMap map[string
 // scheduleRebuild debounces rebuildMenu calls — multiple triggers within 100ms
 // are coalesced into a single rebuild.
 func (t *trayManager) scheduleRebuild() {
+	if t.quitting.Load() {
+		return
+	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.rebuildTimer != nil {
 		t.rebuildTimer.Stop()
 	}
-	t.rebuildTimer = time.AfterFunc(100*time.Millisecond, t.rebuildMenu)
+	t.rebuildTimer = time.AfterFunc(100*time.Millisecond, func() {
+		if t.quitting.Load() {
+			return
+		}
+		t.rebuildMenu()
+	})
 }
 
 // rebuildMenu reconstructs the whole tray menu: tunnel list, Show Window,
 // Quit. Uses ListTunnelsLocal (disk only, no IPC) + the cached activeTunnel
 // for connected-state glyphs. Safe to invoke from any goroutine.
 func (t *trayManager) rebuildMenu() {
+	if t.quitting.Load() {
+		return
+	}
 	// Prevent concurrent rebuilds from overlapping AfterFunc timers.
 	if !t.rebuilding.CompareAndSwap(false, true) {
 		return
@@ -319,15 +335,19 @@ func (t *trayManager) rebuildMenu() {
 		slog.Debug("tray: list tunnels failed", "error", err)
 	}
 
+	// Snapshot both maps under a single lock so the active set we
+	// render and the handshake bits we render are consistent — a
+	// concurrent setIconState was previously able to swap activeTunnels
+	// between the two reads, leading to "connected but no handshake
+	// glyph" flickers.
 	t.mu.Lock()
 	activeSet := t.activeTunnels
+	hsMap := t.hasHandshake
 	t.mu.Unlock()
 
 	m := t.app.NewMenu()
 	m.Add("WireGuide").SetEnabled(false)
 	m.AddSeparator()
-
-	hsMap := t.hasHandshake
 
 	for _, tun := range tunnels {
 		tun := tun // loop-var capture
@@ -360,6 +380,17 @@ func (t *trayManager) rebuildMenu() {
 	})
 	m.AddSeparator()
 	m.Add("Quit").OnClick(func(ctx *application.Context) {
+		// Latch the quit flag BEFORE Destroy so any in-flight debounce
+		// timer that fires between here and the AfterFunc cancel will
+		// see it and bail. Then stop the timer explicitly to prevent
+		// the goroutine from running at all in the common case.
+		t.quitting.Store(true)
+		t.mu.Lock()
+		if t.rebuildTimer != nil {
+			t.rebuildTimer.Stop()
+			t.rebuildTimer = nil
+		}
+		t.mu.Unlock()
 		t.doShutdown()
 		t.tray.Destroy()
 		t.app.Quit()

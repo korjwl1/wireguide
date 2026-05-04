@@ -314,6 +314,13 @@ func (f *DarwinFirewall) Cleanup() error {
 	pfWas := f.pfWasEnabled
 	f.dnsProtectionEnabled = false
 	f.killSwitchEnabled = false
+	// Zero the cached DNS state too. Without this, a future
+	// EnableKillSwitch (e.g. via resumeFirewall after a partial
+	// shutdown) would re-load the DNS sub-anchor with stale
+	// interface/server values from the now-defunct session.
+	f.savedDNSInterface = ""
+	f.savedDNSServers = nil
+	f.pfWasEnabled = false
 	f.mu.Unlock()
 
 	// Flush all anchor rules regardless of what was active.

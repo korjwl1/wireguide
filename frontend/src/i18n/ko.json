@@ -24,6 +24,7 @@
     "new_tunnel": "새 터널",
     "connect": "연결",
     "disconnect": "연결 해제",
+    "helper_recovering": "헬퍼가 복구 중입니다 — 잠시 후 다시 시도하세요.",
     "edit": "편집",
     "delete": "삭제",
     "export": "내보내기",

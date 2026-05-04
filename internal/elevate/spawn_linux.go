@@ -3,14 +3,18 @@
 package elevate
 
 import (
+	"context"
 	"fmt"
 	"os/exec"
 	"syscall"
 )
 
 // SpawnHelper launches the helper with root privileges via pkexec (PolicyKit).
-// Shows a native authentication dialog.
-func SpawnHelper(args Args) error {
+// Shows a native authentication dialog. ctx is accepted for cross-platform
+// signature parity with the macOS variant; pkexec needs no plumbing because
+// it backgrounds immediately on Start.
+func SpawnHelper(ctx context.Context, args Args) error {
+	_ = ctx
 	if _, err := exec.LookPath("pkexec"); err != nil {
 		return fmt.Errorf("pkexec not found: PolicyKit is required for privilege elevation — install the 'polkit' package: %w", err)
 	}

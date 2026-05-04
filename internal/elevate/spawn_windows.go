@@ -3,13 +3,17 @@
 package elevate
 
 import (
+	"context"
 	"fmt"
 	"os/exec"
 	"strings"
 )
 
 // SpawnHelper launches the helper with admin privileges via PowerShell + UAC.
-func SpawnHelper(args Args) error {
+// ctx is accepted for parity with darwin; PowerShell's Start-Process detaches
+// the elevated child immediately, leaving nothing for ctx to cancel.
+func SpawnHelper(ctx context.Context, args Args) error {
+	_ = ctx
 	exe, err := SelfPath()
 	if err != nil {
 		return err

@@ -24,6 +24,7 @@
     "new_tunnel": "New Tunnel",
     "connect": "Connect",
     "disconnect": "Disconnect",
+    "helper_recovering": "Helper is recovering — please retry in a moment.",
     "edit": "Edit",
     "delete": "Delete",
     "export": "Export",

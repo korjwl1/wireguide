@@ -1,6 +1,7 @@
 package app
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -210,18 +211,49 @@ func (s *TunnelService) DeleteTunnel(name string) error {
 
 // RenameTunnel changes a tunnel's name. Rejects rename of the connected
 // tunnel since the interface name is derived from it.
+//
+// Routes through the helper's Tunnel.Rename so the active-tunnel check and
+// the file rename both happen under the helper's connectMu — closing the
+// race where a Connect arriving between the GUI's check and the rename
+// could leave the new name in activeCfgs while the file path moved.
+//
+// Falls back to a direct local rename if the helper rejects the method
+// (older helper that hasn't been upgraded yet).
 func (s *TunnelService) RenameTunnel(oldName, newName string) error {
 	if err := storage.ValidateTunnelName(newName); err != nil {
 		return err
 	}
-	active, err := s.isActiveTunnel(oldName)
-	if err != nil {
-		return fmt.Errorf("cannot verify tunnel state (helper unreachable): %w", err)
+	if oldName == newName {
+		return nil
 	}
-	if active {
-		return fmt.Errorf("cannot rename connected tunnel %q — disconnect first", oldName)
+	err := s.call(ipc.MethodRename, ipc.RenameRequest{OldName: oldName, NewName: newName}, nil)
+	if err == nil {
+		return nil
 	}
-	return s.tunnelStore.Rename(oldName, newName)
+	if isMethodNotFound(err) {
+		active, activeErr := s.isActiveTunnel(oldName)
+		if activeErr != nil {
+			return fmt.Errorf("cannot verify tunnel state (helper unreachable): %w", activeErr)
+		}
+		if active {
+			return fmt.Errorf("cannot rename connected tunnel %q — disconnect first", oldName)
+		}
+		return s.tunnelStore.Rename(oldName, newName)
+	}
+	return err
+}
+
+// isMethodNotFound classifies an IPC error as "old helper doesn't know
+// this method" so callers can fall back to a local-only path.
+func isMethodNotFound(err error) bool {
+	if err == nil {
+		return false
+	}
+	var coded *ipc.Error
+	if errors.As(err, &coded) {
+		return coded.Code == ipc.ErrCodeMethodNotFound
+	}
+	return false
 }
 
 // TunnelExists reports whether a tunnel with the given name is stored.

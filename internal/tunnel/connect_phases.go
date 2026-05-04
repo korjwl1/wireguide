@@ -151,9 +151,17 @@ func (m *Manager) connectPhases(cfg *domain.WireGuardConfig, netMgr network.Netw
 	// 8. Final state file with the precise per-service DNS snapshot
 	// captured by SetDNS. Lets crash recovery restore exact prior
 	// DNS instead of the blunt DHCP-defaults fallback.
+	//
+	// Also stash the FIRST tunnel's snapshot at Manager scope —
+	// when this is the only/first tunnel up, its netMgr.savedDNS
+	// IS the original system DNS. Subsequent tunnels' snapshots
+	// would already include this tunnel's overrides, so we
+	// deliberately ignore them via CapturePreModDNS's first-write-
+	// wins guard.
 	var preModDNS map[string][]string
 	if provider, ok := netMgr.(network.DNSSnapshotProvider); ok {
 		preModDNS = provider.SavedDNSSnapshot()
+		m.CapturePreModDNS(preModDNS)
 	}
 
 	if err := SaveActiveState(m.dataDir, &ActiveTunnelState{
@@ -202,8 +210,21 @@ func (m *Manager) disconnectPhases(cfg *domain.WireGuardConfig, engine *Engine, 
 	// affects this tunnel's state (route monitor, bypass routes, DNS snapshot).
 	if netMgr != nil {
 		if !hasOtherTunnels {
-			// Last tunnel — full cleanup including DNS restore.
+			// Last tunnel — restore the ORIGINAL system DNS (captured
+			// when the first tunnel connected) rather than this
+			// netMgr's own savedDNS, which for a non-first tunnel
+			// would still hold the previous tunnel's DNS overrides.
+			// Cleanup's internal RestoreDNS becomes a no-op because
+			// RestoreDNSFromSnapshot clears dnsActive.
+			if pre := m.PreModDNSSnapshot(); pre != nil {
+				if r, ok := netMgr.(network.DNSStateRestorer); ok {
+					if err := r.RestoreDNSFromSnapshot(pre); err != nil {
+						slog.Warn("RestoreDNSFromSnapshot failed; falling back to per-netMgr restore", "error", err)
+					}
+				}
+			}
 			_ = netMgr.Cleanup(ifaceName)
+			m.ClearPreModDNS()
 		}
 	}
 

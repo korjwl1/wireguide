@@ -314,17 +314,27 @@ func (m *DarwinManager) AddRoutes(ifaceName string, allowedIPs []string, fullTun
 // connection appears dead. Comparing against lastGatewayV4/V6 turns those
 // spurious firings into cheap no-ops.
 func (m *DarwinManager) reapply() {
+	// Single-shot snapshot of every field reapply will reference.
+	// Slices are copied (append) so a concurrent RemoveRoutes that
+	// nils m.lastDNS or m.lastEndpoints can't yank them out from
+	// under us mid-loop. Without the copy, reapply could see a
+	// partially-cleared state where iface was still non-empty but
+	// dns/endpoints had already been wiped, leading to spurious
+	// applyDNS calls against the stale interface.
 	m.mu.Lock()
 	iface := m.lastIface
 	oldEndpoints := append([]string(nil), m.lastEndpoints...)
-	dns := m.lastDNS
+	dns := append([]string(nil), m.lastDNS...)
 	mtu := m.lastMTU
 	prevV4 := m.lastGatewayV4
 	prevV6 := m.lastGatewayV6
 	hasV4 := m.lastHasV4Default
 	hasV6 := m.lastHasV6Default
+	pinIface := m.pinInterface
 	m.mu.Unlock()
 
+	// Bail cleanly when RemoveRoutes won the race — we've already
+	// dropped the lock and have nothing meaningful to re-apply.
 	if iface == "" {
 		return
 	}
@@ -441,8 +451,11 @@ func (m *DarwinManager) reapply() {
 
 	// Update cached state including upstream interface for bypass -ifscope.
 	// Resolve interface outside the lock to avoid blocking on netstat.
+	// pinInterface was snapshotted at function entry — use that value
+	// rather than re-reading the field, otherwise a concurrent
+	// SetPinInterface flip mid-reapply could leave us with mixed state.
 	newUpstreamIface := ""
-	if m.pinInterface {
+	if pinIface {
 		newUpstreamIface = getDefaultInterface()
 	}
 	m.mu.Lock()
@@ -890,10 +903,16 @@ func (m *DarwinManager) applyDNSToServices(entries []string, services []string) 
 // flushDNSCache tells macOS's mDNSResponder to drop any cached entries so
 // lookups see the new DNS servers immediately. Best-effort: errors are not
 // propagated because a failed flush is not worth aborting a successful
-// Connect over.
+// Connect over — but we now log the outcome at debug so a flaky
+// mDNSResponder ("operation not permitted" under SIP, MDM blocks) leaves
+// a breadcrumb in helper.log instead of vanishing.
 func flushDNSCache() {
-	_ = run("dscacheutil", "-flushcache")
-	_ = run("killall", "-HUP", "mDNSResponder")
+	if out, err := exec.Command("dscacheutil", "-flushcache").CombinedOutput(); err != nil {
+		slog.Debug("dscacheutil flush failed", "error", err, "output", strings.TrimSpace(string(out)))
+	}
+	if out, err := exec.Command("killall", "-HUP", "mDNSResponder").CombinedOutput(); err != nil {
+		slog.Debug("mDNSResponder HUP failed", "error", err, "output", strings.TrimSpace(string(out)))
+	}
 }
 
 // validHostnameChars matches RFC 1123 hostname characters plus '.'.
@@ -1066,8 +1085,22 @@ func (m *DarwinManager) SavedDNSSnapshot() map[string][]string {
 }
 
 // RestoreDNSFromSnapshot restores DNS from a persisted pre-modification
-// snapshot. Used during crash recovery when in-memory state is unavailable.
+// snapshot. Used during crash recovery when in-memory state is unavailable,
+// AND on the multi-tunnel last-disconnect path so we restore the system's
+// PRE-VPN DNS instead of whatever the per-netMgr savedDNS captured (which
+// for the second-to-connect tunnel would have been the first tunnel's DNS,
+// not the original DHCP defaults).
+//
+// Side effect: clears in-memory dnsActive/savedDNS so a subsequent
+// Cleanup() doesn't re-fire RestoreDNS over our manual restore.
 func (m *DarwinManager) RestoreDNSFromSnapshot(preModDNS map[string][]string) error {
+	m.mu.Lock()
+	m.dnsActive = false
+	m.savedDNS = make(map[string][]string)
+	m.savedSearch = make(map[string][]string)
+	m.lastDNS = nil
+	m.mu.Unlock()
+
 	var wg sync.WaitGroup
 	for svc, orig := range preModDNS {
 		svc, orig := svc, orig

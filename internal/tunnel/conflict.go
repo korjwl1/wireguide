@@ -1,12 +1,14 @@
 package tunnel
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"os"
 	"os/exec"
 	"runtime"
 	"strings"
+	"time"
 )
 
 // ConflictInfo describes a routing conflict with an existing interface.
@@ -84,6 +86,12 @@ func scanWireGuardInterfaces() ([]ExistingInterface, error) {
 		return nil, err
 	}
 
+	// Resolve once per scan: which interfaces actually carry
+	// Tailscale's IPs. Without this, identifyOwner labelled every
+	// utun as "Tailscale" the moment tailscaled was running, which
+	// hid the real owner of co-resident WireGuard tunnels.
+	tsIfaces := tailscaleInterfaces()
+
 	for _, iface := range ifaces {
 		name := iface.Name
 		// Only check utun (macOS), wg (Linux), or WireGuard-like interfaces
@@ -91,7 +99,7 @@ func scanWireGuardInterfaces() ([]ExistingInterface, error) {
 			continue
 		}
 
-		owner := identifyOwner(name)
+		owner := identifyOwner(name, tsIfaces)
 		routes := getInterfaceRoutes(name)
 
 		if len(routes) > 0 {
@@ -106,14 +114,82 @@ func scanWireGuardInterfaces() ([]ExistingInterface, error) {
 	return result, nil
 }
 
+// tailscaleInterfaces returns the set of local interfaces that carry
+// at least one of Tailscale's CGNAT IPs. Empty when tailscale isn't
+// installed or returns nothing — callers must treat absence as "not
+// Tailscale" rather than "unknown".
+//
+// Why we need this: tailscaled runs once and owns one utun, but the
+// system can have several utunN interfaces from other tools
+// (WireGuide, raw wireguard-go, vpnd). Without per-interface
+// disambiguation, the conflict warning UI confused users by claiming
+// "Tailscale conflict" against unrelated tunnels.
+func tailscaleInterfaces() map[string]bool {
+	ips := tailscaleLocalIPs()
+	if len(ips) == 0 {
+		return nil
+	}
+	netIfs, err := net.Interfaces()
+	if err != nil {
+		return nil
+	}
+	result := make(map[string]bool)
+	for _, ifc := range netIfs {
+		addrs, err := ifc.Addrs()
+		if err != nil {
+			continue
+		}
+		for _, a := range addrs {
+			ipStr := a.String()
+			if i := strings.Index(ipStr, "/"); i >= 0 {
+				ipStr = ipStr[:i]
+			}
+			for _, tsIP := range ips {
+				if ipStr == tsIP {
+					result[ifc.Name] = true
+				}
+			}
+		}
+	}
+	return result
+}
+
+// tailscaleLocalIPs invokes `tailscale ip` to enumerate the host's
+// Tailscale IPs (typically one IPv4 and one IPv6). 1.5s cap so a
+// hung tailscaled doesn't block CheckConflicts.
+func tailscaleLocalIPs() []string {
+	if _, err := exec.LookPath("tailscale"); err != nil {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "tailscale", "ip").CombinedOutput()
+	if err != nil {
+		return nil
+	}
+	var ips []string
+	for _, line := range strings.Split(string(out), "\n") {
+		ip := strings.TrimSpace(line)
+		if ip == "" {
+			continue
+		}
+		if net.ParseIP(ip) != nil {
+			ips = append(ips, ip)
+		}
+	}
+	return ips
+}
+
 func isWireGuardLike(name string) bool {
 	return strings.HasPrefix(name, "utun") ||
 		strings.HasPrefix(name, "wg") ||
 		strings.HasPrefix(name, "tun")
 }
 
-// identifyOwner determines who created this interface by checking UAPI sockets.
-func identifyOwner(ifaceName string) string {
+// identifyOwner determines who created this interface by checking UAPI sockets
+// and the per-scan Tailscale interface map. tsIfaces maps interface names that
+// actually carry a Tailscale IP — pass nil when tailscaled isn't running.
+func identifyOwner(ifaceName string, tsIfaces map[string]bool) string {
 	// Check WireGuide socket
 	if socketExists("/var/run/wireguide/" + ifaceName + ".sock") {
 		return "WireGuide"
@@ -124,24 +200,13 @@ func identifyOwner(ifaceName string) string {
 		return "WireGuard"
 	}
 
-	// Check Tailscale — different socket path
-	tailscalePaths := []string{
-		"/var/run/tailscale/tailscaled.sock",
-		"/var/run/tailscaled.sock",
-	}
-	for _, p := range tailscalePaths {
-		if socketExists(p) {
-			// Check if tailscaled process exists
-			if processExists("tailscaled") {
-				return "Tailscale"
-			}
-		}
-	}
-
-	// Check for known process names
-	if processOwnsInterface(ifaceName, "tailscaled") {
+	// Tailscale ownership requires tailscaled to be live AND this
+	// specific interface to host one of its IPs. Without the per-
+	// interface check, every utun got mis-labelled as Tailscale.
+	if tsIfaces[ifaceName] {
 		return "Tailscale"
 	}
+
 	if processOwnsInterface(ifaceName, "wireguard-go") {
 		return "WireGuard"
 	}

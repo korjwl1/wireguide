@@ -60,6 +60,13 @@ type Manager struct {
 	// engineFactory creates the WireGuard engine. Defaults to NewEngine.
 	// Overridable in tests to avoid requiring root / TUN device access.
 	engineFactory func(cfg *domain.WireGuardConfig) (*Engine, error)
+
+	// globalPreModDNS is the system DNS state captured BEFORE any tunnel
+	// modified it. Used by the last tunnel to disconnect so we restore
+	// the original DHCP defaults rather than the per-netMgr savedDNS,
+	// which for a non-first tunnel would have been the previous tunnel's
+	// already-applied DNS. Guarded by m.mu.
+	globalPreModDNS map[string][]string
 }
 
 // Additional transient states used internally. Exposed on the wire as the
@@ -546,6 +553,65 @@ func (m *Manager) activeTunnelNamesLocked() []string {
 func (m *Manager) AllDNSServers() []string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	return m.allDNSServersLocked()
+}
+
+// CapturePreModDNS records the system's pre-VPN DNS state once, on the
+// FIRST tunnel's connect. Subsequent connects do nothing because the
+// snapshot they'd capture has already been polluted by the first tunnel's
+// DNS. ClearPreModDNS resets it on the LAST tunnel's disconnect.
+//
+// Why: each per-tunnel netMgr keeps its own savedDNS that matches whatever
+// the system DNS was at THAT tunnel's SetDNS time. If tunnel B connects
+// after A, B's savedDNS is A's DNS — so when B disconnects last via
+// netMgr_B.Cleanup the user's system would get restored to A's DNS
+// instead of the original DHCP defaults.
+func (m *Manager) CapturePreModDNS(snapshot map[string][]string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.globalPreModDNS != nil || len(snapshot) == 0 {
+		return
+	}
+	cp := make(map[string][]string, len(snapshot))
+	for k, v := range snapshot {
+		c := make([]string, len(v))
+		copy(c, v)
+		cp[k] = c
+	}
+	m.globalPreModDNS = cp
+}
+
+// PreModDNSSnapshot returns a copy of the captured pre-VPN DNS, or nil
+// if nothing has been captured yet.
+func (m *Manager) PreModDNSSnapshot() map[string][]string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.globalPreModDNS == nil {
+		return nil
+	}
+	cp := make(map[string][]string, len(m.globalPreModDNS))
+	for k, v := range m.globalPreModDNS {
+		c := make([]string, len(v))
+		copy(c, v)
+		cp[k] = c
+	}
+	return cp
+}
+
+// ClearPreModDNS drops the captured snapshot once the last tunnel has
+// disconnected so a fresh capture happens on the next session.
+func (m *Manager) ClearPreModDNS() {
+	m.mu.Lock()
+	m.globalPreModDNS = nil
+	m.mu.Unlock()
+}
+
+// allDNSServersLocked is AllDNSServers without the lock — for callers
+// that already hold m.mu (e.g. inside the Phase-3 commit of Connect).
+// Today no caller needs it, but exposing the locked variant means a
+// future callsite added inside the manager's critical section won't
+// silently deadlock by re-acquiring m.mu.
+func (m *Manager) allDNSServersLocked() []string {
 	seen := make(map[string]struct{})
 	var all []string
 	for _, e := range m.tunnels {

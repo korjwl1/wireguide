@@ -3,6 +3,7 @@
 package elevate
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"net"
@@ -25,12 +26,20 @@ const (
 // via macOS native dialog). After that, the helper starts at boot via launchd
 // and the app never asks for a password again.
 //
+// ctx governs ONLY the post-install socket-readiness polling. The osascript
+// admin dialog is intentionally detached from ctx — a user typing their
+// password slowly would otherwise have the prompt yanked out from under
+// them when the GUI's 30s ensureHelper context expired, producing a
+// spurious "Try again?" retry dialog even though the install itself was
+// fine. Apple's authopen has no progress signal we can observe, so the
+// only safe choice is to let the dialog complete on its own clock.
+//
 // Flow:
 //  1. Socket already live → helper running, return immediately.
 //  2. Daemon not installed → install binary + plist + bootstrap (one-time sudo).
 //  3. Daemon installed but not running → bootout + bootstrap to restart.
 //  4. Dev fallback: if all else fails, osascript spawns helper directly.
-func SpawnHelper(args Args) error {
+func SpawnHelper(ctx context.Context, args Args) error {
 	// 1. Already running? (skip check if force-reinstalling after version mismatch)
 	if !args.ForceReinstall && isSocketLive(args.SocketPath) {
 		slog.Info("helper already running")
@@ -38,7 +47,7 @@ func SpawnHelper(args Args) error {
 	}
 
 	// 2-3. Install/restart daemon via a single osascript admin prompt.
-	if err := installAndLoadDaemon(args); err != nil {
+	if err := installAndLoadDaemon(ctx, args); err != nil {
 		return fmt.Errorf("daemon install failed: %w", err)
 	}
 	return nil
@@ -47,7 +56,12 @@ func SpawnHelper(args Args) error {
 // installAndLoadDaemon writes the plist to a temp file (no escaping issues),
 // then runs a shell script as root via osascript that copies everything into
 // place and bootstraps the daemon. The user sees one password prompt.
-func installAndLoadDaemon(args Args) error {
+//
+// ctx is used only for the post-install socket-readiness polling — the
+// osascript exec runs against context.Background so a slow password
+// entry doesn't get its prompt killed when ensureHelper's outer ctx
+// times out.
+func installAndLoadDaemon(ctx context.Context, args Args) error {
 	exe, err := SelfPath()
 	if err != nil {
 		return err
@@ -148,13 +162,19 @@ func installAndLoadDaemon(args Args) error {
 	)
 
 	slog.Info("installing LaunchDaemon (one-time admin prompt)")
+	// Detach osascript from ctx — see SpawnHelper doc for why.
 	if err := exec.Command("osascript", "-e", osascriptCmd).Run(); err != nil {
 		return fmt.Errorf("osascript install: %w", err)
 	}
 
-	// Wait for daemon socket to come up.
+	// Wait for daemon socket to come up. Honour ctx so a shutdown
+	// during this wait exits promptly instead of dragging out 6s.
 	for i := 0; i < 30; i++ {
-		time.Sleep(200 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("install wait cancelled: %w", ctx.Err())
+		case <-time.After(200 * time.Millisecond):
+		}
 		if isSocketLive(args.SocketPath) {
 			slog.Info("LaunchDaemon installed and running")
 			return nil

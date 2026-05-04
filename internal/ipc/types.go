@@ -74,6 +74,15 @@ type DisconnectRequest struct {
 	TunnelName string `json:"tunnel_name,omitempty"`
 }
 
+// RenameRequest is the parameter for Tunnel.Rename. Helper-side rename
+// closes the connect/disconnect serialization window so a Connect arriving
+// between the GUI's "is it active?" check and the file rename can't leave
+// the new name in activeCfgs while the file path moved underneath it.
+type RenameRequest struct {
+	OldName string `json:"old_name"`
+	NewName string `json:"new_name"`
+}
+
 // ActiveTunnelsResponse lists all currently active tunnel names.
 type ActiveTunnelsResponse struct {
 	Names []string `json:"names"`

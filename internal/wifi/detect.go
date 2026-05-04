@@ -38,45 +38,34 @@ func CurrentSSID() string {
 }
 
 func detectDarwin() string {
-	// macOS 14+: use system_profiler or airport
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	out, err := exec.CommandContext(ctx, "/System/Library/PrivateFrameworks/Apple80211.framework/Versions/Current/Resources/airport", "-I").CombinedOutput()
-	if err != nil {
-		// Fallback: discover the actual Wi-Fi interface dynamically instead
-		// of hardcoding "en0" (which may be Ethernet on some Macs).
-		wifiIface := discoverWiFiInterface()
-		if wifiIface == "" {
-			return ""
-		}
-		ctx2, cancel2 := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel2()
-		out, err = exec.CommandContext(ctx2, "networksetup", "-getairportnetwork", wifiIface).CombinedOutput()
-		if err != nil {
-			return ""
-		}
-		// Output: "Current Wi-Fi Network: MySSID" on success, or
-		// "You are not associated with an AirPort network." on
-		// failure / Location-permission denied. The latter has no
-		// ": " separator so we'll return "" — but we also log a
-		// hint so users debugging "rules don't fire" know to check
-		// Settings → Privacy → Location Services.
-		s := strings.TrimSpace(string(out))
-		if strings.Contains(s, "not associated") {
-			logLocationHintOnce()
-			return ""
-		}
-		if idx := strings.Index(s, ": "); idx >= 0 {
-			return s[idx+2:]
-		}
+	// The PrivateFrameworks `airport` binary was removed in macOS 15
+	// (Sequoia) and stopped reporting SSIDs reliably in 14.4 once Apple
+	// gated the API behind Location Services. networksetup is the
+	// supported path on every macOS we still target — drop the airport
+	// shell-out so we don't burn ~5s waiting for a binary that's gone.
+	wifiIface := discoverWiFiInterface()
+	if wifiIface == "" {
 		return ""
 	}
-	// Parse airport -I output for SSID line
-	for _, line := range strings.Split(string(out), "\n") {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "SSID:") {
-			return strings.TrimSpace(strings.TrimPrefix(line, "SSID:"))
-		}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "networksetup", "-getairportnetwork", wifiIface).CombinedOutput()
+	if err != nil {
+		return ""
+	}
+	// Output: "Current Wi-Fi Network: MySSID" on success, or
+	// "You are not associated with an AirPort network." on
+	// failure / Location-permission denied. The latter has no
+	// ": " separator so we'll return "" — but we also log a
+	// hint so users debugging "rules don't fire" know to check
+	// Settings → Privacy → Location Services.
+	s := strings.TrimSpace(string(out))
+	if strings.Contains(s, "not associated") {
+		logLocationHintOnce()
+		return ""
+	}
+	if idx := strings.Index(s, ": "); idx >= 0 {
+		return s[idx+2:]
 	}
 	return ""
 }

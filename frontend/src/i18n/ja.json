@@ -24,6 +24,7 @@
     "new_tunnel": "新しいトンネル",
     "connect": "接続",
     "disconnect": "切断",
+    "helper_recovering": "ヘルパーを復旧中です — 少し時間をおいてから再試行してください。",
     "edit": "編集",
     "delete": "削除",
     "export": "エクスポート",

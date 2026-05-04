@@ -76,6 +76,19 @@ func (h *HistoryStore) load() ([]SessionRecord, error) {
 	}
 	var records []SessionRecord
 	if err := json.Unmarshal(data, &records); err != nil {
+		// Mirror settings.go's hardening: rename the corrupt file
+		// to <path>.corrupt before discarding so the user can
+		// recover (or we can debug) the original. Without this,
+		// the next Add call's append-then-write silently truncated
+		// the corrupted history to a single new record.
+		corruptPath := h.path + ".corrupt"
+		if renameErr := os.Rename(h.path, corruptPath); renameErr != nil {
+			slog.Warn("history file corrupt; could not back up",
+				"path", h.path, "error", err, "rename_error", renameErr)
+		} else {
+			slog.Warn("history file corrupt; backed up before resetting",
+				"path", h.path, "backup", corruptPath, "error", err)
+		}
 		return nil, err
 	}
 	return records, nil

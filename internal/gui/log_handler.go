@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -52,7 +54,10 @@ var (
 // installGUILogHandler builds the handler and installs it as slog default.
 // Call before the first slog record you want captured.
 func installGUILogHandler() {
-	stderr := slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: guiLogLevel})
+	stderr := slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
+		Level:     guiLogLevel,
+		AddSource: true,
+	})
 	h := &guiLogHandler{
 		levelVar: guiLogLevel,
 		stderr:   stderr,
@@ -121,6 +126,12 @@ func (h *guiLogHandler) Handle(ctx context.Context, r slog.Record) error {
 		fmt.Fprintf(&b, " %s=%v", a.Key, a.Value.Any())
 		return true
 	})
+	if r.PC != 0 {
+		fs := runtime.CallersFrames([]uintptr{r.PC})
+		if frame, _ := fs.Next(); frame.File != "" {
+			fmt.Fprintf(&b, " source=%s:%d", filepath.Base(frame.File), frame.Line)
+		}
+	}
 
 	entry := ipc.LogEntry{
 		Time:    r.Time.UTC().Format(time.RFC3339Nano),

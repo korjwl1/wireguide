@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/korjwl1/wireguide/internal/diag"
@@ -159,11 +160,10 @@ func (h *Helper) statusDTO() ipc.ConnectionStatus {
 // restarted up to maxRestarts times.
 //
 // Each measurement uses diag.PingEndpoint which has its own 15s ctx
-// timeout, so a slow / unreachable peer can stretch the loop slightly
-// past 30s, but multiple hung peers don't compound (we ping in
-// sequence; the next loop iteration just starts later). This is fine
-// for the low-resolution display use case — users don't need
-// sub-second updates of latency in the UI.
+// timeout. Tunnel pings dispatch in parallel (one goroutine per
+// connected tunnel) so total wall time is max(per-tunnel) instead of
+// sum — a row of N hung tunnels no longer multiplies the loop by N
+// and risks chewing through the 30s tick.
 func (h *Helper) latencyLoop() {
 	const tickInterval = 30 * time.Second
 	// Sleep briefly on startup so we don't ping immediately during
@@ -192,6 +192,7 @@ func (h *Helper) latencyLoop() {
 // which the frontend renders as "—".
 func (h *Helper) measureLatencies() {
 	statuses := h.manager.AllStatuses()
+	var wg sync.WaitGroup
 	for _, s := range statuses {
 		if s == nil || s.State != domain.StateConnected || s.Endpoint == "" {
 			continue
@@ -200,31 +201,36 @@ func (h *Helper) measureLatencies() {
 		cfg := h.activeCfgs[s.TunnelName]
 		h.mu.Unlock()
 
-		target := pingTargetForTunnel(cfg, s.Endpoint)
-		viaTunnel := target != s.Endpoint
-		result := diag.PingEndpoint(target)
+		wg.Add(1)
+		go func(tunnelName, endpoint string, cfg *domain.WireGuardConfig) {
+			defer wg.Done()
+			target := pingTargetForTunnel(cfg, endpoint)
+			viaTunnel := target != endpoint
+			result := diag.PingEndpoint(target)
 
-		// If through-tunnel target failed (gateway doesn't exist /
-		// blocks ICMP on this network), fall back to the public
-		// endpoint. Many VPN endpoints DO drop ICMP — the through-
-		// tunnel path is just usually more permissive.
-		if !result.Reachable && viaTunnel {
-			result = diag.PingEndpoint(s.Endpoint)
-			viaTunnel = false
-		}
+			// If through-tunnel target failed (gateway doesn't exist /
+			// blocks ICMP on this network), fall back to the public
+			// endpoint. Many VPN endpoints DO drop ICMP — the through-
+			// tunnel path is just usually more permissive.
+			if !result.Reachable && viaTunnel {
+				result = diag.PingEndpoint(endpoint)
+				viaTunnel = false
+			}
 
-		latency := 0.0
-		if result.Reachable {
-			latency = result.LatencyMs
-		}
-		h.latencyMu.Lock()
-		h.latencyByTunnel[s.TunnelName] = latency
-		h.latencyMu.Unlock()
-		slog.Info("endpoint latency measured",
-			"tunnel", s.TunnelName, "target", target,
-			"via_tunnel", viaTunnel,
-			"reachable", result.Reachable, "latency_ms", latency)
+			latency := 0.0
+			if result.Reachable {
+				latency = result.LatencyMs
+			}
+			h.latencyMu.Lock()
+			h.latencyByTunnel[tunnelName] = latency
+			h.latencyMu.Unlock()
+			slog.Info("endpoint latency measured",
+				"tunnel", tunnelName, "target", target,
+				"via_tunnel", viaTunnel,
+				"reachable", result.Reachable, "latency_ms", latency)
+		}(s.TunnelName, s.Endpoint, cfg)
 	}
+	wg.Wait()
 }
 
 // eventLoop broadcasts status updates to subscribed GUIs on change. Change

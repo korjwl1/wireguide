@@ -27,6 +27,7 @@ func (h *Helper) registerHandlers() {
 	h.server.Handle(ipc.MethodIsConnected, h.handleIsConnected)
 	h.server.Handle(ipc.MethodActiveName, h.handleActiveName)
 	h.server.Handle(ipc.MethodActiveTunnels, h.handleActiveTunnels)
+	h.server.Handle(ipc.MethodRename, h.handleRename)
 	h.server.Handle(ipc.MethodSetKillSwitch, h.handleSetKillSwitch)
 	h.server.Handle(ipc.MethodSetDNSProtection, h.handleSetDNSProtection)
 	h.server.Handle(ipc.MethodSetHealthCheck, h.handleSetHealthCheck)
@@ -53,6 +54,62 @@ func (h *Helper) handleShutdown(params json.RawMessage) (interface{}, error) {
 		time.Sleep(100 * time.Millisecond) // let the response go out first
 		h.shutdown()
 	}()
+	return ipc.Empty{}, nil
+}
+
+// handleRename atomically renames a tunnel's .conf file. Holds the same
+// connectMu that handleConnect/handleDisconnect take, so a Connect arriving
+// during the rename blocks until we finish — closing the GUI-side TOCTOU
+// where the user could rename a tunnel just as it was being auto-connected.
+//
+// Active-tunnel rename is rejected: the WireGuard interface name is derived
+// from the tunnel name on macOS, so renaming would orphan the running utun.
+func (h *Helper) handleRename(params json.RawMessage) (interface{}, error) {
+	h.connectMu.Lock()
+	defer h.connectMu.Unlock()
+
+	var req ipc.RenameRequest
+	if err := json.Unmarshal(params, &req); err != nil {
+		return nil, err
+	}
+	if req.OldName == "" || req.NewName == "" {
+		return nil, fmt.Errorf("rename: old and new names are required")
+	}
+	if req.OldName == req.NewName {
+		return ipc.Empty{}, nil
+	}
+
+	// Reject if the tunnel is currently active. h.connectMu is held so
+	// no Connect/Disconnect can race past this check.
+	for _, name := range h.manager.ActiveTunnels() {
+		if name == req.OldName {
+			return nil, fmt.Errorf("cannot rename connected tunnel %q — disconnect first", req.OldName)
+		}
+	}
+
+	if h.userTunnelStore == nil {
+		return nil, fmt.Errorf("rename: helper has no user tunnel store (running as root without --uid?)")
+	}
+	if err := h.userTunnelStore.Rename(req.OldName, req.NewName); err != nil {
+		return nil, err
+	}
+
+	// Sync any cached state that uses the old name. The tunnel is not
+	// active per the check above, so activeCfgs shouldn't carry it, but
+	// we keep this defensive in case a future flow caches inactive cfgs.
+	h.mu.Lock()
+	if cfg, ok := h.activeCfgs[req.OldName]; ok {
+		delete(h.activeCfgs, req.OldName)
+		if cfg != nil {
+			cfg.Name = req.NewName
+		}
+		h.activeCfgs[req.NewName] = cfg
+	}
+	if owner, ok := h.autoConnectedBy[req.OldName]; ok {
+		delete(h.autoConnectedBy, req.OldName)
+		h.autoConnectedBy[req.NewName] = owner
+	}
+	h.mu.Unlock()
 	return ipc.Empty{}, nil
 }
 
