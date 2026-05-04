@@ -1,6 +1,8 @@
 package update
 
 import (
+	"crypto/ed25519"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -739,8 +741,157 @@ func TestIsBrewInstall_CaskroomWithoutBrew(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// verifyEd25519
+// ---------------------------------------------------------------------------
+
+func TestVerifyEd25519_ValidSignature(t *testing.T) {
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := []byte("abc1234  WireGuide-1.0.0-darwin-arm64.dmg\n")
+	sig := ed25519.Sign(priv, content)
+	if err := verifyEd25519(content, sig, pub); err != nil {
+		t.Fatalf("expected valid signature to verify, got %v", err)
+	}
+}
+
+func TestVerifyEd25519_TamperedContent(t *testing.T) {
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := []byte("abc1234  WireGuide-1.0.0-darwin-arm64.dmg\n")
+	sig := ed25519.Sign(priv, content)
+	tampered := []byte("ffffff  WireGuide-1.0.0-darwin-arm64.dmg\n")
+	if err := verifyEd25519(tampered, sig, pub); err == nil {
+		t.Fatal("expected tampered content to fail verification")
+	}
+}
+
+func TestVerifyEd25519_TamperedSignature(t *testing.T) {
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := []byte("abc1234  WireGuide-1.0.0-darwin-arm64.dmg\n")
+	sig := ed25519.Sign(priv, content)
+	// Flip a single bit anywhere in the signature.
+	sig[0] ^= 0x01
+	if err := verifyEd25519(content, sig, pub); err == nil {
+		t.Fatal("expected tampered signature to fail verification")
+	}
+}
+
+func TestVerifyEd25519_WrongKey(t *testing.T) {
+	_, priv1, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pub2, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := []byte("abc1234  WireGuide-1.0.0-darwin-arm64.dmg\n")
+	sig := ed25519.Sign(priv1, content)
+	// Verify against a DIFFERENT public key — must fail.
+	if err := verifyEd25519(content, sig, pub2); err == nil {
+		t.Fatal("expected signature from key1 to fail under key2")
+	}
+}
+
+func TestVerifyEd25519_BadSizes(t *testing.T) {
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := []byte("test")
+	sig := ed25519.Sign(priv, content)
+
+	// Wrong public key length.
+	if err := verifyEd25519(content, sig, pub[:16]); err == nil {
+		t.Error("expected truncated public key to fail")
+	}
+	// Wrong signature length.
+	if err := verifyEd25519(content, sig[:32], pub); err == nil {
+		t.Error("expected truncated signature to fail")
+	}
+}
+
+// TestVerifyChecksumSignature_HappyPath spins up an httptest server
+// that serves a SHA256SUMS file and a freshly-generated signature,
+// flips expectedPublicKey on for the duration of the test, and
+// confirms the production verification path passes end-to-end.
+func TestVerifyChecksumSignature_HappyPath(t *testing.T) {
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sums := []byte("abc1234  WireGuide-1.0.0-darwin-arm64.dmg\n")
+	sig := ed25519.Sign(priv, sums)
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/SHA256SUMS", func(w http.ResponseWriter, r *http.Request) {
+		w.Write(sums)
+	})
+	mux.HandleFunc("/SHA256SUMS.sig", func(w http.ResponseWriter, r *http.Request) {
+		w.Write(sig)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	// Override the embedded key for this test only.
+	orig := withTestPublicKey(t, hex.EncodeToString(pub))
+	defer orig()
+
+	if err := verifyChecksumSignature(srv.URL+"/SHA256SUMS", srv.Client()); err != nil {
+		t.Fatalf("expected verification to pass, got %v", err)
+	}
+}
+
+func TestVerifyChecksumSignature_TamperedSums(t *testing.T) {
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sums := []byte("abc1234  WireGuide-1.0.0-darwin-arm64.dmg\n")
+	sig := ed25519.Sign(priv, sums)
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/SHA256SUMS", func(w http.ResponseWriter, r *http.Request) {
+		// Server returns a TAMPERED SHA256SUMS — original sig should fail.
+		w.Write([]byte("ffffff  WireGuide-1.0.0-darwin-arm64.dmg\n"))
+	})
+	mux.HandleFunc("/SHA256SUMS.sig", func(w http.ResponseWriter, r *http.Request) {
+		w.Write(sig)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	orig := withTestPublicKey(t, hex.EncodeToString(pub))
+	defer orig()
+
+	if err := verifyChecksumSignature(srv.URL+"/SHA256SUMS", srv.Client()); err == nil {
+		t.Fatal("expected tampered SHA256SUMS to fail verification")
+	}
+}
+
+// ---------------------------------------------------------------------------
 // helpers
 // ---------------------------------------------------------------------------
+
+// withTestPublicKey overrides the package-level expectedPublicKey
+// constant for the duration of a test. Returns a restore func.
+//
+// expectedPublicKey is a `const`, but Go test files in the same
+// package can reach private package state via a test-only mutable
+// shadow. We expose `testOverridePubKey` from checker.go for this.
+func withTestPublicKey(t *testing.T, hexKey string) func() {
+	t.Helper()
+	orig := testOverridePubKey
+	testOverridePubKey = hexKey
+	return func() { testOverridePubKey = orig }
+}
 
 func removeIfExists(path string) error {
 	if path == "" {

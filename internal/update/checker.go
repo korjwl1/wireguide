@@ -2,6 +2,7 @@
 package update
 
 import (
+	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -27,6 +28,21 @@ const (
 	// anything smaller is almost certainly corrupted or a placeholder file
 	// injected by an attacker.
 	minAssetSize = 1 << 20 // 1 MB
+
+	// expectedPublicKey is the hex-encoded Ed25519 public key whose
+	// matching private key signs each release's SHA256SUMS file. The
+	// signature lives next to SHA256SUMS as <SHA256SUMS>.sig (raw
+	// 64-byte signature, no encoding).
+	//
+	// EMPTY UNTIL THE FIRST SIGNED RELEASE. While empty we fall back
+	// to checksum-only authentication (SHA256SUMS itself can be
+	// replaced by a compromised GitHub account, so this is a
+	// degraded mode — flip the constant on the same release where
+	// you ship the first SHA256SUMS.sig).
+	//
+	// Key generation, signing, and rotation procedure: see
+	// docs/release.md.
+	expectedPublicKey = ""
 )
 
 // CurrentVersion returns the hardcoded app version string.
@@ -59,9 +75,10 @@ type UpdateInfo struct {
 	ReleaseNotes string `json:"release_notes"`
 	AssetName    string `json:"asset_name"`
 	AssetSize    int64  `json:"asset_size"`
-	ChecksumURL  string `json:"checksum_url,omitempty"`  // URL to SHA256SUMS file
-	ExpectedHash string `json:"expected_hash,omitempty"` // pre-parsed SHA256 for this asset
-	HashVerified bool   `json:"hash_verified"`           // set to true after successful checksum verification
+	ChecksumURL       string `json:"checksum_url,omitempty"`  // URL to SHA256SUMS file
+	ExpectedHash      string `json:"expected_hash,omitempty"` // pre-parsed SHA256 for this asset
+	HashVerified      bool   `json:"hash_verified"`           // set to true after successful checksum verification
+	SignatureVerified bool   `json:"signature_verified"`      // true iff Ed25519 .sig also verified
 }
 
 // CheckForUpdate queries GitHub Releases API for newer version.
@@ -217,20 +234,106 @@ func DownloadUpdate(info *UpdateInfo) (string, error) {
 	}
 	info.HashVerified = true
 
-	// TODO(security): Add Ed25519/minisign signature verification once a
-	// signing key is established. The checksum file itself is hosted alongside
-	// the asset on GitHub, so a compromised GitHub account can replace both.
-	// Proper defense requires verifying a cryptographic signature made with a
-	// private key that never touches GitHub:
-	//   1. Generate an Ed25519 keypair (or use minisign).
-	//   2. Embed the public key in this binary at compile time.
-	//   3. Sign each release asset (or the SHA256SUMS file) offline.
-	//   4. Upload the .minisig detached signature as a release asset.
-	//   5. After checksum passes here, download <asset>.minisig and verify
-	//      against the embedded public key before proceeding.
-	slog.Warn("signature verification not yet implemented — update authenticated by SHA256 checksum only")
+	// Ed25519 signature verification — defends against a compromised
+	// GitHub account replacing both the asset AND its SHA256SUMS
+	// entry. The private key signs SHA256SUMS once per release; one
+	// .sig covers every asset transitively because each asset's hash
+	// is in the file.
+	if activePublicKey() != "" {
+		if err := verifyChecksumSignature(info.ChecksumURL, client); err != nil {
+			os.Remove(destPath)
+			return "", fmt.Errorf("signature verification: %w", err)
+		}
+		info.SignatureVerified = true
+	} else {
+		slog.Warn("signature verification skipped: no public key embedded; falling back to SHA256-only authentication")
+	}
 
 	return destPath, nil
+}
+
+// testOverridePubKey lets tests substitute the production
+// expectedPublicKey constant without flipping a real release key.
+// Empty in production builds; tests assign to it via
+// withTestPublicKey() and restore on cleanup.
+var testOverridePubKey = ""
+
+// activePublicKey returns the hex-encoded Ed25519 public key the
+// verifier should use: the test override if set, otherwise the
+// embedded constant.
+func activePublicKey() string {
+	if testOverridePubKey != "" {
+		return testOverridePubKey
+	}
+	return expectedPublicKey
+}
+
+// verifyChecksumSignature downloads the SHA256SUMS file and its .sig
+// sibling, then verifies the signature against the embedded public
+// key. We re-download SHA256SUMS (instead of reusing fetchExpectedHash's
+// fetch) so this function is self-contained and easy to test without
+// threading bytes through the rest of DownloadUpdate.
+func verifyChecksumSignature(checksumURL string, client *http.Client) error {
+	pubHex := activePublicKey()
+	if pubHex == "" {
+		// Caller already gated; defensive double-check.
+		return nil
+	}
+	if checksumURL == "" {
+		return fmt.Errorf("no SHA256SUMS URL on this release")
+	}
+	pk, err := hex.DecodeString(pubHex)
+	if err != nil {
+		return fmt.Errorf("malformed embedded public key: %w", err)
+	}
+	if len(pk) != ed25519.PublicKeySize {
+		return fmt.Errorf("embedded public key size: got %d, want %d", len(pk), ed25519.PublicKeySize)
+	}
+
+	sumsBody, err := fetchSmall(checksumURL, client)
+	if err != nil {
+		return fmt.Errorf("download SHA256SUMS: %w", err)
+	}
+	sigBody, err := fetchSmall(checksumURL+".sig", client)
+	if err != nil {
+		return fmt.Errorf("download SHA256SUMS.sig: %w", err)
+	}
+
+	return verifyEd25519(sumsBody, sigBody, pk)
+}
+
+// verifyEd25519 returns nil iff sig is a valid Ed25519 signature of
+// content under pubkey. Pulled out of verifyChecksumSignature for
+// unit-testability — tests can pass freshly-generated test key pairs
+// without monkey-patching globals.
+func verifyEd25519(content, sig, pubkey []byte) error {
+	if len(pubkey) != ed25519.PublicKeySize {
+		return fmt.Errorf("public key size: got %d, want %d",
+			len(pubkey), ed25519.PublicKeySize)
+	}
+	if len(sig) != ed25519.SignatureSize {
+		return fmt.Errorf("signature size: got %d, want %d (sig file must be raw 64 bytes, no encoding)",
+			len(sig), ed25519.SignatureSize)
+	}
+	if !ed25519.Verify(pubkey, content, sig) {
+		return fmt.Errorf("signature does not verify against embedded public key")
+	}
+	return nil
+}
+
+// fetchSmall downloads a small file (≤ 1 MB) and returns its bytes.
+// Used for SHA256SUMS and .sig — both are tiny and need to be in
+// memory for verification.
+func fetchSmall(url string, client *http.Client) ([]byte, error) {
+	resp, err := client.Get(url)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
+	}
+	return io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 }
 
 // isNewerVersion compares two semver strings (without "v" prefix).
