@@ -385,6 +385,16 @@ func (h *Helper) cancelShutdownTimer() {
 	}
 }
 
+// shutdown initiates a clean exit of the helper process. It does NOT call
+// cleanup() directly — instead, it closes the IPC server which causes
+// h.server.Serve() (blocked in Run()) to return. Run() then invokes
+// h.cleanup() on the deferred path, which DisconnectAll-s tunnels and tears
+// down the firewall, and Run() returns to main() which exits the process.
+//
+// Exit code 0 matters here: the LaunchDaemon plist's KeepAlive is configured
+// with SuccessfulExit=false, so launchd respawns only on crash. A successful
+// exit driven by this function will NOT restart the daemon — which is what
+// the user expects when they click "Quit" in the tray.
 func (h *Helper) shutdown() {
 	h.server.Shutdown()
 }

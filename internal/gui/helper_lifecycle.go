@@ -19,6 +19,11 @@ import (
 func ensureHelper(ctx context.Context, dataDir string) (*ipc.Client, error) {
 	addr := ipc.DefaultSocketPath()
 	forceReinstall := false
+	args := elevate.Args{
+		SocketPath: addr,
+		SocketUID:  os.Getuid(),
+		DataDir:    dataDir,
+	}
 
 	// Try an existing helper first (survives GUI restarts).
 	if client, err := ipc.NewClient(addr); err == nil {
@@ -32,13 +37,24 @@ func ensureHelper(ctx context.Context, dataDir string) (*ipc.Client, error) {
 				// Old helper that doesn't have AppVersion field — force upgrade.
 				helperAppVersion = "unknown"
 			}
-			if helperAppVersion == guiVersion {
+			// Two reinstall triggers:
+			//  1. Helper binary version differs from GUI build (normal upgrade).
+			//  2. LaunchDaemon plist on disk differs from what this build would
+			//     write (e.g. KeepAlive policy change in the same version).
+			// Without (2), a plist-only change would never reach existing users
+			// because version-matched helpers are otherwise reused as-is.
+			plistDrifted := elevate.PlistNeedsReinstall(args)
+			if helperAppVersion == guiVersion && !plistDrifted {
 				slog.Info("connected to existing helper", "version", helperAppVersion)
 				return client, nil
 			}
-			// Helper version mismatch — shut down old helper and reinstall.
-			slog.Warn("helper version mismatch, upgrading",
-				"helper", helperAppVersion, "gui", guiVersion)
+			if plistDrifted {
+				slog.Warn("LaunchDaemon plist drift detected, forcing reinstall",
+					"helper", helperAppVersion, "gui", guiVersion)
+			} else {
+				slog.Warn("helper version mismatch, upgrading",
+					"helper", helperAppVersion, "gui", guiVersion)
+			}
 			_ = client.Call(ipc.MethodShutdown, nil, nil)
 			client.Close()
 			// Force reinstall so SpawnHelper skips the "already running"
@@ -52,12 +68,7 @@ func ensureHelper(ctx context.Context, dataDir string) (*ipc.Client, error) {
 
 	// Spawn new helper with elevation
 	slog.Info("spawning helper with elevation...")
-	args := elevate.Args{
-		SocketPath:     addr,
-		SocketUID:      os.Getuid(),
-		DataDir:        dataDir,
-		ForceReinstall: forceReinstall,
-	}
+	args.ForceReinstall = forceReinstall
 	if err := elevate.SpawnHelper(ctx, args); err != nil {
 		return nil, fmt.Errorf("spawn helper: %w", err)
 	}

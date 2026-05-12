@@ -53,6 +53,69 @@ func SpawnHelper(ctx context.Context, args Args) error {
 	return nil
 }
 
+// generatePlistContent returns the canonical plist content this build would
+// install. Shared by installAndLoadDaemon (which writes it) and
+// PlistNeedsReinstall (which compares it against the on-disk version).
+//
+// Any change here invalidates every existing install — bump the comparison
+// in PlistNeedsReinstall accordingly, or the upgrade path will silently
+// leave old plists in place.
+func generatePlistContent(exe string, args Args) string {
+	uid := os.Getuid()
+	return fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>%s</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>%s</string>
+        <string>--helper</string>
+        <string>--socket=%s</string>
+        <string>--uid=%d</string>
+        <string>--data-dir=%s</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+    <key>StandardErrorPath</key>
+    <string>/var/log/wireguide-helper.log</string>
+    <key>StandardOutPath</key>
+    <string>/var/log/wireguide-helper.log</string>
+</dict>
+</plist>
+`, daemonLabel, daemonBinary, args.SocketPath, uid, args.DataDir)
+}
+
+// PlistNeedsReinstall reports whether the on-disk LaunchDaemon plist differs
+// from what this build would write. Used by the GUI launch path to force a
+// reinstall when only the plist (not the helper binary version) has changed —
+// e.g. after a KeepAlive policy change that an existing version-matched
+// helper would otherwise keep running with stale launchd semantics.
+//
+// Returns false on non-darwin or when SelfPath fails (we can't compute the
+// expected content, so we conservatively skip the reinstall trigger).
+func PlistNeedsReinstall(args Args) bool {
+	existing, err := os.ReadFile(daemonPlist)
+	if err != nil {
+		// File missing or unreadable — let SpawnHelper handle reinstall
+		// via its normal "socket not live" path. Don't force here, since
+		// a transient stat error shouldn't prompt for admin password.
+		return false
+	}
+	exe, err := SelfPath()
+	if err != nil {
+		return false
+	}
+	expected := generatePlistContent(exe, args)
+	return string(existing) != expected
+}
+
 // installAndLoadDaemon writes the plist to a temp file (no escaping issues),
 // then runs a shell script as root via osascript that copies everything into
 // place and bootstraps the daemon. The user sees one password prompt.
@@ -70,32 +133,7 @@ func installAndLoadDaemon(ctx context.Context, args Args) error {
 	// Write plist to a temp file — avoids heredoc/escaping issues inside
 	// the AppleScript string. Go writes it as the current user to /tmp,
 	// then the root shell script copies it to /Library/LaunchDaemons/.
-	uid := os.Getuid()
-	plist := fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>Label</key>
-    <string>%s</string>
-    <key>ProgramArguments</key>
-    <array>
-        <string>%s</string>
-        <string>--helper</string>
-        <string>--socket=%s</string>
-        <string>--uid=%d</string>
-        <string>--data-dir=%s</string>
-    </array>
-    <key>RunAtLoad</key>
-    <true/>
-    <key>KeepAlive</key>
-    <true/>
-    <key>StandardErrorPath</key>
-    <string>/var/log/wireguide-helper.log</string>
-    <key>StandardOutPath</key>
-    <string>/var/log/wireguide-helper.log</string>
-</dict>
-</plist>
-`, daemonLabel, daemonBinary, args.SocketPath, uid, args.DataDir)
+	plist := generatePlistContent(exe, args)
 
 	tmpPlist := filepath.Join(os.TempDir(), daemonLabel+".plist")
 	if err := os.WriteFile(tmpPlist, []byte(plist), 0644); err != nil {

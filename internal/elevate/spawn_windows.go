@@ -35,3 +35,11 @@ func SpawnHelper(ctx context.Context, args Args) error {
 func psEscape(s string) string {
 	return strings.ReplaceAll(s, "'", "''")
 }
+
+// PlistNeedsReinstall is a no-op on Windows — there is no LaunchDaemon plist.
+// The darwin variant returns true when the on-disk plist drifts from this
+// build's expected content, forcing a reinstall via the version-mismatch path.
+func PlistNeedsReinstall(args Args) bool {
+	_ = args
+	return false
+}
