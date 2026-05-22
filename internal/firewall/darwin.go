@@ -175,27 +175,61 @@ func loadDNSSubAnchor(interfaceName string, dnsServers []string) error {
 func (f *DarwinFirewall) DisableKillSwitch() error {
 	f.mu.Lock()
 	pfWas := f.pfWasEnabled
+	dnsActive := f.dnsProtectionEnabled
+	dnsIface := f.savedDNSInterface
+	dnsServers := append([]string(nil), f.savedDNSServers...)
 	f.mu.Unlock()
 
 	// Flush the anchor rules — main ruleset is untouched.
+	// flushAllAnchors wipes BOTH com.apple.wireguide (main) and
+	// com.apple.wireguide/dns (sub). If DNS protection was active, those
+	// rules just vanished — re-load them into the MAIN anchor (mirrors
+	// EnableDNSProtection's no-kill-switch branch) so users who toggle
+	// kill switch off don't get a silent DNS leak.
 	if err := flushAllAnchors(); err != nil {
 		slog.Warn("failed to flush anchor rules", "error", err)
 	}
 
-	// If pf was not enabled before we started, disable it now.
-	if !pfWas {
+	dnsReapplied := false
+	if dnsActive && dnsIface != "" && len(dnsServers) > 0 {
+		var dnsRules strings.Builder
+		valid := true
+		for _, dns := range dnsServers {
+			if net.ParseIP(dns) == nil {
+				valid = false
+				break
+			}
+			fmt.Fprintf(&dnsRules, "pass out quick on %s proto {tcp, udp} to %s port 53\n", dnsIface, dns)
+		}
+		dnsRules.WriteString("block drop out quick proto {tcp, udp} to any port 53\n")
+		if valid {
+			if err := loadAnchorRules(anchorName, dnsRules.String()); err != nil {
+				slog.Warn("re-loading DNS rules after kill switch disable failed",
+					"error", err)
+			} else {
+				dnsReapplied = true
+				slog.Info("DNS protection rules re-loaded after kill switch disable")
+			}
+		}
+	}
+
+	// If pf was not enabled before we started AND we did not re-load any
+	// rules above, disable it now. If DNS was re-applied, leave pf on.
+	if !pfWas && !dnsReapplied {
 		if err := disablePf(); err != nil {
 			slog.Warn("pfctl -d failed", "error", err)
 		}
 	}
 
-	// Clean up persisted state file.
-	removePfStateFile()
+	// Clean up persisted state file only when no further protection is active.
+	if !dnsReapplied {
+		removePfStateFile()
+	}
 
 	f.mu.Lock()
 	f.killSwitchEnabled = false
 	f.mu.Unlock()
-	slog.Info("kill switch disabled")
+	slog.Info("kill switch disabled", "dns_reapplied", dnsReapplied)
 	return nil
 }
 

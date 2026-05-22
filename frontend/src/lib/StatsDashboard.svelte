@@ -1,34 +1,71 @@
 <script>
   import { onMount, onDestroy } from 'svelte';
   import { connectionStatus } from '../stores/tunnels.js';
+  import { resolvedTheme } from '../stores/theme.js';
   import { t } from '../i18n/index.js';
 
   let canvas;
   let ctx;
   let samples = [];
   const maxSamples = 60;
-  let animFrame;
+  // Cache the resolved palette so we don't getComputedStyle on every draw.
+  // Refreshed on theme change via the resolvedTheme subscription below.
+  let palette = null;
+
+  function refreshPalette() {
+    if (typeof document === 'undefined') return;
+    const css = getComputedStyle(document.documentElement);
+    palette = {
+      rxStroke: css.getPropertyValue('--stats-rx').trim() || '#00b894',
+      txStroke: css.getPropertyValue('--stats-tx').trim() || '#74b9ff',
+      rxFill:   css.getPropertyValue('--stats-rx-fill').trim() || 'rgba(0, 184, 148, 0.2)',
+      txFill:   css.getPropertyValue('--stats-tx-fill').trim() || 'rgba(116, 185, 255, 0.2)',
+      textMuted:     css.getPropertyValue('--text-muted').trim() || '#555',
+      textSecondary: css.getPropertyValue('--text-secondary').trim() || '#666',
+    };
+  }
+
+  // Resize observer so the canvas redraws when the panel is resized
+  // without piggy-backing on rAF.
+  let resizeObs;
 
   onMount(() => {
     ctx = canvas.getContext('2d');
+    refreshPalette();
     draw();
+    if (typeof ResizeObserver !== 'undefined') {
+      resizeObs = new ResizeObserver(() => draw());
+      resizeObs.observe(canvas);
+    }
+  });
+
+  // Refresh palette + repaint when the theme flips.
+  const unsubTheme = resolvedTheme.subscribe(() => {
+    refreshPalette();
+    if (ctx) draw();
   });
 
   onDestroy(() => {
-    if (animFrame) cancelAnimationFrame(animFrame);
+    unsubTheme();
+    if (resizeObs) resizeObs.disconnect();
   });
 
-  // Collect samples from status polling
+  // Collect samples from status polling. Drawing is driven by data arrival
+  // (1 Hz from the helper broadcast) — NOT by rAF — so the renderer can
+  // actually idle between samples. Previously self-scheduling rAF burned
+  // 3-6% CPU painting the same pixels 60×/sec.
   $: if ($connectionStatus?.state === 'connected') {
     samples = [...samples, {
       rx: $connectionStatus.rx_bytes || 0,
       tx: $connectionStatus.tx_bytes || 0,
       time: Date.now()
     }].slice(-maxSamples);
+    if (ctx) draw();
   }
 
   function draw() {
     if (!ctx) return;
+    if (!palette) refreshPalette();
     const w = canvas.width = canvas.offsetWidth * 2;
     const h = canvas.height = canvas.offsetHeight * 2;
     ctx.scale(2, 2);
@@ -37,23 +74,13 @@
 
     ctx.clearRect(0, 0, cw, ch);
 
-    // Pull palette from CSS variables so the canvas respects the current
-    // theme. getComputedStyle is cheap at 1 Hz and means we don't have to
-    // re-subscribe to the theme store inside the draw loop.
-    const css = getComputedStyle(document.documentElement);
-    const rxStroke = css.getPropertyValue('--stats-rx').trim() || '#00b894';
-    const txStroke = css.getPropertyValue('--stats-tx').trim() || '#74b9ff';
-    const rxFill = css.getPropertyValue('--stats-rx-fill').trim() || 'rgba(0, 184, 148, 0.2)';
-    const txFill = css.getPropertyValue('--stats-tx-fill').trim() || 'rgba(116, 185, 255, 0.2)';
-    const textMuted = css.getPropertyValue('--text-muted').trim() || '#555';
-    const textSecondary = css.getPropertyValue('--text-secondary').trim() || '#666';
+    const { rxStroke, txStroke, rxFill, txFill, textMuted, textSecondary } = palette;
 
     if (samples.length < 2) {
       ctx.fillStyle = textMuted;
       ctx.font = '13px sans-serif';
       ctx.textAlign = 'center';
-      ctx.fillText('Waiting for data...', cw / 2, ch / 2);
-      animFrame = requestAnimationFrame(draw);
+      ctx.fillText($t('stats.waiting'), cw / 2, ch / 2);
       return;
     }
 
@@ -68,10 +95,7 @@
       });
     }
 
-    if (speeds.length === 0) {
-      animFrame = requestAnimationFrame(draw);
-      return;
-    }
+    if (speeds.length === 0) return;
 
     const maxSpeed = Math.max(
       ...speeds.map(s => Math.max(s.rx, s.tx)),
@@ -143,8 +167,6 @@
     ctx.fillText('↓ RX', padding.left, ch - 4);
     ctx.fillStyle = txStroke;
     ctx.fillText('↑ TX', padding.left + 50, ch - 4);
-
-    animFrame = requestAnimationFrame(draw);
   }
 
   function formatSpeed(bytesPerSec) {

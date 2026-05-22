@@ -289,14 +289,15 @@ func (m *DarwinManager) AddRoutes(ifaceName string, allowedIPs []string, fullTun
 	// (if any) need the same gateway-change tracking.
 	needsMonitor := fullTunnel || len(m.lastDNS) > 0
 	if needsMonitor {
+		m.mu.Lock()
 		if m.monitor == nil {
 			m.monitor = newRouteMonitor(m.reapply)
 		}
 		mon := m.monitor
-		go func() {
-			time.Sleep(2 * time.Second)
-			mon.Start()
-		}()
+		m.mu.Unlock()
+		// Delayed start internally cancellable by Stop() — prevents a
+		// route -n monitor leak on fast Connect→Disconnect cycles.
+		mon.StartDelayed(2 * time.Second)
 	}
 
 	return nil
@@ -613,8 +614,12 @@ func (m *DarwinManager) addBypassForIP(ipStr, gwV4, gwV6 string, gwV4Err, gwV6Er
 func (m *DarwinManager) RemoveRoutes(ifaceName string, allowedIPs []string, fullTunnel bool) error {
 	// Stop the route monitor first so its reapply goroutine can't race with
 	// teardown. Stop() blocks until any in-flight reapply callback finishes.
-	if m.monitor != nil {
-		m.monitor.Stop()
+	// Read under m.mu to avoid the data race with Connect()'s assignment.
+	m.mu.Lock()
+	mon := m.monitor
+	m.mu.Unlock()
+	if mon != nil {
+		mon.Stop()
 	}
 
 	// Remove all routes via this interface (both IPv4 and IPv6)
@@ -804,7 +809,10 @@ func (m *DarwinManager) SetDNS(ifaceName string, entries []string) error {
 	flushDNSCache()
 
 	m.mu.Lock()
-	m.lastDNS = entries
+	// Defensive copy — callers today build a fresh slice but a future
+	// caller passing cfg.Interface.DNS directly would let reapply() (via
+	// append-and-grow on the slice header) silently read live config.
+	m.lastDNS = append([]string(nil), entries...)
 	m.dnsActive = true
 	m.mu.Unlock()
 	return nil

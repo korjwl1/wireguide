@@ -13,6 +13,12 @@ import (
 // Handler processes an RPC request and returns a result or error.
 type Handler func(params json.RawMessage) (interface{}, error)
 
+// maxConcurrentConns caps simultaneous IPC connections so a misbehaving
+// or compromised same-UID process can't open thousands of conns and
+// exhaust the helper's goroutine + memory budget — which would in
+// practice take down the kill switch with the helper.
+const maxConcurrentConns = 32
+
 // Server is an IPC server that dispatches RPC requests to handlers
 // and broadcasts events to subscribed clients.
 type Server struct {
@@ -32,6 +38,9 @@ type Server struct {
 	// touching Helper state by the time Shutdown returns. Without this,
 	// helper cleanup could race a handler mid-call.
 	connWg sync.WaitGroup
+	// connSlots gates total concurrent connections (capacity = maxConcurrentConns).
+	// Acquired before spawning safeHandleConn; the goroutine releases on exit.
+	connSlots chan struct{}
 }
 
 type subscriber struct {
@@ -53,6 +62,7 @@ func NewServer(listener net.Listener, ownerUID ...int) *Server {
 		eventSubs:    make(map[*subscriber]struct{}),
 		shutdownCh:   make(chan struct{}),
 		controlConns: make(map[net.Conn]struct{}),
+		connSlots:    make(chan struct{}, maxConcurrentConns),
 	}
 }
 
@@ -104,8 +114,21 @@ func (s *Server) Serve() error {
 			continue
 		}
 		consecutiveErrors = 0
+		// Non-blocking acquire — drop the connection if the slot pool is full.
+		// A burst of bogus same-UID conns can't pile up unbounded goroutines.
+		select {
+		case s.connSlots <- struct{}{}:
+		default:
+			slog.Warn("ipc: connection slot pool full, dropping conn",
+				"max", maxConcurrentConns)
+			_ = conn.Close()
+			continue
+		}
 		s.connWg.Add(1)
-		go s.safeHandleConn(conn)
+		go func(c net.Conn) {
+			defer func() { <-s.connSlots }()
+			s.safeHandleConn(c)
+		}(conn)
 	}
 }
 
@@ -165,8 +188,28 @@ func (s *Server) Shutdown() {
 	}
 }
 
+// HasSubscribers reports whether any client is listening for events.
+// Callers can use this to skip expensive payload assembly when nobody
+// will receive the result — important for steady-state efficiency in
+// the helper's 1 Hz status loop while the GUI is not attached.
+func (s *Server) HasSubscribers() bool {
+	s.mu.Lock()
+	n := len(s.eventSubs)
+	s.mu.Unlock()
+	return n > 0
+}
+
 // Broadcast sends an event notification to all subscribers.
 func (s *Server) Broadcast(method string, params interface{}) {
+	// Cheap pre-check: if nobody is subscribed, skip the JSON marshal
+	// of the (often non-trivial) status payload entirely.
+	s.mu.Lock()
+	if len(s.eventSubs) == 0 {
+		s.mu.Unlock()
+		return
+	}
+	s.mu.Unlock()
+
 	notif, err := NewNotification(method, params)
 	if err != nil {
 		slog.Warn("failed to build notification", "error", err)

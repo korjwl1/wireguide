@@ -683,7 +683,9 @@
   <!-- Modals -->
   {#if showEditor}
     <div class="modal-backdrop" on:click={() => showEditor = false}>
-      <div class="modal modal-editor" on:click|stopPropagation>
+      <div class="modal modal-editor" on:click|stopPropagation
+        role="dialog" aria-modal="true"
+        aria-label={editorIsNew ? $t('tunnel.new_tunnel') : $t('tunnel.edit')}>
         <ConfigEditor
           bind:content={editorContent}
           bind:name={editName}
@@ -709,8 +711,9 @@
 
   {#if showZipResult}
     <div class="modal-backdrop" on:click={() => showZipResult = false}>
-      <div class="modal modal-zip-result" on:click|stopPropagation>
-        <h3>{$t('import.zip_result_title')}</h3>
+      <div class="modal modal-zip-result" on:click|stopPropagation
+        role="dialog" aria-modal="true" aria-labelledby="zip-result-title">
+        <h3 id="zip-result-title">{$t('import.zip_result_title')}</h3>
         <div class="zip-result-list">
           {#each zipResults as r}
             <div class="zip-result-row">

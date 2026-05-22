@@ -275,6 +275,14 @@ func (h *Helper) handleSetKillSwitch(params json.RawMessage) (interface{}, error
 			return nil, fmt.Errorf("no active tunnel")
 		}
 		status := h.manager.Status()
+		// IsConnected can return true while Status returns an empty
+		// InterfaceName if a Disconnect raced in between (Manager.Status
+		// zero-fills when no tunnel matches). Pass the empty name into
+		// firewall.EnableKillSwitch and the regex validator rejects it
+		// after going through the locking dance — bail early instead.
+		if status.InterfaceName == "" {
+			return nil, fmt.Errorf("no active tunnel (interface unavailable)")
+		}
 		// Use pre-resolved endpoints (resolved before tunnel routes were
 		// installed). Doing DNS resolution here would fail because the kill
 		// switch is about to block non-tunnel traffic and/or the query would

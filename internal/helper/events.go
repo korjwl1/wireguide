@@ -236,6 +236,12 @@ func (h *Helper) measureLatencies() {
 
 // eventLoop broadcasts status updates to subscribed GUIs on change. Change
 // detection is done by JSON round-trip compare (robust against field swaps).
+//
+// The loop short-circuits when no GUI is subscribed — building the status
+// DTO involves a per-tunnel UAPI round trip to wireguard-go, so doing it
+// once per second with no listener is pure waste. The next Subscribe call
+// triggers a fresh refreshStatus on the GUI side, so the missed ticks
+// don't leave the UI stale.
 func (h *Helper) eventLoop() {
 	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
@@ -246,6 +252,11 @@ func (h *Helper) eventLoop() {
 		case <-h.done:
 			return
 		case <-ticker.C:
+			// Skip if nobody's listening — saves the wgctrl syscalls + JSON marshal.
+			if !h.server.HasSubscribers() {
+				lastJSON = nil // force next broadcast (post-resubscribe) to fire
+				continue
+			}
 			status := h.statusDTO()
 			currentJSON, err := json.Marshal(status)
 			if err != nil {

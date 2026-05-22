@@ -48,7 +48,6 @@
       per_tunnel: {},
     },
   };
-  $: tunnelNames = ($tunnels || []).map(t => t.name);
   let loaded = false;
   let appVersion = '';
 
@@ -272,7 +271,6 @@
                   <option value="system">{$t('settings.theme_system')}</option>
                 </select>
               </div>
-              <div class="card-divider"></div>
               <div class="setting-row">
                 <label class="setting-label" for="lang-select">{$t('settings.language')}</label>
                 <select id="lang-select" value={settings.language} on:change={onLanguageChange}>
@@ -314,7 +312,6 @@
                   <span class="toggle-track"></span>
                 </label>
               </div>
-              <div class="card-divider"></div>
               <div class="setting-row setting-row--toggle">
                 <div class="setting-info">
                   <label class="setting-label" for="dns-protection">{$t('settings.dns_protection')}</label>
@@ -345,7 +342,6 @@
                   <span class="toggle-track"></span>
                 </label>
               </div>
-              <div class="card-divider"></div>
               <div class="setting-row setting-row--toggle">
                 <div class="setting-info">
                   <label class="setting-label" for="pin-interface">{$t('settings.pin_interface')}</label>
@@ -383,42 +379,54 @@
             on:change={(e) => { settings.wifi_rules = e.detail; scheduleSave(); }} />
 
         {:else if activeTab === 'about'}
-          <div class="about-section">
-            <div class="about-header">
-              <img src="/appicon.png" alt="WireGuide" class="about-icon" />
-              <div>
-                <div class="about-name">WireGuide</div>
-                <div class="about-version-row">
-                  <span class="about-version">{appVersion ? `v${appVersion}` : ''}</span>
+          <div class="about-tab">
+            <div class="about-hero">
+              <img src="/wireguide.svg" alt="WireGuide" class="about-logo" />
+              <div class="about-hero-text">
+                <h2 class="about-name">WireGuide</h2>
+                <p class="about-tagline-text">{$t('settings.about_tagline')}</p>
+                <div class="about-pills">
+                  <span class="pill pill-version">{appVersion ? `v${appVersion}` : 'v—'}</span>
                   {#if updateInfo?.available}
-                    <span class="update-dot"></span>
-                    <span class="update-badge">{$t('update.available', { version: updateInfo.version })}</span>
-                    <button class="link-btn" on:click={aboutRequestUpdate} disabled={aboutUpdating}>
+                    <button class="pill pill-update" on:click={aboutRequestUpdate} disabled={aboutUpdating}>
+                      <span class="pill-dot"></span>
                       {aboutUpdating ? $t('update.updating') : $t('update.update_now')}
                     </button>
                   {:else}
-                    <span class="about-uptodate">— {$t('settings.up_to_date')}</span>
+                    <span class="pill pill-ok">
+                      <Icon name="check" size={11} strokeWidth={2.5} />
+                      {$t('settings.up_to_date')}
+                    </span>
                   {/if}
                 </div>
               </div>
             </div>
 
-            <p class="about-desc">{$t('settings.about_desc')}</p>
+            <p class="about-desc-paragraph">{$t('settings.about_desc')}</p>
 
             {#if aboutShowVpnWarn}
               <div class="about-vpn-warn">
-                <p>{$t('update.vpn_warning')}</p>
-                <div class="about-warn-actions">
-                  <button class="link-btn" on:click={doAboutUpdate}>{$t('update.proceed')}</button>
-                  <button class="link-btn" on:click={() => aboutShowVpnWarn = false}>{$t('update.cancel')}</button>
+                <Icon name="triangle-alert" size={16} strokeWidth={2} />
+                <div class="vpn-warn-body">
+                  <p>{$t('update.vpn_warning')}</p>
+                  <div class="vpn-warn-actions">
+                    <button class="warn-btn warn-proceed" on:click={doAboutUpdate}>{$t('update.proceed')}</button>
+                    <button class="warn-btn warn-cancel" on:click={() => aboutShowVpnWarn = false}>{$t('update.cancel')}</button>
+                  </div>
                 </div>
               </div>
             {/if}
 
             <div class="about-links">
               <button class="link-btn" on:click={() => TunnelService.OpenURL('https://github.com/korjwl1/wireguide')}>GitHub</button>
+              <button class="link-btn" on:click={() => TunnelService.OpenURL('https://github.com/korjwl1/wireguide/releases')}>{$t('settings.about_releases')}</button>
               <button class="link-btn" on:click={() => TunnelService.OpenURL('https://github.com/korjwl1/wireguide/issues')}>{$t('settings.about_issues')}</button>
               <button class="link-btn" on:click={() => TunnelService.OpenURL('https://github.com/korjwl1/wireguide/blob/main/LICENSE')}>{$t('settings.about_license')}</button>
+            </div>
+
+            <div class="about-footer">
+              <p class="about-credits">{$t('settings.about_credits')}</p>
+              <p class="about-copyright">{$t('settings.about_copyright')}</p>
             </div>
           </div>
         {/if}
@@ -471,15 +479,17 @@
     overflow: hidden;
   }
 
-  /* Sidebar — icon + label tabs, M3 active indicator */
+  /* Sidebar — sits on the same modal surface as the content area.
+     No background panel, no border. Visual hierarchy comes from
+     the active tab item's own fill + content-area structure
+     (Linear / Notion / macOS System Settings pattern). */
   .settings-sidebar {
     display: flex;
     flex-direction: column;
     gap: 2px;
-    width: 152px;
+    width: 148px;
     flex-shrink: 0;
-    border-right: 0.5px solid var(--border);
-    padding-right: 12px;
+    padding: 0 6px 0 0;
     overflow-y: auto;
   }
   .settings-sidebar button {
@@ -509,10 +519,14 @@
   .settings-sidebar button:hover :global(.icon) {
     color: var(--text-primary);
   }
+  /* Active state: neutral gray fill + bold primary text + accent ICON.
+     macOS HIG sidebar pattern — only the icon carries brand color,
+     the row itself stays calm so the user's eye lands on content,
+     not the active nav row. */
   .settings-sidebar button.active {
-    background: color-mix(in srgb, var(--accent) 14%, var(--bg-primary));
-    color: var(--accent);
-    font-weight: 700;
+    background: var(--bg-active);
+    color: var(--text-primary);
+    font-weight: 600;
   }
   .settings-sidebar button.active :global(.icon) {
     color: var(--accent);
@@ -560,26 +574,28 @@
   .settings-card {
     background: var(--bg-card);
     border: 0.5px solid var(--border);
-    border-radius: var(--radius-md, 8px);
+    border-radius: 10px;
     overflow: hidden;
   }
-  .card-divider {
-    height: 0.5px;
-    background: var(--border);
-    margin: 0 12px;
-  }
 
-  /* Setting rows inside cards */
+  /* Setting rows inside cards — spacing alone separates (no hairlines).
+     The card surface itself is the grouping cue (Linear / Notion pattern). */
   .setting-row {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding: 9px 12px;
+    padding: 11px 14px;
     gap: var(--space-3);
+  }
+  .setting-row + .setting-row {
+    padding-top: 3px;
   }
   .setting-row--toggle {
     align-items: flex-start;
-    padding: 10px 12px;
+    padding: 12px 14px;
+  }
+  .setting-row--toggle + .setting-row--toggle {
+    padding-top: 4px;
   }
   .setting-info {
     flex: 1;
@@ -693,103 +709,180 @@
     box-shadow: none;
   }
 
-  /* About tab */
-  .about-section {
+  /* ========== About tab — redesigned ========== */
+  .about-tab {
     display: flex;
     flex-direction: column;
-    gap: 12px;
+    height: 100%;
   }
-  .about-header {
+  .about-hero {
     display: flex;
     align-items: center;
-    gap: 12px;
+    gap: 18px;
+    padding: 4px 0 4px;
   }
-  .about-icon {
-    width: 48px;
-    height: 48px;
-    border-radius: 10px;
+  .about-logo {
+    width: 64px;
+    height: 64px;
+    flex-shrink: 0;
+    filter: drop-shadow(0 4px 12px color-mix(in srgb, var(--accent) 28%, transparent));
+  }
+  .about-hero-text {
+    flex: 1;
+    min-width: 0;
   }
   .about-name {
-    font: 600 15px/20px var(--font-sans, -apple-system, BlinkMacSystemFont, sans-serif);
+    margin: 0;
+    font: 700 22px/28px var(--font-sans);
     color: var(--text-primary);
+    letter-spacing: -0.02em;
   }
-  .about-version-row {
+  .about-tagline-text {
+    margin: 2px 0 10px;
+    font: 500 13px/18px var(--font-sans);
+    color: var(--text-secondary);
+    letter-spacing: -0.005em;
+  }
+  .about-pills {
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
     flex-wrap: wrap;
   }
-  .about-version {
-    font: 400 11px/14px var(--font-sans, -apple-system, BlinkMacSystemFont, sans-serif);
+  .pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font: 600 11px/14px var(--font-sans);
+    padding: 4px 10px;
+    border-radius: 999px;
+    letter-spacing: 0.02em;
+  }
+  .pill-version {
     color: var(--text-secondary);
+    background: color-mix(in srgb, var(--text-muted) 18%, transparent);
+    font-feature-settings: "tnum";
   }
-  .about-divider {
-    border: none;
-    border-top: 0.5px solid var(--border);
-    margin: 8px 0;
+  .pill-ok {
+    color: var(--green);
+    background: color-mix(in srgb, var(--green) 16%, transparent);
   }
-  .about-desc {
-    font: 400 12px/16px var(--font-sans, -apple-system, BlinkMacSystemFont, sans-serif);
-    color: var(--text-secondary);
-    margin: 0;
+  .pill-update {
+    color: #fff;
+    background: var(--accent);
+    border: 0;
+    cursor: pointer;
+    box-shadow: 0 1px 3px color-mix(in srgb, var(--accent) 26%, transparent),
+                0 1px 2px rgba(0,0,0,0.08);
   }
-  .about-links {
-    display: flex;
-    gap: 16px;
+  @media (prefers-reduced-motion: no-preference) {
+    .pill-update { transition: background-color 140ms ease, transform 140ms ease, box-shadow 140ms ease; }
   }
-  .update-dot {
+  .pill-update:hover:not(:disabled) {
+    background: color-mix(in srgb, #fff 8%, var(--accent));
+    transform: translateY(-1px);
+  }
+  .pill-update:disabled { opacity: 0.65; cursor: wait; }
+  .pill-dot {
     width: 6px;
     height: 6px;
     border-radius: 50%;
-    background: var(--accent, #007AFF);
+    background: #fff;
   }
-  .update-badge {
-    font: 500 12px/16px var(--font-sans, -apple-system, BlinkMacSystemFont, sans-serif);
-    color: var(--accent, #007AFF);
-  }
-  .about-uptodate {
-    font: 400 11px/14px var(--font-sans, -apple-system, BlinkMacSystemFont, sans-serif);
+
+  .about-desc-paragraph {
+    margin: 18px 0 16px;
+    font: 13px/20px var(--font-sans);
     color: var(--text-secondary);
+    letter-spacing: -0.005em;
   }
+
+  /* VPN warn inline alert card */
   .about-vpn-warn {
-    background: var(--bg-secondary, #F5F5F7);
-    border: 0.5px solid var(--border);
-    border-radius: 6px;
-    padding: 8px 10px;
-    margin-bottom: 8px;
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    background: color-mix(in srgb, var(--orange, #FF9500) 10%, var(--bg-card));
+    border: 0.5px solid color-mix(in srgb, var(--orange, #FF9500) 35%, var(--border));
+    border-radius: 10px;
+    padding: 12px 14px;
+    margin-bottom: 14px;
+    color: var(--orange, #FF9500);
+  }
+  .vpn-warn-body {
+    flex: 1;
+    min-width: 0;
   }
   .about-vpn-warn p {
-    font: 400 12px/16px var(--font-sans, -apple-system, BlinkMacSystemFont, sans-serif);
-    color: var(--text-secondary);
-    margin: 0 0 6px;
+    margin: 0 0 8px;
+    font: 12px/16px var(--font-sans);
+    color: var(--text-primary);
   }
-  .about-warn-actions {
+  .vpn-warn-actions {
     display: flex;
-    gap: 12px;
+    gap: 8px;
+  }
+  .warn-btn {
+    height: 26px;
+    padding: 0 12px;
+    border: 0;
+    border-radius: 7px;
+    font: 600 11px/14px var(--font-sans);
+    cursor: pointer;
+  }
+  .warn-proceed {
+    background: var(--orange, #FF9500);
+    color: #fff;
+  }
+  .warn-cancel {
+    background: transparent;
+    color: var(--text-secondary);
+  }
+  .warn-cancel:hover { background: var(--bg-hover); }
+
+  /* Simple text-link row (original style — restored). */
+  .about-links {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 18px;
+    margin-bottom: 18px;
   }
   .link-btn {
-    font: 400 12px/16px var(--font-sans, -apple-system, BlinkMacSystemFont, sans-serif);
-    color: var(--accent, #007AFF);
+    font: 500 12px/16px var(--font-sans);
+    color: var(--accent);
     background: none;
-    border: none;
+    border: 0;
     padding: 0;
     cursor: pointer;
+    letter-spacing: -0.005em;
   }
   .link-btn:hover { text-decoration: underline; }
   .link-btn:disabled { opacity: 0.5; cursor: wait; text-decoration: none; }
-  .link-btn:focus,
-  .link-btn:focus-visible {
-    outline: none;
+  .link-btn:focus, .link-btn:focus-visible { outline: none; }
+
+  /* About footer credits */
+  .about-footer {
+    margin-top: auto;
+    padding-top: 4px;
+  }
+  .about-credits {
+    margin: 0 0 3px;
+    font: 11px/15px var(--font-sans);
+    color: var(--text-muted);
+  }
+  .about-copyright {
+    margin: 0;
+    font: 11px/15px var(--font-sans);
+    color: var(--text-muted);
   }
 
-  /* Footer */
+  /* ========== Footer — no hard divider, whitespace alone ========== */
   .modal-footer {
     display: flex;
     justify-content: flex-end;
     align-items: center;
     margin-top: 14px;
-    padding-top: 12px;
-    border-top: 0.5px solid var(--border);
+    padding-top: 4px;
     flex-shrink: 0;
   }
   .btn-close {

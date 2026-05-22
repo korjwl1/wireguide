@@ -26,6 +26,13 @@ type routeMonitor struct {
 	reapply  func()
 	debounce *time.Timer
 
+	// pendingStart is the AfterFunc timer for a deferred Start(); set by
+	// StartDelayed and cancelled by Stop() so a fast Connect→Disconnect
+	// cycle doesn't fire Start() against a monitor whose caller has
+	// already torn down. Without this guard, a route -n monitor
+	// subprocess + its loop goroutine leak forever.
+	pendingStart *time.Timer
+
 	// pending tracks the in-flight debounce callback so Stop() can block
 	// until reapply finishes. Without this, Stop() followed by Connect()
 	// could race with a pending reapply that's still touching shared state.
@@ -39,6 +46,25 @@ var rtmEventRegex = regexp.MustCompile(`RTM_(ADD|DELETE|CHANGE|REDIRECT|LOSING|I
 
 func newRouteMonitor(reapply func()) *routeMonitor {
 	return &routeMonitor{reapply: reapply}
+}
+
+// StartDelayed schedules Start() to run after `d`. If Stop() is called before
+// the timer fires, the scheduled Start is cancelled — this prevents a leaked
+// `route -n monitor` subprocess + goroutine when the caller tears down the
+// tunnel during the delay window (the original use case for the delay is to
+// avoid spurious reapply from our own route-add chatter right after Connect).
+func (rm *routeMonitor) StartDelayed(d time.Duration) {
+	rm.mu.Lock()
+	defer rm.mu.Unlock()
+	if rm.running || rm.pendingStart != nil {
+		return
+	}
+	rm.pendingStart = time.AfterFunc(d, func() {
+		rm.mu.Lock()
+		rm.pendingStart = nil
+		rm.mu.Unlock()
+		rm.Start()
+	})
 }
 
 // Start begins monitoring. Safe to call multiple times (no-op if already running).
@@ -75,6 +101,12 @@ func (rm *routeMonitor) Start() {
 // occur, so the caller can safely tear down shared state.
 func (rm *routeMonitor) Stop() {
 	rm.mu.Lock()
+	// Cancel any pending delayed Start so a fast Connect→Disconnect doesn't
+	// leak a `route -n monitor` subprocess. Safe to call when nil.
+	if rm.pendingStart != nil {
+		rm.pendingStart.Stop()
+		rm.pendingStart = nil
+	}
 	if !rm.running {
 		rm.mu.Unlock()
 		return

@@ -175,6 +175,10 @@ func (m *Manager) Connect(cfg *domain.WireGuardConfig) error {
 		netMgr.RestoreDNS(engine.InterfaceName())
 		netMgr.Cleanup(engine.InterfaceName())
 		engine.Close()
+		// connectPhases saved the crash-recovery state file before this
+		// raced Disconnect. Without ClearActiveState here, the file
+		// remains on disk and triggers spurious recovery on next launch.
+		_ = ClearActiveState(m.dataDir, name)
 		m.removeEntry(name)
 		return newTunnelError(ErrStateCorrupt, "connect aborted: state changed during setup", nil)
 	}

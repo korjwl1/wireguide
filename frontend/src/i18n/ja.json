@@ -137,9 +137,15 @@
     "pin_interface": "インターフェース固定",
     "pin_interface_hint": "VPNバイパスルートをアクティブなネットワークインターフェースに固定します。WiFiとイーサネットが同時接続されている環境で遅延スパイクを防止します。",
     "about": "情報",
-    "about_desc": "モダンUIと便利な機能を備えたクロスプラットフォーム WireGuard VPNクライアント",
+    "about_tagline": "デスクトップのための、親しみやすい WireGuard。",
+    "about_desc": "WireGuard を中心に作られたオープンソースの VPN クライアント。設定ファイルをドロップすればすぐにつながります。漏えいしないキルスイッチ、抜け道のない DNS 保護、信頼するネットワークで自動的にトンネルを開く Wi-Fi ルール。コマンドラインも、テレメトリも、勧誘もありません。",
+    "about_source": "GitHub ソースコード",
+    "about_releases": "リリースノート",
     "about_issues": "問題を報告",
     "about_license": "ライセンス (MIT)",
+    "about_credits": "WireGuide®、Wails、Svelte で構築。",
+    "about_copyright": "© 2026 WireGuide. MIT ライセンスで公開。",
+    "about_check_update": "アップデートを確認",
     "section_appearance": "外観",
     "section_startup": "起動",
     "section_security": "セキュリティ",
@@ -250,7 +256,8 @@
     "title": "ルーティング競合を検出",
     "message": "接続すると上記インターフェースのトラフィックルーティングに影響する可能性があります。より具体的なルートが優先されます。",
     "proceed": "それでも接続",
-    "cancel": "キャンセル"
+    "cancel": "キャンセル",
+    "and_more": "… ほか {n} 件"
   },
   "update": {
     "available": "v{version} が利用可能",

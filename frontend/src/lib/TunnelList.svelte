@@ -67,6 +67,7 @@
           class="tunnel-item"
           class:active={$selectedTunnel?.name === tun.name}
           class:connected={activeSet.has(tun.name)}
+          aria-current={$selectedTunnel?.name === tun.name ? 'true' : undefined}
           on:click={() => select(tun)}
         >
           <span class="status-dot"

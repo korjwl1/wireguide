@@ -263,8 +263,17 @@ func DownloadUpdate(info *UpdateInfo) (string, error) {
 			return "", fmt.Errorf("signature verification: %w", err)
 		}
 		info.SignatureVerified = true
+	} else if requireSignedUpdates {
+		// Release builds REFUSE to install without a signature. Defends
+		// against a compromised GitHub repo write token swapping both
+		// binary + SHA256SUMS at once. Dev builds can still proceed via
+		// SHA256-only (the build tag flips this constant off).
+		os.Remove(destPath)
+		return "", fmt.Errorf("refusing to install update: no signing public key embedded in this build " +
+			"(set update.expectedPublicKey before release, or disable signed-updates with the build tag)")
 	} else {
-		slog.Warn("signature verification skipped: no public key embedded; falling back to SHA256-only authentication")
+		slog.Warn("signature verification skipped: no public key embedded; falling back to SHA256-only authentication " +
+			"(dev build — release builds require a signed checksum)")
 	}
 
 	return destPath, nil

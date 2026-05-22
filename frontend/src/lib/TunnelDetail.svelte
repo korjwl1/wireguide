@@ -376,17 +376,34 @@
 
   let renaming = false;
   let renameValue = '';
+  let renameInput = null;
+  // Esc cancels rename. The flow is: keydown handler calls cancelRename()
+  // which sets `renameCancelled=true` and `renaming=false`. The Svelte
+  // unmount fires the input's `on:blur` → commitRename(), which would
+  // otherwise rename the tunnel to whatever was typed. The cancelled
+  // flag short-circuits that blur-driven commit.
+  let renameCancelled = false;
 
-  function startRename() {
+  async function startRename() {
     if (isConnected) {
       error = $t('confirm.disconnect_first');
       return;
     }
     renameValue = $selectedTunnel.name;
+    renameCancelled = false;
     renaming = true;
+    // Programmatic focus is more reliable than `autofocus` across Svelte
+    // re-renders (and avoids the a11y warning).
+    await tick();
+    renameInput?.focus();
+    renameInput?.select();
   }
 
   async function commitRename() {
+    if (renameCancelled) {
+      renameCancelled = false;
+      return;
+    }
     const oldName = $selectedTunnel.name;
     const newName = renameValue.trim();
     renaming = false;
@@ -401,6 +418,7 @@
   }
 
   function cancelRename() {
+    renameCancelled = true;
     renaming = false;
   }
 </script>
@@ -438,12 +456,12 @@
               class="rename-input"
               type="text"
               bind:value={renameValue}
+              bind:this={renameInput}
               on:blur={commitRename}
               on:keydown={(e) => {
                 if (e.key === 'Enter') commitRename();
                 if (e.key === 'Escape') cancelRename();
               }}
-              autofocus
             />
           {:else}
             <h2 class="hero-name" on:dblclick={startRename} title={$t('tunnel.rename_hint')}>{$selectedTunnel.name}</h2>
@@ -484,7 +502,7 @@
           <span>{$t('tunnel.disconnect')}</span>
         </button>
       {:else}
-        <button class="btn-primary-large btn-connect-lg" on:click={connect} disabled={loading}>
+        <button class="btn-primary-large btn-connect-lg" on:click={connect} disabled={loading || isConnecting}>
           {#if loading || isConnecting}
             <span class="spinner"></span>
             <span>{$t('app.connecting')}</span>

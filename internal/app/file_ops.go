@@ -50,9 +50,20 @@ func (s *TunnelService) ImportZip(path string) ([]ZipImportResult, error) {
 	return s.importZipReader(&r.Reader)
 }
 
+// maxZipDataSize caps the in-memory zip payload accepted from the GUI
+// file picker. WireGuard configs are tiny; a multi-MB zip dump is
+// either a mistake or a memory-exhaustion attempt.
+const maxZipDataSize = 32 << 20
+
+// maxZipEntrySize bounds each decompressed entry (zip-bomb guard).
+const maxZipEntrySize = 1 << 20
+
 // ImportZipData imports a zip supplied as raw bytes (used by the file picker,
 // which provides a File object rather than a filesystem path).
 func (s *TunnelService) ImportZipData(data []byte) ([]ZipImportResult, error) {
+	if len(data) > maxZipDataSize {
+		return nil, fmt.Errorf("zip too large: %d bytes (max %d)", len(data), maxZipDataSize)
+	}
 	r, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
 	if err != nil {
 		return nil, fmt.Errorf("reading zip: %w", err)
@@ -72,10 +83,18 @@ func (s *TunnelService) importZipReader(r *zip.Reader) ([]ZipImportResult, error
 			results = append(results, ZipImportResult{Name: filepath.Base(f.Name), Error: err.Error()})
 			continue
 		}
-		data, err := io.ReadAll(rc)
+		// Per-entry size cap — zip bomb protection.
+		data, err := io.ReadAll(io.LimitReader(rc, maxZipEntrySize+1))
 		rc.Close()
 		if err != nil {
 			results = append(results, ZipImportResult{Name: filepath.Base(f.Name), Error: err.Error()})
+			continue
+		}
+		if int64(len(data)) > maxZipEntrySize {
+			results = append(results, ZipImportResult{
+				Name:  filepath.Base(f.Name),
+				Error: fmt.Sprintf("entry exceeds %d bytes", maxZipEntrySize),
+			})
 			continue
 		}
 		baseName := strings.TrimSuffix(filepath.Base(f.Name), ".conf")

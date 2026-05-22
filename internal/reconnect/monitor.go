@@ -479,10 +479,31 @@ func (m *Monitor) reconnectWithBackoff(ctx context.Context, tunnelName string, e
 		}
 
 		// Disconnect the specific tunnel (or first tunnel for legacy path).
+		// If teardown fails (timeout / corrupt state) we log AND back off —
+		// otherwise the next reconnectFn hits ErrAlreadyConnected and we
+		// loop forever with no recovery.
+		var disconnectErr error
 		if tunnelName != "" {
-			_ = m.manager.DisconnectTunnel(tunnelName)
+			disconnectErr = m.manager.DisconnectTunnel(tunnelName)
 		} else {
-			_ = m.manager.Disconnect()
+			disconnectErr = m.manager.Disconnect()
+		}
+		if disconnectErr != nil {
+			slog.Warn("pre-reconnect disconnect failed; will retry after backoff",
+				"tunnel", tunnelName, "attempt", attempt, "error", disconnectErr)
+			if firewallWasSuspended && m.fwResumeFn != nil {
+				if err := m.fwResumeFn(); err != nil {
+					slog.Warn("failed to resume firewall after disconnect failure",
+						"error", err)
+				}
+			}
+			m.mu.Lock()
+			entry.delay = delay * 2
+			if entry.delay > m.cfg.MaxDelay {
+				entry.delay = m.cfg.MaxDelay
+			}
+			m.mu.Unlock()
+			continue
 		}
 
 		// One more cancellation check before the actual reconnect — manager

@@ -1,14 +1,25 @@
 <script>
-  import { createEventDispatcher } from 'svelte';
+  import { createEventDispatcher, onDestroy, onMount } from 'svelte';
   import { t } from '../i18n/index.js';
 
   export let conflicts = [];
   const dispatch = createEventDispatcher();
+
+  // Match the other modals: Escape cancels.
+  function onKeyDown(e) {
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      dispatch('cancel');
+    }
+  }
+  onMount(() => window.addEventListener('keydown', onKeyDown));
+  onDestroy(() => window.removeEventListener('keydown', onKeyDown));
 </script>
 
 <div class="modal-backdrop" on:click={() => dispatch('cancel')}>
-  <div class="modal" on:click|stopPropagation>
-    <h3>{$t('conflict.title')}</h3>
+  <div class="modal" on:click|stopPropagation
+    role="dialog" aria-modal="true" aria-labelledby="conflict-title">
+    <h3 id="conflict-title">{$t('conflict.title')}</h3>
 
     <div class="conflict-list">
       {#each conflicts as conflict}
@@ -22,7 +33,7 @@
               <code class="overlap">{overlap}</code>
             {/each}
             {#if conflict.overlapping_ips.length > 3}
-              <span class="overlap-more">… and {conflict.overlapping_ips.length - 3} more</span>
+              <span class="overlap-more">{$t('conflict.and_more', { n: conflict.overlapping_ips.length - 3 })}</span>
             {/if}
           </div>
         </div>
