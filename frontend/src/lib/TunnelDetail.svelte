@@ -1123,30 +1123,36 @@
   }
   .btn-primary-large:disabled { opacity: 0.55; cursor: not-allowed; }
   .btn-connect-lg {
-    background: linear-gradient(135deg, var(--green) 0%, color-mix(in srgb, var(--green) 75%, var(--accent)) 100%);
-    box-shadow: 0 6px 20px color-mix(in srgb, var(--green) 30%, transparent),
-                inset 0 1px 0 rgba(255,255,255,0.15);
+    background: var(--green);
+    box-shadow: 0 2px 6px color-mix(in srgb, var(--green) 28%, transparent),
+                0 1px 2px rgba(0,0,0,0.08);
   }
   .btn-connect-lg:hover:not(:disabled) {
-    filter: brightness(1.06);
+    background: color-mix(in srgb, #fff 8%, var(--green));
     transform: translateY(-1px);
-    box-shadow: 0 10px 26px color-mix(in srgb, var(--green) 38%, transparent),
-                inset 0 1px 0 rgba(255,255,255,0.18);
+    box-shadow: 0 6px 16px color-mix(in srgb, var(--green) 36%, transparent),
+                0 1px 2px rgba(0,0,0,0.10);
   }
-  .btn-connect-lg:active:not(:disabled) { filter: brightness(0.94); transform: translateY(0); }
+  .btn-connect-lg:active:not(:disabled) {
+    background: color-mix(in srgb, #000 8%, var(--green));
+    transform: translateY(0);
+  }
 
   .btn-disconnect-lg {
-    background: linear-gradient(135deg, var(--red) 0%, color-mix(in srgb, var(--red) 75%, var(--orange, #FF9500)) 100%);
-    box-shadow: 0 6px 20px color-mix(in srgb, var(--red) 28%, transparent),
-                inset 0 1px 0 rgba(255,255,255,0.15);
+    background: var(--red);
+    box-shadow: 0 2px 6px color-mix(in srgb, var(--red) 28%, transparent),
+                0 1px 2px rgba(0,0,0,0.08);
   }
   .btn-disconnect-lg:hover:not(:disabled) {
-    filter: brightness(1.06);
+    background: color-mix(in srgb, #fff 8%, var(--red));
     transform: translateY(-1px);
-    box-shadow: 0 10px 26px color-mix(in srgb, var(--red) 36%, transparent),
-                inset 0 1px 0 rgba(255,255,255,0.18);
+    box-shadow: 0 6px 16px color-mix(in srgb, var(--red) 34%, transparent),
+                0 1px 2px rgba(0,0,0,0.10);
   }
-  .btn-disconnect-lg:active:not(:disabled) { filter: brightness(0.94); transform: translateY(0); }
+  .btn-disconnect-lg:active:not(:disabled) {
+    background: color-mix(in srgb, #000 8%, var(--red));
+    transform: translateY(0);
+  }
 
   /* Spinner inside connect button when connecting */
   .spinner {
@@ -1469,33 +1475,42 @@
   }
   .dialog-btn:disabled { opacity: 0.4; cursor: not-allowed; }
   .dialog-btn-primary {
-    background: linear-gradient(135deg,
-      var(--accent) 0%,
-      color-mix(in srgb, var(--accent) 75%, #a78bfa) 100%);
+    background: var(--accent);
     color: #fff;
     box-shadow:
-      0 3px 10px color-mix(in srgb, var(--accent) 28%, transparent),
-      inset 0 1px 0 rgba(255,255,255,0.15);
+      0 1px 3px color-mix(in srgb, var(--accent) 26%, transparent),
+      0 1px 2px rgba(0,0,0,0.08);
   }
   .dialog-btn-primary:hover:not(:disabled) {
-    filter: brightness(1.06);
+    background: color-mix(in srgb, #fff 8%, var(--accent));
     transform: translateY(-1px);
+    box-shadow:
+      0 4px 10px color-mix(in srgb, var(--accent) 30%, transparent),
+      0 1px 2px rgba(0,0,0,0.10);
   }
-  .dialog-btn-primary:active:not(:disabled) { filter: brightness(0.94); transform: translateY(0); }
+  .dialog-btn-primary:active:not(:disabled) {
+    background: color-mix(in srgb, #000 8%, var(--accent));
+    transform: translateY(0);
+  }
 
   .dialog-btn-danger {
-    background: linear-gradient(135deg, var(--red) 0%,
-      color-mix(in srgb, var(--red) 75%, var(--orange, #FF9500)) 100%);
+    background: var(--red);
     color: #fff;
     box-shadow:
-      0 3px 10px color-mix(in srgb, var(--red) 26%, transparent),
-      inset 0 1px 0 rgba(255,255,255,0.15);
+      0 1px 3px color-mix(in srgb, var(--red) 26%, transparent),
+      0 1px 2px rgba(0,0,0,0.08);
   }
   .dialog-btn-danger:hover:not(:disabled) {
-    filter: brightness(1.06);
+    background: color-mix(in srgb, #fff 8%, var(--red));
     transform: translateY(-1px);
+    box-shadow:
+      0 4px 10px color-mix(in srgb, var(--red) 30%, transparent),
+      0 1px 2px rgba(0,0,0,0.10);
   }
-  .dialog-btn-danger:active:not(:disabled) { filter: brightness(0.94); transform: translateY(0); }
+  .dialog-btn-danger:active:not(:disabled) {
+    background: color-mix(in srgb, #000 8%, var(--red));
+    transform: translateY(0);
+  }
 
   .dialog-btn-ghost {
     background: var(--bg-card);

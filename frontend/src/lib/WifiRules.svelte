@@ -237,9 +237,7 @@
   .add-row button {
     padding: 0 16px;
     height: 32px;
-    background: linear-gradient(135deg,
-      var(--accent) 0%,
-      color-mix(in srgb, var(--accent) 75%, #a78bfa) 100%);
+    background: var(--accent);
     border: 0;
     border-radius: 8px;
     color: #fff;
@@ -248,15 +246,18 @@
     cursor: pointer;
     white-space: nowrap;
     box-shadow:
-      0 3px 8px color-mix(in srgb, var(--accent) 28%, transparent),
-      inset 0 1px 0 rgba(255,255,255,0.15);
+      0 1px 3px color-mix(in srgb, var(--accent) 26%, transparent),
+      0 1px 2px rgba(0,0,0,0.08);
   }
   @media (prefers-reduced-motion: no-preference) {
-    .add-row button { transition: filter 140ms ease, transform 140ms ease, box-shadow 140ms ease; }
+    .add-row button { transition: background-color 140ms ease, transform 140ms ease, box-shadow 140ms ease; }
   }
   .add-row button:hover:not(:disabled) {
-    filter: brightness(1.06);
+    background: color-mix(in srgb, #fff 8%, var(--accent));
     transform: translateY(-1px);
+    box-shadow:
+      0 4px 8px color-mix(in srgb, var(--accent) 30%, transparent),
+      0 1px 2px rgba(0,0,0,0.10);
   }
   .add-row button:disabled { opacity: 0.4; cursor: not-allowed; box-shadow: none; }
 

@@ -560,12 +560,7 @@
   <div class="layout">
     <nav class="sidebar">
       <div class="brand-area">
-        <div class="brand-mark">
-          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/>
-            <path d="M9 12l2 2 4-4"/>
-          </svg>
-        </div>
+        <img class="brand-mark" src="/wireguide.svg" alt="WireGuide" width="38" height="38" />
         <div class="brand-text">
           <span class="brand-name">WireGuide</span>
           <span class="brand-tagline">WireGuard VPN</span>
@@ -836,22 +831,15 @@
     gap: 12px;
     padding: 8px 16px 18px 16px;
   }
+  /* Actual WireGuide logo bitmap. drop-shadow follows the squircle alpha
+   * shape (unlike box-shadow which would draw a rectangle). */
   .brand-mark {
-    display: flex;
-    align-items: center;
-    justify-content: center;
     width: 38px;
     height: 38px;
-    border-radius: 11px;
-    background: linear-gradient(135deg,
-      color-mix(in srgb, var(--accent) 100%, transparent) 0%,
-      color-mix(in srgb, var(--accent) 65%, #a78bfa) 100%);
-    color: #fff;
     flex-shrink: 0;
-    box-shadow:
-      0 6px 16px color-mix(in srgb, var(--accent) 35%, transparent),
-      inset 0 1px 0 rgba(255,255,255,0.2),
-      inset 0 -1px 0 rgba(0,0,0,0.08);
+    object-fit: contain;
+    filter: drop-shadow(0 6px 14px color-mix(in srgb, var(--accent) 35%, transparent));
+    image-rendering: -webkit-optimize-contrast;
   }
   .brand-text {
     display: flex;
@@ -962,20 +950,16 @@
     flex-shrink: 0;
   }
 
-  /* Active state: filled accent pill + glowing icon tile + bold accent text */
+  /* Active state: tonal pill (MD3 secondary container) + filled icon tile */
   .nav-item.active {
     background: color-mix(in srgb, var(--accent) 14%, var(--bg-secondary));
     color: var(--accent);
     font-weight: 700;
   }
   .nav-item.active .nav-icon-box {
-    background: linear-gradient(135deg,
-      var(--accent) 0%,
-      color-mix(in srgb, var(--accent) 75%, #a78bfa) 100%);
+    background: var(--accent);
     color: #fff;
-    box-shadow:
-      0 4px 10px color-mix(in srgb, var(--accent) 40%, transparent),
-      inset 0 1px 0 rgba(255,255,255,0.18);
+    box-shadow: 0 2px 6px color-mix(in srgb, var(--accent) 32%, transparent);
   }
 
   .nav-spacer { flex: 1; }

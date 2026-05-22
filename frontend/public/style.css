@@ -20,8 +20,12 @@
  */
 
 /* ============================================================
-   DARK THEME — "Midnight Slate"
-   Blue-slate tinted surfaces, indigo accent.
+   DARK THEME — "Crimson Slate"
+   Blue-slate surfaces, WireGuide brand red accent (logo-derived).
+   Hue rotation: surfaces stay at ~230° (cool, calm chrome) while the
+   accent jumps to ~358° (warm, attention-getting brand red). The
+   cool-warm contrast is what makes the red "pop" against the bg —
+   complementary hue separation (Itten color theory).
    ============================================================ */
 :root {
     /* --- Surfaces (5-8% luminance staircase, ~230° hue family) --- */
@@ -31,7 +35,7 @@
     --bg-input:     #16171f;   /* text field — slightly recessed        L*≈10 */
     --bg-hover:     rgba(255, 255, 255, 0.06);   /* hover state overlay */
     --bg-active:    rgba(255, 255, 255, 0.10);   /* pressed state overlay */
-    --bg-selected:  rgba(129, 140, 248, 0.18);   /* indigo-tinted selection row */
+    --bg-selected:  rgba(239, 68, 68, 0.16);     /* brand-red selection row */
     --border:       #252736;   /* hairline separators */
     --border-strong: #353850;  /* interactive / input control borders */
 
@@ -39,13 +43,18 @@
     --text-primary:   #e8eaf6;   /* ~11:1 on --bg-primary ✓ AAA */
     --text-secondary: #9ea3c0;   /* ~4.9:1 on --bg-primary ✓ AA  */
     --text-muted:     #5c6080;   /* ~2.6:1 — use only for non-text elements */
-    --text-inverse:   #0f1018;   /* on accent-coloured buttons */
+    --text-inverse:   #fff5f5;   /* warm-white text on red accent buttons */
 
-    /* --- Accent — Indigo (245° HSL, security-tech trust palette) --- */
-    --accent:   #818cf8;   /* indigo-400. On --bg-primary: ~5.4:1 ✓ AA */
-    --blue:     #818cf8;   /* alias */
-    /* Alias tokens for components that use explicit --accent-* names */
-    --accent-blue:   #818cf8;
+    /* --- Accent — WireGuide brand red (derived from logo: #A01D21 → #5E1012)
+       Dark mode picks a brighter vermillion for AA contrast against the
+       deep slate canvas; gradients darken back toward the logo's hue
+       so buttons keep brand identity at rest. */
+    --accent:        #EF4444;   /* red-500. ~4.6:1 on --bg-primary ✓ AA */
+    --accent-deep:   #A01D21;   /* logo top — used as gradient bottom */
+    --accent-darker: #5E1012;   /* logo bottom — for deeper shadows */
+    --blue:          #60a5fa;   /* blue-400 — reserved for "info" semantics (logs) */
+    /* Alias tokens for components that reference explicit --accent-* names */
+    --accent-blue:   #EF4444;   /* alias of --accent (legacy naming) */
     --accent-green:  #34d399;
     --accent-red:    #f87171;
     --accent-yellow: #fbbf24;
@@ -61,7 +70,8 @@
     /* --- Semantic state tints --- */
     --green-tint:  rgba(52, 211, 153, 0.16);
     --yellow-tint: rgba(251, 191, 36, 0.16);
-    --blue-tint:   rgba(129, 140, 248, 0.18);
+    --blue-tint:   rgba(239, 68, 68, 0.18);   /* focus-ring tint = accent-red */
+    --accent-tint: rgba(239, 68, 68, 0.18);   /* explicit accent tint alias */
     --orange-tint: rgba(251, 146, 60, 0.15);
 
     --error-bg:    rgba(248, 113, 113, 0.14);
@@ -69,7 +79,7 @@
 
     /* --- Modals, overlays --- */
     --overlay-bg:       rgba(0, 0, 0, 0.65);
-    --drop-overlay-bg:  rgba(129, 140, 248, 0.20);   /* indigo tint */
+    --drop-overlay-bg:  rgba(239, 68, 68, 0.18);   /* brand-red drop hint */
 
     /* --- Shadows — hue-matched to surface blue-slate (not pure black) --- */
     --shadow-xs:  0 0 0 0.5px rgba(100, 110, 180, 0.10),
@@ -86,7 +96,9 @@
     --editor-gutter-bg:  #1c1d26;
     --editor-border:     #252736;
 
-    /* --- Stats / graph --- */
+    /* --- Stats / graph — RX emerald, TX indigo (functional, NOT brand)
+       Kept distinct from accent red so RX/TX bars remain visually
+       distinguishable from connection state and brand chrome. */
     --graph-bg:      #1c1d26;
     --stats-rx:      #34d399;   /* emerald */
     --stats-tx:      #818cf8;   /* indigo  */
@@ -166,10 +178,9 @@
 }
 
 /* ============================================================
-   LIGHT THEME — "Cloud Slate"
-   Blue-slate tinted off-white surfaces, indigo accent.
-   Near-white (#f0f2f8) instead of pure #FFF eliminates iris-constriction
-   fatigue (Legge & Rubin 1990 contrast sensitivity research).
+   LIGHT THEME — "Crimson Cloud"
+   Blue-slate off-white surfaces, WireGuide brand red accent.
+   Logo's red `#A01D21` works directly on light bg (6.2:1 contrast).
    ============================================================ */
 [data-theme="light"] {
     /* --- Surfaces --- */
@@ -177,9 +188,9 @@
     --bg-secondary: #e8eaf4;   /* sidebar / list pane — slightly more tinted */
     --bg-card:      #ffffff;   /* cards "lift" above base with border+shadow */
     --bg-input:     #ffffff;
-    --bg-hover:     rgba(79, 70, 229, 0.06);   /* indigo-tinted hover */
-    --bg-active:    rgba(79, 70, 229, 0.10);   /* indigo-tinted press */
-    --bg-selected:  rgba(79, 70, 229, 0.10);   /* indigo-tinted selection */
+    --bg-hover:     rgba(160, 29, 33, 0.06);   /* brand-red hover */
+    --bg-active:    rgba(160, 29, 33, 0.10);   /* brand-red press */
+    --bg-selected:  rgba(160, 29, 33, 0.10);   /* brand-red selection */
     --border:       rgba(100, 116, 139, 0.22); /* slate-400 @ 22% — subtle hairlines */
     --border-strong: rgba(100, 116, 139, 0.40);
 
@@ -187,12 +198,14 @@
     --text-primary:   #111827;   /* gray-900. ~17:1 on --bg-primary ✓ AAA */
     --text-secondary: #374151;   /* gray-700. ~9.1:1 ✓ AAA */
     --text-muted:     #6b7280;   /* gray-500. ~4.6:1 ✓ AA */
-    --text-inverse:   #f8fafc;
+    --text-inverse:   #fff5f5;   /* warm-white on red accent buttons */
 
-    /* --- Accent — Indigo shifted darker for light-mode contrast --- */
-    --accent:   #4f46e5;   /* indigo-600. On --bg-primary: ~5.9:1 ✓ AA */
-    --blue:     #4f46e5;
-    --accent-blue:   #4f46e5;
+    /* --- Accent — WireGuide brand red (logo's vivid top color) --- */
+    --accent:        #A01D21;   /* logo top. ~6.2:1 on --bg-primary ✓ AA */
+    --accent-deep:   #5E1012;   /* logo bottom — gradient endpoint */
+    --accent-darker: #3d0a0c;   /* deeper still — shadows */
+    --blue:          #3b82f6;   /* blue-500 — reserved for "info" semantics */
+    --accent-blue:   #A01D21;   /* alias of --accent (legacy naming) */
     --accent-green:  #059669;
     --accent-red:    #dc2626;
     --accent-yellow: #b45309;
@@ -208,7 +221,8 @@
     /* --- Semantic state tints --- */
     --green-tint:  rgba(5, 150, 105, 0.12);
     --yellow-tint: rgba(180, 83, 9, 0.12);
-    --blue-tint:   rgba(79, 70, 229, 0.12);
+    --blue-tint:   rgba(160, 29, 33, 0.14);   /* focus-ring tint = accent-red */
+    --accent-tint: rgba(160, 29, 33, 0.14);   /* explicit accent tint alias */
     --orange-tint: rgba(234, 88, 12, 0.12);
 
     --error-bg:    rgba(220, 38, 38, 0.08);
@@ -216,7 +230,7 @@
 
     /* --- Modals, overlays --- */
     --overlay-bg:       rgba(15, 23, 42, 0.40);
-    --drop-overlay-bg:  rgba(79, 70, 229, 0.12);
+    --drop-overlay-bg:  rgba(160, 29, 33, 0.10);
 
     /* --- Shadows — blue-slate hue-matched (Comeau / natural illumination) --- */
     --shadow-xs:  0 0 0 0.5px rgba(100, 116, 139, 0.14),
@@ -232,6 +246,7 @@
     --editor-gutter-bg: #f0f2f8;
     --editor-border:    rgba(100, 116, 139, 0.22);
 
+    /* RX emerald, TX indigo — functional stats colors (not brand) */
     --graph-bg:      #e8eaf4;
     --stats-rx:      #059669;   /* emerald */
     --stats-tx:      #4f46e5;   /* indigo  */
@@ -256,20 +271,22 @@
         --bg-secondary: #e8eaf4;
         --bg-card:      #ffffff;
         --bg-input:     #ffffff;
-        --bg-hover:     rgba(79, 70, 229, 0.06);
-        --bg-active:    rgba(79, 70, 229, 0.10);
-        --bg-selected:  rgba(79, 70, 229, 0.10);
+        --bg-hover:     rgba(160, 29, 33, 0.06);
+        --bg-active:    rgba(160, 29, 33, 0.10);
+        --bg-selected:  rgba(160, 29, 33, 0.10);
         --border:       rgba(100, 116, 139, 0.22);
         --border-strong: rgba(100, 116, 139, 0.40);
 
         --text-primary:   #111827;
         --text-secondary: #374151;
         --text-muted:     #6b7280;
-        --text-inverse:   #f8fafc;
+        --text-inverse:   #fff5f5;
 
-        --accent:  #4f46e5;
-        --blue:    #4f46e5;
-        --accent-blue:   #4f46e5;
+        --accent:        #A01D21;
+        --accent-deep:   #5E1012;
+        --accent-darker: #3d0a0c;
+        --blue:          #3b82f6;
+        --accent-blue:   #A01D21;
         --accent-green:  #059669;
         --accent-red:    #dc2626;
         --accent-yellow: #b45309;
@@ -282,14 +299,15 @@
 
         --green-tint:  rgba(5, 150, 105, 0.12);
         --yellow-tint: rgba(180, 83, 9, 0.12);
-        --blue-tint:   rgba(79, 70, 229, 0.12);
+        --blue-tint:   rgba(160, 29, 33, 0.14);
+        --accent-tint: rgba(160, 29, 33, 0.14);
         --orange-tint: rgba(234, 88, 12, 0.12);
 
         --error-bg:   rgba(220, 38, 38, 0.08);
         --error-text: #b91c1c;
 
         --overlay-bg:      rgba(15, 23, 42, 0.40);
-        --drop-overlay-bg: rgba(79, 70, 229, 0.12);
+        --drop-overlay-bg: rgba(160, 29, 33, 0.10);
         --shadow-xs: 0 0 0 0.5px rgba(100, 116, 139, 0.14),
                      0 1px 2px hsl(225 25% 40% / 0.08);
         --shadow-sm: 0 1px 3px hsl(225 25% 50% / 0.10),

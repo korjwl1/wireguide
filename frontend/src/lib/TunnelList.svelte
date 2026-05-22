@@ -357,22 +357,20 @@
     }
   }
   .btn-primary {
-    background: linear-gradient(135deg,
-      var(--accent) 0%,
-      color-mix(in srgb, var(--accent) 75%, #a78bfa) 100%);
+    background: var(--accent);
     color: #fff;
     box-shadow:
-      0 4px 12px color-mix(in srgb, var(--accent) 30%, transparent),
-      inset 0 1px 0 rgba(255,255,255,0.15);
+      0 1px 3px color-mix(in srgb, var(--accent) 26%, transparent),
+      0 1px 2px rgba(0,0,0,0.08);
   }
   .btn-primary:hover {
-    filter: brightness(1.06);
+    background: color-mix(in srgb, #fff 8%, var(--accent));
     transform: translateY(-1px);
     box-shadow:
-      0 6px 18px color-mix(in srgb, var(--accent) 38%, transparent),
-      inset 0 1px 0 rgba(255,255,255,0.18);
+      0 4px 12px color-mix(in srgb, var(--accent) 32%, transparent),
+      0 1px 2px rgba(0,0,0,0.10);
   }
-  .btn-primary:active { filter: brightness(0.94); transform: translateY(0); }
+  .btn-primary:active { background: color-mix(in srgb, #000 8%, var(--accent)); transform: translateY(0); }
   .btn-secondary {
     background: var(--bg-card);
     color: var(--text-primary);

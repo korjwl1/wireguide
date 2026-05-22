@@ -300,16 +300,23 @@ PersistentKeepalive = 25
     }
   }
   .editor-btn-primary {
-    background: linear-gradient(135deg,
-      var(--accent) 0%,
-      color-mix(in srgb, var(--accent) 75%, #a78bfa) 100%);
+    background: var(--accent);
     color: #fff;
     box-shadow:
-      0 3px 10px color-mix(in srgb, var(--accent) 28%, transparent),
-      inset 0 1px 0 rgba(255,255,255,0.15);
+      0 1px 3px color-mix(in srgb, var(--accent) 26%, transparent),
+      0 1px 2px rgba(0,0,0,0.08);
   }
-  .editor-btn-primary:hover { filter: brightness(1.06); transform: translateY(-1px); }
-  .editor-btn-primary:active { filter: brightness(0.94); transform: translateY(0); }
+  .editor-btn-primary:hover {
+    background: color-mix(in srgb, #fff 8%, var(--accent));
+    transform: translateY(-1px);
+    box-shadow:
+      0 4px 10px color-mix(in srgb, var(--accent) 30%, transparent),
+      0 1px 2px rgba(0,0,0,0.10);
+  }
+  .editor-btn-primary:active {
+    background: color-mix(in srgb, #000 8%, var(--accent));
+    transform: translateY(0);
+  }
 
   .editor-btn-ghost {
     background: var(--bg-card);
