@@ -424,16 +424,19 @@
               <button class="link-btn" on:click={() => TunnelService.OpenURL('https://github.com/korjwl1/wireguide/blob/main/LICENSE')}>{$t('settings.about_license')}</button>
             </div>
 
-            <div class="about-footer">
-              <p class="about-credits">{$t('settings.about_credits')}</p>
-              <p class="about-copyright">{$t('settings.about_copyright')}</p>
-            </div>
+            <p class="about-credits-line">{$t('settings.about_credits')}</p>
           </div>
         {/if}
       </div>
     </div>
 
     <div class="modal-footer">
+      <div class="footer-info">
+        <span class="footer-credit-label">{$t('settings.about_made_by')}</span>
+        <button class="footer-link" on:click={() => TunnelService.OpenURL('https://github.com/korjwl1')}>@korjwl1</button>
+        <span class="footer-sep">·</span>
+        <span class="footer-credit-text">{$t('settings.about_footer_copyright')}</span>
+      </div>
       <button type="button" class="btn-close" on:mousedown|stopPropagation={close}>{$t('settings.close')}</button>
     </div>
   </div>
@@ -860,31 +863,50 @@
   .link-btn:disabled { opacity: 0.5; cursor: wait; text-decoration: none; }
   .link-btn:focus, .link-btn:focus-visible { outline: none; }
 
-  /* About footer credits */
-  .about-footer {
-    margin-top: auto;
-    padding-top: 4px;
-  }
-  .about-credits {
-    margin: 0 0 3px;
-    font: 11px/15px var(--font-sans);
-    color: var(--text-muted);
-  }
-  .about-copyright {
-    margin: 0;
+  /* Quiet credit line at the very bottom of the About tab. */
+  .about-credits-line {
+    margin: 4px 0 0;
     font: 11px/15px var(--font-sans);
     color: var(--text-muted);
   }
 
-  /* ========== Footer — no hard divider, whitespace alone ========== */
+  /* ========== Modal footer — credits row + close button on one line ==========
+     The credit info shows in every tab now (not just About) — persistent
+     identity reminder. justify-content: space-between pins the credit
+     block to the left and the close button to the right. */
   .modal-footer {
     display: flex;
-    justify-content: flex-end;
+    justify-content: space-between;
     align-items: center;
+    gap: 16px;
     margin-top: 14px;
     padding-top: 4px;
     flex-shrink: 0;
   }
+  .footer-info {
+    display: flex;
+    align-items: baseline;
+    gap: 5px;
+    flex-wrap: wrap;
+    min-width: 0;
+    font: 11px/15px var(--font-sans);
+    color: var(--text-muted);
+    letter-spacing: 0.01em;
+  }
+  .footer-credit-label,
+  .footer-credit-text { color: var(--text-muted); }
+  .footer-sep { opacity: 0.55; }
+  .footer-link {
+    background: none;
+    border: 0;
+    padding: 0;
+    cursor: pointer;
+    font: inherit;
+    color: var(--accent);
+    letter-spacing: -0.005em;
+  }
+  .footer-link:hover { text-decoration: underline; }
+  .footer-link:focus, .footer-link:focus-visible { outline: none; }
   .btn-close {
     min-width: 84px;
     height: 32px;

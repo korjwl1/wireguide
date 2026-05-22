@@ -88,30 +88,63 @@ static BOOL gSSIDMonitorActive = NO;
 // cwStartSSIDMonitor subscribes the singleton delegate to CWWiFiClient
 // SSID + link events. Returns 0 on success, non-zero (errno-like) on
 // failure — caller (Go) falls back to polling if non-zero.
+//
+// Defensive against being called from a process without a running
+// main-thread runloop (e.g., the helper daemon — which now polls
+// instead, but a stray call must NEVER hang the process). We use
+// dispatch_async + a 2 s timeout-bounded semaphore so the worst case
+// is "return an error" rather than "SIGTRAP / hang forever".
 int cwStartSSIDMonitor(void) {
-    __block int result = 0;
-    dispatch_sync(dispatch_get_main_queue(), ^{
-        if (gSSIDMonitorActive) return;
+    // If we're on the main thread already, dispatch_sync(main, ...) would
+    // deadlock — just run the body inline.
+    if ([NSThread isMainThread]) {
+        if (gSSIDMonitorActive) return 0;
         CWWiFiClient *client = [CWWiFiClient sharedWiFiClient];
-        if (!client) { result = 1; return; }
-        if (!gSSIDDelegate) {
-            gSSIDDelegate = [[WGSSIDDelegate alloc] init];
-        }
+        if (!client) return 1;
+        if (!gSSIDDelegate) gSSIDDelegate = [[WGSSIDDelegate alloc] init];
         [client setDelegate:gSSIDDelegate];
         NSError *err = nil;
         [client startMonitoringEventWithType:CWEventTypeSSIDDidChange error:&err];
-        if (err) { result = 2; return; }
+        if (err) return 2;
         [client startMonitoringEventWithType:CWEventTypeLinkDidChange error:&err];
-        if (err) { result = 3; return; }
+        if (err) return 3;
         gSSIDMonitorActive = YES;
+        return 0;
+    }
+
+    __block int result = 0;
+    dispatch_semaphore_t sem = dispatch_semaphore_create(0);
+    dispatch_async(dispatch_get_main_queue(), ^{
+        do {
+            if (gSSIDMonitorActive) break;
+            CWWiFiClient *client = [CWWiFiClient sharedWiFiClient];
+            if (!client) { result = 1; break; }
+            if (!gSSIDDelegate) gSSIDDelegate = [[WGSSIDDelegate alloc] init];
+            [client setDelegate:gSSIDDelegate];
+            NSError *err = nil;
+            [client startMonitoringEventWithType:CWEventTypeSSIDDidChange error:&err];
+            if (err) { result = 2; break; }
+            [client startMonitoringEventWithType:CWEventTypeLinkDidChange error:&err];
+            if (err) { result = 3; break; }
+            gSSIDMonitorActive = YES;
+        } while (0);
+        dispatch_semaphore_signal(sem);
     });
+
+    // 2 s timeout. If the main-queue runloop is not actually running
+    // (headless daemon, etc.) the block above will never execute and the
+    // semaphore will never signal — bail out with an error so the Go
+    // caller falls back to polling instead of hanging forever.
+    if (dispatch_semaphore_wait(sem, dispatch_time(DISPATCH_TIME_NOW, 2LL * NSEC_PER_SEC)) != 0) {
+        return 99; // timeout — no main-queue runloop
+    }
     return result;
 }
 
 // cwStopSSIDMonitor tears down the subscription. Idempotent — safe to
-// call when not active.
+// call when not active. Same defensive dispatch pattern as start.
 void cwStopSSIDMonitor(void) {
-    dispatch_sync(dispatch_get_main_queue(), ^{
+    if ([NSThread isMainThread]) {
         if (!gSSIDMonitorActive) return;
         CWWiFiClient *client = [CWWiFiClient sharedWiFiClient];
         NSError *err = nil;
@@ -119,5 +152,22 @@ void cwStopSSIDMonitor(void) {
         [client stopMonitoringEventWithType:CWEventTypeLinkDidChange error:&err];
         [client setDelegate:nil];
         gSSIDMonitorActive = NO;
+        return;
+    }
+    dispatch_semaphore_t sem = dispatch_semaphore_create(0);
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (gSSIDMonitorActive) {
+            CWWiFiClient *client = [CWWiFiClient sharedWiFiClient];
+            NSError *err = nil;
+            [client stopMonitoringEventWithType:CWEventTypeSSIDDidChange error:&err];
+            [client stopMonitoringEventWithType:CWEventTypeLinkDidChange error:&err];
+            [client setDelegate:nil];
+            gSSIDMonitorActive = NO;
+        }
+        dispatch_semaphore_signal(sem);
     });
+    // 1 s budget — best-effort. If the main queue isn't running, we
+    // can't actually tear down anyway; return so the caller can
+    // continue shutdown.
+    dispatch_semaphore_wait(sem, dispatch_time(DISPATCH_TIME_NOW, 1LL * NSEC_PER_SEC));
 }

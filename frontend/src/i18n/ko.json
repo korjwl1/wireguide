@@ -146,6 +146,8 @@
     "about_credits": "WireGuide®, Wails, Svelte 기반.",
     "about_copyright": "© 2026 WireGuide. MIT 라이선스로 공개.",
     "about_check_update": "업데이트 확인",
+    "about_made_by": "만든 사람",
+    "about_footer_copyright": "© 2026 WireGuide",
     "section_appearance": "외관",
     "section_startup": "시작",
     "section_security": "보안",

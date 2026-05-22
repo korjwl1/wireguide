@@ -146,6 +146,8 @@
     "about_credits": "Built with WireGuard®, Wails, and Svelte.",
     "about_copyright": "© 2026 WireGuide. Released under the MIT License.",
     "about_check_update": "Check for updates",
+    "about_made_by": "Made by",
+    "about_footer_copyright": "© 2026 WireGuide",
     "up_to_date": "You're on the latest version.",
     "section_appearance": "Appearance",
     "section_startup": "Startup",

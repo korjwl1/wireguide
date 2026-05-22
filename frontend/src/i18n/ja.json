@@ -146,6 +146,8 @@
     "about_credits": "WireGuide®、Wails、Svelte で構築。",
     "about_copyright": "© 2026 WireGuide. MIT ライセンスで公開。",
     "about_check_update": "アップデートを確認",
+    "about_made_by": "作者",
+    "about_footer_copyright": "© 2026 WireGuide",
     "section_appearance": "外観",
     "section_startup": "起動",
     "section_security": "セキュリティ",
