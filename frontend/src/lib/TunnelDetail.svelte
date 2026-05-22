@@ -411,7 +411,10 @@
       <p>{$t('tunnel.no_tunnels')}</p>
     </div>
   {:else}
-    <div class="detail-header" class:connected={isConnected}>
+    <div class="detail-header"
+      class:connected={isConnected && !noHandshake}
+      class:connecting={isConnecting}
+      class:warning={noHandshake}>
       {#if renaming}
         <input
           class="rename-input"
@@ -430,17 +433,23 @@
           <Icon name="pencil" size={12} strokeWidth={1.75} />
         </button>
       {/if}
-      <span class="state-badge" class:on={isConnected && !noHandshake} class:warning={noHandshake} class:connecting={isConnecting}>
-        {#if isConnected && noHandshake}
-          {$t('app.no_handshake')}
-        {:else if isConnected}
-          {$t('app.connected')}
-        {:else if isConnecting}
-          {$t('app.connecting')}
-        {:else}
-          {$t('app.disconnected')}
-        {/if}
-      </span>
+      <div class="header-status">
+        <span class="header-dot"
+          class:on={isConnected && !noHandshake}
+          class:warning={noHandshake}
+          class:connecting={isConnecting}></span>
+        <span class="state-badge" class:on={isConnected && !noHandshake} class:warning={noHandshake} class:connecting={isConnecting}>
+          {#if isConnected && noHandshake}
+            {$t('app.no_handshake')}
+          {:else if isConnected}
+            {$t('app.connected')}
+          {:else if isConnecting}
+            {$t('app.connecting')}
+          {:else}
+            {$t('app.disconnected')}
+          {/if}
+        </span>
+      </div>
     </div>
 
     {#if isConnected && status.state === 'connected'}
@@ -834,20 +843,45 @@
     font: var(--text-body);
   }
 
-  /* ---------- Header: title + rename + state badge ---------- */
+  /* ---------- Header: color-tinted status card ---------- */
   .detail-header {
     display: flex;
     align-items: center;
     gap: var(--space-3);
     margin-bottom: var(--space-5);
-    padding-bottom: var(--space-4);
-    border-bottom: 0.5px solid var(--border);
+    padding: var(--space-3) var(--space-4);
+    border: 0.5px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--bg-card);
+  }
+  @media (prefers-reduced-motion: no-preference) {
+    .detail-header {
+      transition: background-color var(--dur-base) var(--ease-out),
+                  border-color var(--dur-base) var(--ease-out);
+    }
+  }
+  .detail-header.connected {
+    background: color-mix(in srgb, var(--green) 8%, var(--bg-card));
+    border-color: color-mix(in srgb, var(--green) 30%, var(--border));
+  }
+  .detail-header.warning {
+    background: color-mix(in srgb, var(--orange, #FF9500) 8%, var(--bg-card));
+    border-color: color-mix(in srgb, var(--orange, #FF9500) 30%, var(--border));
+  }
+  .detail-header.connecting {
+    background: color-mix(in srgb, var(--yellow) 8%, var(--bg-card));
+    border-color: color-mix(in srgb, var(--yellow) 30%, var(--border));
   }
   .detail-header h2 {
     margin: 0;
     font: var(--text-title-1);
     color: var(--text-primary);
     cursor: text;
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   .btn-rename {
     background: transparent;
@@ -858,6 +892,7 @@
     border-radius: var(--radius-xs);
     font: var(--text-body);
     opacity: 0.65;
+    flex-shrink: 0;
   }
   .btn-rename:hover {
     background: var(--bg-hover);
@@ -874,6 +909,46 @@
     flex: 1;
     max-width: 320px;
     box-shadow: 0 0 0 3px var(--blue-tint);
+  }
+
+  /* Status cluster: dot + badge grouped on the right */
+  .header-status {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    flex-shrink: 0;
+    margin-left: auto;
+  }
+  .header-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: color-mix(in srgb, var(--text-muted) 50%, transparent);
+    flex-shrink: 0;
+  }
+  .header-dot.on {
+    background: var(--green);
+  }
+  .header-dot.warning {
+    background: var(--orange, #FF9500);
+  }
+  @keyframes dot-glow {
+    0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--green) 60%, transparent); }
+    55% { box-shadow: 0 0 0 7px color-mix(in srgb, var(--green) 0%, transparent); }
+  }
+  @keyframes spin-ring {
+    to { transform: rotate(360deg); }
+  }
+  @media (prefers-reduced-motion: no-preference) {
+    .header-dot.on {
+      animation: dot-glow 2.4s ease-out infinite;
+    }
+    .header-dot.connecting {
+      background: transparent;
+      border: 2px solid var(--yellow);
+      border-top-color: transparent;
+      animation: spin-ring 0.8s linear infinite;
+    }
   }
 
   /* ---------- State badge (connected / connecting / disconnected) ---------- */

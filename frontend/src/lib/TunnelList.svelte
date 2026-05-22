@@ -121,7 +121,7 @@
     box-shadow: 0 0 0 3px var(--blue-tint);
   }
 
-  /* --- List rows (28px AppKit standard) --- */
+  /* --- List rows (36px — Fitts's Law: larger targets reduce error rate) --- */
   .list-items {
     flex: 1;
     min-height: 0;
@@ -132,7 +132,7 @@
     display: flex;
     align-items: center;
     width: 100%;
-    height: var(--row-std);
+    height: 36px;
     padding: 0 var(--space-2);
     margin-bottom: 1px;
     background: transparent;
@@ -142,6 +142,8 @@
     font: var(--text-body);
     cursor: pointer;
     text-align: left;
+    position: relative;
+    overflow: hidden;
   }
   @media (prefers-reduced-motion: no-preference) {
     .tunnel-item {
@@ -162,18 +164,48 @@
     font-weight: 600;
   }
 
+  /* Connected left-edge accent pill — inspired by Linear's active indicator */
+  .tunnel-item.connected::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 3px;
+    height: 18px;
+    background: var(--green);
+    border-radius: 0 2px 2px 0;
+  }
+  .tunnel-item.connected {
+    padding-left: calc(var(--space-2) + 3px);
+  }
+
   /* --- Connection dot --- */
   .status-dot {
-    width: 8px;
-    height: 8px;
+    width: 7px;
+    height: 7px;
     border-radius: 50%;
-    background: var(--text-muted);
+    background: color-mix(in srgb, var(--text-muted) 50%, transparent);
     margin-right: var(--space-2);
     flex-shrink: 0;
+  }
+
+  @keyframes dot-pulse {
+    0%, 100% {
+      box-shadow: 0 0 0 0 color-mix(in srgb, var(--green) 55%, transparent);
+    }
+    55% {
+      box-shadow: 0 0 0 5px color-mix(in srgb, var(--green) 0%, transparent);
+    }
   }
   .status-dot.on {
     background: var(--green);
     box-shadow: 0 0 0 2px color-mix(in srgb, var(--green) 25%, transparent);
+  }
+  @media (prefers-reduced-motion: no-preference) {
+    .status-dot.on {
+      animation: dot-pulse 2.4s ease-out infinite;
+    }
   }
   .status-dot.warning {
     background: var(--orange, #FF9500);

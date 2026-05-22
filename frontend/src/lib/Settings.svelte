@@ -257,7 +257,7 @@
       <div class="settings-content" role="tabpanel">
         {#if activeTab === 'general'}
           <div class="setting-row">
-            <label for="theme-select">{$t('settings.theme')}</label>
+            <label class="setting-label" for="theme-select">{$t('settings.theme')}</label>
             <select id="theme-select" value={settings.theme} on:change={onThemeChange}>
               <option value="dark">{$t('settings.theme_dark')}</option>
               <option value="light">{$t('settings.theme_light')}</option>
@@ -266,7 +266,7 @@
           </div>
 
           <div class="setting-row">
-            <label for="lang-select">{$t('settings.language')}</label>
+            <label class="setting-label" for="lang-select">{$t('settings.language')}</label>
             <select id="lang-select" value={settings.language} on:change={onLanguageChange}>
               <option value="auto">{$t('settings.lang_auto')}</option>
               <option value="en">English</option>
@@ -276,13 +276,16 @@
           </div>
 
           <div class="setting-row">
-            <label for="auto-start">{$t('settings.auto_start')}</label>
-            <input id="auto-start" type="checkbox" checked={settings.auto_start} on:change={onAutoStartChange} />
+            <label class="setting-label" for="auto-start">{$t('settings.auto_start')}</label>
+            <label class="toggle">
+              <input id="auto-start" type="checkbox" checked={settings.auto_start} on:change={onAutoStartChange} />
+              <span class="toggle-track"></span>
+            </label>
           </div>
 
         {:else if activeTab === 'advanced'}
           <div class="setting-row">
-            <label for="log-level">{$t('settings.log_level')}</label>
+            <label class="setting-label" for="log-level">{$t('settings.log_level')}</label>
             <select id="log-level" value={settings.log_level} on:change={onLogLevelChange}>
               <option value="debug">{$t('settings.log_level_debug')}</option>
               <option value="info">{$t('settings.log_level_info')}</option>
@@ -291,37 +294,57 @@
             </select>
           </div>
 
-          <div class="setting-row">
-            <label for="kill-switch">{$t('settings.kill_switch')}</label>
-            <input id="kill-switch" type="checkbox"
-              checked={settings.kill_switch}
-              on:change={onKillSwitchChange} />
+          <div class="setting-row setting-row--toggle">
+            <div class="setting-info">
+              <label class="setting-label" for="kill-switch">{$t('settings.kill_switch')}</label>
+              <p class="setting-desc">{$t('settings.kill_switch_hint')}</p>
+            </div>
+            <label class="toggle">
+              <input id="kill-switch" type="checkbox"
+                checked={settings.kill_switch}
+                on:change={onKillSwitchChange} />
+              <span class="toggle-track"></span>
+            </label>
           </div>
-          <p class="setting-hint">{$t('settings.kill_switch_hint')}</p>
 
-          <div class="setting-row">
-            <label for="dns-protection">{$t('settings.dns_protection')}</label>
-            <input id="dns-protection" type="checkbox"
-              checked={settings.dns_protection}
-              on:change={onDnsProtectionChange} />
+          <div class="setting-row setting-row--toggle">
+            <div class="setting-info">
+              <label class="setting-label" for="dns-protection">{$t('settings.dns_protection')}</label>
+              <p class="setting-desc">{$t('settings.dns_protection_hint')}</p>
+            </div>
+            <label class="toggle">
+              <input id="dns-protection" type="checkbox"
+                checked={settings.dns_protection}
+                on:change={onDnsProtectionChange} />
+              <span class="toggle-track"></span>
+            </label>
           </div>
-          <p class="setting-hint">{$t('settings.dns_protection_hint')}</p>
 
-          <div class="setting-row">
-            <label for="health-check">{$t('settings.health_check')}</label>
-            <input id="health-check" type="checkbox"
-              checked={settings.health_check}
-              on:change={onHealthCheckChange} />
+          <div class="setting-row setting-row--toggle">
+            <div class="setting-info">
+              <label class="setting-label" for="health-check">{$t('settings.health_check')}</label>
+              <p class="setting-desc">{$t('settings.health_check_hint')}</p>
+            </div>
+            <label class="toggle">
+              <input id="health-check" type="checkbox"
+                checked={settings.health_check}
+                on:change={onHealthCheckChange} />
+              <span class="toggle-track"></span>
+            </label>
           </div>
-          <p class="setting-hint">{$t('settings.health_check_hint')}</p>
 
-          <div class="setting-row">
-            <label for="pin-interface">{$t('settings.pin_interface')}</label>
-            <input id="pin-interface" type="checkbox"
-              checked={settings.pin_interface}
-              on:change={onPinInterfaceChange} />
+          <div class="setting-row setting-row--toggle">
+            <div class="setting-info">
+              <label class="setting-label" for="pin-interface">{$t('settings.pin_interface')}</label>
+              <p class="setting-desc">{$t('settings.pin_interface_hint')}</p>
+            </div>
+            <label class="toggle">
+              <input id="pin-interface" type="checkbox"
+                checked={settings.pin_interface}
+                on:change={onPinInterfaceChange} />
+              <span class="toggle-track"></span>
+            </label>
           </div>
-          <p class="setting-hint">{$t('settings.pin_interface_hint')}</p>
 
         {:else if activeTab === 'wifi_rules'}
           <WifiRules
@@ -460,20 +483,91 @@
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding: 4px 0;
-    min-height: 28px;
+    padding: 5px 0;
+    min-height: 32px;
+    gap: var(--space-3);
   }
-  label {
+  .setting-row--toggle {
+    align-items: flex-start;
+    padding: 8px 0;
+  }
+  .setting-info {
+    flex: 1;
+    min-width: 0;
+  }
+  .setting-label {
+    display: block;
+    font: 400 13px/18px var(--font-sans, -apple-system, BlinkMacSystemFont, sans-serif);
+    color: var(--text-primary);
+    cursor: pointer;
+  }
+  .setting-desc {
+    margin: 2px 0 0;
+    padding: 0;
+    font: 400 11px/15px var(--font-sans, -apple-system, BlinkMacSystemFont, sans-serif);
+    color: var(--text-muted);
+    letter-spacing: 0.01em;
+  }
+  /* Legacy: keep bare `label` styled for selects (not wrapped in setting-info) */
+  label:not(.toggle):not(.setting-label) {
     font: 400 13px/18px var(--font-sans, -apple-system, BlinkMacSystemFont, sans-serif);
     color: var(--text-primary);
   }
-  .setting-hint {
-    margin: 2px 0 8px;
-    padding: 0;
-    font: 400 11px/14px var(--font-sans, -apple-system, BlinkMacSystemFont, sans-serif);
-    color: var(--text-secondary);
-    letter-spacing: 0.02em;
+
+  /* ---- macOS-style toggle switch (34×20px, 200ms slide) ---- */
+  .toggle {
+    position: relative;
+    display: inline-block;
+    width: 34px;
+    height: 20px;
+    flex-shrink: 0;
+    cursor: pointer;
+    margin-top: 1px;
   }
+  .toggle input {
+    opacity: 0;
+    width: 0;
+    height: 0;
+    position: absolute;
+  }
+  .toggle-track {
+    position: absolute;
+    inset: 0;
+    background: color-mix(in srgb, var(--text-muted) 35%, var(--bg-input));
+    border-radius: 10px;
+    border: 0.5px solid color-mix(in srgb, var(--border) 60%, transparent);
+  }
+  .toggle-track::before {
+    content: '';
+    position: absolute;
+    width: 16px;
+    height: 16px;
+    left: 2px;
+    top: 2px;
+    background: #fff;
+    border-radius: 50%;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
+  }
+  @media (prefers-reduced-motion: no-preference) {
+    .toggle-track {
+      transition: background-color 200ms ease, border-color 200ms ease;
+    }
+    .toggle-track::before {
+      transition: transform 200ms ease;
+    }
+  }
+  .toggle input:checked + .toggle-track {
+    background: var(--green);
+    border-color: var(--green);
+  }
+  .toggle input:checked + .toggle-track::before {
+    transform: translateX(14px);
+  }
+  .toggle input:focus-visible + .toggle-track {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+
   select {
     -webkit-appearance: none;
     appearance: none;
