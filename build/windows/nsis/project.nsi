@@ -85,8 +85,12 @@ Section
     !insertmacro wails.webview2runtime
 
     SetOutPath $INSTDIR
-    
+
     !insertmacro wails.files
+
+    # wireguard-go loads wintun.dll dynamically from the EXE directory at first
+    # TUN creation. Bundled here by `task vendor:wintun` during build.
+    File "..\..\..\bin\wintun.dll"
 
     CreateShortcut "$SMPROGRAMS\${INFO_PRODUCTNAME}.lnk" "$INSTDIR\${PRODUCT_EXECUTABLE}"
     CreateShortCut "$DESKTOP\${INFO_PRODUCTNAME}.lnk" "$INSTDIR\${PRODUCT_EXECUTABLE}"
