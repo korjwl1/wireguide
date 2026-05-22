@@ -18,6 +18,7 @@
   import { errText } from './lib/errors.js';
   import { t, setLanguage, detectLanguage } from './i18n/index.js';
   import { TunnelService } from '../bindings/github.com/korjwl1/wireguide/internal/app';
+  import Icon from './lib/Icon.svelte';
 
   // View state
   let currentView = 'tunnels'; // 'tunnels' | 'history' | 'dnsleak' | 'routes' | 'logs'
@@ -545,7 +546,9 @@
   {#if currentView === 'tunnels' && !(showSettings || showEditor || showConflictWarning || showZipResult)}
     <div class="drop-overlay">
       <div class="drop-overlay-content">
-        <div class="drop-icon">↓</div>
+        <div class="drop-icon">
+          <Icon name="download" size={40} strokeWidth={1.5} />
+        </div>
         <div class="drop-text">{$t('tunnel.drop_overlay')}</div>
       </div>
     </div>
@@ -557,15 +560,27 @@
 
   <div class="layout">
     <nav class="sidebar">
-      <div class="app-title">WireGuide</div>
+      <div class="app-brand">
+        <div class="brand-mark">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/>
+            <path d="M9 12l2 2 4-4"/>
+          </svg>
+        </div>
+        <span class="brand-name">WireGuide</span>
+      </div>
+
       <button class="nav-item" class:active={currentView === 'tunnels'} on:click={() => currentView = 'tunnels'}>
-        <span class="nav-icon">◎</span> {$t('nav.tunnels')}
+        <Icon name="shield" size={15} strokeWidth={1.75} />
+        {$t('nav.tunnels')}
       </button>
       <button class="nav-item" class:active={currentView === 'history'} on:click={() => currentView = 'history'}>
-        <span class="nav-icon">⌚</span> {$t('nav.history')}
+        <Icon name="clock" size={15} strokeWidth={1.75} />
+        {$t('nav.history')}
       </button>
       <button class="nav-item nav-section" class:section-active={isToolsView} on:click={() => currentView = 'dnsleak'}>
-        <span class="nav-icon">◈</span> {$t('nav.tools')}
+        <Icon name="wrench" size={15} strokeWidth={1.75} />
+        {$t('nav.tools')}
       </button>
       <button class="nav-sub-item" class:active={currentView === 'dnsleak'} on:click={() => currentView = 'dnsleak'}>
         {$t('tools.tab_dns_leak')}
@@ -574,14 +589,16 @@
         {$t('tools.tab_routes')}
       </button>
       <button class="nav-item" class:active={currentView === 'logs'} on:click={() => currentView = 'logs'}>
-        <span class="nav-icon">≡</span> {$t('nav.logs')}
+        <Icon name="terminal" size={15} strokeWidth={1.75} />
+        {$t('nav.logs')}
       </button>
 
       <div class="nav-spacer"></div>
 
       <div class="nav-footer">
         <button class="nav-item" on:click={() => showSettings = true}>
-          <span class="nav-icon">⚙</span> {$t('nav.settings')}
+          <Icon name="settings" size={15} strokeWidth={1.75} />
+          {$t('nav.settings')}
         </button>
       </div>
     </nav>
@@ -609,10 +626,19 @@
               {/if}
             {:else}
               <div class="empty-detail">
-                <p>{$t('tunnel.no_selection')}</p>
+                <div class="empty-icon-wrap">
+                  <Icon name="shield" size={48} strokeWidth={1.25} className="empty-shield" />
+                </div>
+                <p class="empty-title">{$t('tunnel.no_selection')}</p>
                 <div class="empty-actions">
-                  <button class="btn-primary" on:click={handleNewTunnelOpen}>+ {$t('tunnel.new_tunnel')}</button>
-                  <button class="btn-secondary" on:click={handleImportOpen} title={$t('tunnel.import_hint')}>↓ {$t('tunnel.import')}</button>
+                  <button class="btn-primary" on:click={handleNewTunnelOpen}>
+                    <Icon name="plus" size={13} strokeWidth={2} />
+                    {$t('tunnel.new_tunnel')}
+                  </button>
+                  <button class="btn-secondary" on:click={handleImportOpen} title={$t('tunnel.import_hint')}>
+                    <Icon name="download" size={13} strokeWidth={2} />
+                    {$t('tunnel.import')}
+                  </button>
                 </div>
               </div>
             {/if}
@@ -751,10 +777,11 @@
     box-shadow: var(--shadow-lg);
   }
   .drop-icon {
-    font-size: 40px;
     color: var(--accent);
     margin-bottom: var(--space-2);
-    line-height: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
   }
   .drop-text {
     font: var(--text-title-3);
@@ -776,19 +803,37 @@
     flex-direction: column;
     padding-top: 52px; /* traffic-light clearance */
   }
-  .app-title {
-    padding: var(--space-2) var(--space-4) var(--space-4);
-    font: 500 10px/13px var(--font-sans);
-    color: var(--text-muted);
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
+
+  /* Brand mark + app name */
+  .app-brand {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: var(--space-1) var(--space-3) var(--space-4) var(--space-3);
   }
+  .brand-mark {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    border-radius: var(--radius-sm);
+    background: var(--accent);
+    color: #fff;
+    flex-shrink: 0;
+  }
+  .brand-name {
+    font: 600 13px/18px var(--font-sans);
+    color: var(--text-primary);
+    letter-spacing: -0.01em;
+  }
+
   .nav-item {
     display: flex;
     align-items: center;
     gap: var(--space-2);
     height: var(--row-std);
-    padding: 0 var(--space-2) 0 var(--space-4);
+    padding: 0 var(--space-2) 0 var(--space-3);
     margin: 0 var(--space-2);
     background: transparent;
     border: 0;
@@ -812,12 +857,6 @@
     background: var(--bg-selected);
     color: var(--text-primary);
     font-weight: 500;
-  }
-  .nav-icon {
-    font-size: 13px;
-    width: 18px;
-    text-align: center;
-    opacity: 0.9;
   }
   .nav-spacer {
     flex: 1;
@@ -922,16 +961,33 @@
     justify-content: center;
     flex: 1;
     color: var(--text-secondary);
-    gap: var(--space-4);
+    gap: var(--space-3);
     font: var(--text-body);
+    padding: var(--space-8);
+  }
+  .empty-icon-wrap {
+    color: var(--text-muted);
+    opacity: 0.5;
+    margin-bottom: var(--space-1);
+  }
+  :global(.empty-shield) {
+    display: block;
+  }
+  .empty-title {
+    font: var(--text-callout);
+    color: var(--text-secondary);
   }
   .empty-actions {
     display: flex;
     gap: var(--space-2);
+    margin-top: var(--space-1);
   }
   .btn-primary {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
     height: 28px;
-    padding: 0 var(--space-4);
+    padding: 0 var(--space-3);
     background: var(--accent);
     border: 0;
     border-radius: var(--radius-sm);
@@ -942,8 +998,11 @@
   .btn-primary:hover { filter: brightness(1.08); }
   .btn-primary:active { filter: brightness(0.94); }
   .btn-secondary {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
     height: 28px;
-    padding: 0 var(--space-4);
+    padding: 0 var(--space-3);
     background: var(--bg-card);
     border: 0.5px solid var(--border);
     border-radius: var(--radius-sm);

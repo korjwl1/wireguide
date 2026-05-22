@@ -1,5 +1,6 @@
 <script>
   import { tunnels, selectedTunnel, connectionStatus, refreshTunnels, refreshStatus } from '../stores/tunnels.js';
+  import Icon from './Icon.svelte';
   import { t } from '../i18n/index.js';
   import { errText } from './errors.js';
   import { createEventDispatcher, tick, onDestroy } from 'svelte';
@@ -425,7 +426,9 @@
         />
       {:else}
         <h2 on:dblclick={startRename} title={$t('tunnel.rename_hint')}>{$selectedTunnel.name}</h2>
-        <button class="btn-rename" on:click={startRename} title="Rename">✎</button>
+        <button class="btn-rename" on:click={startRename} title="Rename">
+          <Icon name="pencil" size={12} strokeWidth={1.75} />
+        </button>
       {/if}
       <span class="state-badge" class:on={isConnected && !noHandshake} class:warning={noHandshake} class:connecting={isConnecting}>
         {#if isConnected && noHandshake}
@@ -522,18 +525,22 @@
         </button>
       {/if}
       <button class="btn btn-secondary" on:click={() => dispatch('edit', $selectedTunnel.name)}>
+        <Icon name="file-pen" size={13} strokeWidth={1.75} />
         {$t('tunnel.edit')}
       </button>
       <button class="btn btn-secondary" on:click={() => dispatch('export', $selectedTunnel.name)}>
+        <Icon name="share" size={13} strokeWidth={1.75} />
         {$t('tunnel.export')}
       </button>
       <button class="btn btn-secondary wifi-btn" on:click={openWifiModal}>
+        <Icon name="wifi" size={13} strokeWidth={1.75} />
         {$t('tunnel.wifi_auto_connect')}
         {#if wifiSsids.length > 0}
           <span class="wifi-count">{wifiSsids.length}</span>
         {/if}
       </button>
       <button class="btn btn-danger" on:click={askDelete}>
+        <Icon name="trash-2" size={13} strokeWidth={1.75} />
         {$t('tunnel.delete')}
       </button>
     </div>
@@ -596,7 +603,9 @@
                 {#if ssid === currentSSID}
                   <span class="wifi-current-badge">{$t('tunnel.wifi_current')}</span>
                 {/if}
-                <button class="wifi-row-remove" on:click={() => removeWifiSsid(ssid)} aria-label="remove {ssid}" title={$t('confirm.no') || 'Remove'}>✕</button>
+                <button class="wifi-row-remove" on:click={() => removeWifiSsid(ssid)} aria-label="remove {ssid}" title={$t('confirm.no') || 'Remove'}>
+                  <Icon name="x" size={12} strokeWidth={2} />
+                </button>
               </li>
             {/each}
           </ul>
@@ -1031,6 +1040,7 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
+    gap: 5px;
   }
   @media (prefers-reduced-motion: no-preference) {
     .btn {

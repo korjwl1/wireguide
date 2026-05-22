@@ -1,5 +1,6 @@
 <script>
   import { createEventDispatcher } from 'svelte';
+  import Icon from './Icon.svelte';
   import { tunnels, selectedTunnel, connectionStatus } from '../stores/tunnels.js';
   import { t } from '../i18n/index.js';
 
@@ -43,6 +44,7 @@
   <div class="list-items">
     {#if filtered.length === 0 && search === ''}
       <div class="empty-state">
+        <Icon name="shield-off" size={28} strokeWidth={1.5} className="empty-icon" />
         <p>{$t('tunnel.no_tunnels')}</p>
         <p class="hint">{$t('tunnel.drop_hint')}</p>
       </div>
@@ -63,10 +65,12 @@
 
   <div class="list-footer">
     <button class="btn btn-primary" on:click={() => dispatch('new')}>
-      + {$t('tunnel.new_tunnel')}
+      <Icon name="plus" size={13} strokeWidth={2.25} />
+      {$t('tunnel.new_tunnel')}
     </button>
     <button class="btn btn-secondary" on:click={() => dispatch('import')} title={$t('tunnel.import_hint')}>
-      ↓ {$t('tunnel.import')}
+      <Icon name="download" size={13} strokeWidth={2} />
+      {$t('tunnel.import')}
     </button>
   </div>
 </div>
@@ -188,13 +192,20 @@
     padding: var(--space-8) var(--space-4);
     text-align: center;
     color: var(--text-muted);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: var(--space-2);
+  }
+  :global(.empty-icon) {
+    opacity: 0.4;
+    margin-bottom: var(--space-1);
   }
   .empty-state p {
     font: var(--text-body);
   }
   .empty-state .hint {
     font: var(--text-footnote);
-    margin-top: var(--space-2);
   }
 
   /* --- Footer buttons --- */
@@ -213,6 +224,10 @@
     border-radius: var(--radius-sm);
     font: var(--text-headline);
     cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 5px;
   }
   @media (prefers-reduced-motion: no-preference) {
     .btn {
