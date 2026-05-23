@@ -10,20 +10,25 @@ import (
 type SSIDChangedFunc func(oldSSID, newSSID string)
 
 // Monitor watches for WiFi SSID changes and triggers actions.
+//
+// Note: rule evaluation lives entirely in the helper (see
+// internal/helper/wifi_rules.go) — Monitor only fires the onChanged
+// callback. The previous design embedded a *Rules pointer + UpdateRules
+// setter here, but no caller ever read m.rules; it was set once with
+// nil and never used. Removed to simplify the API.
 type Monitor struct {
-	mu        sync.Mutex
-	rules     *Rules
-	onChanged SSIDChangedFunc
-	lastSSID  string
-	stopCh    chan struct{}
-	running   bool
-	wg        sync.WaitGroup
+	mu              sync.Mutex
+	onChanged       SSIDChangedFunc
+	lastSSID        string
+	stopCh          chan struct{}
+	running         bool
+	wg              sync.WaitGroup
+	stopDBusWatcher func() // populated on Linux when NM DBus is reachable
 }
 
 // NewMonitor creates a WiFi monitor.
-func NewMonitor(rules *Rules, onChanged SSIDChangedFunc) *Monitor {
+func NewMonitor(onChanged SSIDChangedFunc) *Monitor {
 	return &Monitor{
-		rules:     rules,
 		onChanged: onChanged,
 		stopCh:    make(chan struct{}),
 	}
@@ -53,7 +58,42 @@ func (m *Monitor) Start() {
 		defer m.wg.Done()
 		m.poll()
 	}()
+
+	// Linux-only: wake the poller immediately on NetworkManager
+	// DeviceStateChanged so users see SSID transitions react in <1s instead
+	// of waiting for the 5s tick. No-op on non-Linux.
+	stopDBus := startLinuxDBusWatcher(func() { m.checkNow() })
+	// Windows-only: Wlanapi notifications for instant SSID react. No-op on
+	// other platforms.
+	stopWlan := startWindowsWlanWatcher(func() { m.checkNow() })
+	m.stopDBusWatcher = func() {
+		if stopDBus != nil {
+			stopDBus()
+		}
+		if stopWlan != nil {
+			stopWlan()
+		}
+	}
+
 	slog.Info("WiFi monitor started (polling)")
+}
+
+// checkNow forces an immediate SSID re-read outside the 5s tick. Used by the
+// Linux NetworkManager DBus watcher.
+func (m *Monitor) checkNow() {
+	current := CurrentSSID()
+	m.mu.Lock()
+	if current == m.lastSSID {
+		m.mu.Unlock()
+		return
+	}
+	old := m.lastSSID
+	m.lastSSID = current
+	m.mu.Unlock()
+	slog.Info("WiFi SSID changed (NM event)", "from", old, "to", current)
+	if m.onChanged != nil {
+		m.onChanged(old, current)
+	}
 }
 
 // Stop stops the monitor and waits for the poll goroutine to exit.
@@ -68,15 +108,13 @@ func (m *Monitor) Stop() {
 	}
 	m.running = false
 	close(m.stopCh)
+	stopDBus := m.stopDBusWatcher
+	m.stopDBusWatcher = nil
 	m.mu.Unlock()
+	if stopDBus != nil {
+		stopDBus()
+	}
 	m.wg.Wait()
-}
-
-// UpdateRules updates the auto-connect rules.
-func (m *Monitor) UpdateRules(rules *Rules) {
-	m.mu.Lock()
-	m.rules = rules
-	m.mu.Unlock()
 }
 
 // ReportExternalSSID is called when an external source (e.g. the GUI process

@@ -22,25 +22,20 @@ import (
 // macosSystemTray struct, and the subsequent SetIcon never clears it —
 // causing all future icons to be rendered monochrome by macOS.
 //
-// Two colour variants per state because non-template icons don't
-// auto-invert — black W for light menu bars, white W for dark.
+// One icon per state. We use white-W icons unconditionally — macOS menu
+// bar vibrancy makes white icons read correctly on both light and dark
+// system themes (matching Apple's own Wi-Fi/battery/clock indicators).
+// The previous design had separate dark-mode variants but assigned the
+// same white-W to both, so we collapsed it to one.
 var (
-	trayOnIcon      []byte // black W + green dot (light menu bar)
-	trayOnIconDark  []byte // white W + green dot (dark menu bar)
-	trayOffIcon     []byte // black W, no dot (light menu bar)
-	trayOffIconDark []byte // white W, no dot (dark menu bar)
+	trayOnIcon  []byte // white W + green dot
+	trayOffIcon []byte // white W, no dot
 )
 
 func init() {
-	// macOS menu bar always has a semi-dark vibrancy background, so white
-	// icons look correct in both light and dark system themes — matching
-	// Apple's own Wi-Fi, battery, clock icons which are always white.
-	// We use white W for all themes. The green dot is the only colour.
 	white := color.NRGBA{255, 255, 255, 255}
 	trayOnIcon = buildTrayOnIcon(white)
-	trayOnIconDark = trayOnIcon // same — white W works everywhere
 	trayOffIcon = buildTrayOffIcon(white)
-	trayOffIconDark = trayOffIcon
 }
 
 // buildTrayOnIcon composites a W glyph (in wColor) with a green dot badge at

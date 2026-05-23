@@ -24,8 +24,10 @@ func WriteFrame(w io.Writer, v interface{}) error {
 	}
 
 	// Combine header + body into one buffer for an atomic write.
+	// len(data) <= maxFrameSize (1 MiB) checked above, so the cast to
+	// uint32 cannot overflow.
 	buf := make([]byte, 4+len(data))
-	binary.BigEndian.PutUint32(buf[:4], uint32(len(data)))
+	binary.BigEndian.PutUint32(buf[:4], uint32(len(data))) //nolint:gosec // G115: len bounded by maxFrameSize
 	copy(buf[4:], data)
 
 	if _, err := w.Write(buf); err != nil {

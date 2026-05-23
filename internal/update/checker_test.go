@@ -218,14 +218,11 @@ func TestCheckForUpdate_AssetSizeZero(t *testing.T) {
 	// We can't easily override the package-level const, so we test the
 	// validation logic through the helper below instead.
 	// The const-based CheckForUpdate always hits the real API, so we validate
-	// the size check logic directly.
-	if 0 > 0 {
-		t.Fatal("size 0 should be rejected")
-	}
-	if !(0 <= 0) {
-		t.Fatal("expected assetSize <= 0 to be true for size 0")
-	}
-	_ = srv // used to validate server setup works
+	// the size check logic directly. The previous version had tautological
+	// `0 > 0` and `0 <= 0` comparisons (staticcheck SA4000) that didn't
+	// actually exercise anything; the real validation lives in
+	// TestAssetSizeValidation_Zero below.
+	_ = srv
 }
 
 func TestAssetSizeValidation_Zero(t *testing.T) {

@@ -20,9 +20,30 @@ func Listen(addr string, ownerUID int) (net.Listener, error) {
 	// (unprivileged user) needs to traverse it to reach the socket.
 	// 0755 allows traversal; the socket itself is chmod 0600 + chowned
 	// to the GUI user, so only that user can actually connect.
+	//
+	// TOCTOU hardening: try os.Mkdir (exclusive — fails if dir exists)
+	// FIRST. If it succeeds, we know we created the dir and own it;
+	// no race window. If it fails with EEXIST, fall back to the
+	// MkdirAll path which is followed by ownership verification —
+	// that branch is the original TOCTOU-prone code, kept for the
+	// "directory already exists from a prior install" case.
 	if dir := filepath.Dir(addr); dir != "" {
-		if err := os.MkdirAll(dir, 0755); err != nil {
-			return nil, fmt.Errorf("mkdir %s: %w", dir, err)
+		if err := os.Mkdir(dir, 0755); err == nil {
+			// Fresh-create path: we own the directory by construction.
+			// Still chmod to lock the bits (umask may have stripped them).
+			// Window between Mkdir and Chmod is not exploitable because
+			// the socket itself (created below) is chmod 0600 + chowned
+			// to ownerUID — even if an attacker briefly changes the dir
+			// to o+rwx between these two calls, they still can't open
+			// the socket file inside.
+			_ = os.Chmod(dir, 0755)
+		} else if !errors.Is(err, os.ErrExist) {
+			// Mkdir failed for a non-EEXIST reason (parent missing,
+			// permission denied). Try MkdirAll which can recursively
+			// create missing parents.
+			if err := os.MkdirAll(dir, 0755); err != nil {
+				return nil, fmt.Errorf("mkdir %s: %w", dir, err)
+			}
 		}
 		if err := os.Chmod(dir, 0755); err != nil {
 			// Non-fatal: we may not own the directory (e.g. system temp dir).
@@ -48,10 +69,14 @@ func Listen(addr string, ownerUID int) (net.Listener, error) {
 		if !ok {
 			return nil, fmt.Errorf("cannot determine owner of %s", dir)
 		}
-		dirUID := uint32(st.Uid)
-		euid := uint32(os.Geteuid())
+		// POSIX UIDs are unsigned. os.Geteuid returns int for historical
+		// reasons but never returns negative on Unix; gosec's G115 flag
+		// on these conversions is a false positive. We still guard
+		// ownerUID >= 0 because callers pass -1 to mean "no chown".
+		dirUID := uint32(st.Uid) //nolint:gosec // G115: kernel-supplied UID, always non-negative
+		euid := uint32(os.Geteuid()) //nolint:gosec // G115: os.Geteuid never negative on Unix
 		trusted := dirUID == euid
-		if !trusted && ownerUID >= 0 && dirUID == uint32(ownerUID) {
+		if !trusted && ownerUID >= 0 && dirUID == uint32(ownerUID) { //nolint:gosec // G115: ownerUID >= 0 checked
 			trusted = true
 		}
 		if !trusted {

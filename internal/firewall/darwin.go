@@ -3,6 +3,7 @@
 package firewall
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"net"
@@ -12,7 +13,18 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"time"
 )
+
+// pfCmdTimeout bounds every pfctl invocation. macOS pf can stall briefly
+// when ruleset locks contend; this ceiling prevents helper hangs.
+const pfCmdTimeout = 15 * time.Second
+
+func runPfctl(args ...string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), pfCmdTimeout)
+	defer cancel()
+	return exec.CommandContext(ctx, "pfctl", args...).CombinedOutput()
+}
 
 // validIfaceName matches typical macOS interface names like utun4, en0, lo0.
 var validIfaceName = regexp.MustCompile(`^[a-z]+[0-9]+$`)
@@ -302,8 +314,7 @@ func (f *DarwinFirewall) DisableDNSProtection() error {
 
 	if ksEnabled {
 		// Kill switch is active — DNS rules are in the sub-anchor, just flush it.
-		cmd := exec.Command("pfctl", "-a", dnsAnchorName, "-F", "rules")
-		if out, err := cmd.CombinedOutput(); err != nil {
+		if out, err := runPfctl("-a", dnsAnchorName, "-F", "rules"); err != nil {
 			slog.Warn("failed to flush DNS pf anchor", "error", err, "output", strings.TrimSpace(string(out)))
 		}
 	} else {
@@ -392,7 +403,9 @@ func (f *DarwinFirewall) Cleanup() error {
 
 // loadAnchorRules loads rules into the specified pf anchor.
 func loadAnchorRules(anchor, rules string) error {
-	cmd := exec.Command("pfctl", "-a", anchor, "-f", "-")
+	ctx, cancel := context.WithTimeout(context.Background(), pfCmdTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "pfctl", "-a", anchor, "-f", "-")
 	cmd.Stdin = strings.NewReader(rules)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -403,7 +416,7 @@ func loadAnchorRules(anchor, rules string) error {
 
 // isPfEnabled checks whether pf is currently enabled by parsing `pfctl -si`.
 func isPfEnabled() bool {
-	out, err := exec.Command("pfctl", "-si").CombinedOutput()
+	out, err := runPfctl("-si")
 	if err != nil {
 		return false
 	}
@@ -413,7 +426,7 @@ func isPfEnabled() bool {
 
 // enablePf enables the pf firewall.
 func enablePf() error {
-	out, err := exec.Command("pfctl", "-e").CombinedOutput()
+	out, err := runPfctl("-e")
 	if err != nil {
 		outStr := strings.TrimSpace(string(out))
 		// "pf already enabled" is not a real error
@@ -427,7 +440,7 @@ func enablePf() error {
 
 // disablePf disables the pf firewall.
 func disablePf() error {
-	out, err := exec.Command("pfctl", "-d").CombinedOutput()
+	out, err := runPfctl("-d")
 	if err != nil {
 		outStr := strings.TrimSpace(string(out))
 		if strings.Contains(outStr, "already disabled") {
@@ -516,11 +529,11 @@ func flushAllAnchors() error {
 	var errs []string
 
 	// Flush the DNS sub-anchor first.
-	if out, err := exec.Command("pfctl", "-a", dnsAnchorName, "-F", "rules").CombinedOutput(); err != nil {
+	if out, err := runPfctl("-a", dnsAnchorName, "-F", "rules"); err != nil {
 		errs = append(errs, fmt.Sprintf("flush %s: %v (%s)", dnsAnchorName, err, strings.TrimSpace(string(out))))
 	}
 	// Flush the main anchor (this also covers any rules loaded directly).
-	if out, err := exec.Command("pfctl", "-a", anchorName, "-Fa").CombinedOutput(); err != nil {
+	if out, err := runPfctl("-a", anchorName, "-Fa"); err != nil {
 		errs = append(errs, fmt.Sprintf("flush %s: %v (%s)", anchorName, err, strings.TrimSpace(string(out))))
 	}
 

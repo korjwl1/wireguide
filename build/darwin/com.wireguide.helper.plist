@@ -20,6 +20,27 @@
     <key>KeepAlive</key>
     <true/>
 
+    <!-- ProcessType: previously set to "Background" — but per
+         launchd.plist(5), Background drops scheduler priority to ~4
+         (versus Standard's ~31). For a VPN helper that has to encrypt
+         and forward the user's live traffic, that throttling produces
+         visible packet-handling latency under contention. Standard is
+         the right tier: this IS user-requested work even though there
+         is no foreground UI. We OMIT the key entirely to inherit the
+         Standard default; explicitly setting "Standard" works too but
+         the omission is the canonical idiom.
+
+         Adaptive was considered but only works for XPC-driven helpers
+         — we use a Unix socket and would always be downgraded to
+         Background under that classification. -->
+
+    <!-- ThrottleInterval caps respawn frequency to once every 5
+         seconds. Without this a crash loop (e.g. helper hits a
+         deterministic panic on launch) would burn 100% CPU as
+         launchd restarts it as fast as it dies. -->
+    <key>ThrottleInterval</key>
+    <integer>5</integer>
+
     <key>StandardErrorPath</key>
     <string>/var/log/wireguide-helper.log</string>
     <key>StandardOutPath</key>

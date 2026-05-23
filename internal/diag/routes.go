@@ -1,10 +1,22 @@
 package diag
 
 import (
+	"context"
 	"os/exec"
 	"runtime"
 	"strings"
+	"time"
 )
+
+// routeCmdTimeout bounds the route-table-listing commands. These are called
+// from the diagnostics UI; a hung command would freeze the helper.
+const routeCmdTimeout = 10 * time.Second
+
+func runRouteCmd(name string, args ...string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), routeCmdTimeout)
+	defer cancel()
+	return exec.CommandContext(ctx, name, args...).CombinedOutput()
+}
 
 // RouteEntry represents a single routing table entry.
 type RouteEntry struct {
@@ -32,11 +44,11 @@ func getRoutesDarwinFull() ([]RouteEntry, error) {
 	// Run both `inet` and `inet6` so IPv6 routes (Tailscale, full
 	// IPv6 tunnels, ULA prefixes) show up in diagnostics. Without
 	// `-f inet6` an IPv6-only tunnel was completely invisible.
-	v4, err := exec.Command("netstat", "-rn", "-f", "inet").CombinedOutput()
+	v4, err := runRouteCmd("netstat", "-rn", "-f", "inet")
 	if err != nil {
 		return nil, err
 	}
-	v6, err := exec.Command("netstat", "-rn", "-f", "inet6").CombinedOutput()
+	v6, err := runRouteCmd("netstat", "-rn", "-f", "inet6")
 	if err != nil {
 		// Non-fatal: IPv6 may be disabled on this system. Return
 		// just the v4 routes rather than the whole call failing.
@@ -75,7 +87,7 @@ func parseDarwinRouteOutput(out string) []RouteEntry {
 }
 
 func getRoutesLinuxFull() ([]RouteEntry, error) {
-	out, err := exec.Command("ip", "route", "show").CombinedOutput()
+	out, err := runRouteCmd("ip", "route", "show")
 	if err != nil {
 		return nil, err
 	}
@@ -104,7 +116,7 @@ func getRoutesLinuxFull() ([]RouteEntry, error) {
 }
 
 func getRoutesWindowsFull() ([]RouteEntry, error) {
-	out, err := exec.Command("route", "print", "-4").CombinedOutput()
+	out, err := runRouteCmd("route", "print", "-4")
 	if err != nil {
 		return nil, err
 	}

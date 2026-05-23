@@ -14,6 +14,9 @@ import (
 // the elevated child immediately, leaving nothing for ctx to cancel.
 func SpawnHelper(ctx context.Context, args Args) error {
 	_ = ctx
+	if err := ValidateArgs(args); err != nil {
+		return fmt.Errorf("invalid spawn args: %w", err)
+	}
 	exe, err := SelfPath()
 	if err != nil {
 		return err

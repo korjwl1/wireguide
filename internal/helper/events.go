@@ -186,6 +186,20 @@ func (h *Helper) latencyLoop() {
 	}
 }
 
+// latencyPoolSize bounds parallel ICMP probes per tick. With N connected
+// tunnels we used to spawn N goroutines every 30s; on a flaky network with
+// 15s per-probe timeouts this could keep dozens of goroutines alive at peak
+// for very little wall-clock benefit. A fixed pool of 3 covers the typical
+// "two tunnels, both responsive" case and degrades gracefully when many
+// tunnels hang on ICMP.
+const latencyPoolSize = 3
+
+type latencyTask struct {
+	tunnelName string
+	endpoint   string
+	cfg        *domain.WireGuardConfig
+}
+
 // measureLatencies pings each connected tunnel's preferred latency
 // target and updates the cache. The target is the tunnel's internal
 // gateway when derivable (most VPNs respond to ICMP within their own
@@ -193,7 +207,9 @@ func (h *Helper) latencyLoop() {
 // which the frontend renders as "—".
 func (h *Helper) measureLatencies() {
 	statuses := h.manager.AllStatuses()
-	var wg sync.WaitGroup
+
+	// Collect tasks first so we know how many workers are needed.
+	var tasks []latencyTask
 	for _, s := range statuses {
 		if s == nil || s.State != domain.StateConnected || s.Endpoint == "" {
 			continue
@@ -201,37 +217,78 @@ func (h *Helper) measureLatencies() {
 		h.mu.Lock()
 		cfg := h.activeCfgs[s.TunnelName]
 		h.mu.Unlock()
+		tasks = append(tasks, latencyTask{
+			tunnelName: s.TunnelName,
+			endpoint:   s.Endpoint,
+			cfg:        cfg,
+		})
+	}
+	if len(tasks) == 0 {
+		return
+	}
 
+	taskCh := make(chan latencyTask, len(tasks))
+	for _, t := range tasks {
+		taskCh <- t
+	}
+	close(taskCh)
+
+	workers := latencyPoolSize
+	if len(tasks) < workers {
+		workers = len(tasks)
+	}
+
+	var wg sync.WaitGroup
+	for i := 0; i < workers; i++ {
 		wg.Add(1)
-		go func(tunnelName, endpoint string, cfg *domain.WireGuardConfig) {
+		go func() {
+			// defer wg.Done() FIRST so a panic in runOneLatencyProbe
+			// doesn't leak the WaitGroup counter and deadlock the
+			// 30-second latency loop. The inner func() + recover()
+			// catches per-task panics without killing the worker —
+			// next probe in the same worker still runs.
 			defer wg.Done()
-			target := pingTargetForTunnel(cfg, endpoint)
-			viaTunnel := target != endpoint
-			result := diag.PingEndpoint(target)
-
-			// If through-tunnel target failed (gateway doesn't exist /
-			// blocks ICMP on this network), fall back to the public
-			// endpoint. Many VPN endpoints DO drop ICMP — the through-
-			// tunnel path is just usually more permissive.
-			if !result.Reachable && viaTunnel {
-				result = diag.PingEndpoint(endpoint)
-				viaTunnel = false
+			for t := range taskCh {
+				func(t latencyTask) {
+					defer func() {
+						if r := recover(); r != nil {
+							slog.Warn("latency probe panic recovered",
+								"tunnel", t.tunnelName, "panic", r)
+						}
+					}()
+					h.runOneLatencyProbe(t)
+				}(t)
 			}
-
-			latency := 0.0
-			if result.Reachable {
-				latency = result.LatencyMs
-			}
-			h.latencyMu.Lock()
-			h.latencyByTunnel[tunnelName] = latency
-			h.latencyMu.Unlock()
-			slog.Info("endpoint latency measured",
-				"tunnel", tunnelName, "target", target,
-				"via_tunnel", viaTunnel,
-				"reachable", result.Reachable, "latency_ms", latency)
-		}(s.TunnelName, s.Endpoint, cfg)
+		}()
 	}
 	wg.Wait()
+}
+
+func (h *Helper) runOneLatencyProbe(t latencyTask) {
+	target := pingTargetForTunnel(t.cfg, t.endpoint)
+	viaTunnel := target != t.endpoint
+	result := diag.PingEndpoint(target)
+
+	// If through-tunnel target failed (gateway doesn't exist /
+	// blocks ICMP on this network), fall back to the public
+	// endpoint. Many VPN endpoints DO drop ICMP — the through-
+	// tunnel path is just usually more permissive.
+	if !result.Reachable && viaTunnel {
+		result = diag.PingEndpoint(t.endpoint)
+		viaTunnel = false
+	}
+
+	latency := 0.0
+	if result.Reachable {
+		latency = result.LatencyMs
+	}
+	h.latencyMu.Lock()
+	h.latencyByTunnel[t.tunnelName] = latency
+	h.latencyMu.Unlock()
+	slog.Info("endpoint latency measured",
+		"tunnel", t.tunnelName, "target", target,
+		"via_tunnel", viaTunnel,
+		"reachable", result.Reachable, "latency_ms", latency)
 }
 
 // eventLoop broadcasts status updates to subscribed GUIs on change. Change

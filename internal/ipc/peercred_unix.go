@@ -58,7 +58,9 @@ func verifyPeerUID(conn net.Conn, expectedUID int) error {
 		return fmt.Errorf("peer credential check failed: %w", err)
 	}
 
-	if peerUID != uint32(expectedUID) {
+	// expectedUID >= 0 guaranteed by the early-return guard above; the
+	// cast to uint32 is safe (gosec G115 false positive).
+	if peerUID != uint32(expectedUID) { //nolint:gosec // G115: expectedUID >= 0 checked
 		return fmt.Errorf("peer UID %d does not match expected owner UID %d (pid %d)",
 			peerUID, expectedUID, peerPID)
 	}

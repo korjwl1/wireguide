@@ -24,7 +24,7 @@ import (
 const (
 	githubRepo     = "korjwl1/wireguide"
 	apiEndpoint    = "https://api.github.com/repos/" + githubRepo + "/releases/latest"
-	currentVersion = "0.2.0"
+	currentVersion = "0.2.1-dev1"
 
 	// minAssetSize is the minimum acceptable size for a release asset.
 	// A macOS .dmg/.zip containing WireGuide.app is always well over 1 MB;
@@ -32,21 +32,28 @@ const (
 	// injected by an attacker.
 	minAssetSize = 1 << 20 // 1 MB
 
-	// expectedPublicKey is the hex-encoded Ed25519 public key whose
+	// expectedPublicKey is set at build time via:
+	//   go build -ldflags="-X 'github.com/korjwl1/wireguide/internal/update.expectedPublicKey=<hex>'"
+	//
+	// Release builds set this to the hex-encoded Ed25519 public key whose
 	// matching private key signs each release's SHA256SUMS file. The
 	// signature lives next to SHA256SUMS as <SHA256SUMS>.sig (raw
 	// 64-byte signature, no encoding).
 	//
-	// EMPTY UNTIL THE FIRST SIGNED RELEASE. While empty we fall back
-	// to checksum-only authentication (SHA256SUMS itself can be
-	// replaced by a compromised GitHub account, so this is a
-	// degraded mode — flip the constant on the same release where
-	// you ship the first SHA256SUMS.sig).
-	//
-	// Key generation, signing, and rotation procedure: see
-	// docs/release.md.
-	expectedPublicKey = ""
+	// EMPTY in dev builds — falls back to checksum-only auth. To
+	// REQUIRE the key at build time for release tags, the CI script
+	// passes -ldflags + the requireSignedRelease build tag (see
+	// require_signed_release.go). Without that tag, a missing key
+	// degrades to SHA256-only; with the tag, a missing key causes
+	// activePublicKey() to return "" and the install path refuses
+	// to apply the update.
 )
+
+// expectedPublicKey is a `var` (not `const`) so `-ldflags -X` can inject
+// it. The build-time constant idiom (`const expectedPublicKey = ""`) is
+// what allowed every release to ship unsigned by default — the var form
+// + ldflags is the standard Go pattern for build-time secrets.
+var expectedPublicKey = ""
 
 // CurrentVersion returns the hardcoded app version string.
 func CurrentVersion() string { return currentVersion }
@@ -84,9 +91,47 @@ type UpdateInfo struct {
 	SignatureVerified bool   `json:"signature_verified"`      // true iff Ed25519 .sig also verified
 }
 
+// allowedRedirectHosts is the closed set of hostnames our update HTTP
+// client will follow redirects to. GitHub's Releases API can legitimately
+// redirect to *.githubusercontent.com (for asset bodies) and within
+// github.com; anything else is a supply-chain attack signal — an
+// attacker who hijacked DNS or BGP for api.github.com could otherwise
+// 301 us to a server that serves a malicious binary plus matching
+// SHA256SUMS, defeating checksum verification.
+var allowedRedirectHosts = map[string]bool{
+	"api.github.com":              true,
+	"github.com":                  true,
+	"objects.githubusercontent.com": true,
+	"release-assets.githubusercontent.com": true,
+	"codeload.github.com":         true,
+}
+
+// updateCheckRedirect rejects any redirect whose target host isn't in
+// allowedRedirectHosts. Used by both CheckForUpdate and DownloadUpdate.
+func updateCheckRedirect(req *http.Request, via []*http.Request) error {
+	if len(via) >= 10 {
+		return fmt.Errorf("too many redirects")
+	}
+	host := req.URL.Hostname()
+	if !allowedRedirectHosts[host] {
+		return fmt.Errorf("refusing redirect to disallowed host %q", host)
+	}
+	return nil
+}
+
+// newUpdateClient builds an http.Client that locks the redirect domain
+// set to GitHub-owned hosts. All update-related HTTP traffic must use
+// this constructor.
+func newUpdateClient(timeout time.Duration) *http.Client {
+	return &http.Client{
+		Timeout:       timeout,
+		CheckRedirect: updateCheckRedirect,
+	}
+}
+
 // CheckForUpdate queries GitHub Releases API for newer version.
 func CheckForUpdate() (*UpdateInfo, error) {
-	client := &http.Client{Timeout: 10 * time.Second}
+	client := newUpdateClient(10 * time.Second)
 	resp, err := client.Get(apiEndpoint)
 	if err != nil {
 		return nil, fmt.Errorf("checking updates: %w", err)
@@ -166,6 +211,15 @@ func CheckForUpdate() (*UpdateInfo, error) {
 
 // DownloadUpdate downloads the release asset to a secure temp file and
 // verifies the SHA256 checksum if available.
+//
+// CURRENTLY UNREFERENCED FROM PRODUCTION CODE — macOS uses Homebrew for
+// updates (see internal/app/settings_ops.go → IsBrewInstall path) and
+// Linux/Windows ship without auto-install plumbing yet. This function
+// (and the rest of the verify* / install* family below) is kept on
+// purpose for the day we add native Linux/Windows update flows; it is
+// fully exercised by checker_test.go so it doesn't bit-rot. If you're
+// auditing for dead code and considering deletion: confirm with the
+// maintainer first.
 func DownloadUpdate(info *UpdateInfo) (string, error) {
 	if info.DownloadURL == "" {
 		return "", fmt.Errorf("no download URL for %s/%s", runtime.GOOS, runtime.GOARCH)
@@ -176,7 +230,7 @@ func DownloadUpdate(info *UpdateInfo) (string, error) {
 		return "", fmt.Errorf("refusing to download: invalid AssetSize %d", info.AssetSize)
 	}
 
-	client := &http.Client{Timeout: 5 * time.Minute}
+	client := newUpdateClient(5 * time.Minute)
 	resp, err := client.Get(info.DownloadURL)
 	if err != nil {
 		return "", fmt.Errorf("downloading: %w", err)

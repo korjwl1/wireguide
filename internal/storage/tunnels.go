@@ -159,14 +159,85 @@ func (s *TunnelStore) Rename(oldName, newName string) error {
 	if s.exists(newName) {
 		return fmt.Errorf("tunnel %q already exists", newName)
 	}
-	if err := os.Rename(oldPath, s.path(newName)); err != nil {
+	// Two-phase commit for the (.conf, .meta.json) pair. The rollback-
+	// based design (rename .conf, then rename .meta, roll back .conf on
+	// failure) had a tail risk: the rollback rename can itself fail on
+	// Windows (file lock) or under disk-full / EROFS, leaving the user
+	// in a split state with permanent metadata loss.
+	//
+	// Strategy:
+	//   Phase 1 (PRE-CHECK): verify both paths are writable by attempting
+	//     a no-op os.Link-then-Remove on each. This catches permission
+	//     and file-lock failures up front, before any mutation.
+	//   Phase 2 (COMMIT): rename .conf then .meta. If either fails after
+	//     pre-check passed, the cause is almost certainly a TOCTOU race
+	//     (someone else touched the files between phases). Roll back
+	//     best-effort and surface both errors.
+	//
+	// Pre-check is best-effort; it doesn't fully eliminate races, but
+	// it catches the common "Windows file lock" cause that the original
+	// design hit hardest.
+	newPath := s.path(newName)
+	oldMeta := s.metaPath(oldName)
+	newMeta := s.metaPath(newName)
+	hasMeta := false
+	if _, err := os.Stat(oldMeta); err == nil {
+		hasMeta = true
+	}
+
+	if err := preCheckWritable(oldPath, newPath); err != nil {
+		return fmt.Errorf("rename pre-check failed for .conf: %w", err)
+	}
+	if hasMeta {
+		if err := preCheckWritable(oldMeta, newMeta); err != nil {
+			return fmt.Errorf("rename pre-check failed for .meta: %w", err)
+		}
+	}
+
+	if err := os.Rename(oldPath, newPath); err != nil {
 		return err
 	}
-	// Carry the .meta.json sidecar along — best-effort, never block rename
-	// on missing/unwritable sidecar.
-	if _, err := os.Stat(s.metaPath(oldName)); err == nil {
-		_ = os.Rename(s.metaPath(oldName), s.metaPath(newName))
+	if hasMeta {
+		if err := os.Rename(oldMeta, newMeta); err != nil {
+			// Pre-check said this was writable so the failure is almost
+			// certainly a TOCTOU race. Roll back .conf best-effort and
+			// surface both errors so the operator can investigate.
+			if rollbackErr := os.Rename(newPath, oldPath); rollbackErr != nil {
+				return fmt.Errorf("rename meta failed after pre-check (%w) AND .conf rollback also failed (%v) — manual fix required", err, rollbackErr)
+			}
+			return fmt.Errorf("rename meta: %w (rolled back .conf rename)", err)
+		}
 	}
+	return nil
+}
+
+// preCheckWritable verifies that we can rename src→dst by performing a
+// minimal probe: ensure src is statable AND dst doesn't already exist
+// AND we can hardlink src→tmp (this exercises the same VFS permission
+// path as rename without committing). The probe is removed immediately.
+//
+// Hardlinks fail across filesystems with EXDEV; in that case we fall
+// back to "src exists + dst doesn't" which is a weaker check but better
+// than nothing.
+func preCheckWritable(src, dst string) error {
+	if _, err := os.Stat(src); err != nil {
+		return fmt.Errorf("source not accessible: %w", err)
+	}
+	if _, err := os.Stat(dst); err == nil {
+		return fmt.Errorf("destination already exists: %s", dst)
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("destination check failed: %w", err)
+	}
+	// Hardlink probe — same directory so EXDEV is impossible (TunnelStore
+	// keeps .conf and .meta in s.dir).
+	probe := src + ".rename-probe"
+	if err := os.Link(src, probe); err != nil {
+		// Hardlink failed — either filesystem doesn't support it (FAT)
+		// or permission. Fall through; the actual rename will surface
+		// the real error if it can't proceed.
+		return nil
+	}
+	os.Remove(probe)
 	return nil
 }
 

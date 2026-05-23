@@ -8,8 +8,28 @@ import (
 	"strings"
 )
 
+// MaxConfigSize is the hard cap on a single .conf file. A legitimate
+// WireGuard config is rarely more than a few KiB; the 1 MiB ceiling
+// here is generous enough for the largest realistic split-tunnel setup
+// (hundreds of /32 routes spelt out) while denying an attacker the
+// ability to OOM the helper by sending a 1 GB "config".
+const MaxConfigSize = 1 << 20 // 1 MiB
+
+// MaxAllowedIPsPerPeer is the per-peer cap on AllowedIPs entries. A
+// realistic peer has 1-10 CIDRs; 10K entries is far beyond legitimate
+// use but still lets a power user spell out every /32 in a /16 (65K
+// would be too permissive). Caps the O(N) work the validator does
+// per peer.
+const MaxAllowedIPsPerPeer = 10000
+
 // Parse parses a WireGuard .conf file content into a WireGuardConfig.
 func Parse(content string) (*WireGuardConfig, error) {
+	// Reject oversized inputs before any work — defends against malicious
+	// or accidentally-huge .conf files used as a DoS vector. The 1 MiB
+	// limit lines up with bufio.Scanner's buffer cap below.
+	if len(content) > MaxConfigSize {
+		return nil, fmt.Errorf("config too large: %d bytes (max %d)", len(content), MaxConfigSize)
+	}
 	// Strip UTF-8 BOM if present (common when files are saved by Windows editors).
 	content = strings.TrimPrefix(content, "\xef\xbb\xbf")
 
@@ -145,7 +165,13 @@ func parsePeerKey(peer *PeerConfig, key, value string, lineNum int) error {
 	case "endpoint":
 		peer.Endpoint = value
 	case "allowedips":
-		peer.AllowedIPs = append(peer.AllowedIPs, splitAndTrim(value)...)
+		add := splitAndTrim(value)
+		// Per-peer cap so a malicious config can't drive the validator's
+		// O(N) per-peer scan into denial-of-service territory.
+		if len(peer.AllowedIPs)+len(add) > MaxAllowedIPsPerPeer {
+			return fmt.Errorf("AllowedIPs exceeds per-peer cap (%d)", MaxAllowedIPsPerPeer)
+		}
+		peer.AllowedIPs = append(peer.AllowedIPs, add...)
 	case "persistentkeepalive":
 		n, err := strconv.Atoi(value)
 		if err != nil {

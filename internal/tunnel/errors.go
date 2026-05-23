@@ -36,6 +36,9 @@ const (
 	ErrTimeout
 	// ErrFullTunnelConflict: a full-tunnel (0.0.0.0/0) is already connected.
 	ErrFullTunnelConflict
+	// ErrCancelled: a context cancellation landed before the operation
+	// could meaningfully proceed.
+	ErrCancelled
 )
 
 func (e *TunnelError) Error() string {

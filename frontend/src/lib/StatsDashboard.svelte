@@ -6,8 +6,16 @@
 
   let canvas;
   let ctx;
-  let samples = [];
+  // Ring buffer of throughput samples. Same pattern as stores/logs.js:
+  // pre-allocate the array, write at `head`, wrap on cap. The previous
+  // `samples = [...samples, x].slice(-60)` rebuilt the entire 60-element
+  // array on every 1Hz status tick, churning the GC. With the ring we
+  // only mutate one slot per tick.
   const maxSamples = 60;
+  const samplesBuf = new Array(maxSamples);
+  let samplesHead = 0;
+  let samplesCount = 0;
+  let samplesVersion = 0; // bump on every push so reactivity fires
   // Cache the resolved palette so we don't getComputedStyle on every draw.
   // Refreshed on theme change via the resolvedTheme subscription below.
   let palette = null;
@@ -54,13 +62,35 @@
   // (1 Hz from the helper broadcast) — NOT by rAF — so the renderer can
   // actually idle between samples. Previously self-scheduling rAF burned
   // 3-6% CPU painting the same pixels 60×/sec.
+  //
+  // Ring-buffer push: O(1), zero allocations on the steady-state path
+  // (the buffer is pre-allocated). samplesVersion increments so Svelte's
+  // reference-equality check on the reactive statement fires — without
+  // that the same store value would suppress the re-render.
   $: if ($connectionStatus?.state === 'connected') {
-    samples = [...samples, {
+    samplesBuf[samplesHead] = {
       rx: $connectionStatus.rx_bytes || 0,
       tx: $connectionStatus.tx_bytes || 0,
-      time: Date.now()
-    }].slice(-maxSamples);
+      time: Date.now(),
+    };
+    samplesHead = (samplesHead + 1) % maxSamples;
+    if (samplesCount < maxSamples) samplesCount++;
+    samplesVersion++;
     if (ctx) draw();
+  }
+
+  // orderedSamples returns the samples in chronological order (oldest
+  // first). Called only by draw(); allocates a single Array(samplesCount)
+  // per draw, much less than the per-push slice(-60) we used to do.
+  function orderedSamples() {
+    if (samplesCount === 0) return [];
+    if (samplesCount < maxSamples) {
+      // Buffer hasn't wrapped yet — entries 0..samplesCount-1 are in
+      // insertion order.
+      return samplesBuf.slice(0, samplesCount);
+    }
+    // Wrapped: oldest is at samplesHead, newest at samplesHead-1.
+    return samplesBuf.slice(samplesHead).concat(samplesBuf.slice(0, samplesHead));
   }
 
   function draw() {
@@ -75,6 +105,7 @@
     ctx.clearRect(0, 0, cw, ch);
 
     const { rxStroke, txStroke, rxFill, txFill, textMuted, textSecondary } = palette;
+    const samples = orderedSamples();
 
     if (samples.length < 2) {
       ctx.fillStyle = textMuted;

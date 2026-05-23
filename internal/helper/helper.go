@@ -5,12 +5,26 @@
 //   - helper.go   (this file) — Helper struct + Run() lifecycle
 //   - handlers.go — RPC method handlers
 //   - events.go   — status diff + broadcast loop, status conversion
+//
+// Architectural note: helper imports internal/storage on purpose, scoped to
+// two operations:
+//
+//  1. Tunnel.Rename — atomic "check active + rename .conf" under connectMu;
+//     moving the file ops to the GUI would open a TOCTOU window with the
+//     wifi-rule auto-connect path.
+//  2. wifi-rule auto-connect — Load(name) to fetch the cfg for tunnels the
+//     user hasn't opened via the GUI yet. Pushing cfgs from GUI to helper
+//     would race the very first SSID transition right after launch.
+//
+// Storage usage is therefore intentional and minimal; no other privileged
+// code path touches the user's home directory.
 package helper
 
 import (
 	"context"
 	"fmt"
 	"log/slog"
+	"math/rand"
 	"os"
 	"path/filepath"
 	"runtime/debug"
@@ -36,17 +50,23 @@ import (
 // backoff, up to maxRestarts times. This ensures critical background loops
 // (like the event broadcast loop) survive transient panics instead of dying
 // permanently. If fn returns normally (no panic), it is NOT restarted.
-func goSafe(name string, fn func()) {
+//
+// When the restart budget is exhausted, broadcast EventCriticalError so the
+// GUI can surface a banner — otherwise the helper appears alive but key
+// loops are silently dead and the user has no warning.
+func (h *Helper) goSafe(name string, fn func()) {
 	const maxRestarts = 5
 	go func() {
+		var lastPanic string
 		for attempt := 0; attempt <= maxRestarts; attempt++ {
 			panicked := true
 			func() {
 				defer func() {
 					if r := recover(); r != nil {
+						lastPanic = fmt.Sprintf("%v", r)
 						slog.Error("goroutine panic (will restart)",
 							"where", name,
-							"panic", fmt.Sprintf("%v", r),
+							"panic", lastPanic,
 							"stack", string(debug.Stack()),
 							"attempt", attempt+1,
 							"max", maxRestarts+1)
@@ -58,10 +78,25 @@ func goSafe(name string, fn func()) {
 			if !panicked {
 				return // fn returned normally — done.
 			}
-			// Backoff before restart to avoid tight panic loops.
-			time.Sleep(1 * time.Second)
+			// Jittered backoff: 500ms-1500ms. Without jitter, if multiple
+			// background loops panic from a common cause (e.g. a shared
+			// nil dependency), all of them sleep the exact same 1s and
+			// wake up together — repeating the panic in lockstep and
+			// freezing the helper for the full restart budget. Jitter
+			// staggers wakeups so transient ordering issues can resolve.
+			// math/rand is intentional here — predictable randomness is
+			// fine for jitter (gosec G404 would flag any math/rand; the
+			// security threat model doesn't apply to a sleep timer).
+			jitter := time.Duration(rand.Intn(1000)) * time.Millisecond //nolint:gosec // G404: jitter, not security
+			time.Sleep(500*time.Millisecond + jitter)
 		}
 		slog.Error("goroutine exceeded max restarts, giving up", "where", name)
+		if h != nil && h.server != nil {
+			h.server.Broadcast(ipc.EventCriticalError, ipc.CriticalErrorPayload{
+				Where:  name,
+				Detail: "exceeded restart budget; last panic: " + lastPanic,
+			})
+		}
 	}()
 }
 
@@ -217,19 +252,19 @@ func Run(addr string, ownerUID int, dataDir string) error {
 	}
 
 	// Start event emitter (diff loop)
-	goSafe("eventLoop", h.eventLoop)
+	h.goSafe("eventLoop", h.eventLoop)
 
 	// Start endpoint latency probe loop. Runs at a slow tick (~30s) so
 	// it doesn't add measurable load; ICMP pings are blocking and the
 	// goroutine is supervised by goSafe like every other long-running
 	// helper background task.
-	goSafe("latencyLoop", h.latencyLoop)
+	h.goSafe("latencyLoop", h.latencyLoop)
 
 	// Start Wi-Fi SSID monitor. On change we broadcast the event for
 	// any GUI listener AND evaluate the user's wifi rules right here
 	// so auto-connect / auto-disconnect keep working when the GUI is
 	// closed.
-	h.wifiMon = wifi.NewMonitor(nil, func(oldSSID, newSSID string) {
+	h.wifiMon = wifi.NewMonitor(func(oldSSID, newSSID string) {
 		h.server.Broadcast(ipc.EventWifiSSID, ipc.WifiSSIDPayload{
 			OldSSID: oldSSID,
 			NewSSID: newSSID,
@@ -245,7 +280,7 @@ func Run(addr string, ownerUID int, dataDir string) error {
 	// stays up indefinitely until the user manually disconnects.
 	// Running it here, after wifiMon starts, also handles the boot
 	// case where the helper starts before the Wi-Fi has joined.
-	goSafe("ssidStartupRule", func() {
+	h.goSafe("ssidStartupRule", func() {
 		// Brief delay to let the network stack settle and crash
 		// recovery finish — racing handleSSIDChange against an
 		// in-flight RecoverFromCrash would corrupt activeCfgs.
@@ -315,7 +350,7 @@ func (h *Helper) reconnectFn(ctx context.Context, name string) error {
 			return fmt.Errorf("reconnect %q cancelled before Connect: %w", name, err)
 		}
 		h.connectMu.Lock()
-		err := h.manager.Connect(cfg)
+		err := h.manager.ConnectWithContext(ctx, cfg)
 		h.connectMu.Unlock()
 		return err
 	}
@@ -330,7 +365,7 @@ func (h *Helper) reconnectFn(ctx context.Context, name string) error {
 			return fmt.Errorf("reconnect-all cancelled mid-loop: %w", err)
 		}
 		h.connectMu.Lock()
-		err := h.manager.Connect(cfg)
+		err := h.manager.ConnectWithContext(ctx, cfg)
 		h.connectMu.Unlock()
 		if err != nil {
 			lastErr = err

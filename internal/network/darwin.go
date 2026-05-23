@@ -3,6 +3,7 @@
 package network
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"net"
@@ -14,6 +15,11 @@ import (
 
 	"golang.zx2c4.com/wireguard/wgctrl"
 )
+
+// cmdTimeout bounds every external command. Without this, a hung
+// `route`/`ifconfig`/`networksetup`/`scutil` invocation (e.g. kernel route
+// table back-pressure, IOKit deadlock) blocks the helper indefinitely.
+const cmdTimeout = 30 * time.Second
 
 // DarwinManager implements NetworkManager for macOS, modeled after wg-quick's
 // darwin.bash script (github.com/WireGuard/wireguard-tools/src/wg-quick/darwin.bash).
@@ -372,7 +378,9 @@ func (m *DarwinManager) reapply() {
 		// No bypass work needed, but still re-apply DNS — macOS can
 		// reassign DNS when switching network services.
 		if len(dns) > 0 {
-			_ = m.applyDNS(dns)
+			if err := m.applyDNS(dns); err != nil {
+				slog.Warn("reapply: applyDNS failed", "error", err)
+			}
 		}
 		return
 	}
@@ -415,7 +423,9 @@ func (m *DarwinManager) reapply() {
 		if strings.Contains(ip, ":") {
 			family = "-inet6"
 		}
-		_ = run("route", "-q", "-n", "delete", family, ip)
+		if err := run("route", "-q", "-n", "delete", family, ip); err != nil {
+			slog.Debug("bypass route delete failed (may already be gone)", "ip", ip, "error", err)
+		}
 	}
 
 	// Reuse the gateways already probed above — no need for a second pair
@@ -469,12 +479,16 @@ func (m *DarwinManager) reapply() {
 	m.mu.Unlock()
 
 	if len(dns) > 0 {
-		_ = m.applyDNS(dns)
+		if err := m.applyDNS(dns); err != nil {
+			slog.Warn("reapply: applyDNS failed after bypass update", "error", err)
+		}
 	}
 
 	if mtu > 0 {
 		if current := getInterfaceMTU(iface); current != mtu && current > 0 {
-			_ = run("ifconfig", iface, "mtu", fmt.Sprintf("%d", mtu))
+			if err := run("ifconfig", iface, "mtu", fmt.Sprintf("%d", mtu)); err != nil {
+				slog.Warn("reapply: ifconfig mtu failed", "iface", iface, "mtu", mtu, "error", err)
+			}
 		}
 	}
 }
@@ -573,7 +587,9 @@ func (m *DarwinManager) addBypassForIP(ipStr, gwV4, gwV6 string, gwV4Err, gwV6Er
 		if isV6 {
 			loopback = "::1"
 		}
-		_ = run("route", "-q", "-n", "add", family, ipStr, loopback, "-blackhole")
+		if err := run("route", "-q", "-n", "add", family, ipStr, loopback, "-blackhole"); err != nil {
+			slog.Warn("blackhole bypass install failed", "ip", ipStr, "error", err)
+		}
 		recordBypass()
 		return nil
 	}
@@ -655,7 +671,9 @@ func (m *DarwinManager) RemoveRoutes(ifaceName string, allowedIPs []string, full
 		if strings.Contains(ip, ":") {
 			family = "-inet6"
 		}
-		_ = run("route", "-q", "-n", "delete", family, ip)
+		if err := run("route", "-q", "-n", "delete", family, ip); err != nil {
+			slog.Debug("bypass route delete failed (may already be gone)", "ip", ip, "error", err)
+		}
 	}
 	return nil
 }
@@ -719,7 +737,9 @@ func (m *DarwinManager) deleteInterfaceRoutes(ifaceName, family string) {
 		if family == "inet6" {
 			famFlag = "-inet6"
 		}
-		_ = run("route", "-q", "-n", "delete", famFlag, dest)
+		if err := run("route", "-q", "-n", "delete", famFlag, dest); err != nil {
+			slog.Debug("orphan route delete failed (may already be gone)", "family", family, "dest", dest, "error", err)
+		}
 	}
 }
 
@@ -920,10 +940,12 @@ func (m *DarwinManager) applyDNSToServices(entries []string, services []string) 
 // mDNSResponder ("operation not permitted" under SIP, MDM blocks) leaves
 // a breadcrumb in helper.log instead of vanishing.
 func flushDNSCache() {
-	if out, err := exec.Command("dscacheutil", "-flushcache").CombinedOutput(); err != nil {
+	ctx, cancel := context.WithTimeout(context.Background(), cmdTimeout)
+	defer cancel()
+	if out, err := exec.CommandContext(ctx, "dscacheutil", "-flushcache").CombinedOutput(); err != nil {
 		slog.Debug("dscacheutil flush failed", "error", err, "output", strings.TrimSpace(string(out)))
 	}
-	if out, err := exec.Command("killall", "-HUP", "mDNSResponder").CombinedOutput(); err != nil {
+	if out, err := exec.CommandContext(ctx, "killall", "-HUP", "mDNSResponder").CombinedOutput(); err != nil {
 		slog.Debug("mDNSResponder HUP failed", "error", err, "output", strings.TrimSpace(string(out)))
 	}
 }
@@ -1159,10 +1181,14 @@ func (m *DarwinManager) RestoreDNSFromSnapshot(preModDNS map[string][]string) er
 		go func() {
 			defer wg.Done()
 			if len(orig) == 0 {
-				_ = run("networksetup", "-setdnsservers", svc, "Empty")
+				if err := run("networksetup", "-setdnsservers", svc, "Empty"); err != nil {
+					slog.Warn("RestoreDNSFromSnapshot: clearing DNS failed", "service", svc, "error", err)
+				}
 			} else {
 				args := append([]string{"-setdnsservers", svc}, orig...)
-				_ = run("networksetup", args...)
+				if err := run("networksetup", args...); err != nil {
+					slog.Warn("RestoreDNSFromSnapshot: setting DNS failed", "service", svc, "error", err)
+				}
 			}
 		}()
 	}
@@ -1182,7 +1208,9 @@ func (m *DarwinManager) Cleanup(ifaceName string) error {
 	if key != "" {
 		rmMgr.Unsubscribe(key)
 	}
-	_ = m.RestoreDNS(ifaceName)
+	if err := m.RestoreDNS(ifaceName); err != nil {
+		slog.Warn("Cleanup: RestoreDNS failed", "iface", ifaceName, "error", err)
+	}
 	// Defensive: remove any remaining routes via this interface
 	m.deleteInterfaceRoutes(ifaceName, "inet")
 	m.deleteInterfaceRoutes(ifaceName, "inet6")
@@ -1197,7 +1225,9 @@ func (m *DarwinManager) Cleanup(ifaceName string) error {
 		if strings.Contains(ip, ":") {
 			family = "-inet6"
 		}
-		_ = run("route", "-q", "-n", "delete", family, ip)
+		if err := run("route", "-q", "-n", "delete", family, ip); err != nil {
+			slog.Debug("bypass route delete failed (may already be gone)", "ip", ip, "error", err)
+		}
 	}
 	return nil
 }
@@ -1205,12 +1235,17 @@ func (m *DarwinManager) Cleanup(ifaceName string) error {
 // --- helpers ---
 
 func run(name string, args ...string) error {
-	cmd := exec.Command(name, args...)
+	ctx, cancel := context.WithTimeout(context.Background(), cmdTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, name, args...)
 	// Force C locale so parsing English sentinels like "There aren't any DNS Servers"
 	// works on non-English macOS systems. wg-quick uses `export LC_ALL=C` at script top.
 	cmd.Env = append(cmd.Environ(), "LC_ALL=C", "LANG=C")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			return fmt.Errorf("%s %s: timed out after %s (%s)", name, strings.Join(args, " "), cmdTimeout, strings.TrimSpace(string(out)))
+		}
 		return fmt.Errorf("%s %s: %w (%s)", name, strings.Join(args, " "), err, strings.TrimSpace(string(out)))
 	}
 	return nil
@@ -1219,7 +1254,9 @@ func run(name string, args ...string) error {
 // runOut runs a command with LC_ALL=C and returns combined output.
 // Use for commands where we parse the output.
 func runOut(name string, args ...string) ([]byte, error) {
-	cmd := exec.Command(name, args...)
+	ctx, cancel := context.WithTimeout(context.Background(), cmdTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Env = append(cmd.Environ(), "LC_ALL=C", "LANG=C")
 	return cmd.CombinedOutput()
 }
@@ -1258,22 +1295,6 @@ func getDefaultGatewayFor(ipv6 bool) (string, error) {
 // for the `default` row. Dynamic header parsing handles column-order
 // differences across macOS versions; the previous "first lowercase field"
 // heuristic returned `awdl0` (AirDrop) instead of `en0` on some machines.
-// getRouteInterface returns the interface macOS would use to reach the given
-// IP, by parsing `route get <ip>` output. Returns empty string on failure.
-func getRouteInterface(ip string) string {
-	out, err := runOut("route", "-n", "get", ip)
-	if err != nil {
-		return ""
-	}
-	for _, line := range strings.Split(string(out), "\n") {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "interface:") {
-			return strings.TrimSpace(strings.TrimPrefix(line, "interface:"))
-		}
-	}
-	return ""
-}
-
 func getDefaultInterface() string {
 	out, err := runOut("netstat", "-nr", "-f", "inet")
 	if err != nil {

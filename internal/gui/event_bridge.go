@@ -163,5 +163,16 @@ func (b *eventBridge) handleEvent(method string, params json.RawMessage) {
 		} else {
 			b.app.Event.Emit("auto_connected", payload)
 		}
+	case ipc.EventCriticalError:
+		// A helper background goroutine has died permanently. Surface to
+		// the frontend so the user knows tunnel state may stop updating
+		// (eventLoop) or wifi rules may stop firing (ssidStartupRule, etc.).
+		var payload ipc.CriticalErrorPayload
+		if err := json.Unmarshal(params, &payload); err != nil {
+			slog.Warn("event bridge: unmarshal critical_error failed", "error", err)
+		} else {
+			slog.Error("helper background goroutine died permanently", "where", payload.Where, "detail", payload.Detail)
+			b.app.Event.Emit("critical_error", payload)
+		}
 	}
 }

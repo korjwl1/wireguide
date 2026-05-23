@@ -115,10 +115,22 @@ func NewEngine(cfg *config.WireGuardConfig) (*Engine, error) {
 		tunName = "wg"
 	case "windows":
 		tunName = "WireGuide"
+		// Best-effort: close any leftover adapter from a previous helper
+		// crash before CreateTUN attempts to allocate the same name.
+		// No-op on non-Windows.
+		cleanupStaleWintunAdapter(tunName)
 	}
 
 	tunDev, err := tun.CreateTUN(tunName, mtu)
 	if err != nil {
+		// Surface a more actionable message for the common Windows
+		// failure mode: a previous helper crash left a Wintun adapter
+		// in the kernel that we couldn't clean up (cleanupStaleWintunAdapter
+		// is best-effort and silently no-ops when wintun.dll isn't
+		// loadable from our path).
+		if runtime.GOOS == "windows" {
+			return nil, fmt.Errorf("creating TUN device %q: %w (hint: a stale WireGuide adapter may still be installed — open Device Manager → Network adapters and remove any 'WireGuide' entries, then try again)", tunName, err)
+		}
 		return nil, fmt.Errorf("creating TUN device: %w", err)
 	}
 

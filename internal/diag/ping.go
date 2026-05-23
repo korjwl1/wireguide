@@ -20,8 +20,20 @@ type PingResult struct {
 	Error     string  `json:"error,omitempty"`
 }
 
-// PingEndpoint tests if a WireGuard endpoint is reachable.
+// PingEndpoint is the context-less convenience wrapper. Bounded by an
+// internal 15-second timeout so callers that don't have a context
+// don't leak ping subprocesses forever.
 func PingEndpoint(endpoint string) *PingResult {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	return PingEndpointContext(ctx, endpoint)
+}
+
+// PingEndpointContext tests if a WireGuard endpoint is reachable, honouring
+// the caller's context. When the user closes the diagnostics panel the
+// ping subprocess is killed instead of running to completion in the
+// background (previously up to 15s of orphaned subprocess + CPU).
+func PingEndpointContext(ctx context.Context, endpoint string) *PingResult {
 	host, _, err := net.SplitHostPort(endpoint)
 	if err != nil {
 		host = endpoint
@@ -39,12 +51,7 @@ func PingEndpoint(endpoint string) *PingResult {
 	}
 	ip := ips[0]
 
-	// ICMP ping with a hard 15-second context timeout to prevent hangs
-	// when the ping binary itself doesn't respect -W on all platforms.
 	result := &PingResult{Host: host, IP: ip}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
 
 	var cmd *exec.Cmd
 	switch runtime.GOOS {

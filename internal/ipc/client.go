@@ -3,6 +3,7 @@ package ipc
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -10,6 +11,16 @@ import (
 	"sync/atomic"
 	"time"
 )
+
+// ErrClientClosed is the sentinel returned (possibly wrapped) when a
+// caller's RPC was aborted because the client was Close()d — either
+// explicitly, or because the helper went away (ForceShutdown, crash,
+// helper-recovery swap).
+//
+// Use errors.Is(err, ErrClientClosed) to detect this case. Wrap with
+// fmt.Errorf("…: %w", ErrClientClosed) when adding context so the
+// sentinel still surfaces through errors.Is.
+var ErrClientClosed = errors.New("client closed")
 
 // EventHandler is called when an event notification is received.
 type EventHandler func(method string, params json.RawMessage)
@@ -65,9 +76,12 @@ func NewClient(addr string) (*Client, error) {
 		c.Close()
 		return nil, fmt.Errorf("initial ping failed: %w", err)
 	}
-	if ping.Version != ProtocolVersion {
+	// Major-version mismatch is fatal; minor-version difference is OK
+	// (newer side ignores fields it doesn't recognize). Parse the dotted
+	// version cheaply rather than pulling in a semver dependency.
+	if !MajorVersionMatches(ping.Version, ProtocolVersion) {
 		c.Close()
-		return nil, fmt.Errorf("protocol version mismatch: helper=%q client=%q", ping.Version, ProtocolVersion)
+		return nil, fmt.Errorf("protocol major-version mismatch: helper=%q client=%q", ping.Version, ProtocolVersion)
 	}
 
 	return c, nil
@@ -114,7 +128,7 @@ func (c *Client) Call(method string, params interface{}, result interface{}) err
 // CallWithContext makes an RPC call with explicit context for cancellation/timeout.
 func (c *Client) CallWithContext(ctx context.Context, method string, params interface{}, result interface{}) error {
 	if c.IsClosed() {
-		return fmt.Errorf("client closed")
+		return ErrClientClosed
 	}
 
 	id := atomic.AddUint64(&c.nextID, 1)
@@ -145,10 +159,10 @@ func (c *Client) CallWithContext(ctx context.Context, method string, params inte
 	case <-ctx.Done():
 		return ctx.Err()
 	case <-c.closed:
-		return fmt.Errorf("client closed")
+		return ErrClientClosed
 	case resp, ok := <-respCh:
 		if !ok {
-			return fmt.Errorf("client closed")
+			return ErrClientClosed
 		}
 		if resp.Error != nil {
 			return resp.Error

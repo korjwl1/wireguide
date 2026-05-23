@@ -35,20 +35,85 @@ type Session struct {
 	DisconnectReason string     `json:"disconnect_reason,omitempty"`
 }
 
+// historyFlushDelay debounces disk writes when multiple RecordConnect /
+// RecordDisconnect calls land in rapid succession (e.g. multi-tunnel
+// connect, batch reconciliation). Worst-case data loss on crash is
+// bounded by this window; in exchange we save N-1 disk write+marshal
+// cycles per burst.
+const historyFlushDelay = 100 * time.Millisecond
+
 // HistoryStore persists Sessions to history.json with a rolling cap.
 //
 // Concurrency: a single mutex guards both the in-memory list and the file —
 // Connect / Disconnect / Reconcile can race in multi-tunnel scenarios so
 // every public method takes the lock. All disk writes go through atomicRename
 // so a crash during save can never leave a half-written file.
+//
+// Disk-write coalescing: every public mutator marks the in-memory cache dirty
+// and schedules a deferred flush. Reads always go through loadLocked which
+// prefers the in-memory cache when present, so the dirty window is never
+// observable to callers.
 type HistoryStore struct {
-	mu   sync.Mutex
-	path string
+	mu         sync.Mutex
+	path       string
+	cache      []Session // nil until first load
+	cacheValid bool
+	dirty      bool
+	flushTimer *time.Timer
 }
 
 // NewHistoryStore creates a store backed by configDir/history.json.
 func NewHistoryStore(configDir string) *HistoryStore {
 	return &HistoryStore{path: filepath.Join(configDir, "history.json")}
+}
+
+// scheduleFlushLocked arms a debounced flush. Caller MUST hold h.mu.
+//
+// Concurrency: every body run is serialised through h.mu. A scheduleFlushLocked
+// arriving while a previous body is mid-save blocks on the lock; once it
+// gets in it Resets the timer for another tick. Worst case: a high-write
+// burst produces N+1 disk writes instead of N — still bounded, and each
+// write is atomic (saveLocked uses tmp + rename), so the file never sees
+// a partially-written snapshot.
+func (h *HistoryStore) scheduleFlushLocked() {
+	h.dirty = true
+	if h.flushTimer != nil {
+		// Reset on an AfterFunc timer is safe regardless of fired state
+		// (per time.AfterFunc docs): if it has already fired, Reset
+		// schedules another run; if not, it shifts the deadline forward.
+		h.flushTimer.Reset(historyFlushDelay)
+		return
+	}
+	h.flushTimer = time.AfterFunc(historyFlushDelay, func() {
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		if !h.dirty || !h.cacheValid {
+			return
+		}
+		if err := h.saveLocked(h.cache); err != nil {
+			slog.Warn("history: deferred flush failed", "error", err)
+			return
+		}
+		h.dirty = false
+	})
+}
+
+// Flush forces a synchronous write of pending changes. Call from shutdown
+// paths so the deferred-flush window doesn't lose recent records.
+func (h *HistoryStore) Flush() {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if !h.dirty || !h.cacheValid {
+		return
+	}
+	if h.flushTimer != nil {
+		h.flushTimer.Stop()
+	}
+	if err := h.saveLocked(h.cache); err != nil {
+		slog.Warn("history: explicit Flush failed", "error", err)
+		return
+	}
+	h.dirty = false
 }
 
 // RecordConnect opens a new session for tunnelName, appends it, and returns
@@ -68,9 +133,7 @@ func (h *HistoryStore) RecordConnect(tunnelName string) string {
 	sessions := h.loadLocked()
 	sessions = append(sessions, session)
 	sessions = trimSessions(sessions)
-	if err := h.saveLocked(sessions); err != nil {
-		slog.Warn("history: record connect failed", "tunnel", tunnelName, "error", err)
-	}
+	h.commitLocked(sessions)
 	return id
 }
 
@@ -115,9 +178,7 @@ func (h *HistoryStore) RecordDisconnect(id string, rx, tx int64, reason string) 
 	if !changed {
 		return
 	}
-	if err := h.saveLocked(sessions); err != nil {
-		slog.Warn("history: record disconnect failed", "id", id, "error", err)
-	}
+	h.commitLocked(sessions)
 }
 
 // CloseOpenSessions closes every session that still has nil EndTime — used
@@ -153,9 +214,7 @@ func (h *HistoryStore) CloseOpenSessions(reason string) {
 	if !changed {
 		return
 	}
-	if err := h.saveLocked(sessions); err != nil {
-		slog.Warn("history: close-open save failed", "error", err)
-	}
+	h.commitLocked(sessions)
 }
 
 // GetAll returns sessions newest-first. Stale 0-duration / 0-byte completed
@@ -181,6 +240,14 @@ func (h *HistoryStore) Clear() error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
+	// Drop deferred flush so it can't recreate the file after we delete it.
+	if h.flushTimer != nil {
+		h.flushTimer.Stop()
+	}
+	h.cache = nil
+	h.cacheValid = true
+	h.dirty = false
+
 	err := os.Remove(h.path)
 	if err != nil && os.IsNotExist(err) {
 		return nil
@@ -188,16 +255,25 @@ func (h *HistoryStore) Clear() error {
 	return err
 }
 
-// loadLocked reads history.json. Missing file → empty slice. Parse error →
-// rename to <path>.corrupt and start fresh, mirroring settings.go's
+// loadLocked returns the current session list. Prefers the in-memory cache;
+// reads from disk on the first call. Missing file → empty slice. Parse error
+// → rename to <path>.corrupt and start fresh, mirroring settings.go's
 // hardening so a corrupt history is preserved for debugging instead of
 // silently truncated by the next Add.
 func (h *HistoryStore) loadLocked() []Session {
+	if h.cacheValid {
+		// Return a copy so mutating callers can't tear the cache.
+		out := make([]Session, len(h.cache))
+		copy(out, h.cache)
+		return out
+	}
 	data, err := os.ReadFile(h.path)
 	if err != nil {
 		if !os.IsNotExist(err) {
 			slog.Warn("history: read failed", "error", err)
 		}
+		h.cache = nil
+		h.cacheValid = true
 		return nil
 	}
 	var sessions []Session
@@ -210,9 +286,24 @@ func (h *HistoryStore) loadLocked() []Session {
 			slog.Warn("history: corrupt file; backed up before resetting",
 				"path", h.path, "backup", corruptPath, "error", err)
 		}
+		h.cache = nil
+		h.cacheValid = true
 		return nil
 	}
-	return sessions
+	h.cache = sessions
+	h.cacheValid = true
+	// Return a copy so the mutating callers can't tear the cache.
+	out := make([]Session, len(sessions))
+	copy(out, sessions)
+	return out
+}
+
+// commitLocked stores the new session list in cache and schedules a flush.
+// Caller MUST hold h.mu.
+func (h *HistoryStore) commitLocked(sessions []Session) {
+	h.cache = sessions
+	h.cacheValid = true
+	h.scheduleFlushLocked()
 }
 
 // saveLocked atomically writes sessions with 0600 perms.

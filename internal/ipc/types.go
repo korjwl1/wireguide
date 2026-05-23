@@ -128,3 +128,12 @@ type ReportSSIDRequest struct {
 type AutoConnectPayload struct {
 	TunnelName string `json:"tunnel_name"`
 }
+
+// CriticalErrorPayload describes a permanently-dead helper goroutine.
+// Where is the goSafe name (e.g. "eventLoop", "latencyLoop"); Detail is a
+// short human-readable summary of the last panic / restart-budget breach.
+type CriticalErrorPayload struct {
+	Where  string `json:"where"`
+	Detail string `json:"detail"`
+}
+

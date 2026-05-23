@@ -5,54 +5,145 @@ package reconnect
 import (
 	"log/slog"
 	"sync"
+	"syscall"
 	"time"
+	"unsafe"
+
+	"golang.org/x/sys/windows"
 )
 
-// windowsSleepDetector detects sleep/wake on Windows using wall clock gap detection.
-// A more robust approach would use WM_POWERBROADCAST via win32 API.
+// windowsSleepDetector uses PowerRegisterSuspendResumeNotification to get an
+// instant signal on wake. The previous wall-clock-gap heuristic had up to
+// 40s detection latency, which felt broken to users opening their laptop
+// and watching the tunnel stay dead.
 //
-// TODO(M13): Replace polling with RegisterPowerSettingNotification for instant
-// wake detection. The current polling approach works but has up to a 30-second
-// detection delay. RegisterPowerSettingNotification with GUID_CONSOLE_DISPLAY_STATE
-// or GUID_MONITOR_POWER_ON would provide immediate notification. This requires
-// creating a hidden message-only window and a message pump (win32 GetMessage loop),
-// which is a non-trivial amount of platform-specific code.
+// Falls back to wall-clock polling if the notification can't be registered
+// (older Windows, restricted token, etc.).
 type windowsSleepDetector struct {
-	mu     sync.Mutex
-	wakeCh chan struct{}
-	stopCh chan struct{}
+	mu                 sync.Mutex
+	running            bool
+	wakeCh             chan struct{}
+	stopCh             chan struct{}
+	notifyHandle       uintptr
+	callbackTrampoline uintptr
 }
 
 func NewSleepDetector() SleepDetector {
-	return &windowsSleepDetector{
-		wakeCh: make(chan struct{}, 1),
-		stopCh: make(chan struct{}),
-	}
+	return &windowsSleepDetector{}
+}
+
+var (
+	modPowrprof = windows.NewLazySystemDLL("powrprof.dll")
+
+	procPowerRegisterSuspendResumeNotification   = modPowrprof.NewProc("PowerRegisterSuspendResumeNotification")
+	procPowerUnregisterSuspendResumeNotification = modPowrprof.NewProc("PowerUnregisterSuspendResumeNotification")
+)
+
+const (
+	// DEVICE_NOTIFY_CALLBACK = 2 — recipient is a struct with a callback pointer.
+	deviceNotifyCallback = 2
+
+	// PBT_APMSUSPEND = 4, PBT_APMRESUMEAUTOMATIC = 18, PBT_APMRESUMESUSPEND = 7.
+	// We treat anything but APMSUSPEND as a wake signal, since some systems
+	// only fire RESUMEAUTOMATIC (no UI session) on a lid-open.
+	pbtApmSuspend = 4
+)
+
+// deviceNotifySubscribeParams matches DEVICE_NOTIFY_SUBSCRIBE_PARAMETERS:
+//
+//	typedef struct _DEVICE_NOTIFY_SUBSCRIBE_PARAMETERS {
+//	  PDEVICE_NOTIFY_CALLBACK_ROUTINE Callback;
+//	  PVOID                            Context;
+//	} DEVICE_NOTIFY_SUBSCRIBE_PARAMETERS;
+type deviceNotifySubscribeParams struct {
+	Callback uintptr
+	Context  uintptr
 }
 
 func (d *windowsSleepDetector) Start() {
 	d.mu.Lock()
-	defer d.mu.Unlock()
-	// Reinitialize stopCh so the detector is reusable after Stop().
+	if d.running {
+		d.mu.Unlock()
+		return
+	}
+	d.running = true
+	d.wakeCh = make(chan struct{}, 1)
 	d.stopCh = make(chan struct{})
-	go d.poll()
+	d.mu.Unlock()
+
+	cb := syscall.NewCallback(func(_ uintptr, eventType uintptr, _ uintptr) uintptr {
+		if eventType == pbtApmSuspend {
+			slog.Info("PBT_APMSUSPEND (about to suspend)")
+			return 0
+		}
+		slog.Info("power resume notification received", "event", eventType)
+		d.mu.Lock()
+		ch := d.wakeCh
+		d.mu.Unlock()
+		if ch == nil {
+			return 0
+		}
+		select {
+		case ch <- struct{}{}:
+		default:
+		}
+		return 0
+	})
+
+	params := deviceNotifySubscribeParams{
+		Callback: cb,
+		Context:  0,
+	}
+
+	var handle uintptr
+	ret, _, _ := procPowerRegisterSuspendResumeNotification.Call(
+		uintptr(deviceNotifyCallback),
+		uintptr(unsafe.Pointer(&params)),
+		uintptr(unsafe.Pointer(&handle)),
+	)
+	if ret != 0 {
+		slog.Warn("PowerRegisterSuspendResumeNotification failed, falling back to poll",
+			"status", ret)
+		go d.poll()
+		return
+	}
+	d.mu.Lock()
+	d.notifyHandle = handle
+	d.callbackTrampoline = cb // keep alive
+	d.mu.Unlock()
+	slog.Info("Windows sleep/resume notification registered")
 }
 
 func (d *windowsSleepDetector) Stop() {
 	d.mu.Lock()
-	defer d.mu.Unlock()
+	if !d.running {
+		d.mu.Unlock()
+		return
+	}
+	d.running = false
+	stop := d.stopCh
+	handle := d.notifyHandle
+	d.notifyHandle = 0
+	d.mu.Unlock()
 	select {
-	case <-d.stopCh:
-		// Already closed; nothing to do.
+	case <-stop:
 	default:
-		close(d.stopCh)
+		close(stop)
+	}
+	if handle != 0 {
+		procPowerUnregisterSuspendResumeNotification.Call(handle)
 	}
 }
 
 func (d *windowsSleepDetector) WakeChan() <-chan struct{} {
+	d.mu.Lock()
+	defer d.mu.Unlock()
 	return d.wakeCh
 }
 
+// poll is the legacy wall-clock fallback. Kept for environments where
+// PowerRegisterSuspendResumeNotification fails (unusual but documented on
+// some Server SKUs that strip user32-adjacent APIs from system accounts).
 func (d *windowsSleepDetector) poll() {
 	lastCheck := time.Now()
 	const pollInterval = 10 * time.Second
@@ -69,11 +160,16 @@ func (d *windowsSleepDetector) poll() {
 			now := time.Now()
 			elapsed := now.Sub(lastCheck)
 			lastCheck = now
-
 			if elapsed > pollInterval+sleepThreshold {
-				slog.Info("sleep/wake detected", "elapsed", elapsed.Round(time.Second))
+				slog.Info("sleep/wake detected via wall-clock gap", "elapsed", elapsed.Round(time.Second))
+				d.mu.Lock()
+				ch := d.wakeCh
+				d.mu.Unlock()
+				if ch == nil {
+					continue
+				}
 				select {
-				case d.wakeCh <- struct{}{}:
+				case ch <- struct{}{}:
 				default:
 				}
 			}

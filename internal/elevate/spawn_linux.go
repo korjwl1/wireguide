@@ -15,6 +15,9 @@ import (
 // it backgrounds immediately on Start.
 func SpawnHelper(ctx context.Context, args Args) error {
 	_ = ctx
+	if err := ValidateArgs(args); err != nil {
+		return fmt.Errorf("invalid spawn args: %w", err)
+	}
 	if _, err := exec.LookPath("pkexec"); err != nil {
 		return fmt.Errorf("pkexec not found: PolicyKit is required for privilege elevation — install the 'polkit' package: %w", err)
 	}

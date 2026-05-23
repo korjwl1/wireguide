@@ -44,6 +44,8 @@
   let helperResetUnsub = null;
   let wifiSsidUnsub = null;
   let autoConnectedUnsub = null;
+  let criticalErrorUnsub = null;
+  let criticalErrors = []; // array of { where, detail, at } — shown as a persistent banner
 
   // App-level ESC handler: close the editor modal. ConfigEditor wraps
   // a CodeMirror instance whose own keymaps may handle ESC for things
@@ -146,6 +148,10 @@
       showConflictWarning = false;
       conflictList = [];
       pendingConnectName = '';
+      // Critical errors from the OLD helper are no longer relevant —
+      // the new helper started clean. Clearing here prevents stale
+      // banners from staying visible after a recovery.
+      criticalErrors = [];
       await initialLoad(TunnelService);
       await refreshStatus(TunnelService);
     });
@@ -170,6 +176,23 @@
     autoConnectedUnsub = Events.On('auto_connected', async () => {
       await applyFirewallSettings();
     });
+
+    // Critical helper-side failures (background goroutine exceeded its
+    // restart budget). Show as a persistent banner — these mean some
+    // helper subsystem (status broadcast, latency probe, wifi rules)
+    // is permanently dead and the user should restart the helper.
+    criticalErrorUnsub = Events.On('critical_error', (event) => {
+      const { where, detail } = event.data || {};
+      const next = [...criticalErrors, {
+        where: where || 'unknown',
+        detail: detail || '',
+        at: new Date().toLocaleTimeString(),
+      }];
+      // Cap at the 5 most recent entries. A storm of helper goSafe
+      // give-ups (e.g. multiple loops failing on a shared dependency)
+      // would otherwise fill the screen with banners and freeze the UI.
+      criticalErrors = next.slice(-5);
+    });
   });
 
   onDestroy(() => {
@@ -180,8 +203,13 @@
     if (helperResetUnsub) helperResetUnsub();
     if (wifiSsidUnsub) wifiSsidUnsub();
     if (autoConnectedUnsub) autoConnectedUnsub();
+    if (criticalErrorUnsub) criticalErrorUnsub();
     if (toastTimer) clearTimeout(toastTimer);
   });
+
+  function dismissCriticalError(idx) {
+    criticalErrors = criticalErrors.filter((_, i) => i !== idx);
+  }
 
   function showToast(msg) {
     if (toastTimer) clearTimeout(toastTimer);
@@ -555,6 +583,21 @@
 
   {#if toast}
     <div class="toast">{toast}</div>
+  {/if}
+
+  {#if criticalErrors.length > 0}
+    <div class="critical-banner" role="alert">
+      <div class="critical-banner-title">⚠ Helper subsystem failure</div>
+      {#each criticalErrors as e, i}
+        <div class="critical-banner-row">
+          <span class="critical-banner-where">{e.where}</span>
+          <span class="critical-banner-detail">{e.detail}</span>
+          <span class="critical-banner-time">{e.at}</span>
+          <button class="critical-banner-close" on:click={() => dismissCriticalError(i)} aria-label="Dismiss">×</button>
+        </div>
+      {/each}
+      <div class="critical-banner-hint">Restart the app to recover the affected subsystem.</div>
+    </div>
   {/if}
 
   <div class="layout">
@@ -1115,6 +1158,64 @@
     display: flex;
     flex-direction: column;
     overflow: hidden;
+  }
+
+  /* ---------- Critical helper-failure banner (top-centre, persistent) ---------- */
+  .critical-banner {
+    position: fixed;
+    top: var(--space-3);
+    left: 50%;
+    transform: translateX(-50%);
+    padding: var(--space-3) var(--space-4);
+    background: rgba(220, 60, 60, 0.96);
+    color: white;
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-md);
+    z-index: 400;
+    max-width: 640px;
+    min-width: 320px;
+    font: var(--text-body);
+  }
+  .critical-banner-title {
+    font-weight: 600;
+    margin-bottom: var(--space-2);
+  }
+  .critical-banner-row {
+    display: flex;
+    align-items: baseline;
+    gap: var(--space-2);
+    padding: var(--space-1) 0;
+    font-size: 0.875rem;
+  }
+  .critical-banner-where {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-weight: 600;
+    flex: 0 0 auto;
+  }
+  .critical-banner-detail {
+    flex: 1 1 auto;
+    word-break: break-word;
+    opacity: 0.9;
+  }
+  .critical-banner-time {
+    flex: 0 0 auto;
+    font-size: 0.75rem;
+    opacity: 0.75;
+  }
+  .critical-banner-close {
+    flex: 0 0 auto;
+    background: none;
+    border: none;
+    color: white;
+    font-size: 1.125rem;
+    cursor: pointer;
+    padding: 0 var(--space-2);
+    line-height: 1;
+  }
+  .critical-banner-hint {
+    margin-top: var(--space-2);
+    font-size: 0.75rem;
+    opacity: 0.85;
   }
 
   /* ---------- Toast (bottom-centre) ---------- */

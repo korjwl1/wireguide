@@ -39,7 +39,13 @@ type guiLogHandler struct {
 	pending []ipc.LogEntry
 }
 
-const pendingCap = 200
+// pendingCap is the maximum number of pre-Wails-bind log entries we
+// retain. Bootstrap on a slow disk + verbose DEBUG level can emit
+// several hundred entries (helper spawn, version probe, plist drift
+// check, IPC handshake, initial status fetch) — 200 was too tight and
+// silently dropped the tail. 1000 covers worst-case verbose paths with
+// minimal memory impact (each LogEntry ~150 bytes → ~150 KB ceiling).
+const pendingCap = 1000
 
 var guiLogLevel = new(slog.LevelVar)
 

@@ -10,6 +10,25 @@ import (
 // SendNotification sends an OS-level notification. Best-effort: failures are
 // logged at debug level but never propagated.
 func SendNotification(title, message string) {
+	// Strip control characters that would otherwise break the
+	// notification subsystem's display:
+	//   - NUL terminates C strings; osascript/notify-send silently
+	//     truncate at the first NUL.
+	//   - \n / \r split notify-send into multiple notifications on
+	//     some implementations.
+	//   - Bell/escape sequences can mis-render in toast renderers.
+	title = sanitizeNotificationText(title)
+	message = sanitizeNotificationText(message)
+
+	// If sanitization left both empty (input was pure control chars
+	// or whitespace), skip the notification entirely. osascript on
+	// macOS happily displays a blank notification card that the user
+	// can't dismiss; notify-send and PowerShell handle it but the
+	// result is just visual noise.
+	if title == "" && message == "" {
+		return
+	}
+
 	var err error
 	switch runtime.GOOS {
 	case "darwin":
@@ -22,6 +41,33 @@ func SendNotification(title, message string) {
 	if err != nil {
 		slog.Debug("notification failed", "error", err)
 	}
+}
+
+// sanitizeNotificationText replaces control characters (NUL, BEL, ESC,
+// CR, LF, TAB and other C0/C1 chars) with single spaces, collapsing
+// runs of whitespace. The exec.Command interface itself is shell-safe
+// (no shell invocation), so this is purely a display-correctness fix.
+func sanitizeNotificationText(s string) string {
+	if s == "" {
+		return ""
+	}
+	var b strings.Builder
+	b.Grow(len(s))
+	prevSpace := false
+	for _, r := range s {
+		// Treat C0 (U+0000..U+001F) and DEL (U+007F) as whitespace.
+		// Allow tab/space through as a single space.
+		if r < 0x20 || r == 0x7F {
+			if !prevSpace {
+				b.WriteByte(' ')
+				prevSpace = true
+			}
+			continue
+		}
+		b.WriteRune(r)
+		prevSpace = false
+	}
+	return strings.TrimSpace(b.String())
 }
 
 func notifyMac(title, message string) error {

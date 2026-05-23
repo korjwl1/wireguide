@@ -218,6 +218,10 @@ func Run(assetsHandler http.Handler, dataDir string) error {
 			// away — snapshotActiveStats needs the helper alive to fetch
 			// last-known rx/tx counters.
 			tunnelService.CloseHistorySessions("app_quit")
+			// Flush any deferred history writes synchronously. The
+			// debounced writer would otherwise lose the last 100ms of
+			// records when the GUI process exits.
+			historyStore.Flush()
 			c := clients.Get()
 			if c != nil {
 				// Bounded timeouts so a hung helper can't keep the GUI

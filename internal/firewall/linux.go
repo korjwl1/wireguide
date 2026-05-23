@@ -3,6 +3,7 @@
 package firewall
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"net"
@@ -10,7 +11,12 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"time"
 )
+
+// nftCmdTimeout bounds every nftables command. Without it, a contended
+// netlink socket (e.g. concurrent firewalld activity) could hang the helper.
+const nftCmdTimeout = 30 * time.Second
 
 // validIfaceName matches valid Linux interface names (alphanumeric, underscore, hyphen, max 15 chars).
 var validIfaceName = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,15}$`)
@@ -224,7 +230,7 @@ func (f *LinuxFirewall) DisableDNSProtection() error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	// LOW: Log errors from nft delete
-	if out, err := exec.Command("nft", "delete", "table", "inet", nftTable+"_dns").CombinedOutput(); err != nil {
+	if out, err := nftDeleteDNSTable(); err != nil {
 		slog.Warn("nft delete dns table failed", "error", err, "output", strings.TrimSpace(string(out)))
 	}
 	f.dnsProtectionEnabled = false
@@ -257,25 +263,40 @@ func (f *LinuxFirewall) Cleanup() error {
 	f.dnsProtectionEnabled = false
 	flushErr := nftFlush()
 	// Also clean up DNS table.
-	if out, err := exec.Command("nft", "delete", "table", "inet", nftTable+"_dns").CombinedOutput(); err != nil {
+	if out, err := nftDeleteDNSTable(); err != nil {
 		slog.Warn("nft delete dns table failed during cleanup", "error", err, "output", strings.TrimSpace(string(out)))
 	}
 	return flushErr
 }
 
 func nftApply(rules string) error {
-	cmd := exec.Command("nft", "-f", "-")
+	ctx, cancel := context.WithTimeout(context.Background(), nftCmdTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "nft", "-f", "-")
 	cmd.Stdin = strings.NewReader(rules)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			return fmt.Errorf("nft: timed out after %s (%s)", nftCmdTimeout, strings.TrimSpace(string(out)))
+		}
 		return fmt.Errorf("nft: %w (%s)", err, strings.TrimSpace(string(out)))
 	}
 	return nil
 }
 
+// nftDeleteDNSTable removes the wireguide_dns nftables table with a bounded
+// timeout. Returns the same (output, error) shape callers expect.
+func nftDeleteDNSTable() ([]byte, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), nftCmdTimeout)
+	defer cancel()
+	return exec.CommandContext(ctx, "nft", "delete", "table", "inet", nftTable+"_dns").CombinedOutput()
+}
+
 // nftFlush deletes the main wireguide nftables table and returns any error.
 func nftFlush() error {
-	if out, err := exec.Command("nft", "delete", "table", "inet", nftTable).CombinedOutput(); err != nil {
+	ctx, cancel := context.WithTimeout(context.Background(), nftCmdTimeout)
+	defer cancel()
+	if out, err := exec.CommandContext(ctx, "nft", "delete", "table", "inet", nftTable).CombinedOutput(); err != nil {
 		return fmt.Errorf("nft delete table: %w (%s)", err, strings.TrimSpace(string(out)))
 	}
 	return nil

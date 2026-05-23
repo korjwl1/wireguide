@@ -7,10 +7,10 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/korjwl1/wireguide/internal/diag"
 	"github.com/korjwl1/wireguide/internal/domain"
 	"github.com/korjwl1/wireguide/internal/ipc"
 	"github.com/korjwl1/wireguide/internal/storage"
-	"github.com/korjwl1/wireguide/internal/tunnel"
 )
 
 // ListTunnelsLocal returns stored tunnels WITHOUT asking the helper which one
@@ -114,7 +114,7 @@ func (s *TunnelService) ListTunnels() ([]TunnelInfo, error) {
 // for routing overlaps (e.g. Tailscale, another WireGuard instance). Runs
 // entirely in the GUI process — no IPC needed. The frontend calls this before
 // Connect so it can show a warning dialog if conflicts exist.
-func (s *TunnelService) CheckConflicts(name string) ([]tunnel.ConflictInfo, error) {
+func (s *TunnelService) CheckConflicts(name string) ([]diag.ConflictInfo, error) {
 	cfg, err := s.tunnelStore.Load(name)
 	if err != nil {
 		return nil, fmt.Errorf("loading tunnel %s: %w", name, err)
@@ -123,7 +123,7 @@ func (s *TunnelService) CheckConflicts(name string) ([]tunnel.ConflictInfo, erro
 	for _, peer := range cfg.Peers {
 		allowedIPs = append(allowedIPs, peer.AllowedIPs...)
 	}
-	conflicts, err := tunnel.CheckConflicts(allowedIPs)
+	conflicts, err := diag.CheckConflicts(allowedIPs)
 	if err != nil {
 		slog.Warn("conflict check failed", "tunnel", name, "error", err)
 		// Non-fatal — don't block connect if the scan itself fails.
@@ -481,9 +481,12 @@ func (s *TunnelService) ClearConnectionHistory() error {
 }
 
 // isClientClosed returns true for errors caused by the IPC client being closed
-// mid-call (e.g., health monitor swapped clients during recovery).
+// mid-call (e.g., health monitor swapped clients during recovery). Uses
+// errors.Is so wrapped errors still match — substring matching would have
+// false positives on unrelated errors whose messages happen to contain
+// "client closed".
 func isClientClosed(err error) bool {
-	return err != nil && strings.Contains(err.Error(), "client closed")
+	return errors.Is(err, ipc.ErrClientClosed)
 }
 
 // GetStatus queries the helper for the current connection status. IPC errors

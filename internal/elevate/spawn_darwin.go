@@ -40,6 +40,9 @@ const (
 //  3. Daemon installed but not running → bootout + bootstrap to restart.
 //  4. Dev fallback: if all else fails, osascript spawns helper directly.
 func SpawnHelper(ctx context.Context, args Args) error {
+	if err := ValidateArgs(args); err != nil {
+		return fmt.Errorf("invalid spawn args: %w", err)
+	}
 	// 1. Already running? (skip check if force-reinstalling after version mismatch)
 	if !args.ForceReinstall && isSocketLive(args.SocketPath) {
 		slog.Info("helper already running")
@@ -83,6 +86,13 @@ func generatePlistContent(exe string, args Args) string {
         <key>SuccessfulExit</key>
         <false/>
     </dict>
+    <!-- ProcessType omitted to inherit Standard (priority ~31). The
+         previous Background setting (priority ~4) caused packet-handling
+         latency on contended systems because launchd throttled the
+         helper's CPU and timer wakeups. ThrottleInterval still bounds
+         respawn rate to once per 5s in case of a crash loop. -->
+    <key>ThrottleInterval</key>
+    <integer>5</integer>
     <key>StandardErrorPath</key>
     <string>/var/log/wireguide-helper.log</string>
     <key>StandardOutPath</key>
@@ -229,29 +239,6 @@ func isSocketLive(socketPath string) bool {
 	}
 	conn.Close()
 	return true
-}
-
-// spawnViaOsascript launches the helper directly with root privileges via
-// osascript. Used during development when the LaunchDaemon is not installed.
-func spawnViaOsascript(args Args) error {
-	exe, err := SelfPath()
-	if err != nil {
-		return err
-	}
-
-	logPath := "/var/log/wireguide-helper.log"
-	cmd := fmt.Sprintf(
-		`(echo '' ; echo '==== helper spawn ====' ; date ; %s --helper --socket=%s --uid=%d --data-dir=%s) >> %s 2>&1 & disown`,
-		shellQuote(exe), shellQuote(args.SocketPath), args.SocketUID, shellQuote(args.DataDir), shellQuote(logPath),
-	)
-	escaped := strings.ReplaceAll(cmd, `\`, `\\`)
-	escaped = strings.ReplaceAll(escaped, `"`, `\"`)
-	script := fmt.Sprintf(
-		`do shell script "%s" with administrator privileges with prompt "WireGuide needs administrator access to install its VPN helper service.\n\nThe helper runs as a background service to manage VPN tunnels, firewall rules, and network configuration."`,
-		escaped,
-	)
-
-	return exec.Command("osascript", "-e", script).Run()
 }
 
 // shellQuote wraps a value in single quotes, escaping embedded single quotes.

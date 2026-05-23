@@ -1,4 +1,4 @@
-package tunnel
+package diag
 
 import (
 	"context"
@@ -10,6 +10,24 @@ import (
 	"strings"
 	"time"
 )
+
+// conflictCmdTimeout bounds the conflict-detection commands. These run on
+// every Connect; a hung command must not block the entire Connect path.
+const conflictCmdTimeout = 10 * time.Second
+
+func runConflictCmd(name string, args ...string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), conflictCmdTimeout)
+	defer cancel()
+	return exec.CommandContext(ctx, name, args...).CombinedOutput()
+}
+
+func runConflictCmdLC(name string, args ...string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), conflictCmdTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.Env = append(cmd.Environ(), "LC_ALL=C", "LANG=C")
+	return cmd.CombinedOutput()
+}
 
 // ConflictInfo describes a routing conflict with an existing interface.
 type ConflictInfo struct {
@@ -228,10 +246,10 @@ func socketExists(path string) bool {
 func processExists(name string) bool {
 	switch runtime.GOOS {
 	case "darwin", "linux":
-		out, _ := exec.Command("pgrep", "-x", name).CombinedOutput()
+		out, _ := runConflictCmd("pgrep", "-x", name)
 		return len(strings.TrimSpace(string(out))) > 0
 	case "windows":
-		out, _ := exec.Command("tasklist", "/FI", "IMAGENAME eq "+name+".exe").CombinedOutput()
+		out, _ := runConflictCmd("tasklist", "/FI", "IMAGENAME eq "+name+".exe")
 		return strings.Contains(string(out), name)
 	}
 	return false
@@ -261,9 +279,7 @@ func getInterfaceRoutes(ifaceName string) []string {
 }
 
 func getRoutesDarwin(ifaceName string) []string {
-	cmd := exec.Command("netstat", "-rn", "-f", "inet")
-	cmd.Env = append(cmd.Environ(), "LC_ALL=C", "LANG=C")
-	out, err := cmd.CombinedOutput()
+	out, err := runConflictCmdLC("netstat", "-rn", "-f", "inet")
 	if err != nil {
 		return nil
 	}
@@ -305,7 +321,7 @@ func getRoutesDarwin(ifaceName string) []string {
 }
 
 func getRoutesLinux(ifaceName string) []string {
-	out, err := exec.Command("ip", "route", "show", "dev", ifaceName).CombinedOutput()
+	out, err := runConflictCmd("ip", "route", "show", "dev", ifaceName)
 	if err != nil {
 		return nil
 	}

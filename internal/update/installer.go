@@ -1,5 +1,10 @@
 package update
 
+// CURRENTLY UNREFERENCED FROM PRODUCTION CODE — see the longer note on
+// DownloadUpdate in checker.go. Kept (and fully tested) so that adding
+// native Linux/Windows update flows later doesn't require re-implementing
+// the install path from scratch.
+
 import (
 	"fmt"
 	"os/exec"

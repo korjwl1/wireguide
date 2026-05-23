@@ -9,9 +9,9 @@ import (
 	"time"
 
 	"github.com/korjwl1/wireguide/internal/config"
+	"github.com/korjwl1/wireguide/internal/diag"
 	"github.com/korjwl1/wireguide/internal/domain"
 	"github.com/korjwl1/wireguide/internal/ipc"
-	"github.com/korjwl1/wireguide/internal/tunnel"
 	"github.com/korjwl1/wireguide/internal/update"
 )
 
@@ -21,6 +21,7 @@ import (
 func (h *Helper) registerHandlers() {
 	h.server.Handle(ipc.MethodPing, h.handlePing)
 	h.server.Handle(ipc.MethodShutdown, h.handleShutdown)
+	h.server.Handle(ipc.MethodForceShutdown, h.handleForceShutdown)
 	h.server.Handle(ipc.MethodSetLogLevel, h.handleSetLogLevel)
 	h.server.Handle(ipc.MethodConnect, h.handleConnect)
 	h.server.Handle(ipc.MethodDisconnect, h.handleDisconnect)
@@ -55,6 +56,46 @@ func (h *Helper) handleShutdown(params json.RawMessage) (interface{}, error) {
 	go func() {
 		time.Sleep(100 * time.Millisecond) // let the response go out first
 		h.shutdown()
+	}()
+	return ipc.Empty{}, nil
+}
+
+// handleForceShutdown bypasses graceful teardown and exits as fast as
+// possible. Used by the GUI's upgrade path when MethodShutdown failed
+// (wedged handler, stale state).
+//
+// We still do a minimum-effort firewall cleanup before exit:
+//   - macOS: pf anchors persist past process death, so leaving the kill
+//     switch up would lock the user out of the internet.
+//   - Linux: nftables wireguide table persists in the kernel, same risk.
+//   - Windows: WFP dynamic-session filters are auto-deleted by BFE when
+//     the process dies (FWPM_SESSION_FLAG_DYNAMIC contract), so the
+//     Cleanup call here is a no-op on the kernel side — still cheap.
+//
+// Tunnels themselves (TUN device + wireguard-go) are NOT torn down — the
+// utun/wg interface disappears when the process dies on Unix, and Wintun
+// adapters get cleaned up by our cleanupStaleWintunAdapter on next launch.
+// The whole sequence is bounded by a 1-second deadline so a wedged
+// firewall.Cleanup can't keep ForceShutdown hostage.
+func (h *Helper) handleForceShutdown(params json.RawMessage) (interface{}, error) {
+	go func() {
+		// First, give the response 50ms to actually reach the client.
+		// Then run firewall cleanup with a 1s hard cap, then exit.
+		time.Sleep(50 * time.Millisecond)
+		slog.Warn("helper ForceShutdown requested, cleaning firewall then exiting")
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			if err := h.firewall.Cleanup(); err != nil {
+				slog.Warn("ForceShutdown: firewall.Cleanup failed", "error", err)
+			}
+		}()
+		select {
+		case <-done:
+		case <-time.After(1 * time.Second):
+			slog.Warn("ForceShutdown: firewall.Cleanup timed out; exiting anyway")
+		}
+		os.Exit(0)
 	}()
 	return ipc.Empty{}, nil
 }
@@ -169,7 +210,7 @@ func (h *Helper) handleConnect(params json.RawMessage) (interface{}, error) {
 	for _, peer := range req.Config.Peers {
 		allowedIPs = append(allowedIPs, peer.AllowedIPs...)
 	}
-	if conflicts, err := tunnel.CheckConflicts(allowedIPs); err == nil && len(conflicts) > 0 {
+	if conflicts, err := diag.CheckConflicts(allowedIPs); err == nil && len(conflicts) > 0 {
 		for _, c := range conflicts {
 			slog.Warn("routing conflict detected",
 				"interface", c.InterfaceName,
@@ -178,16 +219,40 @@ func (h *Helper) handleConnect(params json.RawMessage) (interface{}, error) {
 		}
 	}
 
-	return ipc.Empty{}, h.doConnectHeld(req.Config)
+	if err := h.doConnectHeld(req.Config); err != nil {
+		return nil, err
+	}
+
+	// C4: Auto-enable DNS protection when the user is on a full-tunnel
+	// with explicit DNS configured. Without this, Windows' multi-homed
+	// DNS resolver leaks queries to the physical adapter's DNS servers
+	// in parallel with the tunnel's — defeating one of the main reasons
+	// a privacy-conscious user enables a full-tunnel VPN.
+	//
+	// Best-effort: surface the inner error to the GUI as a non-fatal
+	// warning by logging here. Disconnect already rolls back the
+	// firewall.
+	if req.Config.IsFullTunnel() && len(req.Config.Interface.DNS) > 0 {
+		status := h.manager.Status()
+		if status != nil && status.InterfaceName != "" {
+			if err := h.firewall.EnableDNSProtection(status.InterfaceName, req.Config.Interface.DNS); err != nil {
+				slog.Warn("auto-DNS protection failed (full-tunnel)", "error", err)
+			}
+		}
+	}
+
+	return ipc.Empty{}, nil
 }
 
 func (h *Helper) handleDisconnect(params json.RawMessage) (interface{}, error) {
 	h.connectMu.Lock()
 	defer h.connectMu.Unlock()
 
-	// Parse optional tunnel name from request.
+	// Parse optional tunnel name from request. len() on a nil slice
+	// returns 0, so the previous explicit `params != nil` check was
+	// redundant (S1009).
 	var tunnelName string
-	if params != nil && len(params) > 0 {
+	if len(params) > 0 {
 		var req ipc.DisconnectRequest
 		if err := json.Unmarshal(params, &req); err == nil {
 			tunnelName = req.TunnelName

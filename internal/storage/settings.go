@@ -79,7 +79,21 @@ func (s *SettingsStore) Load() (*Settings, error) {
 		// the corrupt file for debugging, and return default settings.
 		slog.Warn("settings file is corrupt, falling back to defaults",
 			"path", s.path, "error", err)
-		_ = os.Rename(s.path, s.path+".corrupt")
+		// If the .corrupt rename fails (e.g. Windows file-in-use, ENOSPC),
+		// the next Load would hit the same corrupt file and warn again
+		// forever. Try to remove the corrupt source as a last resort so
+		// the next Save can write a fresh file. Errors here are also
+		// best-effort — the in-memory defaults still work for this
+		// session.
+		corruptPath := s.path + ".corrupt"
+		if renameErr := os.Rename(s.path, corruptPath); renameErr != nil {
+			slog.Warn("could not back up corrupt settings; attempting direct removal",
+				"rename_error", renameErr)
+			if rmErr := os.Remove(s.path); rmErr != nil {
+				slog.Warn("could not remove corrupt settings either; will keep retrying on each Load",
+					"remove_error", rmErr)
+			}
+		}
 		return DefaultSettings(), nil
 	}
 	return settings, nil

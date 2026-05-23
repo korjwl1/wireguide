@@ -1,6 +1,9 @@
 package wifi
 
-import "sort"
+import (
+	"sort"
+	"strings"
+)
 
 // Rules defines WiFi auto-connect behavior. The model is per-tunnel:
 // each tunnel owns the list of SSIDs that should auto-activate it.
@@ -40,8 +43,15 @@ func (r *Rules) Action(ssid string) (action string, tunnelName string) {
 	if ssid == "" {
 		return "none", ""
 	}
+	// SSID matching uses case-insensitive comparison. The 802.11 standard
+	// is case-sensitive, but different OS Wi-Fi stacks normalize SSIDs
+	// inconsistently (some upper-case the first letter, some preserve
+	// vendor-broadcast capitalization). Users who type "MyWifi" into the
+	// rule list expect it to match a SSID broadcast as "mywifi" — the
+	// rare case where two real networks differ only in case is not worth
+	// the surprise factor of strict matching.
 	for _, trusted := range r.TrustedSSIDs {
-		if trusted == ssid {
+		if ssidEqual(trusted, ssid) {
 			return "disconnect", ""
 		}
 	}
@@ -52,10 +62,17 @@ func (r *Rules) Action(ssid string) (action string, tunnelName string) {
 	sort.Strings(names)
 	for _, name := range names {
 		for _, s := range r.PerTunnel[name].AutoConnectSSIDs {
-			if s == ssid {
+			if ssidEqual(s, ssid) {
 				return "connect", name
 			}
 		}
 	}
 	return "none", ""
+}
+
+// ssidEqual compares two SSIDs case-insensitively. EqualFold handles
+// Unicode-aware case folding (Turkish dotted I, German ß, etc.) which
+// matters when SSIDs contain non-ASCII characters.
+func ssidEqual(a, b string) bool {
+	return strings.EqualFold(a, b)
 }

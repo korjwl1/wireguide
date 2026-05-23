@@ -10,8 +10,6 @@ import (
 	"strings"
 )
 
-const launchDaemonLabel = "com.wireguide.daemon"
-
 // InstallAutostart sets up OS-level autostart for the GUI app.
 func InstallAutostart(appPath string) error {
 	switch runtime.GOOS {
@@ -48,11 +46,20 @@ func installMacAutostart(appPath string) error {
 		return fmt.Errorf("cannot determine home directory: %w", err)
 	}
 	plistDir := filepath.Join(home, "Library", "LaunchAgents")
-	os.MkdirAll(plistDir, 0755)
+	if err := os.MkdirAll(plistDir, 0755); err != nil {
+		return fmt.Errorf("creating LaunchAgents dir: %w", err)
+	}
 
 	// XML-escape appPath to prevent plist injection from special characters.
+	// xml.EscapeText returning an error means the escaping itself failed
+	// (extremely rare — only from the io.Writer surface) and the buffer
+	// may contain partial unescaped bytes. We MUST refuse to write the
+	// plist in that case, otherwise an attacker who controls the path
+	// could inject `</string>...<key>...` and modify our plist.
 	var b strings.Builder
-	xml.EscapeText(&b, []byte(appPath))
+	if err := xml.EscapeText(&b, []byte(appPath)); err != nil {
+		return fmt.Errorf("xml-escape app path: %w", err)
+	}
 	safeAppPath := b.String()
 
 	plist := fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
@@ -94,7 +101,9 @@ func installLinuxAutostart(appPath string) error {
 		configHome = filepath.Join(home, ".config")
 	}
 	autostartDir := filepath.Join(configHome, "autostart")
-	os.MkdirAll(autostartDir, 0755)
+	if err := os.MkdirAll(autostartDir, 0755); err != nil {
+		return fmt.Errorf("creating autostart dir: %w", err)
+	}
 
 	// Quote the Exec path per Desktop Entry Spec to handle spaces/special chars.
 	quotedPath := `"` + strings.ReplaceAll(appPath, `"`, `\"`) + `"`

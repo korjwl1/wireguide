@@ -107,9 +107,17 @@ func (d *darwinNetworkChangeDetector) Start() {
 	}
 	d.running = true
 	d.stopCh = make(chan struct{})
+	// wg.Add MUST be inside the lock. Per sync.WaitGroup docs: "calls
+	// with a positive delta that occur when the counter is zero must
+	// happen before a Wait". If Stop() races past the running guard
+	// and reaches wg.Wait() before Start's Add(1) lands, the Wait
+	// returns immediately and the subsequent Add(1) is a use-after-
+	// release. Adding inside the lock makes Stop()'s "if !running"
+	// branch the only path that can observe a zero counter — and
+	// that branch returns without waiting.
+	d.wg.Add(1)
 	d.mu.Unlock()
 
-	d.wg.Add(1)
 	go d.poll()
 }
 

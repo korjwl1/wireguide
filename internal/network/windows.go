@@ -3,13 +3,19 @@
 package network
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"net"
 	"os/exec"
-	"strconv"
 	"strings"
+	"time"
 )
+
+// cmdTimeout bounds every external command (netsh/route/PowerShell).
+// PowerShell cold-start can legitimately take 1-2s; 30s leaves headroom
+// for slow netsh operations on contested interfaces.
+const cmdTimeout = 30 * time.Second
 
 // WindowsManager implements NetworkManager for Windows using netsh/winipcfg.
 type WindowsManager struct {
@@ -84,7 +90,24 @@ func (m *WindowsManager) SetMTU(ifaceName string, mtu int) error {
 }
 
 func (m *WindowsManager) BringUp(ifaceName string) error {
-	// On Windows, the interface is usually already up after TUN creation
+	// On Windows, the interface is usually already up after TUN creation.
+	// Enable weak-host send/receive on the tunnel interface so that reply
+	// packets whose source IP is the tunnel address are accepted on whatever
+	// physical interface they arrive on (Windows IPv4 strong-host model
+	// would otherwise drop them in multi-homed setups). Mirrors what the
+	// official WireGuard-Windows client does via WFP, but using netsh keeps
+	// us self-contained for the netsh-based code path. Best-effort.
+	//
+	// KNOWN LIMITATION (enterprise): Active Directory Group Policy can
+	// enforce strong-host behaviour at the registry level (HKLM\SYSTEM\
+	// CurrentControlSet\Services\Tcpip\Parameters\Interfaces\{guid}\). On
+	// such managed machines our weakhostreceive=enabled is reverted by
+	// the next gpupdate. There is no programmatic workaround — the user
+	// must ask their IT admin to exempt the WireGuide adapter (or accept
+	// that multi-homed reply packets may be dropped). See README for the
+	// full operator note.
+	tryRunWin("set weakhostsend ipv4", "netsh", "interface", "ipv4", "set", "interface", ifaceName, "weakhostsend=enabled", "weakhostreceive=enabled", "store=active")
+	tryRunWin("set weakhostsend ipv6", "netsh", "interface", "ipv6", "set", "interface", ifaceName, "weakhostsend=enabled", "weakhostreceive=enabled", "store=active")
 	return nil
 }
 
@@ -132,15 +155,19 @@ func (m *WindowsManager) addFullTunnelRoutes(ifaceName string, endpoints []strin
 		if ip.To4() != nil {
 			// C8: Windows route command uses "mask" keyword, not CIDR notation.
 			if origGw != "" {
-				_ = runWin("route", "add", ipStr, "mask", "255.255.255.255", origGw, "metric", "1")
+				if err := runWin("route", "add", ipStr, "mask", "255.255.255.255", origGw, "metric", "1"); err != nil {
+					slog.Warn("endpoint bypass route add failed", "ip", ipStr, "gw", origGw, "error", err)
+				}
 			}
 		} else {
 			// M10: IPv6 endpoint bypass route. netsh syntax requires
 			// interface index (not gateway IP) as the second positional arg,
 			// then nexthop= for the gateway.
 			if origGw6 != "" && origIfIdx6 != "" {
-				_ = runWin("netsh", "interface", "ipv6", "add", "route",
-					ipStr+"/128", origIfIdx6, "nexthop="+origGw6, "metric=1")
+				if err := runWin("netsh", "interface", "ipv6", "add", "route",
+					ipStr+"/128", origIfIdx6, "nexthop="+origGw6, "metric=1"); err != nil {
+					slog.Warn("IPv6 endpoint bypass route add failed", "ip", ipStr, "gw", origGw6, "error", err)
+				}
 			}
 		}
 	}
@@ -164,8 +191,8 @@ func (m *WindowsManager) addFullTunnelRoutes(ifaceName string, endpoints []strin
 		return fmt.Errorf("adding 128.0.0.0/1: %w", err)
 	}
 	// IPv6: Same /1 split-route trick (non-fatal if IPv6 is unavailable)
-	_ = runWin("netsh", "interface", "ipv6", "add", "route", "::/1", "interface="+ifaceName, "nexthop=::", "metric=0")
-	_ = runWin("netsh", "interface", "ipv6", "add", "route", "8000::/1", "interface="+ifaceName, "nexthop=::", "metric=0")
+	tryRunWin("IPv6 ::/1 split route add", "netsh", "interface", "ipv6", "add", "route", "::/1", "interface="+ifaceName, "nexthop=::", "metric=0")
+	tryRunWin("IPv6 8000::/1 split route add", "netsh", "interface", "ipv6", "add", "route", "8000::/1", "interface="+ifaceName, "nexthop=::", "metric=0")
 
 	return nil
 }
@@ -173,10 +200,10 @@ func (m *WindowsManager) addFullTunnelRoutes(ifaceName string, endpoints []strin
 func (m *WindowsManager) RemoveRoutes(ifaceName string, allowedIPs []string, fullTunnel bool) error {
 	if fullTunnel {
 		// Remove /1 split routes (matching what addFullTunnelRoutes installed).
-		_ = runWin("netsh", "interface", "ip", "delete", "route", "0.0.0.0/1", ifaceName)
-		_ = runWin("netsh", "interface", "ip", "delete", "route", "128.0.0.0/1", ifaceName)
-		_ = runWin("netsh", "interface", "ipv6", "delete", "route", "::/1", ifaceName)
-		_ = runWin("netsh", "interface", "ipv6", "delete", "route", "8000::/1", ifaceName)
+		tryRunWin("delete 0.0.0.0/1", "netsh", "interface", "ip", "delete", "route", "0.0.0.0/1", ifaceName)
+		tryRunWin("delete 128.0.0.0/1", "netsh", "interface", "ip", "delete", "route", "128.0.0.0/1", ifaceName)
+		tryRunWin("delete ::/1", "netsh", "interface", "ipv6", "delete", "route", "::/1", ifaceName)
+		tryRunWin("delete 8000::/1", "netsh", "interface", "ipv6", "delete", "route", "8000::/1", ifaceName)
 		// Remove endpoint bypass routes
 		for _, ipStr := range m.bypassEndpoints {
 			if ipStr == "" {
@@ -188,11 +215,11 @@ func (m *WindowsManager) RemoveRoutes(ifaceName string, allowedIPs []string, ful
 			}
 			if ip.To4() != nil {
 				// C8: No CIDR notation for Windows route delete.
-				_ = runWin("route", "delete", ipStr)
+				tryRunWin("delete bypass route", "route", "delete", ipStr)
 			} else {
 				// IPv6 bypass was added via the physical interface index.
 				if m.origIfIdx6 != "" {
-					_ = runWin("netsh", "interface", "ipv6", "delete", "route", ipStr+"/128", m.origIfIdx6)
+					tryRunWin("delete IPv6 bypass route", "netsh", "interface", "ipv6", "delete", "route", ipStr+"/128", m.origIfIdx6)
 				}
 			}
 		}
@@ -203,7 +230,7 @@ func (m *WindowsManager) RemoveRoutes(ifaceName string, allowedIPs []string, ful
 		return nil
 	}
 	for _, cidr := range allowedIPs {
-		_ = runWin("netsh", "interface", "ip", "delete", "route", cidr, ifaceName)
+		tryRunWin("delete split route", "netsh", "interface", "ip", "delete", "route", cidr, ifaceName)
 	}
 	m.splitRoutes = nil
 	return nil
@@ -234,13 +261,15 @@ func (m *WindowsManager) SetDNS(ifaceName string, servers []string) error {
 	}
 	// Add additional DNS servers
 	for i := 1; i < len(servers); i++ {
-		_ = runWin("netsh", "interface", "ip", "add", "dns", ifaceName, servers[i], fmt.Sprintf("index=%d", i+1))
+		if err := runWin("netsh", "interface", "ip", "add", "dns", ifaceName, servers[i], fmt.Sprintf("index=%d", i+1)); err != nil {
+			slog.Warn("SetDNS: adding secondary DNS failed", "server", servers[i], "error", err)
+		}
 	}
 
 	// Set the VPN interface metric to 1 so Windows prefers its DNS over
 	// other interfaces, preventing DNS leaks through the physical adapter.
-	_ = runWin("netsh", "interface", "ip", "set", "interface", ifaceName, "metric=1")
-	_ = runWin("netsh", "interface", "ipv6", "set", "interface", ifaceName, "metric=1")
+	tryRunWin("set IPv4 iface metric", "netsh", "interface", "ip", "set", "interface", ifaceName, "metric=1")
+	tryRunWin("set IPv6 iface metric", "netsh", "interface", "ipv6", "set", "interface", ifaceName, "metric=1")
 
 	return nil
 }
@@ -268,7 +297,7 @@ func (m *WindowsManager) ResetDNSToSystemDefault() error {
 
 func (m *WindowsManager) RestoreDNS(ifaceName string) error {
 	// Reset the VPN interface DNS back to DHCP (cleanup).
-	_ = runWin("netsh", "interface", "ip", "set", "dns", ifaceName, "dhcp")
+	tryRunWin("reset VPN iface DNS to DHCP", "netsh", "interface", "ip", "set", "dns", ifaceName, "dhcp")
 
 	// Restore original DNS to the PHYSICAL interface it was saved from.
 	// If origDNSIface is empty, the DNS was likely never overridden.
@@ -280,21 +309,25 @@ func (m *WindowsManager) RestoreDNS(ifaceName string) error {
 		return err
 	}
 	for i := 1; i < len(m.origDNS); i++ {
-		_ = runWin("netsh", "interface", "ip", "add", "dns", restoreIface, m.origDNS[i], fmt.Sprintf("index=%d", i+1))
+		if err := runWin("netsh", "interface", "ip", "add", "dns", restoreIface, m.origDNS[i], fmt.Sprintf("index=%d", i+1)); err != nil {
+			slog.Warn("RestoreDNS: adding secondary DNS failed", "server", m.origDNS[i], "error", err)
+		}
 	}
 	m.origDNSIface = ""
 	return nil
 }
 
 func (m *WindowsManager) Cleanup(ifaceName string) error {
-	_ = m.RestoreDNS(ifaceName)
+	if err := m.RestoreDNS(ifaceName); err != nil {
+		slog.Warn("Cleanup: RestoreDNS failed", "iface", ifaceName, "error", err)
+	}
 	// Clean up /1 split routes (defensive — also try /0 in case of legacy state)
-	_ = runWin("netsh", "interface", "ip", "delete", "route", "0.0.0.0/1", ifaceName)
-	_ = runWin("netsh", "interface", "ip", "delete", "route", "128.0.0.0/1", ifaceName)
-	_ = runWin("netsh", "interface", "ip", "delete", "route", "0.0.0.0/0", ifaceName)
-	_ = runWin("netsh", "interface", "ipv6", "delete", "route", "::/1", ifaceName)
-	_ = runWin("netsh", "interface", "ipv6", "delete", "route", "8000::/1", ifaceName)
-	_ = runWin("netsh", "interface", "ipv6", "delete", "route", "::/0", ifaceName)
+	tryRunWin("cleanup 0.0.0.0/1", "netsh", "interface", "ip", "delete", "route", "0.0.0.0/1", ifaceName)
+	tryRunWin("cleanup 128.0.0.0/1", "netsh", "interface", "ip", "delete", "route", "128.0.0.0/1", ifaceName)
+	tryRunWin("cleanup 0.0.0.0/0", "netsh", "interface", "ip", "delete", "route", "0.0.0.0/0", ifaceName)
+	tryRunWin("cleanup ::/1", "netsh", "interface", "ipv6", "delete", "route", "::/1", ifaceName)
+	tryRunWin("cleanup 8000::/1", "netsh", "interface", "ipv6", "delete", "route", "8000::/1", ifaceName)
+	tryRunWin("cleanup ::/0", "netsh", "interface", "ipv6", "delete", "route", "::/0", ifaceName)
 	// Clean up endpoint bypass routes
 	for _, ipStr := range m.bypassEndpoints {
 		if ipStr == "" {
@@ -305,10 +338,10 @@ func (m *WindowsManager) Cleanup(ifaceName string) error {
 			continue
 		}
 		if ip.To4() != nil {
-			_ = runWin("route", "delete", ipStr)
+			tryRunWin("cleanup bypass route", "route", "delete", ipStr)
 		} else {
 			if m.origIfIdx6 != "" {
-				_ = runWin("netsh", "interface", "ipv6", "delete", "route", ipStr+"/128", m.origIfIdx6)
+				tryRunWin("cleanup IPv6 bypass route", "netsh", "interface", "ipv6", "delete", "route", ipStr+"/128", m.origIfIdx6)
 			}
 		}
 	}
@@ -317,61 +350,73 @@ func (m *WindowsManager) Cleanup(ifaceName string) error {
 	m.origIfIdx6 = ""
 	// M14: Clean up split-tunnel routes.
 	for _, cidr := range m.splitRoutes {
-		_ = runWin("netsh", "interface", "ip", "delete", "route", cidr, ifaceName)
+		tryRunWin("cleanup split route", "netsh", "interface", "ip", "delete", "route", cidr, ifaceName)
 	}
 	m.splitRoutes = nil
 	return nil
 }
 
-func getInterfaceIndex(ifaceName string) (string, error) {
-	out, err := exec.Command("powershell", "-NoProfile", "-Command",
-		fmt.Sprintf(`(Get-NetAdapter -Name '%s' -ErrorAction SilentlyContinue).InterfaceIndex`,
-			strings.ReplaceAll(ifaceName, "'", "''"))).CombinedOutput()
-	if err != nil {
-		return "", fmt.Errorf("failed to get interface index for %s: %w", ifaceName, err)
-	}
-	idx := strings.TrimSpace(string(out))
-	if idx == "" {
-		return "", fmt.Errorf("interface %s not found (empty index)", ifaceName)
-	}
-	return idx, nil
-}
-
 func getUpstreamMTU() int {
-	out, err := exec.Command("powershell", "-NoProfile", "-Command",
-		`(Get-NetIPInterface -AddressFamily IPv4 | Where-Object { $_.InterfaceAlias -notlike 'Loopback*' -and $_.ConnectionState -eq 'Connected' } | Sort-Object InterfaceMetric | Select-Object -First 1).NlMtu`).CombinedOutput()
-	if err != nil {
+	// Locate the default-route interface, then read its MTU directly via
+	// iphlpapi — no PowerShell cold start (saves ~1s per Connect).
+	def := getDefaultRoute(afInet)
+	if def == nil {
 		return 0
 	}
-	mtu := strings.TrimSpace(string(out))
-	if v, err := strconv.Atoi(mtu); err == nil && v > 0 {
-		return v
+	if mtu := findInterfaceMTU(def.InterfaceIndex); mtu > 0 {
+		return int(mtu)
 	}
 	return 0
 }
 
 func runWin(name string, args ...string) error {
-	cmd := exec.Command(name, args...)
+	ctx, cancel := context.WithTimeout(context.Background(), cmdTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, name, args...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			return fmt.Errorf("%s %s: timed out after %s (%s)", name, strings.Join(args, " "), cmdTimeout, strings.TrimSpace(string(out)))
+		}
 		return fmt.Errorf("%s %s: %w (%s)", name, strings.Join(args, " "), err, strings.TrimSpace(string(out)))
 	}
 	return nil
 }
 
-// getWindowsDefaultGateway attempts to detect the current IPv4 default gateway.
-// It first tries parsing `route print`, then falls back to PowerShell.
+// runWinOut runs a Windows command with a bounded context and returns combined
+// output. Used for parse-output queries (netsh/route/PowerShell) so they
+// can't hang the helper indefinitely.
+func runWinOut(name string, args ...string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), cmdTimeout)
+	defer cancel()
+	return exec.CommandContext(ctx, name, args...).CombinedOutput()
+}
+
+// tryRunWin runs a Windows command best-effort and logs failures at debug.
+// Use for cleanup operations where the target may legitimately not exist
+// (e.g. deleting a route that was never installed).
+func tryRunWin(why, name string, args ...string) {
+	if err := runWin(name, args...); err != nil {
+		slog.Debug("best-effort "+why+" failed", "cmd", name, "args", args, "error", err)
+	}
+}
+
+// getWindowsDefaultGateway returns the current IPv4 default gateway,
+// preferring the iphlpapi syscall (locale-independent + microsecond-fast).
+// Falls back to `route print` parsing, then PowerShell, so an unusual
+// kernel state still resolves.
 func getWindowsDefaultGateway() string {
-	// Primary: parse route print output.
+	if def := getDefaultRoute(afInet); def != nil && def.NextHop != nil {
+		return def.NextHop.String()
+	}
 	if gw := getDefaultGatewayFromRoutePrint(); gw != "" {
 		return gw
 	}
-	// LOW: PowerShell fallback for more robust gateway detection.
 	return getDefaultGatewayFromPowerShell()
 }
 
 func getDefaultGatewayFromRoutePrint() string {
-	out, err := exec.Command("route", "print", "0.0.0.0").CombinedOutput()
+	out, err := runWinOut("route", "print", "0.0.0.0")
 	if err != nil {
 		return ""
 	}
@@ -390,8 +435,8 @@ func getDefaultGatewayFromRoutePrint() string {
 }
 
 func getDefaultGatewayFromPowerShell() string {
-	out, err := exec.Command("powershell", "-NoProfile", "-Command",
-		`(Get-NetRoute -DestinationPrefix '0.0.0.0/0' | Sort-Object RouteMetric | Select-Object -First 1).NextHop`).CombinedOutput()
+	out, err := runWinOut("powershell", "-NoProfile", "-Command",
+		`(Get-NetRoute -DestinationPrefix '0.0.0.0/0' | Sort-Object RouteMetric | Select-Object -First 1).NextHop`)
 	if err != nil {
 		return ""
 	}
@@ -403,88 +448,50 @@ func getDefaultGatewayFromPowerShell() string {
 }
 
 // getCurrentWinDNS retrieves the current DNS servers for the given interface.
-// M11: Uses PowerShell Get-DnsClientServerAddress as primary method for
-// locale-independent results, falling back to netsh parsing.
+// Direct iphlpapi syscall — locale-independent and ~1000× faster than the
+// previous PowerShell path. netsh fallback retained in case the adapter is
+// in a transitional state and GetAdaptersAddresses misses it.
 func getCurrentWinDNS(ifaceName string) []string {
-	// Primary: PowerShell (locale-independent).
-	if servers := getDNSViaPowerShell(ifaceName); len(servers) > 0 {
+	if servers := getDNSServersForInterface(ifaceName); len(servers) > 0 {
 		return servers
 	}
-	// Fallback: parse netsh output defensively.
 	return getDNSViaNetsh(ifaceName)
 }
 
-func getDNSViaPowerShell(ifaceName string) []string {
-	cmd := fmt.Sprintf(
-		`(Get-DnsClientServerAddress -InterfaceAlias '%s' -AddressFamily IPv4 -ErrorAction SilentlyContinue).ServerAddresses -join ','`,
-		strings.ReplaceAll(ifaceName, "'", "''"),
-	)
-	out, err := exec.Command("powershell", "-NoProfile", "-Command", cmd).CombinedOutput()
-	if err != nil {
-		return nil
-	}
-	raw := strings.TrimSpace(string(out))
-	if raw == "" {
-		return nil
-	}
-	var servers []string
-	for _, s := range strings.Split(raw, ",") {
-		s = strings.TrimSpace(s)
-		if net.ParseIP(s) != nil {
-			servers = append(servers, s)
-		}
-	}
-	return servers
-}
-
 // getWindowsDefaultIPv6InterfaceIndex returns the interface index of the
-// physical adapter used for the IPv6 default route.
+// physical adapter used for the IPv6 default route. Direct syscall — no
+// PowerShell fork (saves ~1s per Connect).
 func getWindowsDefaultIPv6InterfaceIndex() string {
-	out, err := exec.Command("powershell", "-NoProfile", "-Command",
-		`(Get-NetRoute -DestinationPrefix '::/0' -ErrorAction SilentlyContinue | Sort-Object RouteMetric | Select-Object -First 1).InterfaceIndex`).CombinedOutput()
-	if err != nil {
+	def := getDefaultRoute(afInet6)
+	if def == nil || def.InterfaceIndex == 0 {
 		return ""
 	}
-	idx := strings.TrimSpace(string(out))
-	if idx == "" || idx == "0" {
-		return ""
-	}
-	return idx
+	return strconvU32(def.InterfaceIndex)
 }
 
-// getWindowsDefaultIPv6Gateway detects the current IPv6 default gateway using
-// PowerShell Get-NetRoute. Returns empty string if unavailable.
+// getWindowsDefaultIPv6Gateway returns the current IPv6 default gateway.
+// Direct syscall.
 func getWindowsDefaultIPv6Gateway() string {
-	out, err := exec.Command("powershell", "-NoProfile", "-Command",
-		`(Get-NetRoute -DestinationPrefix '::/0' -ErrorAction SilentlyContinue | Sort-Object RouteMetric | Select-Object -First 1).NextHop`).CombinedOutput()
-	if err != nil {
+	def := getDefaultRoute(afInet6)
+	if def == nil || def.NextHop == nil || def.NextHop.IsUnspecified() {
 		return ""
 	}
-	gw := strings.TrimSpace(string(out))
-	if net.ParseIP(gw) != nil && gw != "::" {
-		return gw
-	}
-	return ""
+	return def.NextHop.String()
 }
 
-// getWindowsPhysicalInterfaceName returns the name of the physical interface
-// that has the active default route (i.e., the one the user was using before
-// the tunnel). This is the correct interface to save/restore DNS for.
+// getWindowsPhysicalInterfaceName returns the FriendlyName of the
+// interface holding the IPv4 default route. Used to identify which
+// adapter's DNS to save/restore.
 func getWindowsPhysicalInterfaceName() string {
-	out, err := exec.Command("powershell", "-NoProfile", "-Command",
-		`(Get-NetRoute -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue | Sort-Object RouteMetric | Select-Object -First 1 | Get-NetAdapter -ErrorAction SilentlyContinue).Name`).CombinedOutput()
-	if err != nil {
+	def := getDefaultRoute(afInet)
+	if def == nil || def.InterfaceIndex == 0 {
 		return ""
 	}
-	name := strings.TrimSpace(string(out))
-	if name == "" {
-		return ""
-	}
-	return name
+	return getInterfaceNameByIndex(def.InterfaceIndex)
 }
 
 func getDNSViaNetsh(ifaceName string) []string {
-	out, _ := exec.Command("netsh", "interface", "ip", "show", "dns", ifaceName).CombinedOutput()
+	out, _ := runWinOut("netsh", "interface", "ip", "show", "dns", ifaceName)
 	var servers []string
 	for _, line := range strings.Split(string(out), "\n") {
 		line = strings.TrimSpace(line)

@@ -29,10 +29,26 @@ type DNSServer struct {
 	IsVPN    bool   `json:"is_vpn"` // true if this is the expected VPN DNS
 }
 
-// RunDNSLeakTest checks if DNS queries are going through the VPN.
-// It resolves a random subdomain via each configured system DNS server and
-// checks whether any non-VPN server actually handles the query.
+// RunDNSLeakTest is a context-less convenience wrapper for callers that
+// don't have one. Bounded by a hard 10-second cap so a hung resolver
+// can't lock up the diagnostic panel.
 func RunDNSLeakTest(expectedDNS []string) *DNSLeakResult {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	return RunDNSLeakTestContext(ctx, expectedDNS)
+}
+
+// RunDNSLeakTestContext checks if DNS queries are going through the VPN.
+// It resolves a random subdomain via each configured system DNS server in
+// PARALLEL and checks whether any non-VPN server actually handles the
+// query. The whole test honours ctx — if the caller cancels (user closes
+// the diagnostics panel) every in-flight resolver lookup aborts within
+// its own per-request timeout slot.
+//
+// Parallel execution caps wall-clock at the slowest single resolver
+// (typically <1s for working DNS, 3s for a dead one) instead of the sum
+// (which on a machine with 8 system DNS entries could exceed a minute).
+func RunDNSLeakTestContext(ctx context.Context, expectedDNS []string) *DNSLeakResult {
 	result := &DNSLeakResult{}
 
 	// Generate a fresh random subdomain so the test query can't be
@@ -58,28 +74,48 @@ func RunDNSLeakTest(expectedDNS []string) *DNSLeakResult {
 		expectedSet[dns] = true
 	}
 
+	type probeResult struct {
+		idx     int
+		hostname string
+		responds bool
+	}
+
+	probes := make(chan probeResult, len(systemDNS))
+	for i, dns := range systemDNS {
+		go func(idx int, dnsIP string) {
+			// Per-resolver budget: 3s. Caller's ctx still acts as the
+			// global ceiling — whichever expires first wins.
+			lookupCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+			defer cancel()
+
+			hn := ""
+			if names, err := (&net.Resolver{}).LookupAddr(lookupCtx, dnsIP); err == nil && len(names) > 0 {
+				hn = names[0]
+			}
+			responds := testDNSServerCtx(lookupCtx, dnsIP, testDomain)
+			probes <- probeResult{idx: idx, hostname: hn, responds: responds}
+		}(i, dns)
+	}
+
+	result.DNSServers = make([]DNSServer, len(systemDNS))
 	leaked := false
-	for _, dns := range systemDNS {
-		isVPN := expectedSet[dns]
-		lookupCtx, lookupCancel := context.WithTimeout(context.Background(), 5*time.Second)
-		hostname, _ := (&net.Resolver{}).LookupAddr(lookupCtx, dns)
-		lookupCancel()
-		hn := ""
-		if len(hostname) > 0 {
-			hn = hostname[0]
-		}
-
-		// Actually test whether this DNS server responds to queries.
-		// A server that is configured but unreachable is not a leak risk.
-		responds := testDNSServer(dns, testDomain)
-
-		result.DNSServers = append(result.DNSServers, DNSServer{
-			IP:       dns,
-			Hostname: hn,
-			IsVPN:    isVPN,
-		})
-		if !isVPN && responds {
-			leaked = true
+	for range systemDNS {
+		select {
+		case <-ctx.Done():
+			result.Error = "test cancelled or timed out"
+			result.Leaked = leaked
+			return result
+		case p := <-probes:
+			dnsIP := systemDNS[p.idx]
+			isVPN := expectedSet[dnsIP]
+			result.DNSServers[p.idx] = DNSServer{
+				IP:       dnsIP,
+				Hostname: p.hostname,
+				IsVPN:    isVPN,
+			}
+			if !isVPN && p.responds {
+				leaked = true
+			}
 		}
 	}
 
@@ -87,32 +123,24 @@ func RunDNSLeakTest(expectedDNS []string) *DNSLeakResult {
 	return result
 }
 
-// testDNSServer performs an actual DNS lookup of domain via the given server
-// to verify it handles queries. Returns true if the server responded.
-func testDNSServer(server, domain string) bool {
-	// Ensure host:port format for the dialer.
-	// Use JoinHostPort so IPv6 addresses are bracketed correctly.
+// testDNSServerCtx is testDNSServer with caller-supplied context. The
+// existing testDNSServer wraps this for the (deprecated) context-less
+// callers.
+func testDNSServerCtx(ctx context.Context, server, domain string) bool {
 	if _, _, err := net.SplitHostPort(server); err != nil {
 		server = net.JoinHostPort(server, "53")
 	}
 	resolver := &net.Resolver{
 		PreferGo: true,
-		Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
+		Dial: func(_ context.Context, _, _ string) (net.Conn, error) {
 			d := net.Dialer{Timeout: 3 * time.Second}
 			return d.DialContext(ctx, "udp", server)
 		},
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	// We don't care about the result — only whether the server responded
-	// at all (NXDOMAIN is still a valid response showing the server is active).
 	_, err := resolver.LookupHost(ctx, domain)
-	// A timeout or connection refusal means the server didn't respond.
-	// NXDOMAIN comes back as a *net.DNSError with IsNotFound=true — that
-	// still means the server IS responding.
 	if err != nil {
 		if dnsErr, ok := err.(*net.DNSError); ok && dnsErr.IsNotFound {
-			return true // server responded with NXDOMAIN
+			return true
 		}
 		return false
 	}

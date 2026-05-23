@@ -98,8 +98,21 @@ func LoadActiveState(dataDir string) []*ActiveTunnelState {
 			}
 			var st ActiveTunnelState
 			if err := json.Unmarshal(data, &st); err != nil {
-				slog.Warn("corrupt tunnel state file, removing", "file", e.Name(), "error", err)
-				os.Remove(filepath.Join(dir, e.Name()))
+				// Preserve the corrupt file as <name>.corrupt for post-mortem
+				// instead of deleting it outright. If the corruption is a
+				// bug rather than truncation, deleting silently throws away
+				// the only evidence. .corrupt files are not picked up by
+				// the .json glob below, so they don't re-trigger recovery.
+				srcPath := filepath.Join(dir, e.Name())
+				corruptPath := srcPath + ".corrupt"
+				slog.Warn("corrupt tunnel state file, preserving as .corrupt", "file", e.Name(), "error", err)
+				if renameErr := os.Rename(srcPath, corruptPath); renameErr != nil {
+					// Rename failed (e.g. .corrupt already exists from a
+					// prior run). Fall back to removing the source so
+					// recovery isn't permanently wedged.
+					slog.Warn("could not preserve corrupt state, removing", "rename_error", renameErr)
+					os.Remove(srcPath)
+				}
 				continue
 			}
 			states = append(states, &st)

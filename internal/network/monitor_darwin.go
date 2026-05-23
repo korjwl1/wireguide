@@ -19,12 +19,16 @@ import (
 // while a full-tunnel VPN is up would leave the endpoint bypass route
 // pointing at the stale gateway, breaking the tunnel.
 type routeMonitor struct {
-	mu       sync.Mutex
-	cmd      *exec.Cmd
-	stopCh   chan struct{}
-	running  bool
-	reapply  func()
-	debounce *time.Timer
+	mu      sync.Mutex
+	cmd     *exec.Cmd
+	stopCh  chan struct{}
+	running bool
+	reapply func()
+
+	// kick is a 1-buffer signal channel. trigger() non-blocking sends
+	// here; the debouncer goroutine drains and coalesces bursts. Zero
+	// allocation per event (no time.AfterFunc churn on flaky networks).
+	kick chan struct{}
 
 	// pendingStart is the AfterFunc timer for a deferred Start(); set by
 	// StartDelayed and cancelled by Stop() so a fast Connect→Disconnect
@@ -33,8 +37,8 @@ type routeMonitor struct {
 	// subprocess + its loop goroutine leak forever.
 	pendingStart *time.Timer
 
-	// pending tracks the in-flight debounce callback so Stop() can block
-	// until reapply finishes. Without this, Stop() followed by Connect()
+	// pending tracks the in-flight reapply callback so Stop() can block
+	// until it finishes. Without this, Stop() followed by Connect()
 	// could race with a pending reapply that's still touching shared state.
 	pending sync.WaitGroup
 }
@@ -60,7 +64,11 @@ func newRouteMonitor(reapply func()) *routeMonitor {
 type routeMonitorMgr struct {
 	mu   sync.Mutex
 	subs map[string]func()
-	m    *routeMonitor
+	// cachedSubs is the fan-out snapshot, invalidated on Subscribe/Unsubscribe.
+	// Avoids allocating a fresh []func() on every RTM event — on a flaky
+	// network the monitor can fire many times per second.
+	cachedSubs []func()
+	m          *routeMonitor
 }
 
 // rmMgr is the package-level singleton. Process-wide.
@@ -73,6 +81,7 @@ func (mgr *routeMonitorMgr) Subscribe(key string, cb func()) {
 	mgr.mu.Lock()
 	defer mgr.mu.Unlock()
 	mgr.subs[key] = cb
+	mgr.cachedSubs = nil // invalidate
 	if mgr.m == nil {
 		mgr.m = newRouteMonitor(mgr.fanOut)
 		mgr.m.StartDelayed(2 * time.Second)
@@ -86,6 +95,7 @@ func (mgr *routeMonitorMgr) Subscribe(key string, cb func()) {
 func (mgr *routeMonitorMgr) Unsubscribe(key string) {
 	mgr.mu.Lock()
 	delete(mgr.subs, key)
+	mgr.cachedSubs = nil // invalidate
 	var toStop *routeMonitor
 	if len(mgr.subs) == 0 {
 		toStop = mgr.m
@@ -98,19 +108,34 @@ func (mgr *routeMonitorMgr) Unsubscribe(key string) {
 }
 
 // fanOut is the single reapply callback registered with the underlying
-// monitor. It snapshots subscribers under the lock, then dispatches
-// each callback OUTSIDE the lock so a slow callback can't block
-// further fanOut iterations from being scheduled by the monitor's
-// debouncer.
+// monitor. It reuses a cached subscriber snapshot (invalidated by
+// Subscribe/Unsubscribe) so RTM bursts don't allocate per event.
+//
+// Each subscriber's callback runs under its own panic guard so a single
+// faulty DarwinManager.reapply doesn't strand the others — previously a
+// panic in subscriber N silently skipped subscribers N+1..M, leaving
+// half the active tunnels without reapply on a network change. The
+// underlying `debounceLoop` recovers too, but only at the outermost
+// level; per-callback recovery here is the per-tunnel boundary.
 func (mgr *routeMonitorMgr) fanOut() {
 	mgr.mu.Lock()
-	snapshot := make([]func(), 0, len(mgr.subs))
-	for _, cb := range mgr.subs {
-		snapshot = append(snapshot, cb)
+	if mgr.cachedSubs == nil {
+		mgr.cachedSubs = make([]func(), 0, len(mgr.subs))
+		for _, cb := range mgr.subs {
+			mgr.cachedSubs = append(mgr.cachedSubs, cb)
+		}
 	}
+	subs := mgr.cachedSubs
 	mgr.mu.Unlock()
-	for _, cb := range snapshot {
-		cb()
+	for _, cb := range subs {
+		func(cb func()) {
+			defer func() {
+				if r := recover(); r != nil {
+					slog.Warn("route monitor subscriber panic recovered", "panic", r)
+				}
+			}()
+			cb()
+		}(cb)
 	}
 }
 
@@ -155,14 +180,16 @@ func (rm *routeMonitor) Start() {
 
 	rm.cmd = cmd
 	rm.stopCh = make(chan struct{})
+	rm.kick = make(chan struct{}, 1)
 	rm.running = true
 
 	go rm.loop(stdout)
+	go rm.debounceLoop()
 	slog.Info("route monitor started")
 }
 
 // Stop terminates the monitor goroutine, kills the `route monitor` subprocess,
-// and waits for any in-flight debounce callback to finish before returning.
+// and waits for any in-flight reapply callback to finish before returning.
 // This guarantees that after Stop() returns no further reapply() calls will
 // occur, so the caller can safely tear down shared state.
 func (rm *routeMonitor) Stop() {
@@ -181,15 +208,6 @@ func (rm *routeMonitor) Stop() {
 	if rm.cmd != nil && rm.cmd.Process != nil {
 		_ = rm.cmd.Process.Kill()
 		_ = rm.cmd.Wait() // reap the zombie
-	}
-	// If a debounce timer is pending, cancel it. Stop() returns true when the
-	// timer was successfully stopped before firing — in that case the AfterFunc
-	// body (including its `defer pending.Done()`) will NEVER run, so we must
-	// balance the outstanding Add(1) manually to avoid deadlocking Wait() below.
-	if rm.debounce != nil {
-		if rm.debounce.Stop() {
-			rm.pending.Done()
-		}
 	}
 	rm.running = false
 	rm.mu.Unlock()
@@ -221,34 +239,77 @@ func (rm *routeMonitor) loop(stdout interface {
 	}
 }
 
-// trigger debounces rapid events — only fires reapply once per 500ms burst.
+// trigger signals the debounce loop. Non-blocking: if a kick is already
+// pending, additional events coalesce naturally inside debounceLoop.
+// Zero allocation per event.
 func (rm *routeMonitor) trigger() {
 	rm.mu.Lock()
-	defer rm.mu.Unlock()
-	if !rm.running {
+	kick := rm.kick
+	running := rm.running
+	rm.mu.Unlock()
+	if !running || kick == nil {
 		return
 	}
-	// Cancel the previous debounce timer (if any). If Stop() returns true the
-	// timer was cancelled before firing, meaning its AfterFunc body never ran
-	// and its `defer pending.Done()` never executed — balance the outstanding
-	// Add(1) here so the WaitGroup counter stays consistent.
-	if rm.debounce != nil {
-		if rm.debounce.Stop() {
-			rm.pending.Done()
-		}
+	select {
+	case kick <- struct{}{}:
+	default:
 	}
-	rm.pending.Add(1)
-	rm.debounce = time.AfterFunc(500*time.Millisecond, func() {
-		defer rm.pending.Done()
+}
 
-		rm.mu.Lock()
-		running := rm.running
-		rm.mu.Unlock()
-		if !running {
-			return
-		}
+// debounceLoop coalesces RTM event bursts into one reapply per ~500ms
+// quiet window. Single persistent timer + Reset — no per-event alloc.
+//
+// The timer is created once before the outer loop; between bursts it
+// lives in the "stopped, drained" state so the next Reset is well-defined
+// per Go's time.Timer docs.
+func (rm *routeMonitor) debounceLoop() {
+	const debounce = 500 * time.Millisecond
+	// Create the timer in stopped+drained state so the first Reset works
+	// cleanly. NewTimer(0) → fires immediately; Stop drains.
+	timer := time.NewTimer(debounce)
+	if !timer.Stop() {
+		<-timer.C
+	}
+	// Recover from any reapply panic so Stop()'s pending.Wait can't hang.
+	runReapply := func() {
+		defer func() {
+			if r := recover(); r != nil {
+				slog.Error("route monitor reapply panic recovered", "panic", r)
+			}
+		}()
 		if rm.reapply != nil {
 			rm.reapply()
 		}
-	})
+	}
+	for {
+		// Wait for the first kick of a new burst.
+		select {
+		case <-rm.stopCh:
+			return
+		case <-rm.kick:
+		}
+		timer.Reset(debounce)
+		settling := true
+		for settling {
+			select {
+			case <-rm.stopCh:
+				if !timer.Stop() {
+					<-timer.C
+				}
+				return
+			case <-rm.kick:
+				if !timer.Stop() {
+					<-timer.C
+				}
+				timer.Reset(debounce)
+			case <-timer.C:
+				settling = false
+			}
+		}
+		// Burst settled; run reapply under pending so Stop() waits for it
+		// before returning.
+		rm.pending.Add(1)
+		runReapply()
+		rm.pending.Done()
+	}
 }

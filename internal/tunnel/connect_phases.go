@@ -1,6 +1,7 @@
 package tunnel
 
 import (
+	"context"
 	"log/slog"
 
 	"github.com/korjwl1/wireguide/internal/domain"
@@ -23,7 +24,7 @@ import (
 // Note: Pre/PostUp/Down script execution was removed as a security hardening
 // measure. The config parser still accepts these fields so existing configs
 // import without error, but the scripts are silently ignored.
-func (m *Manager) connectPhases(cfg *domain.WireGuardConfig, netMgr network.NetworkManager) (*Engine, error) {
+func (m *Manager) connectPhases(ctx context.Context, cfg *domain.WireGuardConfig, netMgr network.NetworkManager) (*Engine, error) {
 	// Compute fullTunnel early — needed by the rollback closure and later
 	// by AddRoutes. It only depends on cfg which is a parameter.
 	fullTunnel := cfg.IsFullTunnel()
@@ -47,9 +48,27 @@ func (m *Manager) connectPhases(cfg *domain.WireGuardConfig, netMgr network.Netw
 		if err := netMgr.RemoveRoutes(ifaceName, nil, fullTunnel); err != nil {
 			slog.Warn("rollback: RemoveRoutes failed", "error", err)
 		}
-		_ = netMgr.Cleanup(ifaceName)
+		if err := netMgr.Cleanup(ifaceName); err != nil {
+			slog.Warn("rollback: network Cleanup failed", "iface", ifaceName, "error", err)
+		}
 		engine.Close()
 		return primary
+	}
+
+	// checkCtx is the per-phase cancellation gate. The individual exec
+	// helpers inside netMgr have their own bounded timeouts (cmdTimeout),
+	// so a hard limit on each phase is still ~30s even when ctx isn't
+	// cancelled. But if the GUI cancels mid-Connect (user clicked Cancel
+	// or app is shutting down), we exit at the next phase boundary
+	// instead of grinding through every remaining step.
+	checkCtx := func() error {
+		if err := ctx.Err(); err != nil {
+			return rollback(newTunnelError(ErrCancelled, "connect cancelled mid-phase", err))
+		}
+		return nil
+	}
+	if err := checkCtx(); err != nil {
+		return nil, err
 	}
 
 	// 3. MTU — pass the user-configured value straight through. If it's 0
@@ -60,15 +79,24 @@ func (m *Manager) connectPhases(cfg *domain.WireGuardConfig, netMgr network.Netw
 	if err := netMgr.SetMTU(ifaceName, cfg.Interface.MTU); err != nil {
 		return nil, rollback(newTunnelError(ErrNetwork, "setting MTU", err))
 	}
+	if err := checkCtx(); err != nil {
+		return nil, err
+	}
 
 	// 4. Address
 	if err := netMgr.AssignAddress(ifaceName, cfg.Interface.Address); err != nil {
 		return nil, rollback(newTunnelError(ErrNetwork, "assigning address", err))
 	}
+	if err := checkCtx(); err != nil {
+		return nil, err
+	}
 
 	// 5. Bring up
 	if err := netMgr.BringUp(ifaceName); err != nil {
 		return nil, rollback(newTunnelError(ErrNetwork, "bringing up interface", err))
+	}
+	if err := checkCtx(); err != nil {
+		return nil, err
 	}
 
 	// 6. Routes + endpoint bypass.
@@ -90,6 +118,9 @@ func (m *Manager) connectPhases(cfg *domain.WireGuardConfig, netMgr network.Netw
 	endpointIPs := engine.ResolvedEndpointIPs()
 	if err := netMgr.AddRoutes(ifaceName, allAllowedIPs, fullTunnel, endpointIPs, cfg.Interface.Table, cfg.Interface.FwMark); err != nil {
 		return nil, rollback(newTunnelError(ErrNetwork, "adding routes", err))
+	}
+	if err := checkCtx(); err != nil {
+		return nil, err
 	}
 
 	// 7. DNS — fatal when DNS servers are explicitly configured (matching
@@ -196,7 +227,9 @@ func (m *Manager) disconnectPhases(cfg *domain.WireGuardConfig, engine *Engine, 
 		allAllowedIPs = append(allAllowedIPs, peer.AllowedIPs...)
 	}
 	if netMgr != nil {
-		_ = netMgr.RemoveRoutes(ifaceName, allAllowedIPs, cfg.IsFullTunnel())
+		if err := netMgr.RemoveRoutes(ifaceName, allAllowedIPs, cfg.IsFullTunnel()); err != nil {
+			slog.Warn("disconnect: RemoveRoutes failed", "iface", ifaceName, "error", err)
+		}
 	}
 
 	// TUN
@@ -223,7 +256,9 @@ func (m *Manager) disconnectPhases(cfg *domain.WireGuardConfig, engine *Engine, 
 					}
 				}
 			}
-			_ = netMgr.Cleanup(ifaceName)
+			if err := netMgr.Cleanup(ifaceName); err != nil {
+				slog.Warn("disconnect: network Cleanup failed", "iface", ifaceName, "error", err)
+			}
 			m.ClearPreModDNS()
 		}
 	}
@@ -250,7 +285,9 @@ func (m *Manager) disconnectPhases(cfg *domain.WireGuardConfig, engine *Engine, 
 	}
 
 	// Clear crash-recovery state for this specific tunnel
-	_ = ClearActiveState(m.dataDir, cfg.Name)
+	if err := ClearActiveState(m.dataDir, cfg.Name); err != nil {
+		slog.Warn("disconnect: ClearActiveState failed", "tunnel", cfg.Name, "error", err)
+	}
 
 	slog.Info("tunnel disconnected", "name", cfg.Name)
 }

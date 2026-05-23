@@ -161,9 +161,14 @@ func (m *Monitor) Start() {
 	m.running = true
 	// Recreate stopCh so Start() works after a previous Stop().
 	m.stopCh = make(chan struct{})
+	// wg.Add MUST be inside the lock — see comment in
+	// network_darwin.go's Start(). Same WaitGroup race risk: if Stop
+	// observes running=false (via the early-return guard) before this
+	// Add(1) lands, Wait() could return before the goroutines actually
+	// finish. Lock-protected Add closes that window.
+	m.wg.Add(2)
 	m.mu.Unlock()
 
-	m.wg.Add(2)
 	go func() {
 		defer m.wg.Done()
 		defer func() {

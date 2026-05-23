@@ -2,8 +2,11 @@ package gui
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"log/slog"
+	"net"
 	"os"
 	"sync"
 	"time"
@@ -55,8 +58,46 @@ func ensureHelper(ctx context.Context, dataDir string) (*ipc.Client, error) {
 				slog.Warn("helper version mismatch, upgrading",
 					"helper", helperAppVersion, "gui", guiVersion)
 			}
-			_ = client.Call(ipc.MethodShutdown, nil, nil)
+			// Graceful shutdown first; if it fails, escalate to
+			// ForceShutdown which the helper handles internally via
+			// os.Exit. Cross-privilege Kill from the GUI (normal user)
+			// to the helper (root/SYSTEM) doesn't work, so we ask the
+			// helper to terminate itself.
+			helperPID := resp.PID
+			shutdownErr := client.Call(ipc.MethodShutdown, nil, nil)
+			if shutdownErr != nil {
+				slog.Warn("helper Shutdown RPC failed, escalating to ForceShutdown",
+					"error", shutdownErr)
+				forceErr := client.Call(ipc.MethodForceShutdown, nil, nil)
+				// ForceShutdown's handler does `time.Sleep(50ms); os.Exit`,
+				// so the response may not reach us before the process
+				// dies — Call returns "client closed" / EOF in that case.
+				// That's actually a SUCCESS signal: helper is dead, which
+				// is exactly what we wanted.
+				if forceErr == nil || isHelperGoneErr(forceErr) {
+					shutdownErr = nil
+				} else {
+					slog.Warn("helper ForceShutdown also failed",
+						"error", forceErr, "pid", helperPID)
+				}
+			}
 			client.Close()
+			// Only attempt last-resort cross-privilege kill if the user is
+			// running an un-elevated dev helper (same UID — proc.Kill
+			// works). For LaunchDaemon/SYSTEM helpers this will fail with
+			// EPERM, but logging it is still useful. We do NOT remove the
+			// socket file when the helper might still be alive — that
+			// would race a fresh listener.
+			if shutdownErr != nil && helperPID > 0 {
+				if killErr := elevate.KillProcess(helperPID); killErr != nil {
+					slog.Warn("helper still up after Shutdown+ForceShutdown; cross-privilege kill failed",
+						"pid", helperPID, "error", killErr,
+						"hint", "the next helper spawn will fail until this PID is cleared")
+				} else {
+					// Same-UID kill succeeded; safe to clean up the socket.
+					elevate.RemoveStaleSocket(addr)
+				}
+			}
 			// Force reinstall so SpawnHelper skips the "already running"
 			// check — KeepAlive may have restarted the old binary already.
 			forceReinstall = true
@@ -217,4 +258,23 @@ func recoverHelper(clients *ipc.ClientHolder, bridge *eventBridge, dataDir strin
 	clients.Set(newClient)
 	bridge.Resubscribe()
 	return true
+}
+
+// isHelperGoneErr returns true when the error looks like "the helper
+// closed the connection on us" — which is exactly what we expect when
+// ForceShutdown succeeded. Used by the upgrade path to treat EOF as
+// success rather than a failure.
+//
+// All four detection paths use typed/sentinel errors so wrapped errors
+// (fmt.Errorf("…: %w", err)) still match. The previous substring-based
+// check had false positives on normal RPC errors whose messages
+// happened to contain "EOF" or "connection reset".
+func isHelperGoneErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	return errors.Is(err, io.EOF) ||
+		errors.Is(err, io.ErrUnexpectedEOF) ||
+		errors.Is(err, net.ErrClosed) ||
+		errors.Is(err, ipc.ErrClientClosed)
 }
