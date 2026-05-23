@@ -29,13 +29,26 @@ func runPfctl(args ...string) ([]byte, error) {
 // validIfaceName matches typical macOS interface names like utun4, en0, lo0.
 var validIfaceName = regexp.MustCompile(`^[a-z]+[0-9]+$`)
 
-// anchorName is the pf anchor where WireGuide loads its rules.  macOS ships
-// with `anchor "com.apple/*" all` in pf.conf, so our anchor is automatically
-// evaluated without modifying the main ruleset.
-const anchorName = "com.apple.wireguide"
+// anchorName is the pf anchor where WireGuide loads its rules.
+//
+// CRITICAL: the path MUST start with "com.apple/" (slash, not dot) so it
+// matches the wildcard `anchor "com.apple/*"` declared in /etc/pf.conf.
+// In pf, '/' is the parent/child anchor path separator while '.' is just
+// a character — an anchor literally named "com.apple.wireguide" (dot)
+// does NOT match the "com.apple/*" wildcard, so its rules would load
+// silently and never be evaluated. That's exactly the bug we hit before
+// switching to the slash form.
+const anchorName = "com.apple/wireguide"
 
 // dnsAnchorName is the sub-anchor for DNS protection rules.
 const dnsAnchorName = anchorName + "/dns"
+
+// dnsSubAnchorRel is the DNS sub-anchor name as referenced from *inside*
+// the parent anchor's rule body. pf resolves `anchor "name"` relative
+// to the current anchor scope, so writing the full path inside the
+// parent would create a doubled path (com.apple/wireguide/com.apple/
+// wireguide/dns) that never gets hit.
+const dnsSubAnchorRel = "dns"
 
 // savedPfStateFile persists whether pf was enabled before WireGuide modified
 // it, so crash recovery can restore the original enabled/disabled state.
@@ -43,10 +56,10 @@ const savedPfStateFile = "/Library/Application Support/wireguide/pf-was-enabled"
 
 // DarwinFirewall implements FirewallManager using macOS pf (packet filter).
 //
-// All WireGuide rules are loaded into the `com.apple.wireguide` anchor.
-// macOS ships with `anchor "com.apple/*" all` in pf.conf, so our anchor
-// is automatically evaluated without modifying the main ruleset.
-// DNS protection rules live in a sub-anchor `com.apple.wireguide/dns`.
+// All WireGuide rules are loaded into the `com.apple/wireguide` anchor.
+// macOS ships with `anchor "com.apple/*" all` in pf.conf, so any anchor
+// under the com.apple/ path is automatically evaluated. DNS protection
+// rules live in a sub-anchor `com.apple/wireguide/dns`.
 type DarwinFirewall struct {
 	mu                   sync.Mutex
 	killSwitchEnabled    bool
@@ -61,15 +74,67 @@ type DarwinFirewall struct {
 	// DNS rules and DNS leaks despite dnsProtectionEnabled==true.
 	savedDNSInterface string
 	savedDNSServers   []string
+	// savedTunnelIface / savedTunnelEndpoints cache the most recent
+	// kill-switch tunnel parameters so AddKillSwitchTunnel /
+	// RemoveKillSwitchTunnel can rebuild the pf anchor without losing
+	// the active tunnel's permits when only one of (iface, dns) changes.
+	savedTunnelIface     string
+	savedTunnelEndpoints []string
 }
 
 func NewPlatformFirewall() FirewallManager {
 	return &DarwinFirewall{}
 }
 
+// buildKillSwitchRules renders the pf rule text loaded into the
+// `com.apple.wireguide` main anchor. interfaceName may be "" — when so,
+// no per-iface permit ("pass quick on utunX all") is emitted, leaving
+// only the base set (loopback + DHCP + endpoint permits if any) + the
+// DNS sub-anchor directive + catch-all block. That's the layout used
+// when the user toggles the kill switch on without an active tunnel.
+func buildKillSwitchRules(interfaceName string, endpoints []string) (string, error) {
+	var rules strings.Builder
+	rules.WriteString("# WireGuide kill switch rules\n")
+	rules.WriteString("# Allow loopback\n")
+	rules.WriteString("pass quick on lo0 all\n")
+
+	for _, ep := range endpoints {
+		ip, port, _ := net.SplitHostPort(ep)
+		if ip == "" {
+			ip = ep
+		}
+		if ip == "" {
+			continue
+		}
+		if net.ParseIP(ip) == nil {
+			return "", fmt.Errorf("invalid endpoint IP %q", ip)
+		}
+		if port != "" {
+			fmt.Fprintf(&rules, "pass out quick proto udp to %s port %s\n", ip, port)
+		} else {
+			fmt.Fprintf(&rules, "pass out quick proto udp to %s\n", ip)
+		}
+	}
+
+	rules.WriteString("pass out quick proto udp from any port 68 to any port 67\n")
+	rules.WriteString("pass out quick proto udp from any port 546 to any port 547\n")
+
+	if interfaceName != "" {
+		fmt.Fprintf(&rules, "pass quick on %s all\n", interfaceName)
+	}
+
+	fmt.Fprintf(&rules, "anchor \"%s\"\n", dnsSubAnchorRel)
+	rules.WriteString("block drop out all\n")
+	rules.WriteString("block drop in all\n")
+	return rules.String(), nil
+}
+
 func (f *DarwinFirewall) EnableKillSwitch(interfaceName string, _ []string, endpoints []string) error {
-	// M1: Validate interface name
-	if !validIfaceName.MatchString(interfaceName) {
+	// Empty interfaceName is a valid input — the user toggled the kill
+	// switch on without an active tunnel. We install the base block-all
+	// set only; once a tunnel connects, AddKillSwitchTunnel folds its
+	// per-iface permit + endpoint permits in.
+	if interfaceName != "" && !validIfaceName.MatchString(interfaceName) {
 		return fmt.Errorf("invalid interface name %q", interfaceName)
 	}
 
@@ -79,78 +144,28 @@ func (f *DarwinFirewall) EnableKillSwitch(interfaceName string, _ []string, endp
 		slog.Warn("failed to persist pf enabled state to disk", "error", err)
 	}
 
-	// Build kill switch rules — loaded into the anchor, not the main ruleset.
-	// macOS ships with `anchor "com.apple/*" all` in pf.conf, so our
-	// anchor `com.apple.wireguide` is automatically evaluated without
-	// modifying the main ruleset at all.
-	var rules strings.Builder
-	rules.WriteString("# WireGuide kill switch rules\n")
-	rules.WriteString("# Allow loopback\n")
-	rules.WriteString("pass quick on lo0 all\n")
-
-	// Allow each WireGuard endpoint (restrict to proto udp + port when available).
-	// Without port/protocol restriction, ALL traffic to the endpoint IP bypasses
-	// the kill switch, which is a security concern if the WireGuard server runs
-	// other services on the same IP.
-	for _, ep := range endpoints {
-		ip, port, _ := net.SplitHostPort(ep)
-		if ip == "" {
-			ip = ep // fallback: bare IP without port
-		}
-		if ip == "" {
-			continue
-		}
-		if net.ParseIP(ip) == nil {
-			return fmt.Errorf("invalid endpoint IP %q", ip)
-		}
-		if port != "" {
-			fmt.Fprintf(&rules, "pass out quick proto udp to %s port %s\n", ip, port)
-		} else {
-			// No port info — allow all UDP to this IP (WireGuard is always UDP)
-			fmt.Fprintf(&rules, "pass out quick proto udp to %s\n", ip)
-		}
+	// Ensure the default pf ruleset is loaded so our anchor is
+	// actually evaluated — see loadDefaultPfRuleset's docstring.
+	if err := loadDefaultPfRuleset(); err != nil {
+		slog.Warn("loading /etc/pf.conf failed; anchor may not be evaluated", "error", err)
 	}
 
-	// Allow DHCP (so lease renewal works while kill switch is active)
-	rules.WriteString("pass out quick proto udp from any port 68 to any port 67\n")
-	// H7: Allow DHCPv6
-	rules.WriteString("pass out quick proto udp from any port 546 to any port 547\n")
+	rules, err := buildKillSwitchRules(interfaceName, endpoints)
+	if err != nil {
+		return err
+	}
 
-	// Allow WireGuard tunnel interface
-	fmt.Fprintf(&rules, "pass quick on %s all\n", interfaceName)
-
-	// DNS protection sub-anchor — must appear BEFORE the block rules so pf
-	// evaluates DNS filtering rules loaded into the sub-anchor.
-	fmt.Fprintf(&rules, "anchor \"%s\"\n", dnsAnchorName)
-
-	// Block all other traffic
-	rules.WriteString("block drop out all\n")
-	rules.WriteString("block drop in all\n")
-
-	// Load rules into the anchor.
-	if err := loadAnchorRules(anchorName, rules.String()); err != nil {
+	if err := loadAnchorRules(anchorName, rules); err != nil {
 		return fmt.Errorf("loading kill switch rules into anchor: %w", err)
 	}
 
 	// If DNS protection was enabled before this call, the previous
-	// invocation wrote rules to the MAIN anchor (line 194 in
-	// EnableDNSProtection). The loadAnchorRules call above just
+	// invocation wrote rules to the MAIN anchor (in EnableDNSProtection's
+	// no-kill-switch branch). The loadAnchorRules call above just
 	// overwrote those rules — leaving the `com.apple.wireguide/dns`
 	// sub-anchor empty even though dnsProtectionEnabled==true. Re-
 	// populate the sub-anchor here so DNS leaks don't silently start.
-	f.mu.Lock()
-	dnsActive := f.dnsProtectionEnabled
-	dnsIface := f.savedDNSInterface
-	dnsServers := append([]string(nil), f.savedDNSServers...)
-	f.mu.Unlock()
-	if dnsActive && dnsIface != "" && len(dnsServers) > 0 {
-		if err := loadDNSSubAnchor(dnsIface, dnsServers); err != nil {
-			slog.Warn("re-loading DNS sub-anchor after kill switch enable failed",
-				"error", err)
-		} else {
-			slog.Info("DNS protection sub-anchor re-loaded after kill switch enable")
-		}
-	}
+	f.reapplyDNSSubAnchorIfActive()
 
 	// Enable pf if not already.
 	if err := enablePf(); err != nil {
@@ -160,9 +175,30 @@ func (f *DarwinFirewall) EnableKillSwitch(interfaceName string, _ []string, endp
 	f.mu.Lock()
 	f.pfWasEnabled = pfWas
 	f.killSwitchEnabled = true
+	f.savedTunnelIface = interfaceName
+	f.savedTunnelEndpoints = append([]string(nil), endpoints...)
 	f.mu.Unlock()
 	slog.Info("kill switch enabled", "interface", interfaceName, "endpoints", len(endpoints))
 	return nil
+}
+
+// reapplyDNSSubAnchorIfActive re-loads the DNS sub-anchor under
+// `com.apple.wireguide/dns` if DNS protection is currently active. The
+// kill-switch main anchor only references the sub-anchor by name; the
+// sub-anchor body lives independently in pf storage. We re-apply
+// defensively after every main-anchor rewrite to keep the two in sync.
+func (f *DarwinFirewall) reapplyDNSSubAnchorIfActive() {
+	f.mu.Lock()
+	dnsActive := f.dnsProtectionEnabled
+	dnsIface := f.savedDNSInterface
+	dnsServers := append([]string(nil), f.savedDNSServers...)
+	f.mu.Unlock()
+	if !dnsActive || dnsIface == "" || len(dnsServers) == 0 {
+		return
+	}
+	if err := loadDNSSubAnchor(dnsIface, dnsServers); err != nil {
+		slog.Warn("re-loading DNS sub-anchor failed", "error", err)
+	}
 }
 
 // loadDNSSubAnchor builds the DNS-protection rule set for a given
@@ -184,14 +220,80 @@ func loadDNSSubAnchor(interfaceName string, dnsServers []string) error {
 	return loadAnchorRules(dnsAnchorName, dnsRules.String())
 }
 
-// AddKillSwitchTunnel is a no-op on darwin. pf builds per-tunnel rules
-// inside EnableKillSwitch; there's no separate "tunnel arrived after
-// kill switch was already on" path to service. Kept to satisfy the
-// cross-platform interface.
-func (f *DarwinFirewall) AddKillSwitchTunnel(string, []string) error { return nil }
+// AddKillSwitchTunnel folds a newly-connected tunnel's per-iface permit
+// + endpoint permits into the kill-switch anchor. On darwin we only
+// track one tunnel at a time in the anchor — the most-recently-added
+// one wins. Multi-tunnel kill-switch on darwin is not supported.
+//
+// No-op when the kill switch isn't enabled (handleConnect should gate
+// on IsKillSwitchEnabled before calling, but be defensive).
+func (f *DarwinFirewall) AddKillSwitchTunnel(interfaceName string, endpoints []string) error {
+	if interfaceName == "" {
+		return fmt.Errorf("AddKillSwitchTunnel: empty interface name")
+	}
+	if !validIfaceName.MatchString(interfaceName) {
+		return fmt.Errorf("invalid interface name %q", interfaceName)
+	}
 
-// RemoveKillSwitchTunnel is a no-op on darwin for the same reason.
-func (f *DarwinFirewall) RemoveKillSwitchTunnel(string) error { return nil }
+	f.mu.Lock()
+	if !f.killSwitchEnabled {
+		f.mu.Unlock()
+		return nil
+	}
+	f.mu.Unlock()
+
+	rules, err := buildKillSwitchRules(interfaceName, endpoints)
+	if err != nil {
+		return err
+	}
+	if err := loadAnchorRules(anchorName, rules); err != nil {
+		return fmt.Errorf("loading kill switch rules into anchor: %w", err)
+	}
+	f.reapplyDNSSubAnchorIfActive()
+
+	f.mu.Lock()
+	f.savedTunnelIface = interfaceName
+	f.savedTunnelEndpoints = append([]string(nil), endpoints...)
+	f.mu.Unlock()
+	slog.Info("kill switch tunnel added", "interface", interfaceName, "endpoints", len(endpoints))
+	return nil
+}
+
+// RemoveKillSwitchTunnel rebuilds the anchor without the disconnected
+// tunnel's permits. Since darwin only stores one tunnel at a time, the
+// rebuild drops to base-only (loopback + DHCP + DNS sub-anchor +
+// catch-all block).
+func (f *DarwinFirewall) RemoveKillSwitchTunnel(interfaceName string) error {
+	f.mu.Lock()
+	if !f.killSwitchEnabled {
+		f.mu.Unlock()
+		return nil
+	}
+	saved := f.savedTunnelIface
+	f.mu.Unlock()
+
+	// If the disconnected tunnel isn't the one we have permits for,
+	// leave the anchor alone — another tunnel is still active.
+	if saved != "" && saved != interfaceName {
+		return nil
+	}
+
+	rules, err := buildKillSwitchRules("", nil)
+	if err != nil {
+		return err
+	}
+	if err := loadAnchorRules(anchorName, rules); err != nil {
+		return fmt.Errorf("rebuilding kill switch anchor: %w", err)
+	}
+	f.reapplyDNSSubAnchorIfActive()
+
+	f.mu.Lock()
+	f.savedTunnelIface = ""
+	f.savedTunnelEndpoints = nil
+	f.mu.Unlock()
+	slog.Info("kill switch tunnel removed", "interface", interfaceName)
+	return nil
+}
 
 func (f *DarwinFirewall) DisableKillSwitch() error {
 	f.mu.Lock()
@@ -249,6 +351,8 @@ func (f *DarwinFirewall) DisableKillSwitch() error {
 
 	f.mu.Lock()
 	f.killSwitchEnabled = false
+	f.savedTunnelIface = ""
+	f.savedTunnelEndpoints = nil
 	f.mu.Unlock()
 	slog.Info("kill switch disabled", "dns_reapplied", dnsReapplied)
 	return nil
@@ -290,6 +394,10 @@ func (f *DarwinFirewall) EnableDNSProtection(interfaceName string, dnsServers []
 		pfWas := isPfEnabled()
 		if err := persistPfEnabledState(pfWas); err != nil {
 			slog.Warn("failed to persist pf enabled state to disk", "error", err)
+		}
+
+		if err := loadDefaultPfRuleset(); err != nil {
+			slog.Warn("loading /etc/pf.conf failed; anchor may not be evaluated", "error", err)
 		}
 
 		if err := loadAnchorRules(anchorName, dnsRules.String()); err != nil {
@@ -399,6 +507,8 @@ func (f *DarwinFirewall) Cleanup() error {
 	}
 	f.dnsProtectionEnabled = false
 	f.killSwitchEnabled = false
+	f.savedTunnelIface = ""
+	f.savedTunnelEndpoints = nil
 	f.pfWasEnabled = false
 	f.mu.Unlock()
 
@@ -431,6 +541,27 @@ func isPfEnabled() bool {
 	}
 	// Look for "Status: Enabled" in the output
 	return strings.Contains(string(out), "Status: Enabled")
+}
+
+// loadDefaultPfRuleset re-loads /etc/pf.conf into pf's main ruleset.
+// macOS' default pf.conf contains `anchor "com.apple/*" all`, which is
+// the *only* reason our `com.apple.wireguide` anchor rules get evaluated
+// at all. On a machine where pf has never been enabled (or where
+// `pfctl -F all` wiped the main ruleset), pf runs with an empty main
+// ruleset and our anchor is loaded but never visited — so traffic flows
+// freely even though we think the kill switch is on. Re-loading the
+// default ruleset is idempotent and cheap, so we do it on every enable
+// path as a defense.
+//
+// Failures are non-fatal — older macOS releases or unusual /etc/pf.conf
+// edits could fail to parse; we surface the error so callers can
+// downgrade to a warning rather than abort the kill-switch install.
+func loadDefaultPfRuleset() error {
+	out, err := runPfctl("-f", "/etc/pf.conf")
+	if err != nil {
+		return fmt.Errorf("pfctl -f /etc/pf.conf: %w (%s)", err, strings.TrimSpace(string(out)))
+	}
+	return nil
 }
 
 // enablePf enables the pf firewall.

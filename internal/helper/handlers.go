@@ -433,8 +433,14 @@ func (h *Helper) handleSetDNSProtection(params json.RawMessage) (interface{}, er
 		return nil, err
 	}
 	if req.Enabled {
-		if !h.manager.IsConnected() {
-			return nil, fmt.Errorf("no active tunnel")
+		// Accept the toggle even with no active tunnel — the GUI persists
+		// the preference and re-sends SetDNSProtection(true) via
+		// applyFirewallSettings() after every successful connect. Without
+		// a tunnel we have no interface to scope the "allow port 53"
+		// permit to, so we just succeed silently and let the next connect
+		// install the pf rules with the right interface + DNS list.
+		if !h.manager.IsConnected() || len(req.DNSServers) == 0 {
+			return ipc.Empty{}, nil
 		}
 		status := h.manager.Status()
 		// DNS protection uses a single tunnel's interface name for the pf
