@@ -3,6 +3,7 @@ package tunnel
 import (
 	"context"
 	"log/slog"
+	"time"
 
 	"github.com/korjwl1/wireguide/internal/domain"
 	"github.com/korjwl1/wireguide/internal/network"
@@ -220,6 +221,11 @@ func (m *Manager) connectPhases(ctx context.Context, cfg *domain.WireGuardConfig
 // better than none.
 func (m *Manager) disconnectPhases(cfg *domain.WireGuardConfig, engine *Engine, netMgr network.NetworkManager) {
 	ifaceName := engine.InterfaceName()
+	t0 := time.Now()
+	logStep := func(step string, since time.Time) {
+		slog.Info("disconnect step", "tunnel", cfg.Name, "step", step,
+			"ms", time.Since(since).Milliseconds())
+	}
 
 	// Routes — remove only THIS tunnel's routes via its own netMgr.
 	var allAllowedIPs []string
@@ -227,13 +233,17 @@ func (m *Manager) disconnectPhases(cfg *domain.WireGuardConfig, engine *Engine, 
 		allAllowedIPs = append(allAllowedIPs, peer.AllowedIPs...)
 	}
 	if netMgr != nil {
+		ts := time.Now()
 		if err := netMgr.RemoveRoutes(ifaceName, allAllowedIPs, cfg.IsFullTunnel()); err != nil {
 			slog.Warn("disconnect: RemoveRoutes failed", "iface", ifaceName, "error", err)
 		}
+		logStep("RemoveRoutes", ts)
 	}
 
 	// TUN
+	tsEngine := time.Now()
 	engine.Close()
+	logStep("engine.Close", tsEngine)
 
 	// Check if other tunnels remain connected BEFORE cleanup.
 	remainingDNS := m.AllDNSServers()
@@ -256,9 +266,11 @@ func (m *Manager) disconnectPhases(cfg *domain.WireGuardConfig, engine *Engine, 
 					}
 				}
 			}
+			tsCleanup := time.Now()
 			if err := netMgr.Cleanup(ifaceName); err != nil {
 				slog.Warn("disconnect: network Cleanup failed", "iface", ifaceName, "error", err)
 			}
+			logStep("netMgr.Cleanup", tsCleanup)
 			m.ClearPreModDNS()
 		}
 	}
@@ -289,5 +301,6 @@ func (m *Manager) disconnectPhases(cfg *domain.WireGuardConfig, engine *Engine, 
 		slog.Warn("disconnect: ClearActiveState failed", "tunnel", cfg.Name, "error", err)
 	}
 
-	slog.Info("tunnel disconnected", "name", cfg.Name)
+	slog.Info("tunnel disconnected", "name", cfg.Name,
+		"total_ms", time.Since(t0).Milliseconds())
 }

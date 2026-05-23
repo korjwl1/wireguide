@@ -9,10 +9,36 @@ import (
 	"net"
 	"os/exec"
 	"strings"
+	"sync"
 	"time"
+	"unsafe"
+
+	"golang.org/x/sys/windows"
 
 	"github.com/korjwl1/wireguide/internal/sysexec"
 )
+
+// decodeOEM converts a byte slice produced by a Windows console child
+// (netsh, route, etc.) from the system OEM codepage to UTF-8. Without
+// this, Korean Windows error messages — printed by netsh as CP949 —
+// surface in slog output as the U+FFFD replacement character garbage
+// ("���"). Returns the input unchanged if the conversion fails.
+func decodeOEM(b []byte) string {
+	if len(b) == 0 {
+		return ""
+	}
+	const cpOEMCP = 1
+	wlen, err := windows.MultiByteToWideChar(cpOEMCP, 0, &b[0], int32(len(b)), nil, 0)
+	if err != nil || wlen <= 0 {
+		return string(b)
+	}
+	wbuf := make([]uint16, wlen)
+	_, err = windows.MultiByteToWideChar(cpOEMCP, 0, &b[0], int32(len(b)), &wbuf[0], wlen)
+	if err != nil {
+		return string(b)
+	}
+	return windows.UTF16ToString((*[1 << 20]uint16)(unsafe.Pointer(&wbuf[0]))[:wlen:wlen])
+}
 
 // cmdTimeout bounds every external command (netsh/route/PowerShell).
 // PowerShell cold-start can legitimately take 1-2s; 30s leaves headroom
@@ -201,12 +227,25 @@ func (m *WindowsManager) addFullTunnelRoutes(ifaceName string, endpoints []strin
 
 func (m *WindowsManager) RemoveRoutes(ifaceName string, allowedIPs []string, fullTunnel bool) error {
 	if fullTunnel {
-		// Remove /1 split routes (matching what addFullTunnelRoutes installed).
-		tryRunWin("delete 0.0.0.0/1", "netsh", "interface", "ip", "delete", "route", "0.0.0.0/1", ifaceName)
-		tryRunWin("delete 128.0.0.0/1", "netsh", "interface", "ip", "delete", "route", "128.0.0.0/1", ifaceName)
-		tryRunWin("delete ::/1", "netsh", "interface", "ipv6", "delete", "route", "::/1", ifaceName)
-		tryRunWin("delete 8000::/1", "netsh", "interface", "ipv6", "delete", "route", "8000::/1", ifaceName)
-		// Remove endpoint bypass routes
+		// Build the work list first, then fan it all out to parallelTry.
+		// Each netsh / route invocation is independent (different prefix
+		// entries in the route table), so running them concurrently
+		// drops wall-clock from ~5×cold-start to ~1×cold-start.
+		thunks := []func(){
+			func() {
+				tryRunWin("delete 0.0.0.0/1", "netsh", "interface", "ip", "delete", "route", "0.0.0.0/1", ifaceName)
+			},
+			func() {
+				tryRunWin("delete 128.0.0.0/1", "netsh", "interface", "ip", "delete", "route", "128.0.0.0/1", ifaceName)
+			},
+			func() {
+				tryRunWin("delete ::/1", "netsh", "interface", "ipv6", "delete", "route", "::/1", ifaceName)
+			},
+			func() {
+				tryRunWin("delete 8000::/1", "netsh", "interface", "ipv6", "delete", "route", "8000::/1", ifaceName)
+			},
+		}
+		origIfIdx6 := m.origIfIdx6 // snapshot before clearing below
 		for _, ipStr := range m.bypassEndpoints {
 			if ipStr == "" {
 				continue
@@ -216,24 +255,34 @@ func (m *WindowsManager) RemoveRoutes(ifaceName string, allowedIPs []string, ful
 				continue
 			}
 			if ip.To4() != nil {
-				// C8: No CIDR notation for Windows route delete.
-				tryRunWin("delete bypass route", "route", "delete", ipStr)
-			} else {
-				// IPv6 bypass was added via the physical interface index.
-				if m.origIfIdx6 != "" {
-					tryRunWin("delete IPv6 bypass route", "netsh", "interface", "ipv6", "delete", "route", ipStr+"/128", m.origIfIdx6)
-				}
+				ipStr := ipStr
+				thunks = append(thunks, func() {
+					// `route delete` (not netsh) for v4 — Windows
+					// route command uses non-CIDR notation here.
+					tryRunWin("delete bypass route", "route", "delete", ipStr)
+				})
+			} else if origIfIdx6 != "" {
+				ipStr := ipStr
+				thunks = append(thunks, func() {
+					tryRunWin("delete IPv6 bypass route", "netsh", "interface", "ipv6", "delete", "route", ipStr+"/128", origIfIdx6)
+				})
 			}
 		}
+		parallelTry(thunks...)
 		m.bypassEndpoints = nil
 		m.origGateway = ""
 		m.origGatewayV6 = ""
 		m.origIfIdx6 = ""
 		return nil
 	}
+	thunks := make([]func(), 0, len(allowedIPs))
 	for _, cidr := range allowedIPs {
-		tryRunWin("delete split route", "netsh", "interface", "ip", "delete", "route", cidr, ifaceName)
+		cidr := cidr
+		thunks = append(thunks, func() {
+			tryRunWin("delete split route", "netsh", "interface", "ip", "delete", "route", cidr, ifaceName)
+		})
 	}
+	parallelTry(thunks...)
 	m.splitRoutes = nil
 	return nil
 }
@@ -297,25 +346,26 @@ func (m *WindowsManager) ResetDNSToSystemDefault() error {
 	return nil
 }
 
+// RestoreDNS on Windows is now intentionally minimal — it only resets
+// the VPN adapter's own DNS to DHCP (cheap; usually a no-op because the
+// adapter is already gone by the time disconnect calls us). It does NOT
+// rewrite the physical interface's DNS even though we snapshot it in
+// SetDNS, because SetDNS never modified the physical interface in the
+// first place: it sets the VPN adapter's DNS and bumps the VPN adapter
+// metric to 1, leaving the physical adapter's DNS exactly as DHCP left
+// it. Writing the snapshot back was a 12-second no-op (Windows'
+// `netsh interface ip set dns` triggers DNS Client service notifications
+// + cache flush regardless of whether the value actually changed) that
+// dominated the disconnect path.
+//
+// If a future change does start modifying the physical adapter's DNS,
+// resurrect the snapshot-write here, but route it through
+// SetInterfaceDnsSettings (iphlpapi) rather than netsh — that API
+// completes in milliseconds.
 func (m *WindowsManager) RestoreDNS(ifaceName string) error {
-	// Reset the VPN interface DNS back to DHCP (cleanup).
 	tryRunWin("reset VPN iface DNS to DHCP", "netsh", "interface", "ip", "set", "dns", ifaceName, "dhcp")
-
-	// Restore original DNS to the PHYSICAL interface it was saved from.
-	// If origDNSIface is empty, the DNS was likely never overridden.
-	restoreIface := m.origDNSIface
-	if restoreIface == "" || len(m.origDNS) == 0 {
-		return nil
-	}
-	if err := runWin("netsh", "interface", "ip", "set", "dns", restoreIface, "static", m.origDNS[0]); err != nil {
-		return err
-	}
-	for i := 1; i < len(m.origDNS); i++ {
-		if err := runWin("netsh", "interface", "ip", "add", "dns", restoreIface, m.origDNS[i], fmt.Sprintf("index=%d", i+1)); err != nil {
-			slog.Warn("RestoreDNS: adding secondary DNS failed", "server", m.origDNS[i], "error", err)
-		}
-	}
 	m.origDNSIface = ""
+	m.origDNS = nil
 	return nil
 }
 
@@ -323,14 +373,21 @@ func (m *WindowsManager) Cleanup(ifaceName string) error {
 	if err := m.RestoreDNS(ifaceName); err != nil {
 		slog.Warn("Cleanup: RestoreDNS failed", "iface", ifaceName, "error", err)
 	}
-	// Clean up /1 split routes (defensive — also try /0 in case of legacy state)
-	tryRunWin("cleanup 0.0.0.0/1", "netsh", "interface", "ip", "delete", "route", "0.0.0.0/1", ifaceName)
-	tryRunWin("cleanup 128.0.0.0/1", "netsh", "interface", "ip", "delete", "route", "128.0.0.0/1", ifaceName)
-	tryRunWin("cleanup 0.0.0.0/0", "netsh", "interface", "ip", "delete", "route", "0.0.0.0/0", ifaceName)
-	tryRunWin("cleanup ::/1", "netsh", "interface", "ipv6", "delete", "route", "::/1", ifaceName)
-	tryRunWin("cleanup 8000::/1", "netsh", "interface", "ipv6", "delete", "route", "8000::/1", ifaceName)
-	tryRunWin("cleanup ::/0", "netsh", "interface", "ipv6", "delete", "route", "::/0", ifaceName)
-	// Clean up endpoint bypass routes
+	// Defensive route cleanup: most of these are duplicates of what
+	// RemoveRoutes already did, but we keep them so a Cleanup called
+	// without a prior RemoveRoutes (e.g. after a partial connect that
+	// failed before activeCfg was set) still leaves the route table
+	// tidy. parallelTry collapses the wall-clock cost to roughly one
+	// netsh cold-start regardless of how many no-op deletes we issue.
+	thunks := []func(){
+		func() { tryRunWin("cleanup 0.0.0.0/1", "netsh", "interface", "ip", "delete", "route", "0.0.0.0/1", ifaceName) },
+		func() { tryRunWin("cleanup 128.0.0.0/1", "netsh", "interface", "ip", "delete", "route", "128.0.0.0/1", ifaceName) },
+		func() { tryRunWin("cleanup 0.0.0.0/0", "netsh", "interface", "ip", "delete", "route", "0.0.0.0/0", ifaceName) },
+		func() { tryRunWin("cleanup ::/1", "netsh", "interface", "ipv6", "delete", "route", "::/1", ifaceName) },
+		func() { tryRunWin("cleanup 8000::/1", "netsh", "interface", "ipv6", "delete", "route", "8000::/1", ifaceName) },
+		func() { tryRunWin("cleanup ::/0", "netsh", "interface", "ipv6", "delete", "route", "::/0", ifaceName) },
+	}
+	origIfIdx6 := m.origIfIdx6
 	for _, ipStr := range m.bypassEndpoints {
 		if ipStr == "" {
 			continue
@@ -340,20 +397,26 @@ func (m *WindowsManager) Cleanup(ifaceName string) error {
 			continue
 		}
 		if ip.To4() != nil {
-			tryRunWin("cleanup bypass route", "route", "delete", ipStr)
-		} else {
-			if m.origIfIdx6 != "" {
-				tryRunWin("cleanup IPv6 bypass route", "netsh", "interface", "ipv6", "delete", "route", ipStr+"/128", m.origIfIdx6)
-			}
+			ipStr := ipStr
+			thunks = append(thunks, func() { tryRunWin("cleanup bypass route", "route", "delete", ipStr) })
+		} else if origIfIdx6 != "" {
+			ipStr := ipStr
+			thunks = append(thunks, func() {
+				tryRunWin("cleanup IPv6 bypass route", "netsh", "interface", "ipv6", "delete", "route", ipStr+"/128", origIfIdx6)
+			})
 		}
 	}
+	for _, cidr := range m.splitRoutes {
+		cidr := cidr
+		thunks = append(thunks, func() {
+			tryRunWin("cleanup split route", "netsh", "interface", "ip", "delete", "route", cidr, ifaceName)
+		})
+	}
+	parallelTry(thunks...)
+
 	m.bypassEndpoints = nil
 	m.origGatewayV6 = ""
 	m.origIfIdx6 = ""
-	// M14: Clean up split-tunnel routes.
-	for _, cidr := range m.splitRoutes {
-		tryRunWin("cleanup split route", "netsh", "interface", "ip", "delete", "route", cidr, ifaceName)
-	}
 	m.splitRoutes = nil
 	return nil
 }
@@ -379,9 +442,9 @@ func runWin(name string, args ...string) error {
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		if ctx.Err() == context.DeadlineExceeded {
-			return fmt.Errorf("%s %s: timed out after %s (%s)", name, strings.Join(args, " "), cmdTimeout, strings.TrimSpace(string(out)))
+			return fmt.Errorf("%s %s: timed out after %s (%s)", name, strings.Join(args, " "), cmdTimeout, strings.TrimSpace(decodeOEM(out)))
 		}
-		return fmt.Errorf("%s %s: %w (%s)", name, strings.Join(args, " "), err, strings.TrimSpace(string(out)))
+		return fmt.Errorf("%s %s: %w (%s)", name, strings.Join(args, " "), err, strings.TrimSpace(decodeOEM(out)))
 	}
 	return nil
 }
@@ -404,6 +467,34 @@ func tryRunWin(why, name string, args ...string) {
 	if err := runWin(name, args...); err != nil {
 		slog.Debug("best-effort "+why+" failed", "cmd", name, "args", args, "error", err)
 	}
+}
+
+// parallelTry runs each thunk in its own goroutine and waits for all to
+// finish. Used to fan out independent netsh / route invocations during
+// disconnect — every cold-start of netsh costs ~200-500ms on Windows
+// because the network configuration service has to load, and a typical
+// full-tunnel teardown serially fires 10+ such commands. Running them
+// concurrently turns the wall-clock cost from "sum" into "max", which
+// is what makes the "disconnect takes 4-5 seconds" feeling go away.
+//
+// Caller-passed work must be independent — if a follow-up command needs
+// the previous one's side effect (e.g. `netsh interface ip set dns
+// static …` then `add dns …` for secondaries), keep those in a single
+// thunk so they stay sequential inside the goroutine.
+func parallelTry(thunks ...func()) {
+	if len(thunks) == 0 {
+		return
+	}
+	var wg sync.WaitGroup
+	wg.Add(len(thunks))
+	for _, t := range thunks {
+		t := t
+		go func() {
+			defer wg.Done()
+			t()
+		}()
+	}
+	wg.Wait()
 }
 
 // getWindowsDefaultGateway returns the current IPv4 default gateway,
