@@ -9,6 +9,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/korjwl1/wireguide/internal/sysexec"
 )
 
 // locationHintOnce ensures we log the macOS Location-permission hint
@@ -172,7 +174,9 @@ func knownSSIDsDarwin() []string {
 func detectWindows() string {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, "netsh", "wlan", "show", "interfaces").CombinedOutput()
+	cmd := exec.CommandContext(ctx, "netsh", "wlan", "show", "interfaces")
+	sysexec.Hide(cmd)
+	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return ""
 	}

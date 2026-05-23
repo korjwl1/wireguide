@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
+
+	"github.com/korjwl1/wireguide/internal/sysexec"
 )
 
 // SpawnHelper launches the helper with admin privileges via PowerShell + UAC.
@@ -30,7 +32,9 @@ func SpawnHelper(ctx context.Context, args Args) error {
 		`Start-Process '%s' -ArgumentList %s -Verb RunAs -WindowStyle Hidden`,
 		psEscape(exe), argList,
 	)
-	return exec.Command("powershell", "-Command", ps).Start()
+	cmd := exec.Command("powershell", "-Command", ps)
+	sysexec.Hide(cmd)
+	return cmd.Start()
 }
 
 // psEscape escapes a string for use inside a PowerShell single-quoted string.

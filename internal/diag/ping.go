@@ -9,6 +9,8 @@ import (
 	"runtime"
 	"strconv"
 	"time"
+
+	"github.com/korjwl1/wireguide/internal/sysexec"
 )
 
 // PingResult holds the result of an endpoint reachability test.
@@ -60,6 +62,7 @@ func PingEndpointContext(ctx context.Context, endpoint string) *PingResult {
 	default:
 		cmd = exec.CommandContext(ctx, "ping", "-c", "3", "-W", "3", ip)
 	}
+	sysexec.Hide(cmd)
 
 	start := time.Now()
 	out, err := cmd.CombinedOutput()

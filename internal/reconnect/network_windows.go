@@ -5,63 +5,70 @@ package reconnect
 import (
 	"log/slog"
 	"sync"
-	"syscall"
 	"time"
-	"unsafe"
 
-	"golang.org/x/sys/windows"
+	"github.com/korjwl1/wireguide/internal/network"
 )
 
-// linkChangeMaxDebounce coalesces NotifyIpInterfaceChange callback storms.
-// One Wi-Fi handover can fire 6-10 callbacks within 100ms (link down →
-// addr remove → link up → addr add → metric change → ...). Without a
-// debounce the reconnect monitor would queue a flurry of identical
-// triggers.
-const linkChangeMaxDebounce = 500 * time.Millisecond
+// On Windows the reconnect detector watches the IPv4 default-route owner
+// (the LUID of the interface that wins 0.0.0.0/0) and fires on change.
+// It is a deliberate departure from a naïve `NotifyIpInterfaceChange`
+// subscription: that callback fires on adapter add/remove, IP bind, and
+// metric changes — including the changes our OWN Wintun adapter causes
+// every time it comes up. Subscribing to it produced a suicide reconnect
+// loop where every Connect triggered a change → reconnect → tear-down →
+// another change.
+//
+// Polling the default-route owner avoids the loop because:
+//  1. Our Wintun adapter is filtered out of the candidate set (see
+//     network.BestNonExcludedDefaultRouteLUIDv4 — it excludes any
+//     interface alias in vpnAdapterAliases).
+//  2. The non-VPN default route only flips when the user actually
+//     changes upstream (Wi-Fi → Ethernet, captive portal hop, etc).
+//  3. Connect / Disconnect of the VPN itself never changes the
+//     non-excluded LUID, so the monitor never reconnects in response
+//     to its own actions.
+//
+// We poll at 1Hz to match the darwin detector and to keep CPU near
+// zero (one GetIpForwardTable2 syscall per second; <1ms on a typical
+// machine).
 
-// windowsNetworkChangeDetector registers an iphlpapi callback for IP
-// interface changes and forwards a coalesced signal to ChangeChan.
-//
-// NotifyIpInterfaceChange fires on:
-//   - Adapter add/remove
-//   - Link state transitions (cable plug, Wi-Fi associate)
-//   - IP address bind/unbind
-//   - Metric changes
-//
-// All four cases mean "the path the user takes to the Internet may have
-// changed" → trigger a reconnect.
-//
-// Signal flow: kernel callback → rawCh (cap 16, non-blocking) → debouncer
-// goroutine coalesces a burst → ChangeChan (cap 1). External consumers
-// read ChangeChan and see one signal per ~500ms quiet window even if the
-// kernel fired hundreds of callbacks during the storm.
+// vpnAdapterAliases lists adapter aliases that this app may install on
+// Windows. Currently we always use "WireGuide" (see internal/tunnel/
+// engine.go), but listing it here keeps the assumption discoverable for
+// future maintainers and trivially extends to per-tunnel adapter names.
+var vpnAdapterAliases = []string{"WireGuide"}
+
+const (
+	// networkPollIntervalWindows mirrors darwin's networkPollInterval —
+	// fast enough to feel responsive after a real Wi-Fi handover, slow
+	// enough that the polling cost is invisible (~one syscall/sec).
+	networkPollIntervalWindows = 1 * time.Second
+
+	// fireCooldownWindows mirrors darwin's fireCooldown. During a Wi-Fi
+	// flap (en0 → none → en0 in <2s) we want exactly one reconnect,
+	// not two stacking backoffs. Also gives the Connect path itself a
+	// quiet window for its own transient route-table edits to settle
+	// before the detector starts judging "did the upstream change?".
+	fireCooldownWindows = 2 * time.Second
+)
+
+// windowsNetworkChangeDetector polls the IPv4 default-route owner and
+// emits one signal on ChangeChan() each time it switches to a different
+// non-VPN interface.
 type windowsNetworkChangeDetector struct {
-	mu      sync.Mutex
-	running bool
-
-	notifyHandle windows.Handle
-	rawCh        chan struct{}
-	changeCh     chan struct{}
-	stopCh       chan struct{}
-	// Keep the callback alive — Go's GC would otherwise collect it
-	// once Start returns, and the iphlpapi callback would crash with
-	// an access violation on the next interface change.
-	callbackTrampoline uintptr
+	mu       sync.Mutex
+	changeCh chan struct{}
+	stopCh   chan struct{}
+	wg       sync.WaitGroup
+	running  bool
 }
 
 func NewNetworkChangeDetector() NetworkChangeDetector {
-	return &windowsNetworkChangeDetector{}
+	return &windowsNetworkChangeDetector{
+		changeCh: make(chan struct{}, 1),
+	}
 }
-
-var (
-	modIphlpapi                       = windows.NewLazySystemDLL("iphlpapi.dll")
-	procNotifyIpInterfaceChange       = modIphlpapi.NewProc("NotifyIpInterfaceChange")
-	procCancelMibChangeNotify2        = modIphlpapi.NewProc("CancelMibChangeNotify2")
-)
-
-const (
-	afUnspec = 0
-)
 
 func (d *windowsNetworkChangeDetector) Start() {
 	d.mu.Lock()
@@ -70,54 +77,14 @@ func (d *windowsNetworkChangeDetector) Start() {
 		return
 	}
 	d.running = true
-	d.rawCh = make(chan struct{}, 16)
-	d.changeCh = make(chan struct{}, 1)
 	d.stopCh = make(chan struct{})
+	// wg.Add MUST be inside the lock — same reason documented on the
+	// darwin detector: Stop() must not observe a zero counter racing
+	// against Start()'s Add.
+	d.wg.Add(1)
 	d.mu.Unlock()
 
-	// Kernel callback. The IO completion thread invokes this; per
-	// Microsoft docs the callback "should not perform any blocking
-	// operations". We just push to rawCh non-blockingly. The actual
-	// debounce work happens in a Go goroutine where blocking is fine.
-	cb := syscall.NewCallback(func(_ uintptr, _ uintptr, _ uintptr) uintptr {
-		d.mu.Lock()
-		ch := d.rawCh
-		d.mu.Unlock()
-		if ch == nil {
-			return 0
-		}
-		select {
-		case ch <- struct{}{}:
-		default:
-		}
-		return 0
-	})
-	d.mu.Lock()
-	d.callbackTrampoline = cb
-	d.mu.Unlock()
-
-	var handle windows.Handle
-	ret, _, _ := procNotifyIpInterfaceChange.Call(
-		uintptr(afUnspec), // AF_UNSPEC — both IPv4 and IPv6
-		cb,                // callback
-		0,                 // CallerContext
-		0,                 // InitialNotification = FALSE
-		uintptr(unsafe.Pointer(&handle)),
-	)
-	if ret != 0 {
-		slog.Warn("NotifyIpInterfaceChange failed; reconnect-on-network-change disabled",
-			"status", ret)
-		d.mu.Lock()
-		d.running = false
-		d.mu.Unlock()
-		return
-	}
-	d.mu.Lock()
-	d.notifyHandle = handle
-	d.mu.Unlock()
-	slog.Info("Windows NotifyIpInterfaceChange detector started")
-
-	go d.debounceLoop()
+	go d.poll()
 }
 
 func (d *windowsNetworkChangeDetector) Stop() {
@@ -127,73 +94,73 @@ func (d *windowsNetworkChangeDetector) Stop() {
 		return
 	}
 	d.running = false
-	handle := d.notifyHandle
-	d.notifyHandle = 0
-	stop := d.stopCh
+	close(d.stopCh)
 	d.mu.Unlock()
-	if handle != 0 {
-		procCancelMibChangeNotify2.Call(uintptr(handle))
-	}
-	select {
-	case <-stop:
-	default:
-		close(stop)
-	}
+	d.wg.Wait()
 }
 
 func (d *windowsNetworkChangeDetector) ChangeChan() <-chan struct{} {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	if d.changeCh == nil {
-		// Detector wasn't started — return a channel that never fires
-		// so listeners block harmlessly. They'll start receiving once
-		// Start() runs.
-		return neverFiresCh
-	}
 	return d.changeCh
 }
 
-// debounceLoop reads raw callback kicks and emits one settled signal per
-// ~500ms quiet window onto changeCh. This is what makes the detector
-// useful — without it a Wi-Fi handover would fire the reconnect monitor
-// 6-10 times in rapid succession instead of once.
-func (d *windowsNetworkChangeDetector) debounceLoop() {
-	for {
-		// Wait for the first kick of a new burst, or stop.
-		select {
-		case <-d.stopCh:
-			return
-		case <-d.rawCh:
-		}
-		// Drain follow-up kicks for the settle window. Each new kick
-		// resets the settle timer; once we go linkChangeMaxDebounce
-		// without a kick we emit and start over.
-		t := time.NewTimer(linkChangeMaxDebounce)
-		settling := true
-		for settling {
-			select {
-			case <-d.stopCh:
-				t.Stop()
-				return
-			case <-d.rawCh:
-				if !t.Stop() {
-					<-t.C
-				}
-				t.Reset(linkChangeMaxDebounce)
-			case <-t.C:
-				settling = false
-			}
-		}
-		select {
-		case d.changeCh <- struct{}{}:
-		default:
-			// A signal is already pending; consumer hasn't drained yet.
-			// Collapse into the existing one — equivalent to "edge
-			// already raised".
-		}
+func (d *windowsNetworkChangeDetector) sendChange() {
+	select {
+	case d.changeCh <- struct{}{}:
+	default:
+		// A signal is already pending; the consumer hasn't drained it
+		// yet. Collapse into the existing one.
 	}
 }
 
-// neverFiresCh is closed-but-never-sent-on: listeners select on it
-// safely without ever waking up.
-var neverFiresCh = make(chan struct{})
+func (d *windowsNetworkChangeDetector) poll() {
+	defer d.wg.Done()
+
+	slog.Info("network change detector started (windows poll)",
+		"poll_interval", networkPollIntervalWindows,
+		"excluded_aliases", vpnAdapterAliases)
+
+	ticker := time.NewTicker(networkPollIntervalWindows)
+	defer ticker.Stop()
+
+	var lastLuid uint64
+	var hasInitial bool
+	var heartbeat int
+	var lastFire time.Time
+
+	for {
+		select {
+		case <-d.stopCh:
+			slog.Info("network change detector stopped (windows poll)")
+			return
+		case <-ticker.C:
+			luid := network.BestNonExcludedDefaultRouteLUIDv4(vpnAdapterAliases)
+			if !hasInitial {
+				hasInitial = true
+				lastLuid = luid
+				slog.Info("network primary upstream interface initial", "luid", luid)
+				continue
+			}
+			heartbeat++
+			if heartbeat%30 == 0 {
+				slog.Debug("network polling heartbeat", "luid", luid)
+			}
+			if luid == lastLuid {
+				continue
+			}
+			prev := lastLuid
+			lastLuid = luid
+
+			if !lastFire.IsZero() && time.Since(lastFire) < fireCooldownWindows {
+				slog.Info("network primary upstream changed (suppressed by cooldown)",
+					"prev_luid", prev, "now_luid", luid,
+					"since_last_fire", time.Since(lastFire).Round(time.Millisecond))
+				continue
+			}
+
+			lastFire = time.Now()
+			slog.Info("network primary upstream changed",
+				"prev_luid", prev, "now_luid", luid)
+			d.sendChange()
+		}
+	}
+}

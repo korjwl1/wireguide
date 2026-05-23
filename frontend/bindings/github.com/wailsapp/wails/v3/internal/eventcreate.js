@@ -15,6 +15,9 @@ import * as gui$0 from "../../../../korjwl1/wireguide/internal/gui/models.js";
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
 import * as ipc$0 from "../../../../korjwl1/wireguide/internal/ipc/models.js";
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore: Unused imports
+import * as update$0 from "../../../../korjwl1/wireguide/internal/update/models.js";
 
 function configure() {
     Object.freeze(Object.assign($Create.Events, {
@@ -23,6 +26,7 @@ function configure() {
         "log": $$createType2,
         "reconnect": $$createType3,
         "status": $$createType4,
+        "update-available": $$createType5,
     }));
 }
 
@@ -32,5 +36,6 @@ const $$createType1 = gui$0.HelperEvent.createFrom;
 const $$createType2 = ipc$0.LogEntry.createFrom;
 const $$createType3 = gui$0.ReconnectEvent.createFrom;
 const $$createType4 = domain$0.ConnectionStatus.createFrom;
+const $$createType5 = update$0.UpdateInfo.createFrom;
 
 configure();

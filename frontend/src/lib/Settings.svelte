@@ -248,24 +248,29 @@
   }
 
   function onKillSwitchChange(e) {
+    // Always forward to the helper, regardless of connection state.
+    // The previous `if connected` gate meant that toggling off while
+    // the tunnel was already disconnected updated settings.json but
+    // left the WFP filters in place — internet stayed blocked until
+    // a reboot. The helper itself decides what to do based on its
+    // current tunnel set.
     settings.kill_switch = e.target.checked;
-    if ($connectionStatus?.state === 'connected') {
-      TunnelService.SetKillSwitch(settings.kill_switch).catch((err) => {
-        console.error('SetKillSwitch failed:', err);
-        settings.kill_switch = !settings.kill_switch;
-      });
-    }
+    TunnelService.SetKillSwitch(settings.kill_switch).catch((err) => {
+      console.error('SetKillSwitch failed:', err);
+      settings.kill_switch = !settings.kill_switch;
+    });
     scheduleSave();
   }
 
   function onDnsProtectionChange(e) {
+    // Same rationale as the kill-switch toggle: always send the IPC so
+    // that a "disable while disconnected" doesn't leave stale WFP
+    // DNS block filters in place.
     settings.dns_protection = e.target.checked;
-    if ($connectionStatus?.state === 'connected') {
-      TunnelService.SetDNSProtection(settings.dns_protection).catch((err) => {
-        console.error('SetDNSProtection failed:', err);
-        settings.dns_protection = !settings.dns_protection;
-      });
-    }
+    TunnelService.SetDNSProtection(settings.dns_protection).catch((err) => {
+      console.error('SetDNSProtection failed:', err);
+      settings.dns_protection = !settings.dns_protection;
+    });
     scheduleSave();
   }
 

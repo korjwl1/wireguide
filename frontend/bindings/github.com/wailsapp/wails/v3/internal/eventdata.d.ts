@@ -14,6 +14,9 @@ import type * as gui$0 from "../../../../korjwl1/wireguide/internal/gui/models.j
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
 import type * as ipc$0 from "../../../../korjwl1/wireguide/internal/ipc/models.js";
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore: Unused imports
+import type * as update$0 from "../../../../korjwl1/wireguide/internal/update/models.js";
 
 declare module "@wailsio/runtime" {
     namespace Events {
@@ -24,6 +27,7 @@ declare module "@wailsio/runtime" {
             "log": ipc$0.LogEntry;
             "reconnect": gui$0.ReconnectEvent;
             "status": domain$0.ConnectionStatus;
+            "update-available": update$0.UpdateInfo;
         }
     }
 }

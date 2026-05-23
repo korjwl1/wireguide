@@ -91,7 +91,7 @@ func (m *Manager) Status() *ConnectionStatus {
 			ActiveTunnels: activeTunnels,
 		}
 	}
-	status, err := GetStatus(engine.InterfaceName(), cfgName, connectedAt)
+	status, err := getStatusForEngine(engine, cfgName, connectedAt)
 	if err != nil {
 		slog.Warn("failed to get status", "error", err)
 		return &ConnectionStatus{
@@ -133,7 +133,7 @@ func (m *Manager) StatusFor(name string) *ConnectionStatus {
 	if engine == nil {
 		return &ConnectionStatus{State: domain.StateDisconnected, TunnelName: cfgName}
 	}
-	status, err := GetStatus(engine.InterfaceName(), cfgName, connectedAt)
+	status, err := getStatusForEngine(engine, cfgName, connectedAt)
 	if err != nil {
 		return &ConnectionStatus{State: domain.StateError, TunnelName: cfgName}
 	}
@@ -174,7 +174,7 @@ func (m *Manager) AllStatuses() []*ConnectionStatus {
 				out = append(out, &ConnectionStatus{State: domain.StateDisconnected, TunnelName: s.cfgName})
 				continue
 			}
-			st, err := GetStatus(s.engine.InterfaceName(), s.cfgName, s.connectedAt)
+			st, err := getStatusForEngine(s.engine, s.cfgName, s.connectedAt)
 			if err != nil {
 				out = append(out, &ConnectionStatus{State: domain.StateError, TunnelName: s.cfgName})
 			} else {

@@ -7,6 +7,57 @@
 import { Create as $Create } from "@wailsio/runtime";
 
 /**
+ * Scheduler holds the periodic-poll loop's state. Construct with
+ * NewScheduler and call Start exactly once.
+ */
+export class Scheduler {
+    /**
+     * Creates a new Scheduler instance.
+     * @param {Partial<Scheduler>} [$$source = {}] - The source object to create the Scheduler.
+     */
+    constructor($$source = {}) {
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new Scheduler instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {Scheduler}
+     */
+    static createFrom($$source = {}) {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new Scheduler(/** @type {Partial<Scheduler>} */($$parsedSource));
+    }
+}
+
+/**
+ * StateStore is a goroutine-safe wrapper around the on-disk update.json
+ * file. The scheduler holds one of these; the IPC layer reads from it to
+ * answer "when did you last check?" queries from the UI.
+ */
+export class StateStore {
+    /**
+     * Creates a new StateStore instance.
+     * @param {Partial<StateStore>} [$$source = {}] - The source object to create the StateStore.
+     */
+    constructor($$source = {}) {
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new StateStore instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {StateStore}
+     */
+    static createFrom($$source = {}) {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new StateStore(/** @type {Partial<StateStore>} */($$parsedSource));
+    }
+}
+
+/**
  * UpdateInfo contains information about an available update.
  */
 export class UpdateInfo {

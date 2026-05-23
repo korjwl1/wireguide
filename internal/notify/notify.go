@@ -5,6 +5,8 @@ import (
 	"os/exec"
 	"runtime"
 	"strings"
+
+	"github.com/korjwl1/wireguide/internal/sysexec"
 )
 
 // SendNotification sends an OS-level notification. Best-effort: failures are
@@ -100,5 +102,7 @@ $textNodes.Item(0).AppendChild($template.CreateTextNode('` + safeTitle + `')) | 
 $textNodes.Item(1).AppendChild($template.CreateTextNode('` + safeMsg + `')) | Out-Null
 $toast = [Windows.UI.Notifications.ToastNotification]::new($template)
 [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier("WireGuide").Show($toast)`
-	return exec.Command("powershell", "-Command", ps).Run()
+	cmd := exec.Command("powershell", "-Command", ps)
+	sysexec.Hide(cmd)
+	return cmd.Run()
 }

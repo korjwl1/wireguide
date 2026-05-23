@@ -12,6 +12,8 @@ import (
 	"runtime"
 	"strings"
 	"time"
+
+	"github.com/korjwl1/wireguide/internal/sysexec"
 )
 
 // DNSLeakResult holds the DNS leak test results.
@@ -80,6 +82,20 @@ func RunDNSLeakTestContext(ctx context.Context, expectedDNS []string) *DNSLeakRe
 		responds bool
 	}
 
+	// Pre-fill DNSServers so each slot has at least the IP and IsVPN
+	// flag even if its probe never returns. The earlier version left
+	// timed-out slots zero-valued (empty IP, empty hostname, IsVPN=false),
+	// so the UI rendered placeholder "!" badges with no IP next to them
+	// whenever any probe hit the outer ctx deadline. The probe loop now
+	// just overlays Hostname/IsVPN-promotion on top of these defaults.
+	result.DNSServers = make([]DNSServer, len(systemDNS))
+	for i, dns := range systemDNS {
+		result.DNSServers[i] = DNSServer{
+			IP:    dns,
+			IsVPN: expectedSet[dns],
+		}
+	}
+
 	probes := make(chan probeResult, len(systemDNS))
 	for i, dns := range systemDNS {
 		go func(idx int, dnsIP string) {
@@ -97,7 +113,6 @@ func RunDNSLeakTestContext(ctx context.Context, expectedDNS []string) *DNSLeakRe
 		}(i, dns)
 	}
 
-	result.DNSServers = make([]DNSServer, len(systemDNS))
 	leaked := false
 	for range systemDNS {
 		select {
@@ -106,14 +121,8 @@ func RunDNSLeakTestContext(ctx context.Context, expectedDNS []string) *DNSLeakRe
 			result.Leaked = leaked
 			return result
 		case p := <-probes:
-			dnsIP := systemDNS[p.idx]
-			isVPN := expectedSet[dnsIP]
-			result.DNSServers[p.idx] = DNSServer{
-				IP:       dnsIP,
-				Hostname: p.hostname,
-				IsVPN:    isVPN,
-			}
-			if !isVPN && p.responds {
+			result.DNSServers[p.idx].Hostname = p.hostname
+			if !result.DNSServers[p.idx].IsVPN && p.responds {
 				leaked = true
 			}
 		}
@@ -201,8 +210,10 @@ func readLinuxResolvers() ([]string, error) {
 func readWindowsResolvers() ([]string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, "powershell", "-NoProfile", "-Command",
-		`(Get-DnsClientServerAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue).ServerAddresses | Sort-Object -Unique`).CombinedOutput()
+	cmd := exec.CommandContext(ctx, "powershell", "-NoProfile", "-Command",
+		`(Get-DnsClientServerAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue).ServerAddresses | Sort-Object -Unique`)
+	sysexec.Hide(cmd)
+	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return nil, fmt.Errorf("Get-DnsClientServerAddress: %w", err)
 	}

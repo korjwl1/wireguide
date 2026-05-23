@@ -5,6 +5,7 @@ package firewall
 import (
 	"encoding/binary"
 	"fmt"
+	"log/slog"
 	"net"
 	"runtime"
 	"sync"
@@ -57,10 +58,98 @@ type WindowsFirewall struct {
 
 	killSwitchEnabled    bool
 	dnsProtectionEnabled bool
+
+	// tunnelFilterIDs tracks per-tunnel WFP filter IDs installed by
+	// AddKillSwitchTunnel so RemoveKillSwitchTunnel can delete only that
+	// tunnel's filters without disturbing the base catch-all set or
+	// other tunnels' filters. Keyed by interface name (which on Windows
+	// is "WireGuide" today but the map is multi-tunnel-ready for the
+	// per-tunnel-adapter naming change we'll need to ship later).
+	tunnelFilterIDs map[string][]uint64
 }
 
 func NewPlatformFirewall() FirewallManager {
+	// Best-effort: nuke any sublayer + filters our fixed GUIDs left
+	// behind on a previous helper run that didn't shut down cleanly.
+	// Without this, a leaked dynamic session that the kernel somehow
+	// didn't reclaim survives a helper restart, and the user's only
+	// recovery is a reboot. SweepOrphanedFilters is no-op on a clean
+	// machine (FWP_E_NOT_FOUND, silently ignored).
+	SweepOrphanedFilters()
 	return &WindowsFirewall{}
+}
+
+// wireguideProviderKey / wireguideSublayerKey are FIXED GUIDs used by
+// every helper instance. Two consequences:
+//
+//  1. SweepOrphanedFilters on startup can cascade-delete the sublayer
+//     by these known GUIDs, wiping any leftover filters from a previous
+//     helper run that failed to close its dynamic session cleanly. The
+//     previous random-per-session GUIDs made that impossible — once
+//     leaked, the only recovery was reboot.
+//
+//  2. Two simultaneous helpers will collide on add. We don't support
+//     concurrent helpers anyway (the IPC pipe is single-instance), so
+//     this is the right trade-off: deterministic recovery beats
+//     defending against a use case that already errors out elsewhere.
+//
+// Values were generated once with `[guid]::NewGuid()`; nothing about
+// them is sensitive — they only need to be unique within WFP's GUID
+// namespace.
+var (
+	wireguideProviderKey = windows.GUID{
+		Data1: 0x9b3d7a52, Data2: 0xf8c4, Data3: 0x4a91,
+		Data4: [8]byte{0xb1, 0x6e, 0x2c, 0x8d, 0x4f, 0x5a, 0x6b, 0x71},
+	}
+	wireguideSublayerKey = windows.GUID{
+		Data1: 0x9b3d7a53, Data2: 0xf8c4, Data3: 0x4a91,
+		Data4: [8]byte{0xb1, 0x6e, 0x2c, 0x8d, 0x4f, 0x5a, 0x6b, 0x72},
+	}
+)
+
+// SweepOrphanedFilters opens a one-shot non-dynamic WFP session and
+// asks the kernel to delete our sublayer (and, by cascade, every filter
+// attached to it) plus the provider. Called once at helper startup
+// before ensureSession installs a fresh dynamic session.
+//
+// All errors are best-effort: FWP_E_NOT_FOUND is the expected state on
+// a clean machine and we don't need to distinguish it. A non-zero
+// status is logged but never blocks startup — the new dynamic session
+// will simply fail to add the provider/sublayer if cleanup missed,
+// which surfaces as a louder error than a silent leak.
+func SweepOrphanedFilters() {
+	displayName := utf16Ptr("WireGuide-Sweeper")
+	sess := fwpmSession0{
+		displayData:          fwpmDisplayData0{name: displayName},
+		txnWaitTimeoutInMSec: 0xFFFFFFFF,
+	}
+	var handle uintptr
+	if status := fwpmEngineOpen0(&sess, &handle); status != 0 {
+		slog.Warn("WFP SweepOrphanedFilters: engine open failed",
+			"status", fmt.Sprintf("0x%x", status))
+		return
+	}
+	defer fwpmEngineClose0(handle)
+
+	subKey := wireguideSublayerKey
+	if status := fwpmSubLayerDeleteByKey0(handle, &subKey); status != 0 {
+		const fwpENotFound uint32 = 0x80320008
+		if status != fwpENotFound {
+			slog.Info("WFP SweepOrphanedFilters: sublayer delete reported status",
+				"status", fmt.Sprintf("0x%x", status))
+		}
+	} else {
+		slog.Info("WFP SweepOrphanedFilters: removed orphaned sublayer + filters from a previous run")
+	}
+
+	provKey := wireguideProviderKey
+	if status := fwpmProviderDeleteByKey0(handle, &provKey); status != 0 {
+		const fwpENotFound uint32 = 0x80320008
+		if status != fwpENotFound {
+			slog.Info("WFP SweepOrphanedFilters: provider delete reported status",
+				"status", fmt.Sprintf("0x%x", status))
+		}
+	}
 }
 
 // ensureSession opens a WFP session and registers our provider + sublayer
@@ -81,18 +170,8 @@ func (f *WindowsFirewall) ensureSession() error {
 		return fmt.Errorf("FwpmEngineOpen0: 0x%x", status)
 	}
 
-	// Distinct provider GUID and sublayer GUID — generated once per
-	// session so concurrent helpers can't collide.
-	providerKey, err := windows.GenerateGUID()
-	if err != nil {
-		fwpmEngineClose0(handle)
-		return fmt.Errorf("GenerateGUID(provider): %w", err)
-	}
-	sublayerKey, err := windows.GenerateGUID()
-	if err != nil {
-		fwpmEngineClose0(handle)
-		return fmt.Errorf("GenerateGUID(sublayer): %w", err)
-	}
+	providerKey := wireguideProviderKey
+	sublayerKey := wireguideSublayerKey
 
 	provider := fwpmProvider0{
 		providerKey: providerKey,
@@ -130,14 +209,32 @@ func (f *WindowsFirewall) ensureSession() error {
 
 // closeSession tears down every filter we installed by closing the dynamic
 // session. Idempotent. Caller MUST hold f.mu.
+//
+// We log the FwpmEngineClose0 status because a non-zero return means the
+// kernel didn't actually destroy the session — and with the session
+// alive, every filter we added stays in force. A previous user-reported
+// outage ("disabled kill switch, internet still blocked, had to reboot")
+// matches that failure mode exactly. If you see this log, the only
+// reliable recovery short of reboot is killing the helper PID with
+// elevated rights (kernel auto-cleans dynamic sessions on process
+// death) — netsh wfp del filter by hand would otherwise have to walk
+// the whole provider list.
 func (f *WindowsFirewall) closeSession() {
 	if f.sessionHandle == 0 {
 		return
 	}
-	fwpmEngineClose0(f.sessionHandle)
+	if status := fwpmEngineClose0(f.sessionHandle); status != 0 {
+		slog.Error("WFP FwpmEngineClose0 failed — filters may remain installed; killing the helper PID is the safest recovery",
+			"status", fmt.Sprintf("0x%x", status),
+			"session_handle", f.sessionHandle)
+	}
 	f.sessionHandle = 0
 	f.killSwitchEnabled = false
 	f.dnsProtectionEnabled = false
+	// Closing the session cascades all filter IDs we tracked — there's no
+	// per-ID delete to do, but we drop the map so a re-Enable starts
+	// from a clean slate.
+	f.tunnelFilterIDs = nil
 }
 
 // resolveInterfaceLUID looks up the LUID of the tunnel interface by its
@@ -182,7 +279,7 @@ func resolveInterfaceLUID(ifaceName string) (uint64, error) {
 // mandatory because uintptr(unsafe.Pointer(&v)) drops the GC tracking
 // reference — without it the compiler may free the backing memory
 // while the syscall is still reading it.
-func (f *WindowsFirewall) addFilter(name string, layerKey windows.GUID, action uint32, weight uint16, conditions []fwpmFilterCondition0) (uint64, error) {
+func (f *WindowsFirewall) addFilter(name string, layerKey windows.GUID, action uint32, weight uint8, conditions []fwpmFilterCondition0) (uint64, error) {
 	displayName := utf16Ptr(name)
 	filter := fwpmFilter0{
 		displayData:         fwpmDisplayData0{name: displayName},
@@ -190,7 +287,7 @@ func (f *WindowsFirewall) addFilter(name string, layerKey windows.GUID, action u
 		providerKey:         &f.providerKey,
 		layerKey:            layerKey,
 		subLayerKey:         f.sublayerKey,
-		weight:              weight16(weight),
+		weight:              filterWeight(weight),
 		numFilterConditions: uint32(len(conditions)),
 		action:              fwpmAction0{actionType: action},
 	}
@@ -212,27 +309,37 @@ func (f *WindowsFirewall) addFilter(name string, layerKey windows.GUID, action u
 	return id, nil
 }
 
-// EnableKillSwitch installs the full WFP filter set. ifaceAddresses is the
-// list of tunnel-interface IPs (for anti-spoof); we don't need it on
-// Windows because the tunnel LUID match handles the same role
-// implicitly.
+// EnableKillSwitch installs the base WFP filter set (loopback / DHCP /
+// NDP / catch-all block). When interfaceName is non-empty it also
+// installs the per-tunnel permits (Permit tunnel LUID + Permit each peer
+// endpoint outbound) so a connect happening alongside enable is covered
+// in one transaction; when interfaceName is empty the kill switch turns
+// on immediately with no tunnel, blocking everything until the user
+// either connects a tunnel (handled by AddKillSwitchTunnel) or toggles
+// the switch back off.
+//
+// Idempotent: calling Enable again while killSwitchEnabled is true is a
+// no-op so the GUI's "auto-apply on connect" flow can fire freely.
+//
+// ifaceAddresses is accepted for cross-platform parity but unused on
+// Windows — the per-tunnel LUID permit covers the same role.
 func (f *WindowsFirewall) EnableKillSwitch(interfaceName string, _ []string, endpoints []string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
 	if f.killSwitchEnabled {
+		// Already on — if a tunnel arrived at the same time, fold its
+		// permits in without re-installing the base set. This is the
+		// "user toggled kill switch on first, then connected" sequence.
+		if interfaceName != "" {
+			return f.addTunnelFiltersLocked(interfaceName, endpoints)
+		}
 		return nil
 	}
 	if err := f.ensureSession(); err != nil {
 		return err
 	}
 
-	luid, err := resolveInterfaceLUID(interfaceName)
-	if err != nil {
-		return fmt.Errorf("resolve tunnel LUID: %w", err)
-	}
-
-	// Start a transaction so a mid-way error rolls back cleanly.
 	if status := fwpmTransactionBegin0(f.sessionHandle); status != 0 {
 		return fmt.Errorf("FwpmTransactionBegin0: 0x%x", status)
 	}
@@ -243,73 +350,11 @@ func (f *WindowsFirewall) EnableKillSwitch(interfaceName string, _ []string, end
 		}
 	}()
 
-	// Two layers we install everything on: IPv4 and IPv6 outbound connect.
-	// Use the package-level array to avoid per-call slice allocation.
-	layers := allConnectLayers[:]
-
-	// (1) Permit on tunnel interface — weight 12.
-	for _, layer := range layers {
-		luidCopy := luid
-		conds := []fwpmFilterCondition0{
-			{
-				fieldKey:       guidCondIPLocalInterface,
-				matchType:      matchEqual,
-				conditionValue: uint64ValuePtr(&luidCopy),
-			},
-		}
-		if _, err := f.addFilter("Permit tunnel", layer, actionPermit, 12, conds); err != nil {
-			return err
-		}
-		// runtime.KeepAlive keeps the LUID pointer reachable across the
-		// kernel call — without it, Go's escape analysis may stack-
-		// allocate luidCopy and free it before fwpmFilterAdd0 copies the
-		// value out. `_ = luidCopy` is NOT sufficient: the compiler can
-		// elide it as dead code.
-		runtime.KeepAlive(&luidCopy)
-		runtime.KeepAlive(conds)
-	}
-
-	// (2) Permit loopback — weight 13. Loopback uses LOCAL_ADDRESS, not
-	// interface LUID, on these layers. Easiest match: condition on
-	// remote address in 127.0.0.0/8 / ::1.
-	if err := f.permitLoopback(); err != nil {
+	if err := f.installBaseFiltersLocked(); err != nil {
 		return err
 	}
-
-	// (3) Permit DHCP IPv4 (UDP 67/68) and IPv6 (UDP 546/547) — weight 12.
-	if err := f.permitDHCP(); err != nil {
-		return err
-	}
-
-	// (4) Permit ICMPv6 NDP — weight 12. NDP types 133-137 are needed
-	// for IPv6 router solicitation/advertisement and neighbor discovery.
-	// At the ALE_AUTH_CONNECT layer we can't filter on ICMPv6 type
-	// directly; we permit all ICMPv6 destined to link-local fe80::/10,
-	// which covers NDP without leaking ping-of-death style abuse.
-	if err := f.permitICMPv6LinkLocal(); err != nil {
-		return err
-	}
-
-	// (5) Permit each WG endpoint IP outbound — weight 12. This lets the
-	// encrypted WG packets reach the server even with the catch-all in
-	// place.
-	for _, ep := range endpoints {
-		ip, _, _ := net.SplitHostPort(ep)
-		if ip == "" {
-			ip = ep
-		}
-		parsed := net.ParseIP(ip)
-		if parsed == nil {
-			continue
-		}
-		if err := f.permitEndpoint(parsed); err != nil {
-			return err
-		}
-	}
-
-	// (6) Catch-all block — weight 0.
-	for _, layer := range layers {
-		if _, err := f.addFilter("Block all (catch-all)", layer, actionBlock, 0, nil); err != nil {
+	if interfaceName != "" {
+		if err := f.installTunnelFiltersLocked(interfaceName, endpoints); err != nil {
 			return err
 		}
 	}
@@ -322,6 +367,230 @@ func (f *WindowsFirewall) EnableKillSwitch(interfaceName string, _ []string, end
 	return nil
 }
 
+// installBaseFiltersLocked installs the VPN-independent permits and the
+// catch-all block. Caller MUST hold f.mu AND must be inside a WFP
+// transaction.
+func (f *WindowsFirewall) installBaseFiltersLocked() error {
+	layers := allConnectLayers[:]
+
+	// (1) Permit loopback — weight 13. Loopback uses LOCAL_ADDRESS, not
+	// interface LUID, on these layers. Easiest match: condition on
+	// remote address in 127.0.0.0/8 / ::1.
+	if err := f.permitLoopback(); err != nil {
+		return err
+	}
+
+	// (2) Permit DHCP IPv4 (UDP 67/68) and IPv6 (UDP 546/547) — weight 12.
+	if err := f.permitDHCP(); err != nil {
+		return err
+	}
+
+	// (3) Permit ICMPv6 NDP — weight 12. NDP types 133-137 are needed
+	// for IPv6 router solicitation/advertisement and neighbor discovery.
+	// At the ALE_AUTH_CONNECT layer we can't filter on ICMPv6 type
+	// directly; we permit all ICMPv6 destined to link-local fe80::/10,
+	// which covers NDP without leaking ping-of-death style abuse.
+	if err := f.permitICMPv6LinkLocal(); err != nil {
+		return err
+	}
+
+	// (4) Catch-all block — weight 0. Lowest priority, so per-tunnel and
+	// other permits above it win. This is the actual "kill" of the
+	// kill switch.
+	for _, layer := range layers {
+		if _, err := f.addFilter("Block all (catch-all)", layer, actionBlock, 0, nil); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// installTunnelFiltersLocked installs Permit-tunnel-LUID and
+// Permit-endpoint filters for one tunnel, capturing each filter ID into
+// f.tunnelFilterIDs[interfaceName] so RemoveKillSwitchTunnel can pull
+// the same set out later. Caller MUST hold f.mu AND must be inside a
+// WFP transaction.
+func (f *WindowsFirewall) installTunnelFiltersLocked(interfaceName string, endpoints []string) error {
+	luid, err := resolveInterfaceLUID(interfaceName)
+	if err != nil {
+		return fmt.Errorf("resolve tunnel LUID: %w", err)
+	}
+	if f.tunnelFilterIDs == nil {
+		f.tunnelFilterIDs = make(map[string][]uint64, 1)
+	}
+	ids := f.tunnelFilterIDs[interfaceName]
+
+	// Permit on tunnel interface — weight 12. One per ALE layer (v4+v6).
+	for _, layer := range allConnectLayers {
+		luidCopy := luid
+		conds := []fwpmFilterCondition0{
+			{
+				fieldKey:       guidCondIPLocalInterface,
+				matchType:      matchEqual,
+				conditionValue: uint64ValuePtr(&luidCopy),
+			},
+		}
+		id, err := f.addFilter("Permit tunnel", layer, actionPermit, 12, conds)
+		if err != nil {
+			f.tunnelFilterIDs[interfaceName] = ids
+			return err
+		}
+		ids = append(ids, id)
+		runtime.KeepAlive(&luidCopy)
+		runtime.KeepAlive(conds)
+	}
+
+	// Permit each WG endpoint IP outbound — weight 12. Lets the
+	// encrypted WG packets reach the server even with the catch-all in
+	// place. permitEndpoint installs one filter per IP family; we
+	// re-implement it inline here so we can capture the filter ID.
+	for _, ep := range endpoints {
+		ipStr, _, _ := net.SplitHostPort(ep)
+		if ipStr == "" {
+			ipStr = ep
+		}
+		parsed := net.ParseIP(ipStr)
+		if parsed == nil {
+			continue
+		}
+		id, err := f.addEndpointFilterLocked(parsed)
+		if err != nil {
+			f.tunnelFilterIDs[interfaceName] = ids
+			return err
+		}
+		ids = append(ids, id)
+	}
+	f.tunnelFilterIDs[interfaceName] = ids
+	return nil
+}
+
+// addTunnelFiltersLocked wraps installTunnelFiltersLocked in its own
+// transaction for callers (AddKillSwitchTunnel) that arrive after the
+// kill switch is already enabled. Caller MUST hold f.mu.
+func (f *WindowsFirewall) addTunnelFiltersLocked(interfaceName string, endpoints []string) error {
+	if status := fwpmTransactionBegin0(f.sessionHandle); status != 0 {
+		return fmt.Errorf("FwpmTransactionBegin0(add-tunnel): 0x%x", status)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			fwpmTransactionAbort0(f.sessionHandle)
+		}
+	}()
+	if err := f.installTunnelFiltersLocked(interfaceName, endpoints); err != nil {
+		return err
+	}
+	if status := fwpmTransactionCommit0(f.sessionHandle); status != 0 {
+		return fmt.Errorf("FwpmTransactionCommit0(add-tunnel): 0x%x", status)
+	}
+	committed = true
+	return nil
+}
+
+// addEndpointFilterLocked installs one Permit-endpoint filter (UDP to a
+// single peer IP /32 or /128) and returns its WFP filter ID. Inline
+// version of permitEndpoint that surfaces the ID so the caller can
+// register it for per-tunnel removal. Caller MUST hold f.mu AND must be
+// inside a WFP transaction.
+func (f *WindowsFirewall) addEndpointFilterLocked(ip net.IP) (uint64, error) {
+	if v4 := ip.To4(); v4 != nil {
+		r := &fwpV4AddrMask{
+			addr: binary.BigEndian.Uint32(v4),
+			mask: 0xFFFFFFFF,
+		}
+		conds := []fwpmFilterCondition0{
+			{fieldKey: guidCondIPProtocol, matchType: matchEqual, conditionValue: uint8Value(17)},
+			{
+				fieldKey:  guidCondIPRemoteAddress,
+				matchType: matchEqual,
+				conditionValue: fwpConditionValue0{
+					dataType: dataTypeV4Address,
+					value:    uintptr(unsafe.Pointer(r)),
+				},
+			},
+		}
+		id, err := f.addFilter("Permit WG endpoint v4 "+ip.String(), guidLayerAleAuthConnectV4, actionPermit, 12, conds)
+		runtime.KeepAlive(r)
+		runtime.KeepAlive(conds)
+		return id, err
+	}
+	r := &fwpV6AddrMask{prefixLength: 128}
+	copy(r.addr[:], ip.To16())
+	conds := []fwpmFilterCondition0{
+		{fieldKey: guidCondIPProtocol, matchType: matchEqual, conditionValue: uint8Value(17)},
+		{
+			fieldKey:  guidCondIPRemoteAddress,
+			matchType: matchEqual,
+			conditionValue: fwpConditionValue0{
+				dataType: dataTypeV6Address,
+				value:    uintptr(unsafe.Pointer(r)),
+			},
+		},
+	}
+	id, err := f.addFilter("Permit WG endpoint v6 "+ip.String(), guidLayerAleAuthConnectV6, actionPermit, 12, conds)
+	runtime.KeepAlive(r)
+	runtime.KeepAlive(conds)
+	return id, err
+}
+
+// AddKillSwitchTunnel installs Permit-tunnel + Permit-endpoint filters
+// for one tunnel into the active kill-switch filter set. No-op if the
+// kill switch isn't enabled. Safe to call multiple times for the same
+// name (it will add additional filters; RemoveKillSwitchTunnel removes
+// all of them).
+func (f *WindowsFirewall) AddKillSwitchTunnel(interfaceName string, endpoints []string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if !f.killSwitchEnabled {
+		return nil
+	}
+	if interfaceName == "" {
+		return fmt.Errorf("AddKillSwitchTunnel: empty interface name")
+	}
+	return f.addTunnelFiltersLocked(interfaceName, endpoints)
+}
+
+// RemoveKillSwitchTunnel deletes the per-tunnel filters installed by
+// AddKillSwitchTunnel (or by EnableKillSwitch's initial install) for
+// one tunnel. The catch-all base set stays in place — the user still
+// has the kill switch on. No-op if the tunnel has no tracked filters.
+func (f *WindowsFirewall) RemoveKillSwitchTunnel(interfaceName string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if !f.killSwitchEnabled || f.sessionHandle == 0 {
+		return nil
+	}
+	ids := f.tunnelFilterIDs[interfaceName]
+	if len(ids) == 0 {
+		return nil
+	}
+	if status := fwpmTransactionBegin0(f.sessionHandle); status != 0 {
+		return fmt.Errorf("FwpmTransactionBegin0(rm-tunnel): 0x%x", status)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			fwpmTransactionAbort0(f.sessionHandle)
+		}
+	}()
+	for _, id := range ids {
+		if status := fwpmFilterDeleteById0(f.sessionHandle, id); status != 0 {
+			// Best-effort: log and continue. A stale ID can happen if the
+			// filter was removed out-of-band (session close, manual netsh
+			// wfp del); we still want to clean the rest of the slice.
+			slog.Warn("RemoveKillSwitchTunnel: filter delete failed",
+				"tunnel", interfaceName, "filter_id", id,
+				"status", fmt.Sprintf("0x%x", status))
+		}
+	}
+	if status := fwpmTransactionCommit0(f.sessionHandle); status != 0 {
+		return fmt.Errorf("FwpmTransactionCommit0(rm-tunnel): 0x%x", status)
+	}
+	committed = true
+	delete(f.tunnelFilterIDs, interfaceName)
+	return nil
+}
+
 // permitLoopback permits outbound to 127.0.0.0/8 (IPv4) and ::1/128 (IPv6).
 // Implemented as two conditions per layer matching remote address ranges.
 //
@@ -329,60 +598,51 @@ func (f *WindowsFirewall) EnableKillSwitch(interfaceName string, _ []string, end
 // permit because Windows treats loopback specially, but we add it for
 // belt-and-suspenders compatibility with apps that bind explicit loopback
 // sockets.
+//
+// V4_ADDR_MASK / V6_ADDR_MASK structs are heap-allocated and the Go
+// pointer is held in a stack slot — see permitDNSv4 for the rationale
+// on why the older `var r = struct{...}; uintptr(unsafe.Pointer(&r))`
+// pattern is unsafe across a WFP syscall (escape analysis can't trace
+// r through a uintptr in a struct field).
 func (f *WindowsFirewall) permitLoopback() error {
 	// IPv4 loopback /8: address 127.0.0.0, mask 255.0.0.0.
-	var v4Range = struct {
-		addr uint32
-		mask uint32
-	}{addr: 0x7F000000, mask: 0xFF000000}
-
-	// We use V4_ADDR_MASK conditioned via dataTypeV4Address (FWP_V4_ADDR_MASK = 12).
-	// The condition value points at a 64-bit struct {uint32 addr; uint32 mask}.
+	v4 := &fwpV4AddrMask{addr: 0x7F000000, mask: 0xFF000000}
 	cond4 := []fwpmFilterCondition0{
 		{
 			fieldKey:  guidCondIPRemoteAddress,
 			matchType: matchEqual,
 			conditionValue: fwpConditionValue0{
 				dataType: dataTypeV4Address,
-				value:    uintptr(unsafe.Pointer(&v4Range)),
+				value:    uintptr(unsafe.Pointer(v4)),
 			},
 		},
 	}
-	if _, err := f.addFilter("Permit loopback v4", guidLayerAleAuthConnectV4, actionPermit, 13, cond4); err != nil {
+	_, err := f.addFilter("Permit loopback v4", guidLayerAleAuthConnectV4, actionPermit, 13, cond4)
+	runtime.KeepAlive(v4)
+	runtime.KeepAlive(cond4)
+	if err != nil {
 		return err
 	}
-	runtime.KeepAlive(&v4Range)
-	runtime.KeepAlive(cond4)
 
-	// IPv6 loopback ::1 — single host. Use BYTE_ARRAY16 via a 16-byte buffer.
-	var v6Loop [16]byte
-	v6Loop[15] = 1
-	v6Mask := [16]byte{
-		0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
-		0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+	// IPv6 loopback ::1/128.
+	v6 := &fwpV6AddrMask{
+		addr:         [16]byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
+		prefixLength: 128,
 	}
-	var v6Range = struct {
-		addr [16]byte
-		mask [16]byte
-	}{addr: v6Loop, mask: v6Mask}
 	cond6 := []fwpmFilterCondition0{
 		{
 			fieldKey:  guidCondIPRemoteAddress,
 			matchType: matchEqual,
 			conditionValue: fwpConditionValue0{
 				dataType: dataTypeV6Address,
-				value:    uintptr(unsafe.Pointer(&v6Range)),
+				value:    uintptr(unsafe.Pointer(v6)),
 			},
 		},
 	}
-	if _, err := f.addFilter("Permit loopback v6", guidLayerAleAuthConnectV6, actionPermit, 13, cond6); err != nil {
-		return err
-	}
-	runtime.KeepAlive(&v6Range)
+	_, err = f.addFilter("Permit loopback v6", guidLayerAleAuthConnectV6, actionPermit, 13, cond6)
+	runtime.KeepAlive(v6)
 	runtime.KeepAlive(cond6)
-	runtime.KeepAlive(&v6Loop)
-	runtime.KeepAlive(&v6Mask)
-	return nil
+	return err
 }
 
 // permitDHCP permits UDP 67/68 (IPv4 DHCP) and UDP 546/547 (IPv6 DHCPv6).
@@ -410,14 +670,12 @@ func (f *WindowsFirewall) permitDHCP() error {
 }
 
 // permitICMPv6LinkLocal permits ICMPv6 (protocol 58) to fe80::/10.
+// See permitDNSv4 for why the address-mask struct is heap-allocated.
 func (f *WindowsFirewall) permitICMPv6LinkLocal() error {
-	// fe80::/10 — first 10 bits = 0xfe80.
-	var ll = struct {
-		addr [16]byte
-		mask [16]byte
-	}{
-		addr: [16]byte{0xfe, 0x80, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
-		mask: [16]byte{0xff, 0xc0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+	// fe80::/10 — IPv6 link-local prefix.
+	ll := &fwpV6AddrMask{
+		addr:         [16]byte{0xfe, 0x80, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+		prefixLength: 10,
 	}
 	conds := []fwpmFilterCondition0{
 		{fieldKey: guidCondIPProtocol, matchType: matchEqual, conditionValue: uint8Value(58)},
@@ -426,27 +684,22 @@ func (f *WindowsFirewall) permitICMPv6LinkLocal() error {
 			matchType: matchEqual,
 			conditionValue: fwpConditionValue0{
 				dataType: dataTypeV6Address,
-				value:    uintptr(unsafe.Pointer(&ll)),
+				value:    uintptr(unsafe.Pointer(ll)),
 			},
 		},
 	}
-	if _, err := f.addFilter("Permit NDP (ICMPv6 link-local)", guidLayerAleAuthConnectV6, actionPermit, 12, conds); err != nil {
-		return err
-	}
-	runtime.KeepAlive(&ll)
+	_, err := f.addFilter("Permit NDP (ICMPv6 link-local)", guidLayerAleAuthConnectV6, actionPermit, 12, conds)
+	runtime.KeepAlive(ll)
 	runtime.KeepAlive(conds)
-	return nil
+	return err
 }
 
 // permitEndpoint adds a single permit filter for traffic to one peer
-// endpoint IP. UDP-only (WG uses UDP).
+// endpoint IP. UDP-only (WG uses UDP). See permitDNSv4 for why the
+// address-mask struct is heap-allocated.
 func (f *WindowsFirewall) permitEndpoint(ip net.IP) error {
 	if v4 := ip.To4(); v4 != nil {
-		// Endpoint /32 in V4_ADDR_MASK form.
-		var r = struct {
-			addr uint32
-			mask uint32
-		}{
+		r := &fwpV4AddrMask{
 			addr: binary.BigEndian.Uint32(v4),
 			mask: 0xFFFFFFFF,
 		}
@@ -457,28 +710,17 @@ func (f *WindowsFirewall) permitEndpoint(ip net.IP) error {
 				matchType: matchEqual,
 				conditionValue: fwpConditionValue0{
 					dataType: dataTypeV4Address,
-					value:    uintptr(unsafe.Pointer(&r)),
+					value:    uintptr(unsafe.Pointer(r)),
 				},
 			},
 		}
-		if _, err := f.addFilter("Permit WG endpoint v4 "+ip.String(), guidLayerAleAuthConnectV4, actionPermit, 12, conds); err != nil {
-			return err
-		}
-		runtime.KeepAlive(&r)
+		_, err := f.addFilter("Permit WG endpoint v4 "+ip.String(), guidLayerAleAuthConnectV4, actionPermit, 12, conds)
+		runtime.KeepAlive(r)
 		runtime.KeepAlive(conds)
-		return nil
+		return err
 	}
-	// IPv6 endpoint /128.
-	var addr [16]byte
-	copy(addr[:], ip.To16())
-	mask := [16]byte{
-		0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
-		0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
-	}
-	var r = struct {
-		addr [16]byte
-		mask [16]byte
-	}{addr: addr, mask: mask}
+	r := &fwpV6AddrMask{prefixLength: 128}
+	copy(r.addr[:], ip.To16())
 	conds := []fwpmFilterCondition0{
 		{fieldKey: guidCondIPProtocol, matchType: matchEqual, conditionValue: uint8Value(17)},
 		{
@@ -486,18 +728,14 @@ func (f *WindowsFirewall) permitEndpoint(ip net.IP) error {
 			matchType: matchEqual,
 			conditionValue: fwpConditionValue0{
 				dataType: dataTypeV6Address,
-				value:    uintptr(unsafe.Pointer(&r)),
+				value:    uintptr(unsafe.Pointer(r)),
 			},
 		},
 	}
-	if _, err := f.addFilter("Permit WG endpoint v6 "+ip.String(), guidLayerAleAuthConnectV6, actionPermit, 12, conds); err != nil {
-		return err
-	}
-	runtime.KeepAlive(&r)
+	_, err := f.addFilter("Permit WG endpoint v6 "+ip.String(), guidLayerAleAuthConnectV6, actionPermit, 12, conds)
+	runtime.KeepAlive(r)
 	runtime.KeepAlive(conds)
-	runtime.KeepAlive(&addr)
-	runtime.KeepAlive(&mask)
-	return nil
+	return err
 }
 
 func (f *WindowsFirewall) DisableKillSwitch() error {
@@ -567,84 +805,123 @@ func (f *WindowsFirewall) EnableDNSProtection(interfaceName string, dnsServers [
 }
 
 // permitDNSServer installs two filters (UDP+TCP) per address family for
-// one whitelisted DNS server. The UDP and TCP cases use separate condition
-// slices so the unsafe-pointer aliasing in conditionValue.value stays
-// clearly scoped per addFilter call.
+// one whitelisted DNS server. Each filter is installed by an isolated
+// helper that owns its own V4/V6_ADDR_MASK allocation and KeepAlives it
+// the instant the syscall returns.
+//
+// Why the per-call isolation: an earlier version built one addrCond and
+// reused it across two addFilter calls, sharing the same uintptr(&r) as
+// the conditionValue. That triggered EXCEPTION_ACCESS_VIOLATION
+// (0xC0000005) inside fwpuclnt.dll's FwpmFilterAdd0 on the first call
+// because Go's escape analysis only sees `&r` through KeepAlive at the
+// bottom of the function — it cannot trace r through a uintptr stored
+// in a struct field stored in a slice. With two syscalls back-to-back
+// and several local frames on stack, the goroutine had enough time for
+// a stack move or GC tick to invalidate the pointer between when the
+// uintptr was captured and when the kernel dereferenced it. The single
+// `var r = struct{...}` / KeepAlive(&r) pattern that works for
+// permitEndpoint (one filter, one syscall, tight scope) is not safe
+// when the same r feeds two consecutive syscalls.
+//
+// The wireguard-windows reference implementation uses the same WFP
+// surface but builds each filter in its own goroutine-local scope —
+// mirroring that here avoids the implicit "stack frame lives long
+// enough" assumption.
 func (f *WindowsFirewall) permitDNSServer(ip net.IP) error {
 	if v4 := ip.To4(); v4 != nil {
-		var r = struct {
-			addr uint32
-			mask uint32
-		}{addr: binary.BigEndian.Uint32(v4), mask: 0xFFFFFFFF}
-		addrCond := fwpmFilterCondition0{
+		if err := f.permitDNSv4(ip, v4, 17, "UDP"); err != nil {
+			return err
+		}
+		return f.permitDNSv4(ip, v4, 6, "TCP")
+	}
+	var addr [16]byte
+	copy(addr[:], ip.To16())
+	if err := f.permitDNSv6(ip, addr, 17, "UDP"); err != nil {
+		return err
+	}
+	return f.permitDNSv6(ip, addr, 6, "TCP")
+}
+
+// permitDNSv4 installs ONE WFP filter permitting UDP/TCP port 53 traffic
+// to a single IPv4 address. The V4_ADDR_MASK struct is heap-allocated
+// via `&fwpV4AddrMask{...}` so the GC tracks it through `r` (a real Go
+// pointer); the uintptr stored in the condition value field is just a
+// number for the kernel to dereference, and runtime.KeepAlive(r) after
+// the syscall ensures the GC won't reclaim the heap object mid-call.
+func (f *WindowsFirewall) permitDNSv4(ip net.IP, v4 net.IP, proto uint8, protoName string) error {
+	r := &fwpV4AddrMask{
+		addr: binary.BigEndian.Uint32(v4),
+		mask: 0xFFFFFFFF,
+	}
+	conds := []fwpmFilterCondition0{
+		{fieldKey: guidCondIPProtocol, matchType: matchEqual, conditionValue: uint8Value(proto)},
+		{fieldKey: guidCondIPRemotePort, matchType: matchEqual, conditionValue: uint16Value(53)},
+		{
 			fieldKey:  guidCondIPRemoteAddress,
 			matchType: matchEqual,
 			conditionValue: fwpConditionValue0{
 				dataType: dataTypeV4Address,
-				value:    uintptr(unsafe.Pointer(&r)),
+				value:    uintptr(unsafe.Pointer(r)),
 			},
-		}
-		condsUDP := []fwpmFilterCondition0{
-			{fieldKey: guidCondIPProtocol, matchType: matchEqual, conditionValue: uint8Value(17)},
-			{fieldKey: guidCondIPRemotePort, matchType: matchEqual, conditionValue: uint16Value(53)},
-			addrCond,
-		}
-		condsTCP := []fwpmFilterCondition0{
-			{fieldKey: guidCondIPProtocol, matchType: matchEqual, conditionValue: uint8Value(6)},
-			{fieldKey: guidCondIPRemotePort, matchType: matchEqual, conditionValue: uint16Value(53)},
-			addrCond,
-		}
-		if _, err := f.addFilter("Permit DNS v4 UDP "+ip.String(), guidLayerAleAuthConnectV4, actionPermit, 15, condsUDP); err != nil {
-			return err
-		}
-		if _, err := f.addFilter("Permit DNS v4 TCP "+ip.String(), guidLayerAleAuthConnectV4, actionPermit, 15, condsTCP); err != nil {
-			return err
-		}
-		runtime.KeepAlive(&r)
-		runtime.KeepAlive(condsUDP)
-		runtime.KeepAlive(condsTCP)
-		return nil
-	}
-	var addr [16]byte
-	copy(addr[:], ip.To16())
-	mask := [16]byte{
-		0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
-		0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
-	}
-	var r = struct {
-		addr [16]byte
-		mask [16]byte
-	}{addr: addr, mask: mask}
-	addrCond := fwpmFilterCondition0{
-		fieldKey:  guidCondIPRemoteAddress,
-		matchType: matchEqual,
-		conditionValue: fwpConditionValue0{
-			dataType: dataTypeV6Address,
-			value:    uintptr(unsafe.Pointer(&r)),
 		},
 	}
-	condsUDP := []fwpmFilterCondition0{
-		{fieldKey: guidCondIPProtocol, matchType: matchEqual, conditionValue: uint8Value(17)},
-		{fieldKey: guidCondIPRemotePort, matchType: matchEqual, conditionValue: uint16Value(53)},
-		addrCond,
-	}
-	condsTCP := []fwpmFilterCondition0{
-		{fieldKey: guidCondIPProtocol, matchType: matchEqual, conditionValue: uint8Value(6)},
-		{fieldKey: guidCondIPRemotePort, matchType: matchEqual, conditionValue: uint16Value(53)},
-		addrCond,
-	}
-	if _, err := f.addFilter("Permit DNS v6 UDP "+ip.String(), guidLayerAleAuthConnectV6, actionPermit, 15, condsUDP); err != nil {
+	_, err := f.addFilter("Permit DNS v4 "+protoName+" "+ip.String(), guidLayerAleAuthConnectV4, actionPermit, 15, conds)
+	runtime.KeepAlive(r)
+	runtime.KeepAlive(conds)
+	if err != nil {
 		return err
 	}
-	if _, err := f.addFilter("Permit DNS v6 TCP "+ip.String(), guidLayerAleAuthConnectV6, actionPermit, 15, condsTCP); err != nil {
-		return err
-	}
-	runtime.KeepAlive(&r)
-	runtime.KeepAlive(&addr)
-	runtime.KeepAlive(&mask)
-	runtime.KeepAlive(condsUDP)
-	runtime.KeepAlive(condsTCP)
 	return nil
+}
+
+// permitDNSv6 mirrors permitDNSv4 for IPv6 — single filter, heap-
+// allocated V6_ADDR_MASK, KeepAlive immediately after the syscall.
+func (f *WindowsFirewall) permitDNSv6(ip net.IP, addr [16]byte, proto uint8, protoName string) error {
+	r := &fwpV6AddrMask{
+		addr:         addr,
+		prefixLength: 128,
+	}
+	conds := []fwpmFilterCondition0{
+		{fieldKey: guidCondIPProtocol, matchType: matchEqual, conditionValue: uint8Value(proto)},
+		{fieldKey: guidCondIPRemotePort, matchType: matchEqual, conditionValue: uint16Value(53)},
+		{
+			fieldKey:  guidCondIPRemoteAddress,
+			matchType: matchEqual,
+			conditionValue: fwpConditionValue0{
+				dataType: dataTypeV6Address,
+				value:    uintptr(unsafe.Pointer(r)),
+			},
+		},
+	}
+	_, err := f.addFilter("Permit DNS v6 "+protoName+" "+ip.String(), guidLayerAleAuthConnectV6, actionPermit, 15, conds)
+	runtime.KeepAlive(r)
+	runtime.KeepAlive(conds)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+// fwpV4AddrMask mirrors FWP_V4_ADDR_AND_MASK: addr + mask, both UINT32
+// in host byte order, total 8 bytes.
+type fwpV4AddrMask struct {
+	addr uint32
+	mask uint32
+}
+
+// fwpV6AddrMask mirrors FWP_V6_ADDR_AND_MASK from fwptypes.h: 16 bytes
+// of address followed by a SINGLE prefix-length byte (NOT a 16-byte
+// mask like the v4 variant). A previous version used a 16-byte mask
+// here; the kernel read mask[0] (0xff) as prefixLength=255, which is
+// invalid for IPv6 (max 128) and surfaced as
+// FWP_E_INCOMPATIBLE_LAYER (0x8032001f) the first time the kill switch
+// installed a loopback-v6 filter.
+//
+// Total size 17 bytes; no Go alignment padding is needed because
+// uint8 has alignment 1.
+type fwpV6AddrMask struct {
+	addr         [16]byte
+	prefixLength uint8
 }
 
 func (f *WindowsFirewall) blockAllDNS() error {

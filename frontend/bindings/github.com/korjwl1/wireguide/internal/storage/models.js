@@ -177,6 +177,19 @@ export class Settings {
              */
             this["log_level"] = "";
         }
+        if (/** @type {any} */(false)) {
+            /**
+             * AutoUpdateCheck controls the periodic update scheduler. *bool so we
+             * can distinguish "user never touched this" from "user explicitly
+             * turned it off" — defaults to true on first load. A user who installs
+             * via brew might prefer to disable in-app checks and let brew handle
+             * it instead; an offline / corporate-network user might disable to
+             * silence the failed-check log noise.
+             * @member
+             * @type {boolean | null | undefined}
+             */
+            this["auto_update_check"] = undefined;
+        }
         if (!("wifi_rules" in $$source)) {
             /**
              * WifiRules holds the SSID-based auto-connect / auto-disconnect
@@ -197,10 +210,10 @@ export class Settings {
      * @returns {Settings}
      */
     static createFrom($$source = {}) {
-        const $$createField9_0 = $$createType0;
+        const $$createField10_0 = $$createType0;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("wifi_rules" in $$parsedSource) {
-            $$parsedSource["wifi_rules"] = $$createField9_0($$parsedSource["wifi_rules"]);
+            $$parsedSource["wifi_rules"] = $$createField10_0($$parsedSource["wifi_rules"]);
         }
         return new Settings(/** @type {Partial<Settings>} */($$parsedSource));
     }

@@ -29,29 +29,44 @@ import (
 var (
 	modFwpuclnt = windows.NewLazySystemDLL("fwpuclnt.dll")
 
-	procFwpmEngineOpen0      = modFwpuclnt.NewProc("FwpmEngineOpen0")
-	procFwpmEngineClose0     = modFwpuclnt.NewProc("FwpmEngineClose0")
-	procFwpmTransactionBegin0  = modFwpuclnt.NewProc("FwpmTransactionBegin0")
-	procFwpmTransactionCommit0 = modFwpuclnt.NewProc("FwpmTransactionCommit0")
-	procFwpmTransactionAbort0  = modFwpuclnt.NewProc("FwpmTransactionAbort0")
-	procFwpmProviderAdd0     = modFwpuclnt.NewProc("FwpmProviderAdd0")
-	procFwpmSubLayerAdd0     = modFwpuclnt.NewProc("FwpmSubLayerAdd0")
-	procFwpmFilterAdd0       = modFwpuclnt.NewProc("FwpmFilterAdd0")
+	procFwpmEngineOpen0           = modFwpuclnt.NewProc("FwpmEngineOpen0")
+	procFwpmEngineClose0          = modFwpuclnt.NewProc("FwpmEngineClose0")
+	procFwpmTransactionBegin0     = modFwpuclnt.NewProc("FwpmTransactionBegin0")
+	procFwpmTransactionCommit0    = modFwpuclnt.NewProc("FwpmTransactionCommit0")
+	procFwpmTransactionAbort0     = modFwpuclnt.NewProc("FwpmTransactionAbort0")
+	procFwpmProviderAdd0          = modFwpuclnt.NewProc("FwpmProviderAdd0")
+	procFwpmSubLayerAdd0          = modFwpuclnt.NewProc("FwpmSubLayerAdd0")
+	procFwpmSubLayerDeleteByKey0  = modFwpuclnt.NewProc("FwpmSubLayerDeleteByKey0")
+	procFwpmProviderDeleteByKey0  = modFwpuclnt.NewProc("FwpmProviderDeleteByKey0")
+	procFwpmFilterAdd0            = modFwpuclnt.NewProc("FwpmFilterAdd0")
+	procFwpmFilterDeleteById0     = modFwpuclnt.NewProc("FwpmFilterDeleteById0")
 )
 
 // RPC_C_AUTHN_WINNT — pass-through Windows NT authn for FwpmEngineOpen0.
 const cRPC_C_AUTHN_WINNT = 10
 
 // FWP_DATA_TYPE values used by us. Subset of the full enum.
+// Source: fwptypes.h (Windows SDK) and the FWP_DATA_TYPE Microsoft Learn
+// reference. The previous values in this file were off-by-one for the
+// integer types AND missed the SDK's deliberate jump to 0x100 for
+// V4_ADDR_MASK / V6_ADDR_MASK / RANGE_TYPE (the SDK puts
+// FWP_SINGLE_DATA_TYPE_MAX = 0xff between the scalar block and the
+// pointer-to-struct block). The bug surfaced as 0xC0000005 in
+// FwpmFilterAdd0 the first time auto-DNS-protection ran for a full-
+// tunnel, DNS-configured connect: WFP read our "0xC = V4_ADDR_MASK"
+// as FWP_BYTE_BLOB_TYPE, dereferenced the V4_ADDR_AND_MASK pointer as
+// an FWP_BYTE_BLOB layout, and ran off the end of the 8-byte struct.
+// EnableKillSwitch never hit it because the user hasn't toggled kill
+// switch on; auto-DNS-protection is what reliably reproduces it.
 const (
-	dataTypeUint8     = 2
-	dataTypeUint16    = 3
-	dataTypeUint32    = 4
-	dataTypeUint64    = 5
-	dataTypeByteBlob  = 11 // BYTE_BLOB_TYPE
-	dataTypeV4Address = 12 // V4_ADDR_MASK
-	dataTypeV6Address = 13 // V6_ADDR_MASK
-	dataTypeRange     = 18 // RANGE_TYPE
+	dataTypeUint8     = 1     // FWP_UINT8
+	dataTypeUint16    = 2     // FWP_UINT16
+	dataTypeUint32    = 3     // FWP_UINT32
+	dataTypeUint64    = 4     // FWP_UINT64
+	dataTypeByteBlob  = 12    // FWP_BYTE_BLOB_TYPE
+	dataTypeV4Address = 0x100 // FWP_V4_ADDR_MASK
+	dataTypeV6Address = 0x101 // FWP_V6_ADDR_MASK
+	dataTypeRange     = 0x102 // FWP_RANGE_TYPE
 )
 
 // FWP_MATCH_TYPE values.
@@ -300,6 +315,34 @@ func fwpmFilterAdd0(handle uintptr, f *fwpmFilter0) (uint64, uint32) {
 	return filterID, uint32(ret)
 }
 
+// fwpmFilterDeleteById0 removes a single filter by its WFP filter ID
+// (returned by FwpmFilterAdd0). Used to remove per-tunnel permits when
+// a tunnel disconnects without tearing down the rest of the kill switch.
+func fwpmFilterDeleteById0(handle uintptr, id uint64) uint32 {
+	ret, _, _ := procFwpmFilterDeleteById0.Call(handle, uintptr(id))
+	return uint32(ret)
+}
+
+// fwpmSubLayerDeleteByKey0 deletes a sublayer AND every filter attached
+// to it (cascading delete per the SDK contract). Used by the startup-
+// time orphan-filter cleanup so a previous helper run that failed to
+// close its dynamic session cleanly doesn't leave a permanently-
+// blocking catch-all filter alive after we install our own.
+func fwpmSubLayerDeleteByKey0(handle uintptr, key *windows.GUID) uint32 {
+	ret, _, _ := procFwpmSubLayerDeleteByKey0.Call(handle, uintptr(unsafe.Pointer(key)))
+	runtime.KeepAlive(key)
+	return uint32(ret)
+}
+
+// fwpmProviderDeleteByKey0 removes a registered WFP provider. Filters
+// referencing the provider must already be gone (we delete the
+// sublayer first, which cascades the filters).
+func fwpmProviderDeleteByKey0(handle uintptr, key *windows.GUID) uint32 {
+	ret, _, _ := procFwpmProviderDeleteByKey0.Call(handle, uintptr(unsafe.Pointer(key)))
+	runtime.KeepAlive(key)
+	return uint32(ret)
+}
+
 // --- value helpers -----------------------------------------------------
 
 // uint8Value wraps an FWP_UINT8 in fwpConditionValue0.
@@ -324,16 +367,16 @@ func uint64ValuePtr(p *uint64) fwpConditionValue0 {
 	return fwpConditionValue0{dataType: dataTypeUint64, value: uintptr(unsafe.Pointer(p))}
 }
 
-// byteArr16Value wraps a 16-byte IPv6 address (BYTE_ARRAY16_TYPE = 9).
-// We use BYTE_BLOB instead which is simpler.
-func byteBlobValue(b *fwpByteBlob) fwpConditionValue0 {
-	return fwpConditionValue0{dataType: dataTypeByteBlob, value: uintptr(unsafe.Pointer(b))}
-}
-
-// weight16 builds an FWP_VALUE0 holding a UINT16 weight (priority).
-// Higher weight → evaluated first.
-func weight16(w uint16) fwpValue0 {
-	return fwpValue0{dataType: dataTypeUint16, value: uintptr(w)}
+// filterWeight builds an FWP_VALUE0 holding a UINT8 priority weight
+// (0 = lowest, 15 = highest). FWPM_FILTER0::weight is documented as
+// FWP_EMPTY, FWP_UINT8, or FWP_UINT64 only — passing FWP_UINT16 there
+// triggers FWP_E_TYPE_MISMATCH (0x80320025) at FwpmFilterAdd0, which
+// is the failure we saw on "Permit tunnel" when enabling the kill
+// switch. wireguard-windows tunnel/firewall/helpers.go uses the same
+// UINT8 pattern, so we mirror it. The caller-side weight is taken as
+// uint8 to enforce the 0-15 priority range at the type level.
+func filterWeight(w uint8) fwpValue0 {
+	return fwpValue0{dataType: dataTypeUint8, value: uintptr(w)}
 }
 
 // utf16Ptr is a convenience over windows.UTF16PtrFromString that returns

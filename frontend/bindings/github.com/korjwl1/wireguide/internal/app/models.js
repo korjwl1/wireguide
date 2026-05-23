@@ -276,6 +276,89 @@ export class TunnelInfo {
 }
 
 /**
+ * UpdateState is the frontend-facing snapshot of persisted check state.
+ * Exposed so Settings → About can render the "Last checked …" line and
+ * the first-check placeholder correctly.
+ * 
+ * IsDevBuild + AutoEnabled together let the UI distinguish three
+ * "not-yet-checked" cases that look identical to a naive `last_check==0`
+ * gate:
+ * 
+ * 	dev build  → scheduler is intentionally inert, show "Never checked"
+ * 	auto off   → user disabled the scheduler, show "Never checked"
+ * 	auto on    → first tick is 30–120 s away, show "scheduled" hint
+ * 
+ * CurrentVersion is duplicated here (also in GetVersion()) so the About
+ * tab doesn't need two round-trips to render.
+ */
+export class UpdateState {
+    /**
+     * Creates a new UpdateState instance.
+     * @param {Partial<UpdateState>} [$$source = {}] - The source object to create the UpdateState.
+     */
+    constructor($$source = {}) {
+        if (!("current_version" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["current_version"] = "";
+        }
+        if (!("last_check_unix" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["last_check_unix"] = 0;
+        }
+        if (!("last_seen_version" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["last_seen_version"] = "";
+        }
+        if (!("dismissed_versions" in $$source)) {
+            /**
+             * @member
+             * @type {string[]}
+             */
+            this["dismissed_versions"] = [];
+        }
+        if (!("is_dev_build" in $$source)) {
+            /**
+             * @member
+             * @type {boolean}
+             */
+            this["is_dev_build"] = false;
+        }
+        if (!("auto_enabled" in $$source)) {
+            /**
+             * @member
+             * @type {boolean}
+             */
+            this["auto_enabled"] = false;
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new UpdateState instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {UpdateState}
+     */
+    static createFrom($$source = {}) {
+        const $$createField3_0 = $$createType2;
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("dismissed_versions" in $$parsedSource) {
+            $$parsedSource["dismissed_versions"] = $$createField3_0($$parsedSource["dismissed_versions"]);
+        }
+        return new UpdateState(/** @type {Partial<UpdateState>} */($$parsedSource));
+    }
+}
+
+/**
  * ZipImportResult holds the outcome of importing one .conf entry from a zip.
  */
 export class ZipImportResult {

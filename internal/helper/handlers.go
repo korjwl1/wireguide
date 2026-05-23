@@ -247,6 +247,27 @@ func (h *Helper) handleConnect(params json.RawMessage) (interface{}, error) {
 		}
 	}
 
+	// If the kill switch is already enabled (user toggled it on before
+	// connecting, OR it's been on the whole time and we just brought up
+	// another tunnel), fold the new tunnel's LUID + endpoints into the
+	// existing WFP filter set. The base "block all" filter would
+	// otherwise still drop the new tunnel's encapsulated UDP traffic
+	// because the only "permit tunnel" filter still references whatever
+	// LUID was current at Enable time.
+	if h.firewall.IsKillSwitchEnabled() {
+		status := h.manager.Status()
+		ifaceName := ""
+		if status != nil {
+			ifaceName = status.InterfaceName
+		}
+		if ifaceName != "" {
+			eps := h.manager.ResolvedEndpoints()
+			if err := h.firewall.AddKillSwitchTunnel(ifaceName, eps); err != nil {
+				slog.Warn("AddKillSwitchTunnel after connect failed", "error", err)
+			}
+		}
+	}
+
 	return ipc.Empty{}, nil
 }
 
@@ -274,6 +295,22 @@ func (h *Helper) handleDisconnect(params json.RawMessage) (interface{}, error) {
 			h.monitor.CancelRetryFor(tunnelName)
 		} else {
 			h.monitor.CancelRetry()
+		}
+	}
+
+	// Snapshot interface names BEFORE disconnect so we can remove their
+	// kill-switch permits after teardown. After DisconnectTunnel the
+	// engine pointer (and its ifaceName) is gone.
+	var ifaceSnapshot []string
+	if h.firewall.IsKillSwitchEnabled() {
+		for _, st := range h.manager.AllStatuses() {
+			if st == nil || st.InterfaceName == "" {
+				continue
+			}
+			if tunnelName != "" && st.TunnelName != tunnelName {
+				continue
+			}
+			ifaceSnapshot = append(ifaceSnapshot, st.InterfaceName)
 		}
 	}
 
@@ -317,6 +354,15 @@ func (h *Helper) handleDisconnect(params json.RawMessage) (interface{}, error) {
 			return nil, firstErr
 		}
 	}
+
+	// Strip the just-torn-down tunnels from the kill-switch filter set.
+	// Best-effort: log failures but never block the disconnect response.
+	for _, iface := range ifaceSnapshot {
+		if err := h.firewall.RemoveKillSwitchTunnel(iface); err != nil {
+			slog.Warn("RemoveKillSwitchTunnel after disconnect failed",
+				"interface", iface, "error", err)
+		}
+	}
 	return ipc.Empty{}, nil
 }
 
@@ -342,36 +388,35 @@ func (h *Helper) handleSetKillSwitch(params json.RawMessage) (interface{}, error
 		return nil, err
 	}
 	if req.Enabled {
-		if !h.manager.IsConnected() {
-			return nil, fmt.Errorf("no active tunnel")
+		// Enable should work regardless of tunnel state. If no tunnel is
+		// active the firewall installs only the base "block everything
+		// not explicitly allowed" set; once a tunnel connects,
+		// handleConnect will call AddKillSwitchTunnel to fold its
+		// LUID/endpoints in. This matches the user mental model of
+		// "the kill switch is on the moment I flip the toggle" instead
+		// of the old "kill switch can only be enabled while connected"
+		// gate that surprised users into a half-state.
+		var (
+			ifaceName      string
+			endpoints      []string
+			ifaceAddresses []string
+		)
+		if status := h.manager.Status(); status != nil {
+			ifaceName = status.InterfaceName
 		}
-		status := h.manager.Status()
-		// IsConnected can return true while Status returns an empty
-		// InterfaceName if a Disconnect raced in between (Manager.Status
-		// zero-fills when no tunnel matches). Pass the empty name into
-		// firewall.EnableKillSwitch and the regex validator rejects it
-		// after going through the locking dance — bail early instead.
-		if status.InterfaceName == "" {
-			return nil, fmt.Errorf("no active tunnel (interface unavailable)")
+		if ifaceName != "" {
+			// Tunnel is up — bundle its permits into the initial install.
+			// Pre-resolved endpoints come from NewEngine; doing DNS now
+			// would either fail (kill switch is about to block) or loop
+			// back through the tunnel we're about to fence in.
+			endpoints = h.manager.ResolvedEndpoints()
+			h.mu.Lock()
+			for _, cfg := range h.activeCfgs {
+				ifaceAddresses = append(ifaceAddresses, cfg.Interface.Address...)
+			}
+			h.mu.Unlock()
 		}
-		// Use pre-resolved endpoints (resolved before tunnel routes were
-		// installed). Doing DNS resolution here would fail because the kill
-		// switch is about to block non-tunnel traffic and/or the query would
-		// route through the tunnel itself.
-		endpoints := h.manager.ResolvedEndpoints()
-		if len(endpoints) == 0 {
-			return nil, fmt.Errorf("no resolved endpoints available — tunnel may have disconnected")
-		}
-		// Get interface addresses from ALL active configs for anti-spoof chains.
-		// With multiple tunnels, the kill switch must allow traffic from every
-		// tunnel's interface addresses, not just the first one.
-		var ifaceAddresses []string
-		h.mu.Lock()
-		for _, cfg := range h.activeCfgs {
-			ifaceAddresses = append(ifaceAddresses, cfg.Interface.Address...)
-		}
-		h.mu.Unlock()
-		if err := h.firewall.EnableKillSwitch(status.InterfaceName, ifaceAddresses, endpoints); err != nil {
+		if err := h.firewall.EnableKillSwitch(ifaceName, ifaceAddresses, endpoints); err != nil {
 			return nil, err
 		}
 	} else {

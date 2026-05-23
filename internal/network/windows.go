@@ -10,6 +10,8 @@ import (
 	"os/exec"
 	"strings"
 	"time"
+
+	"github.com/korjwl1/wireguide/internal/sysexec"
 )
 
 // cmdTimeout bounds every external command (netsh/route/PowerShell).
@@ -373,6 +375,7 @@ func runWin(name string, args ...string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), cmdTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, name, args...)
+	sysexec.Hide(cmd)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		if ctx.Err() == context.DeadlineExceeded {
@@ -389,7 +392,9 @@ func runWin(name string, args ...string) error {
 func runWinOut(name string, args ...string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), cmdTimeout)
 	defer cancel()
-	return exec.CommandContext(ctx, name, args...).CombinedOutput()
+	cmd := exec.CommandContext(ctx, name, args...)
+	sysexec.Hide(cmd)
+	return cmd.CombinedOutput()
 }
 
 // tryRunWin runs a Windows command best-effort and logs failures at debug.

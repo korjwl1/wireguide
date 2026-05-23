@@ -184,6 +184,15 @@ func loadDNSSubAnchor(interfaceName string, dnsServers []string) error {
 	return loadAnchorRules(dnsAnchorName, dnsRules.String())
 }
 
+// AddKillSwitchTunnel is a no-op on darwin. pf builds per-tunnel rules
+// inside EnableKillSwitch; there's no separate "tunnel arrived after
+// kill switch was already on" path to service. Kept to satisfy the
+// cross-platform interface.
+func (f *DarwinFirewall) AddKillSwitchTunnel(string, []string) error { return nil }
+
+// RemoveKillSwitchTunnel is a no-op on darwin for the same reason.
+func (f *DarwinFirewall) RemoveKillSwitchTunnel(string) error { return nil }
+
 func (f *DarwinFirewall) DisableKillSwitch() error {
 	f.mu.Lock()
 	pfWas := f.pfWasEnabled

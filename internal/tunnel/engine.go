@@ -234,6 +234,22 @@ func (e *Engine) Close() {
 	})
 }
 
+// IpcGet returns the wireguard-go device's UAPI state as a multi-line
+// string (see https://www.wireguard.com/xplatform/#configuration-protocol).
+// This is an in-process call straight into wgDevice — it does NOT require
+// the UAPI named-pipe / socket to be reachable, which on Windows fails
+// because wireguard-go's pipe target (\\.\pipe\ProtectedPrefix\Administrators\…)
+// rejects any owner SID other than the Administrators group, and our
+// helper runs as an elevated user (not as LocalSystem). Callers that
+// need peer stats and don't want to depend on the pipe should use this
+// instead of going through wgctrl.
+func (e *Engine) IpcGet() (string, error) {
+	if e.wgDevice == nil {
+		return "", fmt.Errorf("engine wgDevice is nil")
+	}
+	return e.wgDevice.IpcGet()
+}
+
 // buildIpcConfig creates the WireGuard IPC config string.
 // Protocol: https://www.wireguard.com/xplatform/#configuration-protocol
 //
@@ -320,18 +336,21 @@ func keyToHex(b64Key string) (string, error) {
 
 
 // newWireguardSlogLogger builds a wireguard-go logger that routes Errorf to
-// our structured log stream at Warn level, and DISCARDS Verbosef. The latter
-// is called by wireguard-go on per-packet events (key rotations, idle
-// detection, keepalive ticks) and would easily produce hundreds of log
-// lines per second on a busy tunnel — enough to bury every other log the
-// user might care about. We keep Errorf loud because that's where peer
-// rejections, bad packet formats, and rekey failures surface, which ARE
-// the things a user needs to see when debugging a broken tunnel.
+// our structured log stream at Warn level, and Verbosef at Debug level.
+// Verbosef is called by wireguard-go on per-packet events (key rotations,
+// idle detection, keepalive ticks) AND on the handshake state machine
+// (handshake initiation send, response receipt, retries) — the latter is
+// the only window into why a tunnel fails to come up when the peer is
+// silent. Routing to Debug keeps the firehose suppressed in the default
+// INFO configuration, so users only pay the per-packet cost when they
+// explicitly turn the helper to DEBUG in Settings to diagnose a connect
+// problem. Errorf stays at Warn because that surfaces peer rejections,
+// bad packet formats, and rekey failures that the user always needs to see.
 func newWireguardSlogLogger(ifaceName string) *device.Logger {
 	prefix := "[wg:" + ifaceName + "] "
 	return &device.Logger{
 		Verbosef: func(format string, args ...any) {
-			// intentional no-op — see function comment
+			slog.Debug(prefix + fmt.Sprintf(format, args...))
 		},
 		Errorf: func(format string, args ...any) {
 			slog.Warn(prefix + fmt.Sprintf(format, args...))

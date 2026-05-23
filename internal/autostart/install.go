@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+
+	"github.com/korjwl1/wireguide/internal/sysexec"
 )
 
 // InstallAutostart sets up OS-level autostart for the GUI app.
@@ -135,15 +137,18 @@ func installWindowsAutostart(appPath string) error {
 	// M15: Wrap the path in quotes so spaces in the path are handled correctly
 	// by the Windows shell when the registry value is used to launch the app.
 	quotedPath := `"` + appPath + `"`
-	return exec.Command("reg", "add",
+	cmd := exec.Command("reg", "add",
 		`HKCU\Software\Microsoft\Windows\CurrentVersion\Run`,
-		"/v", "WireGuide", "/t", "REG_SZ", "/d", quotedPath, "/f").Run()
+		"/v", "WireGuide", "/t", "REG_SZ", "/d", quotedPath, "/f")
+	sysexec.Hide(cmd)
+	return cmd.Run()
 }
 
 func removeWindowsAutostart() error {
 	cmd := exec.Command("reg", "delete",
 		`HKCU\Software\Microsoft\Windows\CurrentVersion\Run`,
 		"/v", "WireGuide", "/f")
+	sysexec.Hide(cmd)
 	out, err := cmd.CombinedOutput()
 	if err != nil && !strings.Contains(string(out), "not found") {
 		return err

@@ -9,6 +9,8 @@ import (
 	"runtime"
 	"strings"
 	"time"
+
+	"github.com/korjwl1/wireguide/internal/sysexec"
 )
 
 // conflictCmdTimeout bounds the conflict-detection commands. These run on
@@ -18,7 +20,9 @@ const conflictCmdTimeout = 10 * time.Second
 func runConflictCmd(name string, args ...string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), conflictCmdTimeout)
 	defer cancel()
-	return exec.CommandContext(ctx, name, args...).CombinedOutput()
+	cmd := exec.CommandContext(ctx, name, args...)
+	sysexec.Hide(cmd)
+	return cmd.CombinedOutput()
 }
 
 func runConflictCmdLC(name string, args ...string) ([]byte, error) {
@@ -26,6 +30,7 @@ func runConflictCmdLC(name string, args ...string) ([]byte, error) {
 	defer cancel()
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Env = append(cmd.Environ(), "LC_ALL=C", "LANG=C")
+	sysexec.Hide(cmd)
 	return cmd.CombinedOutput()
 }
 

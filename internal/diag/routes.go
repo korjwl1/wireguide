@@ -6,6 +6,8 @@ import (
 	"runtime"
 	"strings"
 	"time"
+
+	"github.com/korjwl1/wireguide/internal/sysexec"
 )
 
 // routeCmdTimeout bounds the route-table-listing commands. These are called
@@ -15,7 +17,9 @@ const routeCmdTimeout = 10 * time.Second
 func runRouteCmd(name string, args ...string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), routeCmdTimeout)
 	defer cancel()
-	return exec.CommandContext(ctx, name, args...).CombinedOutput()
+	cmd := exec.CommandContext(ctx, name, args...)
+	sysexec.Hide(cmd)
+	return cmd.CombinedOutput()
 }
 
 // RouteEntry represents a single routing table entry.
@@ -115,33 +119,9 @@ func getRoutesLinuxFull() ([]RouteEntry, error) {
 	return routes, nil
 }
 
-func getRoutesWindowsFull() ([]RouteEntry, error) {
-	out, err := runRouteCmd("route", "print", "-4")
-	if err != nil {
-		return nil, err
-	}
-	var routes []RouteEntry
-	inTable := false
-	for _, line := range strings.Split(string(out), "\n") {
-		line = strings.TrimSpace(line)
-		if strings.Contains(line, "Network Destination") {
-			inTable = true
-			continue
-		}
-		if inTable && line == "" {
-			break
-		}
-		if !inTable {
-			continue
-		}
-		fields := strings.Fields(line)
-		if len(fields) >= 4 {
-			routes = append(routes, RouteEntry{
-				Destination: fields[0],
-				Gateway:     fields[1],
-				Interface:   fields[3],
-			})
-		}
-	}
-	return routes, nil
-}
+// getRoutesWindowsFull is defined in routes_windows.go so the iphlpapi
+// dependency stays platform-scoped. The previous implementation here
+// parsed `route print -4` output and produced an empty list on at least
+// one user's machine; the iphlpapi path uses the same kernel API that
+// PowerShell's Get-NetRoute calls and is immune to console-process
+// quirks and locale differences in the route.exe output.

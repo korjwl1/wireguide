@@ -44,11 +44,12 @@ var adapterBufPool = sync.Pool{
 var (
 	modIphlpapi = windows.NewLazySystemDLL("iphlpapi.dll")
 
-	procGetIpForwardTable2     = modIphlpapi.NewProc("GetIpForwardTable2")
-	procGetAdaptersAddresses   = modIphlpapi.NewProc("GetAdaptersAddresses")
-	procGetIpInterfaceEntry    = modIphlpapi.NewProc("GetIpInterfaceEntry")
-	procFreeMibTable           = modIphlpapi.NewProc("FreeMibTable")
+	procGetIpForwardTable2          = modIphlpapi.NewProc("GetIpForwardTable2")
+	procGetAdaptersAddresses        = modIphlpapi.NewProc("GetAdaptersAddresses")
+	procGetIpInterfaceEntry         = modIphlpapi.NewProc("GetIpInterfaceEntry")
+	procFreeMibTable                = modIphlpapi.NewProc("FreeMibTable")
 	procConvertInterfaceLuidToIndex = modIphlpapi.NewProc("ConvertInterfaceLuidToIndex")
+	procConvertInterfaceAliasToLuid = modIphlpapi.NewProc("ConvertInterfaceAliasToLuid")
 )
 
 // Constants from netioapi.h / iphlpapi.h
@@ -138,6 +139,7 @@ func freeMibTable(ptr unsafe.Pointer) {
 type defaultRouteInfo struct {
 	NextHop        net.IP
 	InterfaceIndex uint32
+	InterfaceLuid  uint64
 	Metric         uint32
 }
 
@@ -145,6 +147,21 @@ type defaultRouteInfo struct {
 // address family (afInet or afInet6). Returns nil if no default route is
 // installed (e.g. fresh boot before DHCP completes).
 func getDefaultRoute(family uint32) *defaultRouteInfo {
+	return getDefaultRouteFiltered(family, nil)
+}
+
+// getDefaultRouteFiltered returns the lowest-metric default route for the
+// given family, skipping any route whose interface LUID is excluded by
+// the predicate. Passing nil for excluded matches every interface (same
+// behaviour as getDefaultRoute).
+//
+// Used by the reconnect detector to find "the upstream interface" — i.e.
+// the best default route that ISN'T our own VPN adapter. Without this
+// filter, bringing up a full-tunnel WireGuard interface would itself
+// look like a network change (the WireGuard adapter becomes the lowest-
+// metric default route), triggering an immediate reconnect → tear-down →
+// re-create loop.
+func getDefaultRouteFiltered(family uint32, excluded func(luid uint64) bool) *defaultRouteInfo {
 	var tablePtr unsafe.Pointer
 	ret, _, _ := procGetIpForwardTable2.Call(uintptr(family), uintptr(unsafe.Pointer(&tablePtr)))
 	if ret != 0 || tablePtr == nil {
@@ -180,9 +197,13 @@ func getDefaultRoute(family uint32) *defaultRouteInfo {
 		if row.Loopback != 0 {
 			continue
 		}
+		if excluded != nil && excluded(row.InterfaceLuid) {
+			continue
+		}
 		cand := defaultRouteInfo{
 			NextHop:        nh,
 			InterfaceIndex: row.InterfaceIndex,
+			InterfaceLuid:  row.InterfaceLuid,
 			Metric:         row.Metric,
 		}
 		if best == nil || cand.Metric < best.Metric {
@@ -191,6 +212,154 @@ func getDefaultRoute(family uint32) *defaultRouteInfo {
 		}
 	}
 	return best
+}
+
+// convertInterfaceAliasToLuid resolves a Windows adapter alias (the
+// "FriendlyName" you see in Network Connections, e.g. "WireGuide" or
+// "Wi-Fi") to its NET_LUID. Returns 0, false if the adapter does not
+// exist — which is the expected case before the first Connect, and
+// after Disconnect.
+func convertInterfaceAliasToLuid(alias string) (uint64, bool) {
+	if alias == "" {
+		return 0, false
+	}
+	u16, err := windows.UTF16PtrFromString(alias)
+	if err != nil {
+		return 0, false
+	}
+	var luid uint64
+	ret, _, _ := procConvertInterfaceAliasToLuid.Call(
+		uintptr(unsafe.Pointer(u16)),
+		uintptr(unsafe.Pointer(&luid)),
+	)
+	if ret != 0 {
+		return 0, false
+	}
+	return luid, true
+}
+
+// WindowsRouteEntry is one row of the IPv4 routing table, with the
+// interface LUID resolved to a friendly name (e.g. "WireGuide",
+// "이더넷 3"). The Diagnostics → Routes view consumes this directly.
+type WindowsRouteEntry struct {
+	Destination   string // CIDR ("0.0.0.0/1") or "0.0.0.0" for default
+	Gateway       string // "On-link" when next-hop is the interface itself, else dotted-IP
+	Interface     string // FriendlyName from GetAdaptersAddresses; falls back to "if#N"
+	Metric        uint32 // route metric (lower = preferred)
+	InterfaceLuid uint64 // raw NET_LUID — useful for filtering UI-side
+}
+
+// EnumerateIPv4Routes returns every active IPv4 route the kernel knows
+// about, source-of-truth via iphlpapi's GetIpForwardTable2 — same API
+// Get-NetRoute uses. Replaces a previous `route print -4` parser that
+// silently returned empty results on this machine (the precise reason
+// was never pinned down — likely the GUI-side exec ran into an
+// environment quirk that `route.exe` didn't tolerate, or its output
+// changed shape mid-line in a way the field-count check skipped). The
+// iphlpapi path also avoids spawning a console child (no conhost
+// flash) and is locale-independent.
+//
+// Returns nil on syscall failure; callers should treat that as "table
+// unavailable" rather than empty.
+func EnumerateIPv4Routes() []WindowsRouteEntry {
+	var tablePtr unsafe.Pointer
+	ret, _, _ := procGetIpForwardTable2.Call(uintptr(afInet), uintptr(unsafe.Pointer(&tablePtr)))
+	if ret != 0 || tablePtr == nil {
+		return nil
+	}
+	defer freeMibTable(tablePtr)
+
+	hdr := (*mibIpforwardTable2)(tablePtr)
+	n := int(hdr.NumEntries)
+	if n == 0 {
+		return nil
+	}
+
+	// Resolve interface index → FriendlyName once for every adapter the
+	// kernel currently knows about; avoids one GetAdaptersAddresses
+	// round-trip per row when the table has dozens of entries (typical
+	// machine with a tunnel up easily hits 20+).
+	ifNames := snapshotInterfaceNames()
+
+	rowsBase := unsafe.Pointer(uintptr(tablePtr) + unsafe.Sizeof(mibIpforwardTable2{}))
+	rowSize := unsafe.Sizeof(mibIpforwardRow2{})
+
+	out := make([]WindowsRouteEntry, 0, n)
+	for i := 0; i < n; i++ {
+		row := (*mibIpforwardRow2)(unsafe.Pointer(uintptr(rowsBase) + uintptr(i)*rowSize))
+		fam := row.DestinationPrefix.Prefix.family()
+		if fam != uint16(afInet) {
+			continue
+		}
+		destIP := row.DestinationPrefix.Prefix.ip()
+		if destIP == nil {
+			continue
+		}
+		dest := destIP.String()
+		if row.DestinationPrefix.PrefixLength != 32 {
+			dest = fmt.Sprintf("%s/%d", dest, row.DestinationPrefix.PrefixLength)
+		}
+		nh := row.NextHop.ip()
+		gw := "On-link"
+		if nh != nil && !nh.IsUnspecified() {
+			gw = nh.String()
+		}
+		ifName := ifNames[row.InterfaceIndex]
+		if ifName == "" {
+			ifName = "if#" + strconvU32(row.InterfaceIndex)
+		}
+		out = append(out, WindowsRouteEntry{
+			Destination:   dest,
+			Gateway:       gw,
+			Interface:     ifName,
+			Metric:        row.Metric,
+			InterfaceLuid: row.InterfaceLuid,
+		})
+	}
+	return out
+}
+
+// snapshotInterfaceNames returns a map of Windows interface index →
+// adapter FriendlyName. Empty map on lookup failure (caller falls back
+// to "if#N" labels).
+func snapshotInterfaceNames() map[uint32]string {
+	enum, err := callGetAdaptersAddresses()
+	if err != nil {
+		return map[uint32]string{}
+	}
+	defer enum.Release()
+	names := make(map[uint32]string, 16)
+	for cur := enum.head; cur != nil; cur = cur.Next {
+		names[cur.IfIndex] = windows.UTF16PtrToString(cur.FriendlyName)
+	}
+	return names
+}
+
+// BestNonExcludedDefaultRouteLUIDv4 returns the LUID of the IPv4 default
+// route owned by the best (lowest-metric) interface whose alias is NOT
+// in the excluded set. Returns 0 if no such route exists (e.g. only
+// excluded adapters have default routes — happens during full-tunnel
+// VPN handover windows).
+//
+// Exported for use by the reconnect detector. Lives in this package
+// because all the iphlpapi plumbing is here; the detector should not
+// duplicate it.
+func BestNonExcludedDefaultRouteLUIDv4(excludedAliases []string) uint64 {
+	excludedLuids := make(map[uint64]struct{}, len(excludedAliases))
+	for _, alias := range excludedAliases {
+		if luid, ok := convertInterfaceAliasToLuid(alias); ok {
+			excludedLuids[luid] = struct{}{}
+		}
+	}
+	excluder := func(luid uint64) bool {
+		_, ok := excludedLuids[luid]
+		return ok
+	}
+	r := getDefaultRouteFiltered(afInet, excluder)
+	if r == nil {
+		return 0
+	}
+	return r.InterfaceLuid
 }
 
 // IPAdapterAddresses is a partial mirror of IP_ADAPTER_ADDRESSES_LH. We only

@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"os/exec"
 	"runtime"
+
+	"github.com/korjwl1/wireguide/internal/sysexec"
 )
 
 // Install runs the OS-specific installer for the downloaded update.
@@ -62,10 +64,13 @@ func installLinux(path string) error {
 func installWindows(path string) error {
 	// Run .msi installer
 	if len(path) > 4 && path[len(path)-4:] == ".msi" {
-		return exec.Command("msiexec", "/i", path).Run()
+		cmd := exec.Command("msiexec", "/i", path)
+		sysexec.Hide(cmd)
+		return cmd.Run()
 	}
 	// Run .exe installer
 	cmd := exec.Command(path)
+	sysexec.Hide(cmd)
 	if err := cmd.Start(); err != nil {
 		return err
 	}

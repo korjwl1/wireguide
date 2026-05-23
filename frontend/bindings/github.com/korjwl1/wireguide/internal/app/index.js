@@ -14,5 +14,6 @@ export {
     KnownSSIDs,
     RouteEntry,
     TunnelInfo,
+    UpdateState,
     ZipImportResult
 } from "./models.js";

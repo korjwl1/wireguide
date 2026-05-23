@@ -163,6 +163,15 @@ table inet %s {
 	return nil
 }
 
+// AddKillSwitchTunnel is a no-op on linux. nftables rules built by
+// EnableKillSwitch already key on the WG interface name; multi-tunnel
+// support would need a real implementation but single-tunnel matches
+// today's helper behaviour.
+func (f *LinuxFirewall) AddKillSwitchTunnel(string, []string) error { return nil }
+
+// RemoveKillSwitchTunnel is a no-op on linux for the same reason.
+func (f *LinuxFirewall) RemoveKillSwitchTunnel(string) error { return nil }
+
 func (f *LinuxFirewall) DisableKillSwitch() error {
 	f.mu.Lock()
 	defer f.mu.Unlock()

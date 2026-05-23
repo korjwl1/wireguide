@@ -17,13 +17,13 @@ import { Call as $Call, CancellablePromise as $CancellablePromise, Create as $Cr
 
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
+import * as diag$0 from "../diag/models.js";
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore: Unused imports
 import * as domain$0 from "../domain/models.js";
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
 import * as storage$0 from "../storage/models.js";
-// eslint-disable-next-line @typescript-eslint/ban-ts-comment
-// @ts-ignore: Unused imports
-import * as tunnel$0 from "../tunnel/models.js";
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
 import * as update$0 from "../update/models.js";
@@ -53,7 +53,7 @@ export function BaseName(path) {
  * entirely in the GUI process — no IPC needed. The frontend calls this before
  * Connect so it can show a warning dialog if conflicts exist.
  * @param {string} name
- * @returns {$CancellablePromise<tunnel$0.ConflictInfo[]>}
+ * @returns {$CancellablePromise<diag$0.ConflictInfo[]>}
  */
 export function CheckConflicts(name) {
     return $Call.ByID(3480969502, name).then(/** @type {($result: any) => any} */(($result) => {
@@ -62,7 +62,11 @@ export function CheckConflicts(name) {
 }
 
 /**
- * CheckForUpdate queries GitHub for a newer release.
+ * CheckForUpdate is the legacy synchronous check kept for backward
+ * compatibility with the (now-removed) onMount call. New code should call
+ * ManualCheckForUpdate, which routes through the scheduler so the result
+ * is also persisted (ETag, last-checked timestamp) and the in-app banner
+ * can update without a separate round-trip.
  * @returns {$CancellablePromise<update$0.UpdateInfo | null>}
  */
 export function CheckForUpdate() {
@@ -167,6 +171,16 @@ export function DisconnectTunnel(name) {
 }
 
 /**
+ * DismissUpdate persists a version dismissal so the in-app banner stays
+ * hidden across restarts until a newer version arrives.
+ * @param {string} version
+ * @returns {$CancellablePromise<void>}
+ */
+export function DismissUpdate(version) {
+    return $Call.ByID(1487086966, version);
+}
+
+/**
  * ExportConfig returns the serialized text for display in the export dialog.
  * @param {string} name
  * @returns {$CancellablePromise<string>}
@@ -262,6 +276,16 @@ export function GetTunnelDetail(name) {
 }
 
 /**
+ * GetUpdateState returns persisted state for the About tab UI.
+ * @returns {$CancellablePromise<$models.UpdateState>}
+ */
+export function GetUpdateState() {
+    return $Call.ByID(3155746791).then(/** @type {($result: any) => any} */(($result) => {
+        return $$createType16($result);
+    }));
+}
+
+/**
  * GetVersion returns the current app version string.
  * @returns {$CancellablePromise<string>}
  */
@@ -278,7 +302,7 @@ export function GetVersion() {
  */
 export function ImportConfig(name, content) {
     return $Call.ByID(2459134310, name, content).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType17($result);
+        return $$createType18($result);
     }));
 }
 
@@ -292,7 +316,7 @@ export function ImportConfig(name, content) {
  */
 export function ImportQRFromBytes(data, name) {
     return $Call.ByID(3817928306, data, name).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType17($result);
+        return $$createType18($result);
     }));
 }
 
@@ -305,7 +329,7 @@ export function ImportQRFromBytes(data, name) {
  */
 export function ImportQRFromPath(path, name) {
     return $Call.ByID(2544386800, path, name).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType17($result);
+        return $$createType18($result);
     }));
 }
 
@@ -317,7 +341,7 @@ export function ImportQRFromPath(path, name) {
  */
 export function ImportZip(path) {
     return $Call.ByID(976469479, path).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType19($result);
+        return $$createType20($result);
     }));
 }
 
@@ -329,7 +353,7 @@ export function ImportZip(path) {
  */
 export function ImportZipData(data) {
     return $Call.ByID(2432663343, data).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType19($result);
+        return $$createType20($result);
     }));
 }
 
@@ -347,7 +371,7 @@ export function ImportZipData(data) {
  */
 export function ListTunnels() {
     return $Call.ByID(3587038916).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType20($result);
+        return $$createType21($result);
     }));
 }
 
@@ -362,7 +386,7 @@ export function ListTunnels() {
  */
 export function ListTunnelsLocal() {
     return $Call.ByID(3031176175).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType20($result);
+        return $$createType21($result);
     }));
 }
 
@@ -453,13 +477,22 @@ export function RenameTunnel(oldName, newName) {
  */
 export function RunDNSLeakTest() {
     return $Call.ByID(2469114850).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType22($result);
+        return $$createType23($result);
     }));
 }
 
 /**
- * RunUpdate performs the update. If installed via Homebrew, runs brew upgrade.
- * Otherwise downloads and installs directly from GitHub Releases.
+ * RunUpdate performs the update end-to-end:
+ * 
+ *   - Homebrew installs → `brew update && brew upgrade --cask wireguide`,
+ *     letting the cask's postflight handle the killall + relaunch. This
+ *     is the "one-click" expectation users have, not "copy this command
+ *     into your terminal".
+ *   - Non-brew installs → open the GitHub Releases page in the browser.
+ *     Auto-replacing an un-notarised `.app` bundle needs sudo and races
+ *     with Gatekeeper quarantining of the new binary; redirecting the
+ *     user to the download page is the honest path for an indie macOS
+ *     app without an Apple Developer account.
  * @param {update$0.UpdateInfo | null} info
  * @returns {$CancellablePromise<void>}
  */
@@ -557,6 +590,19 @@ export function SetTunnelNotes(name, notes) {
 }
 
 /**
+ * SetUpdateScheduler injects the periodic update-check scheduler and its
+ * persistent state store. Called once from gui.Run() after the Wails app
+ * is constructed. The frontend's "Check now" / dismiss / last-checked
+ * queries route through these.
+ * @param {update$0.Scheduler | null} sched
+ * @param {update$0.StateStore | null} store
+ * @returns {$CancellablePromise<void>}
+ */
+export function SetUpdateScheduler(sched, store) {
+    return $Call.ByID(2970288435, sched, store);
+}
+
+/**
  * TunnelExists reports whether a tunnel with the given name is stored.
  * @param {string} name
  * @returns {$CancellablePromise<boolean>}
@@ -584,12 +630,12 @@ export function UpdateConfig(name, content) {
  */
 export function ValidateConfig(content) {
     return $Call.ByID(592398029, content).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType23($result);
+        return $$createType24($result);
     }));
 }
 
 // Private type creation functions
-const $$createType0 = tunnel$0.ConflictInfo.createFrom;
+const $$createType0 = diag$0.ConflictInfo.createFrom;
 const $$createType1 = $Create.Array($$createType0);
 const $$createType2 = update$0.UpdateInfo.createFrom;
 const $$createType3 = $Create.Nullable($$createType2);
@@ -605,11 +651,12 @@ const $$createType12 = domain$0.ConnectionStatus.createFrom;
 const $$createType13 = $Create.Nullable($$createType12);
 const $$createType14 = domain$0.WireGuardConfig.createFrom;
 const $$createType15 = $Create.Nullable($$createType14);
-const $$createType16 = $models.TunnelInfo.createFrom;
-const $$createType17 = $Create.Nullable($$createType16);
-const $$createType18 = $models.ZipImportResult.createFrom;
-const $$createType19 = $Create.Array($$createType18);
-const $$createType20 = $Create.Array($$createType16);
-const $$createType21 = $models.DNSLeakResult.createFrom;
-const $$createType22 = $Create.Nullable($$createType21);
-const $$createType23 = $Create.Array($Create.Any);
+const $$createType16 = $models.UpdateState.createFrom;
+const $$createType17 = $models.TunnelInfo.createFrom;
+const $$createType18 = $Create.Nullable($$createType17);
+const $$createType19 = $models.ZipImportResult.createFrom;
+const $$createType20 = $Create.Array($$createType19);
+const $$createType21 = $Create.Array($$createType17);
+const $$createType22 = $models.DNSLeakResult.createFrom;
+const $$createType23 = $Create.Nullable($$createType22);
+const $$createType24 = $Create.Array($Create.Any);
