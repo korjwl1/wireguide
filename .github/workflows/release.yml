@@ -103,21 +103,24 @@ jobs:
         # is correct. vendor:wintun pulls the pinned wintun.dll into bin/.
         run: wails3 task windows:package ARCH=${{ matrix.arch }}
 
-      - name: Locate installer + rename
+      - name: Rename installer to canonical asset name
         shell: bash
-        # makensis writes to build/windows/nsis with a generic name;
-        # find it, copy with the canonical Asset name our update
-        # checker expects (matchTokenAnchored: windows + amd64/arm64
-        # surrounded by '-', '_', or '.').
+        # project.nsi's OutFile writes to bin/wireguide-${ARCH}-installer.exe
+        # (ARCH set by wails_tools.nsh to "amd64" or "arm64"). v0.3.0 used
+        # `find ... | head -1` here and picked up build/windows/nsis/
+        # MicrosoftEdgeWebview2Setup.exe — the embedded WebView2 bootstrapper —
+        # instead of the real installer, shipping a 1.7MB "installer" that
+        # just installed WebView2 and exited. Path is deterministic; address
+        # it directly.
         run: |
           set -e
-          out=$(find build/windows/nsis bin -maxdepth 3 -type f -name "*.exe" -not -name "wireguide.exe" | head -1)
-          if [ -z "$out" ]; then
-            echo "ERROR: NSIS installer not found"
+          src="bin/wireguide-${{ matrix.arch }}-installer.exe"
+          if [ ! -f "$src" ]; then
+            echo "ERROR: NSIS installer not found at $src"
             find build/windows bin -type f
             exit 1
           fi
-          cp "$out" "bin/WireGuide-windows-${{ matrix.arch }}.exe"
+          mv "$src" "bin/WireGuide-windows-${{ matrix.arch }}.exe"
 
       - uses: actions/upload-artifact@v4
         with:
