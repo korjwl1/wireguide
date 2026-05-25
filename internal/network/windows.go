@@ -4,6 +4,7 @@ package network
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -193,16 +194,48 @@ func (m *WindowsManager) addFullTunnelRoutes(ifaceName string, endpoints []strin
 	// and-continue fallback path: the user-visible failure mode of "Connect
 	// returned an error" is strictly better than "Connect succeeded and
 	// your upload meter spins to 6 GB".
-	origGw := getWindowsDefaultGateway()
-	origGw6 := getWindowsDefaultIPv6Gateway()
-	origIfIdx6 := getWindowsDefaultIPv6InterfaceIndex()
-	// Capture both IPv4 underlay LUID + nexthop in one call. The LUID is
-	// what CreateIpForwardEntry2 wants for the bypass /32; the nexthop
-	// fills NextHop. Excluding our own wintun adapter prevents the
-	// "second connect re-detects the just-up tunnel as the underlay"
-	// failure mode.
-	physLuidV4, physIfIdxV4, _ := DefaultRouteV4LuidAndIndex([]string{ifaceName})
-	physLuidV6, _, _ := DefaultRouteV6LuidAndIndex([]string{ifaceName})
+	// Underlay detection with bounded retry. The user-facing failure
+	// mode we're guarding against is "Connect right after wake from
+	// sleep / fresh boot fails because Windows hasn't installed the
+	// default route yet" — typical lag is 0.5–3 s on Wi-Fi handoff,
+	// up to 10 s on slow DHCP / cellular tether. 5 s is the sweet
+	// spot: covers most legitimate slow-start scenarios while
+	// bounding the fail-fast window to something the user perceives
+	// as a normal connect delay.
+	//
+	// Captures: IPv4/IPv6 default-route gateway, the underlay LUID
+	// (what CreateIpForwardEntry2 wants for the bypass /32), the
+	// underlay ifIndex, and the IPv6 ifIndex (used for netsh-style
+	// legacy paths in Cleanup). Excludes our own wintun adapter so a
+	// second-connect re-detect doesn't loop on the just-up tunnel.
+	var (
+		origGw      string
+		origGw6     string
+		origIfIdx6  string
+		physLuidV4  uint64
+		physIfIdxV4 uint32
+		physLuidV6  uint64
+	)
+	const underlayPollInterval = 250 * time.Millisecond
+	const underlayPollBudget = 5 * time.Second
+	pollDeadline := time.Now().Add(underlayPollBudget)
+	for {
+		origGw = getWindowsDefaultGateway()
+		origGw6 = getWindowsDefaultIPv6Gateway()
+		origIfIdx6 = getWindowsDefaultIPv6InterfaceIndex()
+		physLuidV4, physIfIdxV4, _ = DefaultRouteV4LuidAndIndex([]string{ifaceName})
+		physLuidV6, _, _ = DefaultRouteV6LuidAndIndex([]string{ifaceName})
+		// We have what we need as soon as the IPv4 underlay is present;
+		// IPv6 is optional and best-effort. Most VPN configs are v4-only
+		// peers, so v6 underlay missing must not block.
+		if origGw != "" && physLuidV4 != 0 {
+			break
+		}
+		if time.Now().After(pollDeadline) {
+			break
+		}
+		time.Sleep(underlayPollInterval)
+	}
 
 	// Classify endpoints by family so we can demand a usable underlay only
 	// for the families we actually need to bypass.
@@ -244,34 +277,34 @@ func (m *WindowsManager) addFullTunnelRoutes(ifaceName string, endpoints []strin
 
 	gwIPv4 := net.ParseIP(origGw)
 
-	// PHASE 1: bypass /32 host routes for every IPv4 peer endpoint.
-	// Failure to install ANY bypass is fatal — without it the matching
-	// /1 split route will trap encrypted UDP back into the tunnel.
+	// PHASE 1+2: bypass host routes for every IPv4 + IPv6 peer endpoint.
+	// We install every row first, then batch-verify against ONE
+	// snapshot of the route table per family. The naive per-route
+	// VerifyIpForwardRoute would issue N GetIpForwardTable2 calls
+	// for N peers — wasteful on multi-peer site-to-site configs and
+	// on machines with hundreds of unrelated routes. One snapshot
+	// per family is enough because Add and Verify both run while
+	// addFullTunnelRoutes holds the only writer; the table can only
+	// be larger at Verify time than at Add time.
+	gwIPv6 := net.ParseIP(origGw6)
+	wantKeys := make([]routeKey, 0, len(v4Endpoints)+len(v6Endpoints))
 	for _, ip := range v4Endpoints {
 		err := AddIpForwardRoute(physLuidV4, physIfIdxV4, ip, 32, gwIPv4, 1)
-		if err != nil && !IsRouteAlreadyExists(err) {
+		if err != nil && !errors.Is(err, ErrRouteAlreadyExists) {
 			return fmt.Errorf("installing IPv4 endpoint bypass %s via %s: %w", ip, origGw, err)
 		}
-		// Even if the kernel said OK, double-check the row landed in the
-		// table. Defends against the rare "kernel accepted via nsi but
-		// dataplane has not picked up yet" race that only surfaces on
-		// fresh wintun adapters under heavy ETW load.
-		if !VerifyIpForwardRoute(physLuidV4, ip, 32) {
-			return fmt.Errorf("installing IPv4 endpoint bypass %s: kernel reported success but route not visible in table", ip)
-		}
+		wantKeys = append(wantKeys, routeKey{ifaceLuid: physLuidV4, dest: ip, prefixLen: 32})
 	}
-
-	// PHASE 2: bypass /128 host routes for IPv6 peer endpoints.
-	// Same fail-fast policy as IPv4.
-	gwIPv6 := net.ParseIP(origGw6)
 	for _, ip := range v6Endpoints {
 		err := AddIpForwardRoute(physLuidV6, 0, ip, 128, gwIPv6, 1)
-		if err != nil && !IsRouteAlreadyExists(err) {
+		if err != nil && !errors.Is(err, ErrRouteAlreadyExists) {
 			return fmt.Errorf("installing IPv6 endpoint bypass %s via %s: %w", ip, origGw6, err)
 		}
-		if !VerifyIpForwardRoute(physLuidV6, ip, 128) {
-			return fmt.Errorf("installing IPv6 endpoint bypass %s: kernel reported success but route not visible in table", ip)
-		}
+		wantKeys = append(wantKeys, routeKey{ifaceLuid: physLuidV6, dest: ip, prefixLen: 128})
+	}
+	if missing := VerifyIpForwardRoutes(wantKeys); len(missing) > 0 {
+		return fmt.Errorf("installing endpoint bypass: %d route(s) reported success but not visible in table (first missing: %s/%d via LUID %d)",
+			len(missing), missing[0].dest, missing[0].prefixLen, missing[0].ifaceLuid)
 	}
 
 	// Persist the bypass list so disconnect can target the same rows.
@@ -289,10 +322,10 @@ func (m *WindowsManager) addFullTunnelRoutes(ifaceName string, endpoints []strin
 	// automatically restores the underlay's default-route precedence.
 	// metric=0 keeps the kernel-computed effective metric purely driven
 	// by the tunnel adapter's interface metric (set to 1 by SetDNS).
-	if err := AddIpForwardRoute(tunnelLuid, 0, net.IPv4(0, 0, 0, 0), 1, nil, 0); err != nil && !IsRouteAlreadyExists(err) {
+	if err := AddIpForwardRoute(tunnelLuid, 0, net.IPv4(0, 0, 0, 0), 1, nil, 0); err != nil && !errors.Is(err, ErrRouteAlreadyExists) {
 		return fmt.Errorf("adding 0.0.0.0/1: %w", err)
 	}
-	if err := AddIpForwardRoute(tunnelLuid, 0, net.IPv4(128, 0, 0, 0), 1, nil, 0); err != nil && !IsRouteAlreadyExists(err) {
+	if err := AddIpForwardRoute(tunnelLuid, 0, net.IPv4(128, 0, 0, 0), 1, nil, 0); err != nil && !errors.Is(err, ErrRouteAlreadyExists) {
 		return fmt.Errorf("adding 128.0.0.0/1: %w", err)
 	}
 
@@ -301,11 +334,11 @@ func (m *WindowsManager) addFullTunnelRoutes(ifaceName string, endpoints []strin
 	// these fail (no kernel-side loop risk because the only IPv6 routes
 	// installed are the ones we tried and failed to add).
 	v6Unspec := net.IPv6unspecified
-	if err := AddIpForwardRoute(tunnelLuid, 0, v6Unspec, 1, nil, 0); err != nil && !IsRouteAlreadyExists(err) {
+	if err := AddIpForwardRoute(tunnelLuid, 0, v6Unspec, 1, nil, 0); err != nil && !errors.Is(err, ErrRouteAlreadyExists) {
 		slog.Warn("IPv6 ::/1 split route add failed", "error", err)
 	}
 	v68000 := net.ParseIP("8000::")
-	if err := AddIpForwardRoute(tunnelLuid, 0, v68000, 1, nil, 0); err != nil && !IsRouteAlreadyExists(err) {
+	if err := AddIpForwardRoute(tunnelLuid, 0, v68000, 1, nil, 0); err != nil && !errors.Is(err, ErrRouteAlreadyExists) {
 		slog.Warn("IPv6 8000::/1 split route add failed", "error", err)
 	}
 
@@ -324,7 +357,7 @@ func (m *WindowsManager) RemoveRoutes(ifaceName string, allowedIPs []string, ful
 			if luid == 0 {
 				return
 			}
-			if err := DeleteIpForwardRoute(luid, 0, dest, prefix, nextHop); err != nil && !IsRouteNotFound(err) {
+			if err := DeleteIpForwardRoute(luid, 0, dest, prefix, nextHop); err != nil && !errors.Is(err, ErrRouteNotFound) {
 				slog.Debug("RemoveRoutes: "+name+" delete failed", "error", err)
 			}
 		}
@@ -498,7 +531,7 @@ func (m *WindowsManager) Cleanup(ifaceName string) error {
 		if luid == 0 || dest == nil {
 			return
 		}
-		if err := DeleteIpForwardRoute(luid, 0, dest, prefix, nextHop); err != nil && !IsRouteNotFound(err) {
+		if err := DeleteIpForwardRoute(luid, 0, dest, prefix, nextHop); err != nil && !errors.Is(err, ErrRouteNotFound) {
 			slog.Debug("Cleanup: "+name+" delete failed", "error", err)
 		}
 	}

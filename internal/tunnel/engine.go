@@ -168,10 +168,14 @@ func NewEngine(cfg *config.WireGuardConfig) (*Engine, error) {
 	}
 	slog.Info("WireGuard config applied", "interface", ifaceName)
 
-	if err := wgDev.Up(); err != nil {
-		engine.Close()
-		return nil, fmt.Errorf("bringing up device: %w", err)
-	}
+	// IMPORTANT: we do NOT call wgDev.Up() here. The handshake-start
+	// must happen AFTER the connect_phases caller has installed
+	// platform-level firewall rules (Windows: WFP endpoint-loop
+	// protection BLOCK at ALE_AUTH_CONNECT_V4) so the very first
+	// handshake packet is already subject to those filters. Otherwise
+	// the kernel's ALE flow cache can record a PERMIT for the first
+	// sendto and subsequent packets bypass our newly-installed BLOCK.
+	// Callers MUST call engine.Start() after the firewall hooks ran.
 
 	// Start UAPI listener for status queries
 	uapi, err := createUAPIListener(ifaceName)
@@ -197,8 +201,38 @@ func NewEngine(cfg *config.WireGuardConfig) (*Engine, error) {
 		}()
 	}
 
-	slog.Info("WireGuard device up", "interface", ifaceName)
+	slog.Info("WireGuard device created (not yet up)", "interface", ifaceName)
 	return engine, nil
+}
+
+// Start transitions the WireGuard device into the running state by
+// calling wgDev.Up(). Split from NewEngine so the connect_phases caller
+// can install platform firewall rules BEFORE the first handshake fires
+// — see the ALE_AUTH_CONNECT_V4 flow-cache rationale in NewEngine.
+//
+// Safe to call multiple times (wgDev.Up itself is idempotent when the
+// device is already up); on subsequent calls it returns the device's
+// stored last error if Up failed previously. Callers should treat any
+// non-nil error here as a fatal connect failure.
+//
+// A nil wgDevice is treated as a successful no-op: that case only
+// arises in tests where the engine is constructed without a real
+// wireguard-go device (the manager-level tests in manager_test.go
+// build fakeEngine instances that exercise lifecycle ordering without
+// touching the protocol layer). Production callers always go through
+// NewEngine which produces a non-nil device.
+func (e *Engine) Start() error {
+	if e == nil {
+		return fmt.Errorf("engine.Start: nil engine")
+	}
+	if e.wgDevice == nil {
+		return nil
+	}
+	if err := e.wgDevice.Up(); err != nil {
+		return fmt.Errorf("bringing up device: %w", err)
+	}
+	slog.Info("WireGuard device up", "interface", e.ifaceName)
+	return nil
 }
 
 // InterfaceName returns the kernel interface name (utunN on macOS).

@@ -305,19 +305,35 @@ func (m *Manager) Disconnect() error {
 
 // DisconnectTunnel tears down a specific tunnel by name. Like Connect, runs
 // the slow teardown work outside the lock.
+//
+// Concurrent-disconnect contract: if the tunnel goes from
+// stateDisconnecting → gone while we're waiting (because the watchdog
+// or another caller ran disconnectPhases first), we return nil rather
+// than ErrNotConnected. The user's intent was "be disconnected", which
+// IS the state at return. We only return ErrNotConnected when the
+// tunnel was never observed connected during this call.
 func (m *Manager) DisconnectTunnel(name string) error {
 	// --- Phase 1: wait for any in-flight transition on THIS tunnel to settle ---
 	deadline := time.Now().Add(10 * time.Second)
+	observedTransitioning := false
 	for {
 		m.mu.Lock()
 		entry, ok := m.tunnels[name]
 		if !ok {
 			m.mu.Unlock()
+			// If we previously observed this tunnel mid-transition,
+			// its disappearance means a concurrent disconnect (likely
+			// the watchdog) reached completion. The user got what
+			// they asked for; return success, not ErrNotConnected.
+			if observedTransitioning {
+				return nil
+			}
 			return newTunnelError(ErrNotConnected, fmt.Sprintf("tunnel %q is not connected", name), nil)
 		}
 		if entry.state != domain.StateConnecting && entry.state != stateDisconnecting {
 			break // lock still held, state is stable
 		}
+		observedTransitioning = true
 		m.mu.Unlock()
 		if time.Now().After(deadline) {
 			return newTunnelError(ErrTimeout, fmt.Sprintf("disconnect timeout for tunnel %q: transition in progress", name), nil)

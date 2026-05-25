@@ -112,17 +112,32 @@ func (m *Manager) connectPhases(ctx context.Context, cfg *domain.WireGuardConfig
 
 	// 5.5 Endpoint loop protection (Windows full-tunnel only on the
 	// firewall side; nil-protector platforms are no-ops). Installed
-	// BEFORE AddRoutes because step 6 is what arms the routing trap
-	// the protection defends against — if AddRoutes goes wrong (bypass
-	// /32 install fails on a flaky stack) we want the WFP BLOCK in
-	// place to fail-stop the WireGuard handshake rather than let it
-	// loop. For split-tunnel / Table=off this is a no-op on the
-	// firewall side (no endpoints → no filters).
+	// BEFORE engine.Start() — the WG handshake goroutine fires its
+	// first sendto immediately after Up(), and on Windows the kernel's
+	// ALE flow cache locks in the first-packet decision (permit) for
+	// the (local-port, peer-ip, peer-port) 5-tuple. If our BLOCK
+	// filter isn't yet installed at that moment, the cached PERMIT
+	// can let subsequent loop-recursed packets through even after the
+	// BLOCK is installed seconds later. Mandatory ordering: install
+	// the firewall *before* anything that could cause WireGuard to
+	// transmit.
 	if m.endpointProtector != nil && fullTunnel {
 		eps := engine.ResolvedEndpoints()
 		if err := m.endpointProtector.EnableEndpointProtection(ifaceName, eps); err != nil {
 			return nil, rollback(newTunnelError(ErrNetwork, "installing endpoint loop protection", err))
 		}
+	}
+	if err := checkCtx(); err != nil {
+		return nil, err
+	}
+
+	// 5.7 Now it is safe to start the WireGuard device. This is what
+	// transitions wireguard-go's goroutines into the running state
+	// (kicks off the first handshake). See engine.go's NewEngine
+	// comment for the ALE-flow-cache rationale; the firewall step
+	// above is the precondition.
+	if err := engine.Start(); err != nil {
+		return nil, rollback(newTunnelError(ErrEngineCreation, "starting engine", err))
 	}
 	if err := checkCtx(); err != nil {
 		return nil, err

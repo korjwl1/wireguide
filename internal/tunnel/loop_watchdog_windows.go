@@ -37,52 +37,54 @@ import (
 	"github.com/korjwl1/wireguide/internal/network"
 )
 
-// MIB_IF_ROW2 layout offset for OutOctets on 64-bit Windows.
+// MIB_IF_ROW2 byte-offsets for the two counters we need on 64-bit
+// Windows. We read the row into a fixed byte buffer and pick the
+// counters out by offset rather than declaring a full Go-side struct
+// — the struct has 30+ fields, several enums and a packed bitfield,
+// and matching the exact C layout in Go is fragile across SDK
+// revisions. The byte-offset path only depends on the position of
+// InOctets and OutOctets, both of which have been stable since the
+// API was introduced in Windows 8.
 //
-// The struct's fields up to OutOctets (per netioapi.h):
+// Derivation (cross-checked against netioapi.h):
 //
-//	NET_LUID InterfaceLuid                        8
-//	NET_IFINDEX InterfaceIndex                    4
-//	GUID InterfaceGuid                           16 (offset 12 + GUID alignment)
-//	WCHAR Alias[257]                            514 (offset 28; 514 bytes; 2-byte aligned)
-//	WCHAR Description[257]                      514 (offset 542)
-//	ULONG PhysicalAddressLength                   4 (offset 1056; ULONG aligned)
-//	UCHAR PhysicalAddress[32]                    32 (offset 1060)
-//	UCHAR PermanentPhysicalAddress[32]           32 (offset 1092)
-//	ULONG Mtu                                     4 (offset 1124)
-//	IFTYPE Type                                   4 (offset 1128)
-//	TUNNEL_TYPE TunnelType                        4 (offset 1132)
-//	NDIS_MEDIUM MediaType                         4 (offset 1136)
-//	NDIS_PHYSICAL_MEDIUM PhysicalMediumType       4 (offset 1140)
-//	NET_IF_ACCESS_TYPE AccessType                 4 (offset 1144)
-//	NET_IF_DIRECTION_TYPE DirectionType           4 (offset 1148)
-//	<bitfield byte>                               1 (offset 1152)
-//	<3 bytes pad to align next ULONG>             3
-//	IF_OPER_STATUS OperStatus                     4 (offset 1156)
-//	NET_IF_ADMIN_STATUS AdminStatus               4 (offset 1160)
-//	NET_IF_MEDIA_CONNECT_STATE MediaConnectState  4 (offset 1164)
-//	NET_IF_NETWORK_GUID NetworkGuid              16 (offset 1168)
-//	NET_IF_CONNECTION_TYPE ConnectionType         4 (offset 1184)
-//	<4 bytes pad to align ULONG64>                4 (offset 1188)
-//	ULONG64 TransmitLinkSpeed                     8 (offset 1192)
-//	ULONG64 ReceiveLinkSpeed                      8 (offset 1200)
-//	ULONG64 InOctets                              8 (offset 1208)
-//	ULONG64 InUcastPkts                           8 (offset 1216)
-//	ULONG64 InNUcastPkts                          8 (offset 1224)
-//	ULONG64 InDiscards                            8 (offset 1232)
-//	ULONG64 InErrors                              8 (offset 1240)
-//	ULONG64 InUnknownProtos                       8 (offset 1248)
-//	ULONG64 InUcastOctets                         8 (offset 1256)
-//	ULONG64 InMulticastOctets                     8 (offset 1264)
-//	ULONG64 InBroadcastOctets                     8 (offset 1272)
-//	ULONG64 OutOctets                             8 (offset 1280) ← TARGET
+//	NET_LUID InterfaceLuid                        8 bytes @   0
+//	NET_IFINDEX InterfaceIndex                    4 bytes @   8
+//	GUID InterfaceGuid                           16 bytes @  12 (align 4)
+//	WCHAR Alias[257]                            514 bytes @  28 (align 2)
+//	WCHAR Description[257]                      514 bytes @ 542
+//	ULONG PhysicalAddressLength                   4 bytes @1056 (align 4, no pad)
+//	UCHAR PhysicalAddress[32]                    32 bytes @1060
+//	UCHAR PermanentPhysicalAddress[32]           32 bytes @1092
+//	ULONG Mtu                                     4 bytes @1124
+//	6 × enum (Type/TunnelType/MediaType/PhysicalMediumType/
+//	         AccessType/DirectionType)         24 bytes @1128
+//	bitfield byte + 3 pad                         4 bytes @1152
+//	3 × enum (OperStatus/AdminStatus/MediaConnectState)
+//	                                              12 bytes @1156
+//	NET_IF_NETWORK_GUID NetworkGuid              16 bytes @1168
+//	NET_IF_CONNECTION_TYPE ConnectionType         4 bytes @1184
+//	4 bytes pad to ULONG64 alignment              4 bytes @1188
+//	ULONG64 TransmitLinkSpeed                     8 bytes @1192
+//	ULONG64 ReceiveLinkSpeed                      8 bytes @1200
+//	ULONG64 InOctets                              8 bytes @1208 ← TARGET
+//	ULONG64 InUcastPkts                           8 bytes @1216
+//	ULONG64 InNUcastPkts                          8 bytes @1224
+//	ULONG64 InDiscards                            8 bytes @1232
+//	ULONG64 InErrors                              8 bytes @1240
+//	ULONG64 InUnknownProtos                       8 bytes @1248
+//	ULONG64 InUcastOctets                         8 bytes @1256
+//	ULONG64 InMulticastOctets                     8 bytes @1264
+//	ULONG64 InBroadcastOctets                     8 bytes @1272
+//	ULONG64 OutOctets                             8 bytes @1280 ← TARGET
 //
 // The struct's total size is ~1352 bytes on x64. A 1500-byte buffer
 // safely accommodates the full row even if Microsoft extends the
 // struct in a future SDK revision (added fields are appended at the
-// end; OutOctets offset is stable).
+// end; In/Out octet offsets are stable).
 const (
 	mibIfRow2BufSize         = 1500
+	mibIfRow2OffsetOctetsIn  = 1208
 	mibIfRow2OffsetOctetsOut = 1280
 )
 
@@ -92,14 +94,27 @@ var (
 
 const (
 	// loopWatchdogSampleInterval is the cadence at which we poll the
-	// adapter's OutOctets counter. 5 s is slow enough that the per-sample
-	// cost (one syscall) is invisible against any reasonable system
-	// load, and fast enough that a sustained-loop trip lands within
-	// 15-20 s of the loop starting.
+	// adapter's In/Out octet counters. 5 s is slow enough that the
+	// per-sample cost (one syscall) is invisible against any reasonable
+	// system load, and fast enough that a sustained-loop trip lands
+	// within 15-20 s of the loop starting.
 	loopWatchdogSampleInterval = 5 * time.Second
 
-	// loopWatchdogThresholdBytesPerSec — 50 MiB/s, see file header.
+	// loopWatchdogThresholdBytesPerSec — 50 MiB/s. Sustained TX above
+	// this is implausible for organic VPN workload but trivially
+	// exceeded by a routing loop (saturates the underlay link's line
+	// rate, typically ~120 MiB/s on gigabit).
 	loopWatchdogThresholdBytesPerSec uint64 = 50 * 1024 * 1024
+
+	// loopWatchdogTxToRxRatio — the ratio of OutBps to InBps that
+	// distinguishes a loop (TX vastly exceeds RX because handshake
+	// responses never arrive) from a legitimate heavy upload-skewed
+	// workload (e.g. iperf3 -R, Resilio share). A loop sees TX:RX of
+	// effectively infinity; a healthy ackful upload settles around
+	// 50:1 because TCP ACKs / WireGuard keepalives flow back. 10:1
+	// is the conservative split: it tolerates any plausible legit
+	// workload and still trips on a real loop.
+	loopWatchdogTxToRxRatio uint64 = 10
 
 	// loopWatchdogSustainedSamples — consecutive over-threshold samples
 	// required to trip. 3 × 5 s = 15 s of sustained over-threshold.
@@ -129,7 +144,7 @@ func startLoopWatchdog(ctx context.Context, ifaceName string, onTrip func(bytesP
 func loopWatchdogPoll(ctx context.Context, ifaceName string, luid uint64, onTrip func(uint64)) {
 	t := time.NewTicker(loopWatchdogSampleInterval)
 	defer t.Stop()
-	var prev uint64
+	var prevOut, prevIn uint64
 	have := false
 	consecutiveOver := 0
 	for {
@@ -138,7 +153,7 @@ func loopWatchdogPoll(ctx context.Context, ifaceName string, luid uint64, onTrip
 			return
 		case <-t.C:
 		}
-		cur, ok := readInterfaceOutOctets(luid)
+		curIn, curOut, ok := readInterfaceOctets(luid)
 		if !ok {
 			// Adapter likely gone (disconnect in progress on the other
 			// goroutine, or it crashed). One missed sample is OK; we
@@ -148,31 +163,54 @@ func loopWatchdogPoll(ctx context.Context, ifaceName string, luid uint64, onTrip
 			continue
 		}
 		if !have {
-			prev = cur
+			prevOut = curOut
+			prevIn = curIn
 			have = true
 			continue
 		}
-		var delta uint64
-		if cur >= prev {
-			delta = cur - prev
+		var dOut, dIn uint64
+		if curOut >= prevOut {
+			dOut = curOut - prevOut
 		}
-		prev = cur
-		ratePerSec := delta / uint64(loopWatchdogSampleInterval/time.Second)
-		if ratePerSec >= loopWatchdogThresholdBytesPerSec {
+		if curIn >= prevIn {
+			dIn = curIn - prevIn
+		}
+		prevOut = curOut
+		prevIn = curIn
+		seconds := uint64(loopWatchdogSampleInterval / time.Second)
+		outRate := dOut / seconds
+		inRate := dIn / seconds
+
+		// Trip condition: high absolute TX rate AND grossly asymmetric
+		// TX:RX. A routing loop has effectively no RX (handshake
+		// responses never arrive because the encrypted packets never
+		// escape the local kernel). A heavy upload — even a maxed-out
+		// iperf3 -R — has TCP ACKs flowing back that keep the ratio
+		// well under 10:1. See loopWatchdogTxToRxRatio for the
+		// rationale on the chosen factor.
+		highOut := outRate >= loopWatchdogThresholdBytesPerSec
+		// "inRate == 0" tripping at high TX is the canonical loop
+		// signature (no inbound at all). Avoid divide-by-zero by
+		// special-casing inRate == 0.
+		asymmetric := inRate == 0 || outRate/maxU64(inRate, 1) >= loopWatchdogTxToRxRatio
+		if highOut && asymmetric {
 			consecutiveOver++
-			slog.Warn("loop watchdog: high TX rate observed",
+			slog.Warn("loop watchdog: high TX rate with asymmetric RX",
 				"interface", ifaceName,
-				"bytes_per_sec", ratePerSec,
+				"out_bytes_per_sec", outRate,
+				"in_bytes_per_sec", inRate,
 				"consecutive_samples", consecutiveOver,
-				"threshold_bytes_per_sec", loopWatchdogThresholdBytesPerSec)
+				"threshold_bytes_per_sec", loopWatchdogThresholdBytesPerSec,
+				"min_tx_to_rx_ratio", loopWatchdogTxToRxRatio)
 			if consecutiveOver >= loopWatchdogSustainedSamples {
-				slog.Error("loop watchdog: sustained runaway TX — forcing disconnect to break the loop",
+				slog.Error("loop watchdog: sustained runaway TX with asymmetric RX — forcing disconnect to break the loop",
 					"interface", ifaceName,
-					"bytes_per_sec", ratePerSec,
+					"out_bytes_per_sec", outRate,
+					"in_bytes_per_sec", inRate,
 					"samples", consecutiveOver,
 					"window_seconds", int(loopWatchdogSampleInterval.Seconds())*consecutiveOver)
 				if onTrip != nil {
-					onTrip(ratePerSec)
+					onTrip(outRate)
 				}
 				return
 			}
@@ -182,11 +220,23 @@ func loopWatchdogPoll(ctx context.Context, ifaceName string, luid uint64, onTrip
 	}
 }
 
-// readInterfaceOutOctets reads MIB_IF_ROW2.OutOctets for the given LUID
-// via GetIfEntry2. Returns (count, true) on success, (0, false) on any
-// syscall failure (typically ERROR_NOT_FOUND when the adapter is in the
-// middle of being torn down).
-func readInterfaceOutOctets(luid uint64) (uint64, bool) {
+// maxU64 returns the larger of two uint64 values. Used to avoid a
+// divide-by-zero when computing the TX:RX ratio at idle.
+func maxU64(a, b uint64) uint64 {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+// readInterfaceOctets reads MIB_IF_ROW2.InOctets + OutOctets for the
+// given LUID via a single GetIfEntry2 syscall. Returns (in, out, true)
+// on success, (0, 0, false) on any failure (typically ERROR_NOT_FOUND
+// when the adapter is in the middle of being torn down). One syscall
+// returns both counters — the previous OutOctets-only path needed two
+// snapshots to compute a delta, two syscalls per sample to capture
+// asymmetry; this is one.
+func readInterfaceOctets(luid uint64) (in uint64, out uint64, ok bool) {
 	var buf [mibIfRow2BufSize]byte
 	// Set InterfaceLuid at the start of the row. The kernel uses LUID
 	// as the lookup key when InterfaceIndex is zero (which it is in
@@ -194,7 +244,9 @@ func readInterfaceOutOctets(luid uint64) (uint64, bool) {
 	*(*uint64)(unsafe.Pointer(&buf[0])) = luid
 	ret, _, _ := procGetIfEntry2.Call(uintptr(unsafe.Pointer(&buf[0])))
 	if ret != 0 {
-		return 0, false
+		return 0, 0, false
 	}
-	return *(*uint64)(unsafe.Pointer(&buf[mibIfRow2OffsetOctetsOut])), true
+	in = *(*uint64)(unsafe.Pointer(&buf[mibIfRow2OffsetOctetsIn]))
+	out = *(*uint64)(unsafe.Pointer(&buf[mibIfRow2OffsetOctetsOut]))
+	return in, out, true
 }

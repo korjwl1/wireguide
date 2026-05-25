@@ -60,9 +60,7 @@ const (
 // addr(16 BE) + scope(4)=0. The kernel only cares about family and
 // the address bytes; other fields default to zero.
 func fillSockaddrInet(sa *sockaddrInet, ip net.IP) {
-	for i := range sa.raw {
-		sa.raw[i] = 0
-	}
+	clear(sa.raw[:])
 	if v4 := ip.To4(); v4 != nil {
 		*(*uint16)(unsafe.Pointer(&sa.raw[0])) = afInet
 		copy(sa.raw[4:8], v4)
@@ -79,9 +77,7 @@ func fillSockaddrInet(sa *sockaddrInet, ip net.IP) {
 // routes that go straight out an interface (wintun /1 split routes,
 // for example).
 func fillSockaddrInetUnspec(sa *sockaddrInet, family uint16) {
-	for i := range sa.raw {
-		sa.raw[i] = 0
-	}
+	clear(sa.raw[:])
 	*(*uint16)(unsafe.Pointer(&sa.raw[0])) = family
 }
 
@@ -109,6 +105,14 @@ func AddIpForwardRoute(ifaceLuid uint64, ifaceIndex uint32, dest net.IP, prefixL
 		InterfaceLuid:  ifaceLuid,
 		InterfaceIndex: ifaceIndex,
 		Metric:         metric,
+		// Protocol = MIB_IPPROTO_NETMGMT (3). When left at 0 the kernel
+		// behaviour is documented as "default to NETMGMT" but tooling
+		// downstream (Get-NetRoute display, kernel-side dedup key) reads
+		// the raw value. Setting it explicitly removes the ambiguity:
+		// Get-NetRoute shows "NetMgmt" consistently and a re-install
+		// after a leaked previous row hits ERROR_OBJECT_ALREADY_EXISTS
+		// deterministically rather than potentially duplicating the row.
+		Protocol: 3,
 	}
 	// DestinationPrefix
 	fillSockaddrInet(&row.DestinationPrefix.Prefix, dest)
@@ -127,7 +131,7 @@ func AddIpForwardRoute(ifaceLuid uint64, ifaceIndex uint32, dest net.IP, prefixL
 	if ret != 0 {
 		status := uint32(ret)
 		if status == winErrorObjectAlreadyExists {
-			return errRouteAlreadyExists
+			return ErrRouteAlreadyExists
 		}
 		return fmt.Errorf("CreateIpForwardEntry2(%s/%d via %v): status %d", dest, prefixLen, nextHop, status)
 	}
@@ -162,27 +166,23 @@ func DeleteIpForwardRoute(ifaceLuid uint64, ifaceIndex uint32, dest net.IP, pref
 	if ret != 0 {
 		status := uint32(ret)
 		if status == winErrorNotFound {
-			return errRouteNotFound
+			return ErrRouteNotFound
 		}
 		return fmt.Errorf("DeleteIpForwardEntry2(%s/%d via %v): status %d", dest, prefixLen, nextHop, status)
 	}
 	return nil
 }
 
-// errRouteAlreadyExists / errRouteNotFound are sentinels for the
-// distinguishable status codes. Callers should use errors.Is to check.
-var (
-	errRouteAlreadyExists = fmt.Errorf("route already exists")
-	errRouteNotFound      = fmt.Errorf("route not found")
-)
+// ErrRouteAlreadyExists is returned by AddIpForwardRoute when the
+// kernel rejects the install with ERROR_OBJECT_ALREADY_EXISTS — i.e.
+// a row with the same key (LUID, destination prefix, nexthop, protocol)
+// is already present. Callers use errors.Is to distinguish this case.
+var ErrRouteAlreadyExists = fmt.Errorf("route already exists")
 
-// IsRouteAlreadyExists reports whether err is ERROR_OBJECT_ALREADY_EXISTS
-// from AddIpForwardRoute.
-func IsRouteAlreadyExists(err error) bool { return err == errRouteAlreadyExists }
-
-// IsRouteNotFound reports whether err is ERROR_NOT_FOUND from
-// DeleteIpForwardRoute.
-func IsRouteNotFound(err error) bool { return err == errRouteNotFound }
+// ErrRouteNotFound is returned by DeleteIpForwardRoute when the
+// kernel returns ERROR_NOT_FOUND — the row the caller wanted to delete
+// isn't in the table. Almost always benign during best-effort cleanup.
+var ErrRouteNotFound = fmt.Errorf("route not found")
 
 // VerifyIpForwardRoute reports whether a route matching the given
 // (dest, prefix, ifaceLuid) tuple is currently in the kernel route
@@ -194,47 +194,113 @@ func IsRouteNotFound(err error) bool { return err == errRouteNotFound }
 //
 // `verifyTimeout` and polling are the caller's responsibility; this
 // is a single point-in-time check.
+//
+// For verifying many routes in one go, prefer VerifyIpForwardRoutes:
+// it takes a single GetIpForwardTable2 snapshot instead of one per
+// route, which matters on machines with hundreds of routes (heavily
+// containerised hosts, multiple-VPN setups).
 func VerifyIpForwardRoute(ifaceLuid uint64, dest net.IP, prefixLen uint8) bool {
-	if dest == nil {
-		return false
+	want := []routeKey{{ifaceLuid: ifaceLuid, dest: canonicalIP(dest), prefixLen: prefixLen}}
+	missing := VerifyIpForwardRoutes(want)
+	return len(missing) == 0
+}
+
+// routeKey is the tuple VerifyIpForwardRoutes matches on.
+type routeKey struct {
+	ifaceLuid uint64
+	dest      net.IP
+	prefixLen uint8
+}
+
+// VerifyIpForwardRoutes batch-verifies multiple route tuples against a
+// SINGLE GetIpForwardTable2 snapshot. Returns the subset of `wants`
+// that are NOT present in the table (the caller-actionable misses).
+// Returns nil when every want is present.
+//
+// IPv4 and IPv6 wants are split by destination family so we only pay
+// for the table family the caller actually needs. An empty `wants`
+// slice returns nil with no syscall cost.
+func VerifyIpForwardRoutes(wants []routeKey) []routeKey {
+	if len(wants) == 0 {
+		return nil
 	}
-	family := uint32(afInet)
-	if dest.To4() == nil {
-		family = afInet6
+	var v4Wants, v6Wants []routeKey
+	for _, w := range wants {
+		if w.dest.To4() != nil {
+			w.dest = w.dest.To4()
+			v4Wants = append(v4Wants, w)
+		} else {
+			v6Wants = append(v6Wants, w)
+		}
 	}
+	var missing []routeKey
+	if len(v4Wants) > 0 {
+		missing = append(missing, verifyOneFamily(afInet, v4Wants)...)
+	}
+	if len(v6Wants) > 0 {
+		missing = append(missing, verifyOneFamily(afInet6, v6Wants)...)
+	}
+	return missing
+}
+
+// verifyOneFamily snapshots the route table for one address family
+// (one GetIpForwardTable2 call), builds an in-memory set keyed by
+// (LUID, prefixLen, canonical destination), and returns the wants
+// that aren't in the set.
+func verifyOneFamily(family uint32, wants []routeKey) []routeKey {
 	var tablePtr unsafe.Pointer
 	ret, _, _ := procGetIpForwardTable2.Call(uintptr(family), uintptr(unsafe.Pointer(&tablePtr)))
 	if ret != 0 || tablePtr == nil {
-		return false
+		// Snapshot failed entirely — return all as missing so caller
+		// errs on the safe side (refuse the connect rather than ship
+		// it without verification).
+		return wants
 	}
 	defer freeMibTable(tablePtr)
 
 	hdr := (*mibIpforwardTable2)(tablePtr)
 	n := int(hdr.NumEntries)
 	if n == 0 {
-		return false
+		return wants
 	}
 	rowsBase := unsafe.Pointer(uintptr(tablePtr) + unsafe.Sizeof(mibIpforwardTable2{}))
 	rowSize := unsafe.Sizeof(mibIpforwardRow2{})
 
-	want := canonicalIP(dest)
+	// Index the table rows once into a set keyed by a stringified
+	// (LUID, prefixLen, dest-bytes) tuple. String key avoids the
+	// boilerplate of a struct-keyed map; the cost is minor for
+	// route-table sizes we see in practice (typically < 200 rows).
+	type tableKey struct {
+		luid      uint64
+		prefixLen uint8
+		dest      string
+	}
+	present := make(map[tableKey]struct{}, n)
 	for i := 0; i < n; i++ {
 		row := (*mibIpforwardRow2)(unsafe.Pointer(uintptr(rowsBase) + uintptr(i)*rowSize))
-		if row.InterfaceLuid != ifaceLuid {
+		dest := row.DestinationPrefix.Prefix.ip()
+		if dest == nil {
 			continue
 		}
-		if row.DestinationPrefix.PrefixLength != prefixLen {
-			continue
+		present[tableKey{
+			luid:      row.InterfaceLuid,
+			prefixLen: row.DestinationPrefix.PrefixLength,
+			dest:      string(canonicalIP(dest)),
+		}] = struct{}{}
+	}
+
+	var missing []routeKey
+	for _, w := range wants {
+		k := tableKey{
+			luid:      w.ifaceLuid,
+			prefixLen: w.prefixLen,
+			dest:      string(w.dest),
 		}
-		got := row.DestinationPrefix.Prefix.ip()
-		if got == nil {
-			continue
-		}
-		if canonicalIP(got).Equal(want) {
-			return true
+		if _, ok := present[k]; !ok {
+			missing = append(missing, w)
 		}
 	}
-	return false
+	return missing
 }
 
 // canonicalIP coerces a net.IP to its 4-byte form when it's IPv4-in-
