@@ -102,16 +102,19 @@ func AddIpForwardRoute(ifaceLuid uint64, ifaceIndex uint32, dest net.IP, prefixL
 	if ifaceLuid == 0 && ifaceIndex == 0 {
 		return fmt.Errorf("AddIpForwardRoute: must specify ifaceLuid or ifaceIndex")
 	}
-	// Microsoft mandates InitializeIpForwardEntry before CreateIpForwardEntry2:
-	// it stamps the row with documented defaults — most importantly
-	// ValidLifetime/PreferredLifetime = INFINITE (0xFFFFFFFF), Immortal = TRUE,
-	// Loopback = AutoconfigureAddress = Publish = TRUE.
-	// Starting from a Go zero-value would leave those at 0/FALSE, which the
-	// route-lifetime timer treats as a "this expires in zero seconds" entry
-	// and the kernel will reap. Symptom: our /32 bypass disappearing days
-	// after a connect, the very loop class this whole module exists to
-	// prevent — slow-burn version. See
+	// Microsoft mandates InitializeIpForwardEntry before CreateIpForwardEntry2.
+	// It stamps the row with documented defaults — the critical ones for our
+	// use case are ValidLifetime / PreferredLifetime = INFINITE (0xFFFFFFFF)
+	// and Immortal = TRUE. Starting from a Go zero-value would leave those
+	// at 0 / FALSE, which the route-lifetime timer treats as "expires
+	// immediately"; the kernel reaps the row. Symptom: our /32 bypass
+	// disappearing under a long-running session — the very loop class this
+	// whole module exists to prevent, slow-burn version. See
 	// https://learn.microsoft.com/en-us/windows/win32/api/netioapi/nf-netioapi-initializeipforwardentry
+	// (Other documented defaults the helper sets: SitePrefixLength = 0,
+	// AutoconfigureAddress = TRUE, Publish = FALSE, Loopback = FALSE,
+	// Age = 0, Origin = NlroManual. None of those matter for our path —
+	// we overwrite the fields we care about below.)
 	var row mibIpforwardRow2
 	procInitializeIpForwardEntry.Call(uintptr(unsafe.Pointer(&row)))
 	row.InterfaceLuid = ifaceLuid

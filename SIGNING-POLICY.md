@@ -63,15 +63,33 @@ not a recovery workaround.
 
 ## Privacy &amp; data handling
 
-WireGuide does not transmit telemetry, analytics, or any other
-information to networked systems unless the user explicitly initiates
-a VPN connection. WireGuard tunnels carry only user-configured peer
-traffic; no usage data, configuration content, crash reports, or
-metadata is sent to the maintainer, SignPath, or any third party as
-a side effect of running the application. Update checks query GitHub
-Releases (a public API) only when the user opens the Updates UI;
-this is the only outbound HTTP request the application initiates
-that is not user-driven via a tunnel.
+WireGuide does not transmit telemetry, analytics, crash reports, or
+configuration content to the maintainer, SignPath, or any third party.
+WireGuard tunnels carry only the peer traffic the user has explicitly
+configured; nothing about the user's machine, session, or usage is
+exfiltrated as a side effect.
+
+The application initiates two classes of outbound HTTP requests that
+are NOT triggered by a tunnel:
+
+1. **Update check.** A background scheduler queries the GitHub
+   Releases API for this repository's latest tag — once at startup
+   (after a 30-120 s jittered delay) and approximately every 24
+   hours thereafter, plus an opportunistic recheck when the window
+   regains focus after 4+ hours of idle. The request carries no
+   identifying payload beyond the standard HTTP user-agent and
+   what GitHub's public API logs by default (caller IP). Users can
+   disable this entirely in Settings (`auto-update check` toggle);
+   when disabled, no scheduled HTTP request fires.
+2. **Manual update**. When the user clicks "Check now" or "Update"
+   in the Updates UI, the application fetches the release feed and,
+   for "Update", downloads the new installer / .app bundle directly
+   from `github.com/korjwl1/wireguide/releases/...`. Both are
+   user-initiated.
+
+No third-party domains beyond `api.github.com` and
+`github.com/korjwl1/wireguide` are contacted by the application
+itself.
 
 ## Signing requests are accepted only from
 

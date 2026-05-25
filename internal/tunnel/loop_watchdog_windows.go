@@ -28,6 +28,7 @@ package tunnel
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"time"
 	"unsafe"
@@ -97,6 +98,22 @@ type mibIfRow2 struct {
 	OutQLen                    uint64
 }
 
+// init asserts that Go's struct layout reproduces the well-known C
+// offsets for the two counters the watchdog reads. If a future code
+// change reorders mibIfRow2 fields by accident, the helper fails at
+// startup with a clear message instead of silently reading garbage.
+// The known-good offsets (1208 / 1280) are derived from the C struct
+// definition and unchanged since the MIB_IF_ROW2 API was introduced
+// in Windows 8; if Microsoft ever shifts them in a future SDK we
+// want to know loudly.
+func init() {
+	if got := unsafe.Offsetof(mibIfRow2{}.InOctets); got != 1208 {
+		panic(fmt.Sprintf("mibIfRow2.InOctets: expected offset 1208, got %d — struct layout drift", got))
+	}
+	if got := unsafe.Offsetof(mibIfRow2{}.OutOctets); got != 1280 {
+		panic(fmt.Sprintf("mibIfRow2.OutOctets: expected offset 1280, got %d — struct layout drift", got))
+	}
+}
 
 var (
 	procGetIfEntry2 = windows.NewLazySystemDLL("iphlpapi.dll").NewProc("GetIfEntry2")
@@ -253,6 +270,14 @@ func readInterfaceOctets(luid uint64) (in uint64, out uint64, ok bool) {
 	row.InterfaceLuid = luid
 	ret, _, _ := procGetIfEntry2.Call(uintptr(unsafe.Pointer(&row)))
 	if ret != 0 {
+		return 0, 0, false
+	}
+	// Sanity: the kernel echoes InterfaceLuid back unchanged. If the
+	// echoed LUID doesn't match what we asked for, either the kernel
+	// found a different adapter (shouldn't happen — LUIDs are unique)
+	// or the struct layout shifted under us and we're reading the wrong
+	// 8 bytes. Either way, skip this sample.
+	if row.InterfaceLuid != luid {
 		return 0, 0, false
 	}
 	return row.InOctets, row.OutOctets, true

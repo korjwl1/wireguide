@@ -250,10 +250,11 @@ func (m *DarwinManager) AddRoutes(ifaceName string, allowedIPs []string, fullTun
 	// silently installing /1 against a missing gateway.
 	type epClassified struct {
 		raw  string
-		ip   net.IP
 		isV6 bool
 	}
 	var classified []epClassified
+	haveV4Endpoints := false
+	haveV6Endpoints := false
 	for _, ipStr := range endpoints {
 		if ipStr == "" {
 			continue
@@ -270,12 +271,8 @@ func (m *DarwinManager) AddRoutes(ifaceName string, allowedIPs []string, fullTun
 		if !isV6 && !hasV4Default {
 			continue
 		}
-		classified = append(classified, epClassified{raw: ipStr, ip: ip, isV6: isV6})
-	}
-	haveV4Endpoints := false
-	haveV6Endpoints := false
-	for _, ep := range classified {
-		if ep.isV6 {
+		classified = append(classified, epClassified{raw: ipStr, isV6: isV6})
+		if isV6 {
 			haveV6Endpoints = true
 		} else {
 			haveV4Endpoints = true
@@ -494,6 +491,17 @@ func (m *DarwinManager) reapply() {
 	// Add bypass routes for endpoints that need (re-)installation:
 	// - If gateway changed: all live endpoints (they were all deleted above).
 	// - If only endpoints changed: only newly appeared endpoints.
+	//
+	// Reapply is the network-state-change handler, NOT a fresh connect.
+	// addBypassForIP now fail-fast-returns on missing gateway, which is
+	// correct for Connect (rollback runs) but unsafe here — the /1 split
+	// routes were already in force before this reapply began, and
+	// returning without a /32 bypass would leave the encrypted-UDP path
+	// matching /1 → utun → loop. So in reapply we install a blackhole
+	// fallback when the new gateway is missing; the tunnel breaks
+	// (handshake can't reach the peer) but the loop is contained.
+	// Next RTM event with a real gateway promotes the blackhole back
+	// to a real bypass.
 	for _, ipStr := range liveEndpoints {
 		if ipStr == "" {
 			continue
@@ -515,7 +523,9 @@ func (m *DarwinManager) reapply() {
 			continue
 		}
 		if err := m.addBypassForIP(ipStr, newGwV4, newGwV6, newGwV4Err, newGwV6Err); err != nil {
-			slog.Warn("reapply: bypass failed", "ip", ipStr, "error", err)
+			slog.Warn("reapply: bypass install failed; installing blackhole as a loop firewall",
+				"ip", ipStr, "error", err)
+			m.installBlackholeBypass(ipStr, isV6)
 		}
 	}
 
@@ -599,6 +609,31 @@ func stringSetEqual(a, b []string) bool {
 		}
 	}
 	return true
+}
+
+// installBlackholeBypass installs a /32 (or /128) route to the given
+// peer endpoint IP pointing at loopback with -blackhole. Used as a
+// loop-firewall in the reapply (network-change) path when the upstream
+// gateway probe fails — the alternative is leaving the /1 split route
+// in force without a /32 bypass, which loops encrypted UDP through
+// utun. Records the IP in m.bypassEndpoints so RemoveRoutes /
+// disconnect can sweep it. Errors are best-effort: if even the
+// blackhole install fails, we've exhausted defenses in this code path
+// and the next RTM event has to clean up.
+func (m *DarwinManager) installBlackholeBypass(ipStr string, isV6 bool) {
+	family := "-inet"
+	loopback := "127.0.0.1"
+	if isV6 {
+		family = "-inet6"
+		loopback = "::1"
+	}
+	if err := run("route", "-q", "-n", "add", family, ipStr, loopback, "-blackhole"); err != nil {
+		slog.Warn("blackhole bypass install failed", "ip", ipStr, "error", err)
+		return
+	}
+	m.mu.Lock()
+	m.bypassEndpoints = append(m.bypassEndpoints, ipStr)
+	m.mu.Unlock()
 }
 
 // addBypassForIP installs a host route for one already-resolved peer endpoint
