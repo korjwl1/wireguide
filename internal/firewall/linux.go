@@ -172,6 +172,16 @@ func (f *LinuxFirewall) AddKillSwitchTunnel(string, []string) error { return nil
 // RemoveKillSwitchTunnel is a no-op on linux for the same reason.
 func (f *LinuxFirewall) RemoveKillSwitchTunnel(string) error { return nil }
 
+// EnableEndpointProtection is a no-op on Linux. The loop class this guards
+// against on Windows (userspace wireguard-go re-encrypting its own UDP
+// because the /1 split route trapped it) doesn't exist on Linux: wg-quick
+// installs an fwmark policy-routing rule that exempts WireGuard's own UDP
+// socket from the tunnel route, so the kernel never recurses.
+func (f *LinuxFirewall) EnableEndpointProtection(string, []string) error { return nil }
+
+// DisableEndpointProtection mirrors the Linux no-op.
+func (f *LinuxFirewall) DisableEndpointProtection(string) error { return nil }
+
 func (f *LinuxFirewall) DisableKillSwitch() error {
 	f.mu.Lock()
 	defer f.mu.Unlock()

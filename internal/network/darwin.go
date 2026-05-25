@@ -202,7 +202,108 @@ func (m *DarwinManager) AddRoutes(ifaceName string, allowedIPs []string, fullTun
 		m.mu.Unlock()
 	}
 
-	// Install default routes using the split trick
+	// CORRECTNESS — bypass /32 host routes go in BEFORE the /1 split routes.
+	// Reason: wireguard-go on darwin has no SO_MARK / IP_BOUND_IF socket
+	// binding (conn/mark_default.go is a no-op on Darwin), so the kernel's
+	// routing decision for the encrypted UDP send is purely longest-prefix-
+	// match. If /1 lands first, there is a window between /1-install and
+	// /32-install where the WG handshake retransmits (already firing because
+	// connect_phases.engine.Start() ran before AddRoutes) match /1 → re-enter
+	// utun → loop. This is the exact bug class issue #14 fixed on Windows;
+	// macOS carries the same risk.
+	//
+	// `endpoints` here are ALREADY-RESOLVED IP LITERALS — the caller
+	// (connect_phases) resolved them via the wireguard-go engine at a
+	// moment where the tunnel routes were not yet in place. We must never
+	// DNS-resolve here, because by this point the /1 split routes below
+	// would route the DNS query back through utun, creating a loop.
+	//
+	// Cache the upstream gateway per family once — one netstat call per
+	// family instead of one per endpoint IP. Bounded poll (5 s @ 250 ms)
+	// rides out sleep/wake, Wi-Fi handoff, and slow DHCP — matches the
+	// Windows underlay-detection retry.
+	var gwV4, gwV6 string
+	var gwV4Err, gwV6Err error
+	const underlayPollInterval = 250 * time.Millisecond
+	const underlayPollBudget = 5 * time.Second
+	pollDeadline := time.Now().Add(underlayPollBudget)
+	for {
+		if hasV4Default {
+			gwV4, gwV4Err = getDefaultGatewayFor(false)
+		}
+		if hasV6Default {
+			gwV6, gwV6Err = getDefaultGatewayFor(true)
+		}
+		needV4 := hasV4Default && (gwV4Err != nil || gwV4 == "")
+		needV6 := hasV6Default && (gwV6Err != nil || gwV6 == "")
+		if !needV4 && !needV6 {
+			break
+		}
+		if time.Now().After(pollDeadline) {
+			break
+		}
+		time.Sleep(underlayPollInterval)
+	}
+
+	// Classify endpoints by family BEFORE we touch the route table so we
+	// can refuse a connect whose family lacks a usable underlay rather than
+	// silently installing /1 against a missing gateway.
+	type epClassified struct {
+		raw  string
+		isV6 bool
+	}
+	var classified []epClassified
+	haveV4Endpoints := false
+	haveV6Endpoints := false
+	for _, ipStr := range endpoints {
+		if ipStr == "" {
+			continue
+		}
+		ip := net.ParseIP(ipStr)
+		if ip == nil {
+			slog.Warn("skipping invalid endpoint IP", "ip", ipStr)
+			continue
+		}
+		isV6 := ip.To4() == nil
+		if isV6 && !hasV6Default {
+			continue
+		}
+		if !isV6 && !hasV4Default {
+			continue
+		}
+		classified = append(classified, epClassified{raw: ipStr, isV6: isV6})
+		if isV6 {
+			haveV6Endpoints = true
+		} else {
+			haveV4Endpoints = true
+		}
+	}
+	if haveV4Endpoints && (gwV4Err != nil || gwV4 == "") {
+		return fmt.Errorf("full-tunnel: cannot detect a usable IPv4 default gateway "+
+			"(err=%v). Refusing to install split routes — without an endpoint bypass "+
+			"the encrypted WireGuard traffic would loop through the tunnel and "+
+			"saturate the link", gwV4Err)
+	}
+	if haveV6Endpoints && (gwV6Err != nil || gwV6 == "") {
+		return fmt.Errorf("full-tunnel: cannot detect a usable IPv6 default gateway "+
+			"(err=%v). IPv6 peer endpoint cannot be bypassed safely", gwV6Err)
+	}
+
+	// PHASE 1: bypass host routes for every classified endpoint. Fail-fast:
+	// any install failure aborts the connect and the caller's rollback
+	// removes anything we managed to install. The previous best-effort
+	// path silently dropped failures (one slog.Warn per IP) and left the
+	// connect to proceed into the /1 install with broken bypass — the
+	// path that produces the 6 GB-upload loop class.
+	for _, ep := range classified {
+		if err := m.addBypassForIP(ep.raw, gwV4, gwV6, gwV4Err, gwV6Err); err != nil {
+			return fmt.Errorf("endpoint bypass %s: %w", ep.raw, err)
+		}
+	}
+
+	// PHASE 2: /1 split-route trick. Now safe to install — every endpoint
+	// matched by 0.0.0.0/1 or 128.0.0.0/1 already has a longest-prefix /32
+	// pointing at the physical gateway.
 	if hasV4Default {
 		if err := run("route", "-q", "-n", "add", "-inet", "0.0.0.0/1", "-interface", ifaceName); err != nil {
 			return fmt.Errorf("adding 0.0.0.0/1: %w", err)
@@ -217,53 +318,6 @@ func (m *DarwinManager) AddRoutes(ifaceName string, allowedIPs []string, fullTun
 		}
 		if err := run("route", "-q", "-n", "add", "-inet6", "8000::/1", "-interface", ifaceName); err != nil {
 			return fmt.Errorf("adding 8000::/1: %w", err)
-		}
-	}
-
-	// Add endpoint bypass routes ONLY for the families whose default route
-	// we actually hijacked. If a peer endpoint is IPv6 but AllowedIPs only
-	// contains 0.0.0.0/0 (IPv4-only full tunnel), the IPv6 default route is
-	// untouched — WG packets to the IPv6 peer still flow naturally through
-	// the original IPv6 gateway, so NO bypass is needed (and adding one
-	// would blackhole a perfectly good path).
-	//
-	// `endpoints` here are ALREADY-RESOLVED IP LITERALS — the caller
-	// (connect_phases) resolved them via the wireguard-go engine at a
-	// moment where the tunnel routes were not yet in place. We must never
-	// DNS-resolve here, because by this point the /1 split routes above
-	// would route the DNS query back through utun, creating a loop.
-	//
-	// Cache the upstream gateway per family once — one netstat call per
-	// family instead of one per endpoint IP.
-	var gwV4, gwV6 string
-	var gwV4Err, gwV6Err error
-	if hasV4Default {
-		gwV4, gwV4Err = getDefaultGatewayFor(false)
-	}
-	if hasV6Default {
-		gwV6, gwV6Err = getDefaultGatewayFor(true)
-	}
-	for _, ipStr := range endpoints {
-		if ipStr == "" {
-			continue
-		}
-		ip := net.ParseIP(ipStr)
-		if ip == nil {
-			slog.Warn("skipping invalid endpoint IP", "ip", ipStr)
-			continue
-		}
-		// Only bypass this endpoint if its family is actually hijacked.
-		// See comment above — mis-bypassing a v6 endpoint on a v4-only
-		// hijack would blackhole an otherwise-working path.
-		isV6 := ip.To4() == nil
-		if isV6 && !hasV6Default {
-			continue
-		}
-		if !isV6 && !hasV4Default {
-			continue
-		}
-		if err := m.addBypassForIP(ipStr, gwV4, gwV6, gwV4Err, gwV6Err); err != nil {
-			slog.Warn("endpoint bypass route failed", "ip", ipStr, "error", err)
 		}
 	}
 
@@ -437,6 +491,17 @@ func (m *DarwinManager) reapply() {
 	// Add bypass routes for endpoints that need (re-)installation:
 	// - If gateway changed: all live endpoints (they were all deleted above).
 	// - If only endpoints changed: only newly appeared endpoints.
+	//
+	// Reapply is the network-state-change handler, NOT a fresh connect.
+	// addBypassForIP now fail-fast-returns on missing gateway, which is
+	// correct for Connect (rollback runs) but unsafe here — the /1 split
+	// routes were already in force before this reapply began, and
+	// returning without a /32 bypass would leave the encrypted-UDP path
+	// matching /1 → utun → loop. So in reapply we install a blackhole
+	// fallback when the new gateway is missing; the tunnel breaks
+	// (handshake can't reach the peer) but the loop is contained.
+	// Next RTM event with a real gateway promotes the blackhole back
+	// to a real bypass.
 	for _, ipStr := range liveEndpoints {
 		if ipStr == "" {
 			continue
@@ -458,7 +523,9 @@ func (m *DarwinManager) reapply() {
 			continue
 		}
 		if err := m.addBypassForIP(ipStr, newGwV4, newGwV6, newGwV4Err, newGwV6Err); err != nil {
-			slog.Warn("reapply: bypass failed", "ip", ipStr, "error", err)
+			slog.Warn("reapply: bypass install failed; installing blackhole as a loop firewall",
+				"ip", ipStr, "error", err)
+			m.installBlackholeBypass(ipStr, isV6)
 		}
 	}
 
@@ -544,6 +611,31 @@ func stringSetEqual(a, b []string) bool {
 	return true
 }
 
+// installBlackholeBypass installs a /32 (or /128) route to the given
+// peer endpoint IP pointing at loopback with -blackhole. Used as a
+// loop-firewall in the reapply (network-change) path when the upstream
+// gateway probe fails — the alternative is leaving the /1 split route
+// in force without a /32 bypass, which loops encrypted UDP through
+// utun. Records the IP in m.bypassEndpoints so RemoveRoutes /
+// disconnect can sweep it. Errors are best-effort: if even the
+// blackhole install fails, we've exhausted defenses in this code path
+// and the next RTM event has to clean up.
+func (m *DarwinManager) installBlackholeBypass(ipStr string, isV6 bool) {
+	family := "-inet"
+	loopback := "127.0.0.1"
+	if isV6 {
+		family = "-inet6"
+		loopback = "::1"
+	}
+	if err := run("route", "-q", "-n", "add", family, ipStr, loopback, "-blackhole"); err != nil {
+		slog.Warn("blackhole bypass install failed", "ip", ipStr, "error", err)
+		return
+	}
+	m.mu.Lock()
+	m.bypassEndpoints = append(m.bypassEndpoints, ipStr)
+	m.mu.Unlock()
+}
+
 // addBypassForIP installs a host route for one already-resolved peer endpoint
 // IP, pointing at the upstream default gateway. Without this, encrypted WG
 // packets destined for the peer would match the /1 split routes and loop
@@ -552,9 +644,11 @@ func stringSetEqual(a, b []string) bool {
 // Gateways are passed in (not resolved here) so the caller can make a single
 // netstat call for all IPs in a batch — one per family instead of one per IP.
 //
-// If the gateway probe failed for a given family, we fall back to wg-quick's
-// behaviour of installing a blackhole route, which breaks the loop while
-// clearly signalling to the user that handshake is impossible in this state.
+// If the gateway probe failed for a given family this returns an error and
+// the caller MUST refuse the connect (the rollback path will sweep any
+// half-installed state). The previous blackhole-and-continue fallback was
+// silently-permissive: it broke the loop class only by also breaking the
+// tunnel, with no surfaced signal that anything was wrong.
 func (m *DarwinManager) addBypassForIP(ipStr, gwV4, gwV6 string, gwV4Err, gwV6Err error) error {
 	ip := net.ParseIP(ipStr)
 	if ip == nil {
@@ -581,17 +675,7 @@ func (m *DarwinManager) addBypassForIP(ipStr, gwV4, gwV6 string, gwV4Err, gwV6Er
 	}
 
 	if gwErr != nil || gw == "" {
-		// No usable upstream gateway → install a blackhole so encrypted WG
-		// traffic to this peer doesn't loop through the tunnel.
-		loopback := "127.0.0.1"
-		if isV6 {
-			loopback = "::1"
-		}
-		if err := run("route", "-q", "-n", "add", family, ipStr, loopback, "-blackhole"); err != nil {
-			slog.Warn("blackhole bypass install failed", "ip", ipStr, "error", err)
-		}
-		recordBypass()
-		return nil
+		return fmt.Errorf("no usable upstream gateway for %s (family=%s, err=%v)", ipStr, family, gwErr)
 	}
 
 	// Use the cached upstream interface to pin the bypass route with

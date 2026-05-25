@@ -180,6 +180,12 @@ func Run(addr string, ownerUID int, dataDir string) error {
 
 	manager := tunnel.NewManager(dataDir)
 	fw := firewall.NewPlatformFirewall()
+	// Wire the always-on endpoint loop protection. The firewall
+	// satisfies tunnel.EndpointProtector trivially on every platform —
+	// macOS/Linux return nil from their no-op implementations and the
+	// Windows path installs the WFP BLOCK filters described in
+	// internal/firewall/endpoint_protection_windows.go.
+	manager.SetEndpointProtector(fw)
 
 	h := &Helper{
 		server:          ipc.NewServer(listener, ownerUID),

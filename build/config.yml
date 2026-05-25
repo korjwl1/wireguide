@@ -11,7 +11,7 @@ info:
   description: "Cross-platform WireGuard VPN desktop client"
   copyright: "© 2026 korjwl1"
   comments: "https://github.com/korjwl1/wireguide"
-  version: "0.3.0" # The application version
+  version: "0.3.1" # The application version
   # cfBundleIconName: "appicon" # The macOS icon name in Assets.car icon bundles (optional)
   #                               # Should match the name of your .icon file without the extension
   #                               # If not set and Assets.car exists, defaults to "appicon"

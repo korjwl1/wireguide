@@ -49,6 +49,16 @@ func (m *Manager) connectPhases(ctx context.Context, cfg *domain.WireGuardConfig
 		if err := netMgr.RemoveRoutes(ifaceName, nil, fullTunnel); err != nil {
 			slog.Warn("rollback: RemoveRoutes failed", "error", err)
 		}
+		// Strip any endpoint loop protection filters we installed before
+		// the failure point — leaving them in force after a failed
+		// connect would block re-connects to the same endpoint until
+		// the helper restarted (the WFP BLOCK targets remote IP+port +
+		// tunnel LUID; on a re-connect the LUID matches again).
+		if m.endpointProtector != nil {
+			if err := m.endpointProtector.DisableEndpointProtection(ifaceName); err != nil {
+				slog.Warn("rollback: DisableEndpointProtection failed", "iface", ifaceName, "error", err)
+			}
+		}
 		if err := netMgr.Cleanup(ifaceName); err != nil {
 			slog.Warn("rollback: network Cleanup failed", "iface", ifaceName, "error", err)
 		}
@@ -99,6 +109,59 @@ func (m *Manager) connectPhases(ctx context.Context, cfg *domain.WireGuardConfig
 	if err := checkCtx(); err != nil {
 		return nil, err
 	}
+
+	// 5.5 Endpoint loop protection (Windows full-tunnel only on the
+	// firewall side; nil-protector platforms are no-ops). Installed
+	// BEFORE engine.Start() — the WG handshake goroutine fires its
+	// first sendto immediately after Up(), and on Windows the kernel's
+	// ALE flow cache locks in the first-packet decision (permit) for
+	// the (local-port, peer-ip, peer-port) 5-tuple. If our BLOCK
+	// filter isn't yet installed at that moment, the cached PERMIT
+	// can let subsequent loop-recursed packets through even after the
+	// BLOCK is installed seconds later. Mandatory ordering: install
+	// the firewall *before* anything that could cause WireGuard to
+	// transmit.
+	if m.endpointProtector != nil && fullTunnel {
+		eps := engine.ResolvedEndpoints()
+		if err := m.endpointProtector.EnableEndpointProtection(ifaceName, eps); err != nil {
+			return nil, rollback(newTunnelError(ErrNetwork, "installing endpoint loop protection", err))
+		}
+	}
+	if err := checkCtx(); err != nil {
+		return nil, err
+	}
+
+	// 5.7 Now it is safe to start the WireGuard device. This is what
+	// transitions wireguard-go's goroutines into the running state
+	// (kicks off the first handshake). See engine.go's NewEngine
+	// comment for the ALE-flow-cache rationale; the firewall step
+	// above is the precondition.
+	if err := engine.Start(); err != nil {
+		return nil, rollback(newTunnelError(ErrEngineCreation, "starting engine", err))
+	}
+	if err := checkCtx(); err != nil {
+		return nil, err
+	}
+
+	// 5.8 Pin the WG UDP socket to the physical underlay's ifIndex
+	// (IP_UNICAST_IF on Windows). This is the source-side loop firewall:
+	// once pinned, the kernel skips its routing lookup for sends on
+	// these sockets and goes straight out the chosen interface — so even
+	// if wintun is the longest-prefix match for the peer endpoint in
+	// the route table (loop scenario), the encrypted UDP never crosses
+	// into wintun. Mirrors what wireguard-windows does in
+	// tunnel/defaultroutemonitor.go.
+	//
+	// We do this here, AFTER engine.Start opened the sockets, AFTER
+	// EnableEndpointProtection installed the per-flow/per-packet WFP
+	// blocks, but BEFORE AddRoutes installs the /1 split. Order matters
+	// because the bind picks "best non-tunnel default" — if /1 split is
+	// already in, the lookup still correctly returns the physical NIC
+	// (because /1 is via the tunnel adapter LUID, which we exclude),
+	// but if the physical default was missing AND /1 isn't in yet,
+	// pinning would blackhole. Doing it post-Start, pre-AddRoutes is
+	// the safest window.
+	engine.SocketPinV4, engine.SocketPinV6 = pinSocketToPhysical(engine.bind, ifaceName)
 
 	// 6. Routes + endpoint bypass.
 	//
@@ -238,6 +301,20 @@ func (m *Manager) disconnectPhases(cfg *domain.WireGuardConfig, engine *Engine, 
 			slog.Warn("disconnect: RemoveRoutes failed", "iface", ifaceName, "error", err)
 		}
 		logStep("RemoveRoutes", ts)
+	}
+
+	// Endpoint loop protection — remove AFTER RemoveRoutes so the WFP
+	// BLOCK is the last line of defence while the kernel route table
+	// is still in the loop-prone /1-split state. On a clean disconnect
+	// the route deletes always win, but DisableEndpointProtection here
+	// guarantees no orphaned BLOCK survives a subsequent re-connect
+	// against a different endpoint IP for the same interface name.
+	if m.endpointProtector != nil {
+		tsEP := time.Now()
+		if err := m.endpointProtector.DisableEndpointProtection(ifaceName); err != nil {
+			slog.Warn("disconnect: DisableEndpointProtection failed", "iface", ifaceName, "error", err)
+		}
+		logStep("DisableEndpointProtection", tsEP)
 	}
 
 	// On Windows the wintun adapter doesn't actually disappear when

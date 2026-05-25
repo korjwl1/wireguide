@@ -36,6 +36,28 @@ type FirewallManager interface {
 	// any per-tunnel filters added since enable).
 	DisableKillSwitch() error
 
+	// EnableEndpointProtection installs always-on routing-loop protection
+	// for a full-tunnel connect, independently of the kill switch. The
+	// canonical Windows implementation blocks UDP outbound to each peer
+	// endpoint when the packet would leave via the tunnel adapter itself
+	// — so a missing or stale bypass /32 route can no longer recurse
+	// encrypted handshake traffic into the tunnel. Defense in depth on top
+	// of the bypass host route, intentionally narrow (UDP + exact remote
+	// IP+port + tunnel LUID) so it never interferes with normal user
+	// traffic on the tunnel.
+	//
+	// Caller passes "ip:port" pairs (the same form ResolvedEndpoints
+	// returns). No-op + nil return on non-Windows: macOS and Linux have
+	// fwmark / interface-binding alternatives that wireguard-go already
+	// uses, so the loop class doesn't surface there.
+	EnableEndpointProtection(tunnelInterfaceName string, endpoints []string) error
+
+	// DisableEndpointProtection removes the filters installed by
+	// EnableEndpointProtection for one tunnel. Idempotent — no-op if no
+	// filters are tracked for that tunnel name (e.g. split tunnel never
+	// called Enable).
+	DisableEndpointProtection(tunnelInterfaceName string) error
+
 	// EnableDNSProtection blocks DNS (port 53) except to specified servers via WG tunnel.
 	EnableDNSProtection(interfaceName string, dnsServers []string) error
 

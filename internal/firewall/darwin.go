@@ -295,6 +295,30 @@ func (f *DarwinFirewall) RemoveKillSwitchTunnel(interfaceName string) error {
 	return nil
 }
 
+// EnableEndpointProtection is a no-op on macOS — but NOT because the
+// loop class is impossible here. wireguard-go's Darwin bind does NOT
+// set IP_BOUND_IF on its UDP socket (the previous comment was wrong);
+// conn/mark_default.go is a no-op SetMark for non-Linux/BSD targets
+// and bind_std.go doesn't bind by interface on macOS. The /32 bypass
+// host routes installed by DarwinManager.addBypassForIP are the only
+// safety net against the encrypted-UDP-loops-through-utun bug class.
+//
+// The reason this hook is still a no-op on macOS is that pf (Packet
+// Filter) doesn't expose a layer with the per-packet-classify +
+// local-interface-LUID match equivalent to WFP's OUTBOUND_TRANSPORT.
+// A pf "block out on utun proto udp to <endpoint>" rule would also
+// catch the legitimate-but-mis-routed case during a network change,
+// which is more dangerous than the current "bypass route ordering +
+// fail-fast on missing gateway" approach in DarwinManager.AddRoutes.
+//
+// If/when we add a Darwin-side runaway-TX watchdog (mirror of
+// loop_watchdog_windows.go via SIOCGIFDATA), that's where the residual
+// safety net goes — not here.
+func (f *DarwinFirewall) EnableEndpointProtection(string, []string) error { return nil }
+
+// DisableEndpointProtection mirrors the macOS no-op.
+func (f *DarwinFirewall) DisableEndpointProtection(string) error { return nil }
+
 func (f *DarwinFirewall) DisableKillSwitch() error {
 	f.mu.Lock()
 	pfWas := f.pfWasEnabled

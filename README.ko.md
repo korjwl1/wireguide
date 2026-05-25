@@ -84,6 +84,7 @@ task build
 | **설정 에디터** | CodeMirror 6 기반 WireGuard 문법 강조 및 자동완성 |
 | **시스템 트레이** | 연결 상태 뱃지, 1클릭 연결/해제 |
 | **킬 스위치** | VPN 외 모든 트래픽 차단 — macOS `pf`, Linux `nftables`, Windows WFP (선택) |
+| **루프 보호** | 풀터널 라우팅 루프(업로드 폭증 버그)에 대한 다층 방어. Windows: WFP `ALE_AUTH_CONNECT` + `OUTBOUND_TRANSPORT` 블록, `IP_UNICAST_IF` 소켓 바인딩 + 재핀 모니터, 런어웨이 TX 워치독. macOS: `/32` bypass를 `/1` split 라우트보다 먼저 설치 + 게이트웨이 누락 시 fail-fast, `reapply` 중 게이트웨이 손실 시 블랙홀 폴백, 런어웨이 TX 워치독. |
 | **DNS 보호** | DNS 쿼리를 VPN 터널로만 강제 (선택) |
 | **헬스 체크** | 핸드셰이크 상태 모니터링 및 자동 재연결 (선택) |
 | **슬립/웨이크 복구** | macOS `NSWorkspace`, Linux `systemd-logind`, Windows 전원 알림 |
@@ -162,3 +163,20 @@ WireGuide가 유용하셨다면 후원으로 개발을 지원해 주세요.
 ## 라이선스
 
 [MIT](LICENSE)
+
+---
+
+## 코드 사이닝
+
+SignPath Foundation 오픈소스 프로그램 승인이 완료되면 Windows
+인스톨러는 SignPath를 통해 코드 사이닝됩니다. 사이닝 인프라는
+[SignPath.io](https://signpath.io)에서 제공하며, 인증서는
+[SignPath Foundation](https://signpath.org)에서 발급합니다.
+사이닝 정책은 [SIGNING-POLICY.md](SIGNING-POLICY.md)에
+문서화되어 있습니다.
+
+> Free code signing provided by [SignPath.io](https://signpath.io),
+> certificate by [SignPath Foundation](https://signpath.org).
+
+SignPath 승인 전까지는 unsigned 빌드가 릴리스되며 첫 실행 시
+SmartScreen이 노란색 "확인되지 않은 게시자" 경고를 표시합니다.

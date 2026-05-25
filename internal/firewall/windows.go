@@ -66,6 +66,24 @@ type WindowsFirewall struct {
 	// is "WireGuide" today but the map is multi-tunnel-ready for the
 	// per-tunnel-adapter naming change we'll need to ship later).
 	tunnelFilterIDs map[string][]uint64
+
+	// endpointProtectionFilterIDs tracks the BLOCK filters installed by
+	// EnableEndpointProtection. Keyed by tunnel interface name. Separate
+	// from tunnelFilterIDs so the two features have independent lifetimes
+	// — toggling the kill switch off must not strip the loop protection,
+	// and disconnecting one tunnel must not touch another tunnel's
+	// protection set.
+	endpointProtectionFilterIDs map[string][]uint64
+
+	// endpointProtectionState remembers (iface → endpoints) for each
+	// active endpoint protection install so we can re-install after a
+	// dynamic-session close. Session close happens whenever the user
+	// toggles the kill switch off (closeSession is the simple cascade
+	// path), which would otherwise silently strip an active tunnel's
+	// loop protection. The snapshot-and-rebuild pattern lets the kill
+	// switch keep its tear-down-everything-rebuild simplicity while
+	// preserving endpoint protection across the transition.
+	endpointProtectionState map[string][]string
 }
 
 func NewPlatformFirewall() FirewallManager {
@@ -232,43 +250,47 @@ func (f *WindowsFirewall) closeSession() {
 	f.killSwitchEnabled = false
 	f.dnsProtectionEnabled = false
 	// Closing the session cascades all filter IDs we tracked — there's no
-	// per-ID delete to do, but we drop the map so a re-Enable starts
-	// from a clean slate.
+	// per-ID delete to do, but we drop every map so a re-Enable starts
+	// from a clean slate. Callers that need to PRESERVE state across a
+	// session close (e.g. DisableKillSwitch snapshotting endpoint
+	// protection so it can be reinstalled in a fresh session) must do
+	// that snapshot themselves before calling closeSession.
 	f.tunnelFilterIDs = nil
+	f.endpointProtectionFilterIDs = nil
+	f.endpointProtectionState = nil
 }
+
+// procConvertAliasToLuidFW is the package-level iphlpapi handle used by
+// resolveInterfaceLUID. Lazy-bound at first call; subsequent calls reuse
+// the resolved address. Previously we re-resolved on every Enable*
+// (every connect path) — measurable but small win to lift here.
+var procConvertAliasToLuidFW = windows.NewLazySystemDLL("iphlpapi.dll").NewProc("ConvertInterfaceAliasToLuid")
 
 // resolveInterfaceLUID looks up the LUID of the tunnel interface by its
 // friendly name (as wintun creates it). The LUID is what WFP filters key
 // on — interface index would also work but LUIDs are stable across
 // re-creation, which matters for crash recovery.
+//
+// We do NOT pre-check existence via net.Interfaces() before calling
+// ConvertInterfaceAliasToLuid: the iphlpapi call is itself the canonical
+// "does this alias exist" oracle (returns ERROR_NOT_FOUND), and the
+// pre-check syscall + slice allocation was pure overhead on every
+// EnableEndpointProtection.
 func resolveInterfaceLUID(ifaceName string) (uint64, error) {
-	ifaces, err := net.Interfaces()
-	if err != nil {
-		return 0, err
+	if ifaceName == "" {
+		return 0, fmt.Errorf("resolveInterfaceLUID: empty alias")
 	}
-	target := ""
-	for _, ifi := range ifaces {
-		if ifi.Name == ifaceName {
-			target = ifaceName
-			break
-		}
-	}
-	if target == "" {
-		return 0, fmt.Errorf("interface %q not found", ifaceName)
-	}
-	// Resolve LUID via iphlpapi ConvertInterfaceAliasToLuid.
-	procConvertAliasToLuid := windows.NewLazySystemDLL("iphlpapi.dll").NewProc("ConvertInterfaceAliasToLuid")
-	utf16, err := windows.UTF16PtrFromString(target)
+	u16, err := windows.UTF16PtrFromString(ifaceName)
 	if err != nil {
 		return 0, err
 	}
 	var luid uint64
-	ret, _, _ := procConvertAliasToLuid.Call(
-		uintptr(unsafe.Pointer(utf16)),
+	ret, _, _ := procConvertAliasToLuidFW.Call(
+		uintptr(unsafe.Pointer(u16)),
 		uintptr(unsafe.Pointer(&luid)),
 	)
 	if ret != 0 {
-		return 0, fmt.Errorf("ConvertInterfaceAliasToLuid: 0x%x", ret)
+		return 0, fmt.Errorf("ConvertInterfaceAliasToLuid(%q): 0x%x", ifaceName, ret)
 	}
 	return luid, nil
 }
@@ -741,12 +763,58 @@ func (f *WindowsFirewall) permitEndpoint(ip net.IP) error {
 func (f *WindowsFirewall) DisableKillSwitch() error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+
+	// Snapshot endpoint protection state BEFORE the session close —
+	// otherwise the cascade-delete strips the loop-protection BLOCK
+	// filters along with the kill switch's permits, leaving an active
+	// full-tunnel connect exposed to the very loop class the protection
+	// is meant to prevent.
+	//
+	// We deliberately rebuild rather than carrying filters across
+	// sessions because WFP filter IDs are session-scoped: a fresh
+	// session gets fresh IDs, so we'd need full re-registration anyway.
+	//
+	// There IS a microsecond-scale window between closeSession (filters
+	// gone) and enableEndpointProtectionLocked (filters back) where
+	// loop protection is absent. In practice a kill-switch toggle is a
+	// deliberate UI action and the user is unlikely to be in the middle
+	// of a routing loop at that exact moment. We accept the window
+	// rather than refactor every feature set to precise ID tracking
+	// (tracked as a follow-up; see DisableDNSProtection's TODO for the
+	// same shape of debt).
+	epSnapshot := make(map[string][]string, len(f.endpointProtectionState))
+	for iface, eps := range f.endpointProtectionState {
+		cp := make([]string, len(eps))
+		copy(cp, eps)
+		epSnapshot[iface] = cp
+	}
+
 	// Closing the dynamic session removes every filter in one shot. If
 	// DNS protection is also active it will be torn down together —
 	// that's acceptable because the DNS rules only matter when a tunnel
 	// is up, and DisableKillSwitch implies the user is taking the
 	// tunnel down.
 	f.closeSession()
+
+	// Re-install endpoint protection in a fresh session for every tunnel
+	// that had it active at session-close time. Now FATAL: a silent
+	// "loop protection went away" outcome left an active full-tunnel
+	// exposed to the bug class this whole module exists to prevent.
+	// Returning the (joined) error lets the helper surface a critical
+	// event to the GUI; the user can choose to disconnect.
+	var rebuildErrs []error
+	for iface, eps := range epSnapshot {
+		if err := f.enableEndpointProtectionLocked(iface, eps); err != nil {
+			slog.Error("DisableKillSwitch: failed to reinstall endpoint protection",
+				"interface", iface, "error", err)
+			rebuildErrs = append(rebuildErrs,
+				fmt.Errorf("reinstall endpoint protection for %s: %w", iface, err))
+		}
+	}
+	if len(rebuildErrs) > 0 {
+		return fmt.Errorf("kill switch disabled but loop protection rebuild failed for %d tunnel(s); first error: %w",
+			len(rebuildErrs), rebuildErrs[0])
+	}
 	return nil
 }
 

@@ -29,6 +29,24 @@ type tunnelEntry struct {
 	cfg         *domain.WireGuardConfig
 	connectedAt time.Time
 	netMgr      network.NetworkManager // per-tunnel network state (routes, DNS, monitor)
+
+	// watchdogCancel stops the runaway-TX watchdog goroutine started
+	// after a successful full-tunnel connect. nil for split-tunnel and
+	// non-Windows where the watchdog is a no-op.
+	watchdogCancel context.CancelFunc
+
+	// socketBindCancel stops the IP_UNICAST_IF re-pin monitor goroutine.
+	// Lives next to watchdogCancel because both have the same lifetime
+	// (start at end-of-connect, stop at disconnect-begin). nil on
+	// non-Windows where the monitor is a no-op.
+	socketBindCancel context.CancelFunc
+
+	// socketBindInitialV4/V6 are the ifIndex values pin succeeded against
+	// at connect time. The monitor uses them as its "previous" baseline
+	// so the first poll only triggers a re-pin if the route table has
+	// actually moved since connect.
+	socketBindInitialV4 uint32
+	socketBindInitialV6 uint32
 }
 
 // Manager orchestrates the tunnel lifecycle using a small state machine
@@ -67,6 +85,29 @@ type Manager struct {
 	// which for a non-first tunnel would have been the previous tunnel's
 	// already-applied DNS. Guarded by m.mu.
 	globalPreModDNS map[string][]string
+
+	// endpointProtector is the optional always-on loop protection hook
+	// (Windows full-tunnel only). Set by the helper after construction
+	// via SetEndpointProtector. nil → connectPhases skips the
+	// enable/disable calls, mirroring the historical behaviour on
+	// platforms that don't have this protection layer.
+	endpointProtector EndpointProtector
+}
+
+// EndpointProtector is the minimal slice of the firewall manager that
+// connect/disconnect needs for installing always-on endpoint loop
+// protection. Defined here so the tunnel (domain) package doesn't have
+// to import the firewall (infra) package — same pattern as
+// FirewallCleaner. The helper passes its live firewall instance, which
+// satisfies this interface trivially on every platform.
+//
+// Implementations are expected to be safe across the disconnect ordering
+// already used by disconnectPhases (DisableEndpointProtection runs
+// AFTER RemoveRoutes but BEFORE engine.Close, matching the
+// kill-switch's RemoveKillSwitchTunnel semantics).
+type EndpointProtector interface {
+	EnableEndpointProtection(tunnelInterfaceName string, endpoints []string) error
+	DisableEndpointProtection(tunnelInterfaceName string) error
 }
 
 // Additional transient states used internally. Exposed on the wire as the
@@ -88,6 +129,14 @@ func NewManager(dataDir string) *Manager {
 	}
 }
 
+// SetEndpointProtector wires the optional always-on loop protection
+// callback. Safe to call once at construction time; not safe to call
+// concurrently with Connect. Pass nil to disable (the connect path
+// then skips the hook entirely).
+func (m *Manager) SetEndpointProtector(p EndpointProtector) {
+	m.endpointProtector = p
+}
+
 // getOrCreateEntry returns the entry for a tunnel, creating a disconnected
 // one if it doesn't exist. Caller MUST hold m.mu.
 func (m *Manager) getOrCreateEntry(name string) *tunnelEntry {
@@ -100,7 +149,13 @@ func (m *Manager) getOrCreateEntry(name string) *tunnelEntry {
 }
 
 // removeEntry deletes a tunnel entry from the map. Caller MUST hold m.mu.
+// Also cancels any per-entry background goroutine (the runaway-TX
+// watchdog) so we never leak a poll loop pointing at a stale entry.
 func (m *Manager) removeEntry(name string) {
+	if e := m.tunnels[name]; e != nil && e.watchdogCancel != nil {
+		e.watchdogCancel()
+		e.watchdogCancel = nil
+	}
 	delete(m.tunnels, name)
 }
 
@@ -214,6 +269,45 @@ func (m *Manager) ConnectWithContext(ctx context.Context, cfg *domain.WireGuardC
 	entry.engine = engine
 	entry.connectedAt = time.Now()
 	entry.state = domain.StateConnected
+
+	// Start the runaway-TX watchdog for full-tunnel connects. The
+	// watchdog is a no-op on non-Windows and on split-tunnel because
+	// the loop class is full-tunnel-Windows-only. We launch it under
+	// a child context so DisconnectTunnel's cancel reliably stops it
+	// without depending on the Manager's lifetime.
+	if cfg.IsFullTunnel() {
+		watchdogCtx, cancel := context.WithCancel(context.Background())
+		entry.watchdogCancel = cancel
+		ifaceName := engine.InterfaceName()
+		tunnelName := name
+		startLoopWatchdog(watchdogCtx, ifaceName, func(bps uint64) {
+			slog.Error("loop watchdog tripped — initiating forced disconnect",
+				"tunnel", tunnelName, "interface", ifaceName, "bytes_per_sec", bps)
+			// Run the disconnect on a fresh goroutine so we don't
+			// block the watchdog goroutine, and so we don't hold any
+			// implicit lock the caller might have.
+			go func() {
+				if err := m.DisconnectTunnel(tunnelName); err != nil {
+					slog.Error("loop watchdog: forced disconnect failed",
+						"tunnel", tunnelName, "error", err)
+				}
+			}()
+		})
+
+		// Start the IP_UNICAST_IF re-pin monitor (Windows-only, no-op
+		// elsewhere). Hooks off the same context-lifetime pattern as the
+		// watchdog so DisconnectTunnel cleanly stops both without
+		// depending on Manager lifetime. The initial v4/v6 ifIndex
+		// values came from the connectPhases pin call; the monitor
+		// compares against them and only re-pins when the underlay
+		// actually moves (Wi-Fi → Ethernet handoff, DHCP gateway change,
+		// VPN-over-VPN etc.).
+		sbCtx, sbCancel := context.WithCancel(context.Background())
+		entry.socketBindCancel = sbCancel
+		entry.socketBindInitialV4 = engine.SocketPinV4
+		entry.socketBindInitialV6 = engine.SocketPinV6
+		startSocketBindMonitor(sbCtx, engine.bind, ifaceName, engine.SocketPinV4, engine.SocketPinV6)
+	}
 	return nil
 }
 
@@ -238,19 +332,35 @@ func (m *Manager) Disconnect() error {
 
 // DisconnectTunnel tears down a specific tunnel by name. Like Connect, runs
 // the slow teardown work outside the lock.
+//
+// Concurrent-disconnect contract: if the tunnel goes from
+// stateDisconnecting → gone while we're waiting (because the watchdog
+// or another caller ran disconnectPhases first), we return nil rather
+// than ErrNotConnected. The user's intent was "be disconnected", which
+// IS the state at return. We only return ErrNotConnected when the
+// tunnel was never observed connected during this call.
 func (m *Manager) DisconnectTunnel(name string) error {
 	// --- Phase 1: wait for any in-flight transition on THIS tunnel to settle ---
 	deadline := time.Now().Add(10 * time.Second)
+	observedTransitioning := false
 	for {
 		m.mu.Lock()
 		entry, ok := m.tunnels[name]
 		if !ok {
 			m.mu.Unlock()
+			// If we previously observed this tunnel mid-transition,
+			// its disappearance means a concurrent disconnect (likely
+			// the watchdog) reached completion. The user got what
+			// they asked for; return success, not ErrNotConnected.
+			if observedTransitioning {
+				return nil
+			}
 			return newTunnelError(ErrNotConnected, fmt.Sprintf("tunnel %q is not connected", name), nil)
 		}
 		if entry.state != domain.StateConnecting && entry.state != stateDisconnecting {
 			break // lock still held, state is stable
 		}
+		observedTransitioning = true
 		m.mu.Unlock()
 		if time.Now().After(deadline) {
 			return newTunnelError(ErrTimeout, fmt.Sprintf("disconnect timeout for tunnel %q: transition in progress", name), nil)
@@ -267,13 +377,31 @@ func (m *Manager) DisconnectTunnel(name string) error {
 	engine := entry.engine
 	cfg := entry.cfg
 	netMgr := entry.netMgr
+	watchdogCancel := entry.watchdogCancel
+	socketBindCancel := entry.socketBindCancel
 	if engine == nil {
 		m.removeEntry(name)
 		m.mu.Unlock()
 		return newTunnelError(ErrStateCorrupt, fmt.Sprintf("engine is nil for tunnel %q despite connected state", name), nil)
 	}
 	entry.state = stateDisconnecting
+	entry.watchdogCancel = nil
+	entry.socketBindCancel = nil
 	m.mu.Unlock()
+
+	// Cancel the watchdog BEFORE the slow teardown so it can't trip on
+	// the disconnect-phase TX burst (DNS flush, route deletes, etc.).
+	if watchdogCancel != nil {
+		watchdogCancel()
+	}
+	// Cancel the socket-bind monitor too — its next poll would call
+	// BindSocketToInterface on a wgDevice we're about to Close, which
+	// is benign (the bind layer's sockets are still alive until
+	// wgDev.Close) but logging the resulting "interface gone" errors
+	// would be confusing noise in the disconnect path.
+	if socketBindCancel != nil {
+		socketBindCancel()
+	}
 
 	// --- Phase 2: slow teardown outside the lock ---
 	m.disconnectPhases(cfg, engine, netMgr)

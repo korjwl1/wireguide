@@ -214,6 +214,20 @@ var (
 		Data1: 0x4a72393b, Data2: 0x319f, Data3: 0x44bc,
 		Data4: [8]byte{0x84, 0xc3, 0xba, 0x54, 0xdc, 0xb3, 0xb6, 0xb4},
 	}
+	// FWPM_LAYER_OUTBOUND_TRANSPORT_V4 — runs PER PACKET on the outbound
+	// transport path (after the route lookup, before send-to-NIC). Unlike
+	// ALE_AUTH_CONNECT which is a per-flow / cached classification layer,
+	// this layer re-classifies every datagram, so a BLOCK installed here
+	// closes the cached-flow race that ALE alone cannot.
+	guidLayerOutboundTransportV4 = windows.GUID{
+		Data1: 0x09e61aea, Data2: 0xd214, Data3: 0x46e2,
+		Data4: [8]byte{0x9b, 0x21, 0xb2, 0x6b, 0x0b, 0x2f, 0x28, 0xc8},
+	}
+	// FWPM_LAYER_OUTBOUND_TRANSPORT_V6 — per-packet IPv6 counterpart.
+	guidLayerOutboundTransportV6 = windows.GUID{
+		Data1: 0xe1735bde, Data2: 0x013f, Data3: 0x4655,
+		Data4: [8]byte{0xb3, 0x51, 0xa4, 0x9e, 0x15, 0x76, 0x2d, 0xf0},
+	}
 )
 
 // allConnectLayers is the ordered pair of layers we install filters on
