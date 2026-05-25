@@ -39,17 +39,6 @@
 
 Tested on **macOS 15+ (Apple Silicon)** and **Windows 11 (amd64)**.
 
-> **Cross-platform parity note (May 2026).** The Windows full-tunnel loop-protection
-> overhaul in this release (WFP block at `ALE_AUTH_CONNECT` + `OUTBOUND_TRANSPORT`,
-> iphlpapi `/32` bypass with `InitializeIpForwardEntry`, runaway-TX watchdog,
-> `IP_UNICAST_IF` socket binding with re-pin monitor) has been live-tested on
-> Windows 11 — see the loop-protection branch's commit messages for the verification
-> matrix. The same class of bug was identified and fixed on macOS in the same
-> release (bypass-first ordering, fail-fast on missing gateway, 5 s underlay-detection
-> retry), but the macOS path has only been verified via cross-compilation and unit
-> tests so far — a full live test on macOS hardware is recommended before the
-> macOS portion ships to a wider audience.
-
 ### macOS (Homebrew) — recommended
 
 ```bash
@@ -95,7 +84,7 @@ task build
 | **Config Editor** | CodeMirror 6 with WireGuard syntax highlighting and autocompletion |
 | **System Tray** | Connection status badge, 1-click connect/disconnect |
 | **Kill Switch** | Blocks all non-VPN traffic — macOS `pf`, Linux `nftables`, Windows WFP (optional) |
-| **Loop Protection** | Always-on WFP filter blocks encrypted peer traffic from re-entering the tunnel adapter — defends against the routing-loop / "upload spike" class of bug on Windows full-tunnel even when the bypass /32 host route is missing |
+| **Loop Protection** | Defense-in-depth against the routing-loop / "upload spike" class of bug on full-tunnel. Windows: WFP block at `ALE_AUTH_CONNECT` + `OUTBOUND_TRANSPORT`, `IP_UNICAST_IF` socket binding with re-pin monitor, runaway-TX watchdog. macOS: `/32` bypass installed before `/1` split routes with fail-fast preflight, blackhole fallback on gateway loss during `reapply`, runaway-TX watchdog. |
 | **DNS Protection** | Forces DNS queries through the VPN tunnel only (optional) |
 | **Health Check** | Handshake age monitoring with auto-reconnect (optional) |
 | **Sleep/Wake Recovery** | macOS `NSWorkspace`, Linux `systemd-logind`, Windows power notifications |
@@ -190,19 +179,4 @@ is documented in [SIGNING-POLICY.md](SIGNING-POLICY.md).
 
 Until the SignPath application is approved, releases ship unsigned and
 SmartScreen will show a yellow "publisher unknown" warning on first
-run. The CI workflow detects the absence of the SignPath secret and
-publishes the unsigned `.exe` with a workflow warning rather than
-failing the release.
-
-If SignPath Foundation declines the application (the OSS programme has
-no documented project-age / star-count threshold but approvals tend
-toward more-established projects), the fallback is Microsoft's Azure
-**Artifact Signing** service (renamed from "Trusted Signing" in
-January 2026). At time of writing, the individual-developer eligibility
-for Public Trust certificates is limited to applicants in the United
-States and Canada; users outside those jurisdictions can use Azure
-Artifact Signing only under an organisation identity (registered legal
-business entity required). For a solo maintainer in Korea, this means
-forming a legal entity before the fallback path is open — the cost is
-not a flat ~$10/month subscription, the prerequisite is the entity
-registration itself.
+run.

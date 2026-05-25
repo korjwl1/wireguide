@@ -39,15 +39,6 @@
 
 **macOS 15+ (Apple Silicon)** 및 **Windows 11 (amd64)** 에서 테스트 완료.
 
-> **크로스플랫폼 동등성 노트 (2026년 5월).** 이번 릴리스의 Windows 풀터널 루프
-> 보호 개편 (WFP `ALE_AUTH_CONNECT` + `OUTBOUND_TRANSPORT` 블록, iphlpapi `/32`
-> bypass + `InitializeIpForwardEntry`, 런어웨이 TX 워치독, `IP_UNICAST_IF`
-> 소켓 바인딩 + 재핀 모니터)은 Windows 11 라이브 테스트 완료 — 검증 매트릭스는
-> 루프 보호 브랜치 커밋 메시지 참조. 동일 클래스 버그를 macOS에서도 같은
-> 릴리스에서 fix (bypass-우선 순서, 게이트웨이 누락 시 fail-fast, 5초 언더레이
-> 재시도) 했으나 cross-compile + 유닛 테스트만 수행됨 — macOS 하드웨어
-> 라이브 테스트는 macOS 사용자 대상 정식 배포 전 권장.
-
 ### macOS (Homebrew) — 권장
 
 ```bash
@@ -93,7 +84,7 @@ task build
 | **설정 에디터** | CodeMirror 6 기반 WireGuard 문법 강조 및 자동완성 |
 | **시스템 트레이** | 연결 상태 뱃지, 1클릭 연결/해제 |
 | **킬 스위치** | VPN 외 모든 트래픽 차단 — macOS `pf`, Linux `nftables`, Windows WFP (선택) |
-| **루프 보호** | 항상 켜진 WFP 필터가 암호화된 피어 트래픽이 터널 어댑터로 다시 들어가는 것을 차단 — bypass /32 호스트 라우트가 누락돼도 Windows 풀터널 라우팅 루프(업로드 폭증 버그)를 막아냄 |
+| **루프 보호** | 풀터널 라우팅 루프(업로드 폭증 버그)에 대한 다층 방어. Windows: WFP `ALE_AUTH_CONNECT` + `OUTBOUND_TRANSPORT` 블록, `IP_UNICAST_IF` 소켓 바인딩 + 재핀 모니터, 런어웨이 TX 워치독. macOS: `/32` bypass를 `/1` split 라우트보다 먼저 설치 + 게이트웨이 누락 시 fail-fast, `reapply` 중 게이트웨이 손실 시 블랙홀 폴백, 런어웨이 TX 워치독. |
 | **DNS 보호** | DNS 쿼리를 VPN 터널로만 강제 (선택) |
 | **헬스 체크** | 핸드셰이크 상태 모니터링 및 자동 재연결 (선택) |
 | **슬립/웨이크 복구** | macOS `NSWorkspace`, Linux `systemd-logind`, Windows 전원 알림 |
@@ -189,15 +180,3 @@ SignPath Foundation 오픈소스 프로그램 승인이 완료되면 Windows
 
 SignPath 승인 전까지는 unsigned 빌드가 릴리스되며 첫 실행 시
 SmartScreen이 노란색 "확인되지 않은 게시자" 경고를 표시합니다.
-CI 워크플로우는 SignPath 시크릿이 없으면 unsigned `.exe`를 그대로
-릴리스에 첨부하고 워크플로우 경고만 출력합니다(릴리스 실패가 아닙니다).
-
-SignPath 승인이 거절될 경우 — OSS 프로그램에 명시적인 별 수 / 프로젝트
-연차 기준은 없지만 통계적으로 더 성숙한 프로젝트가 통과하는 경향 —
-대안은 Microsoft Azure **Artifact Signing** (2026년 1월 "Trusted
-Signing"에서 이름 변경)입니다. 단, 개인 개발자 신원 검증을 거친
-Public Trust 인증서 발급은 현재 미국·캐나다 거주자에게만 열려
-있어, 그 외 국가 (한국 포함) 메인테이너는 법인 등록 후 조직
-신원으로만 사용할 수 있습니다. 즉, 한국 단일 메인테이너 입장에서
-이 폴백 경로는 "월 ~$10 구독"이 아니라 "법인 설립 + 월 ~$10
-구독"이 됩니다.
