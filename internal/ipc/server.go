@@ -274,7 +274,15 @@ func (s *Server) handleConn(conn net.Conn) {
 		}
 	}()
 
-	const readDeadline = 60 * time.Second
+	// readDeadline bounds how long the helper waits for the next RPC on a
+	// control connection. The GUI's helper_lifecycle.go health monitor
+	// sends a Helper.Ping every 5 s, so a 10 s deadline tolerates one
+	// missed cycle (brief GUI stall, GC pause) while still detecting a
+	// dead GUI within ~10 s — short enough that the shutdown grace timer
+	// runs and the helper exits within ~20 s of the GUI dying. The
+	// previous 60 s deadline was overkill given the ping cadence and
+	// made "GUI close → helper still running" linger for over a minute.
+	const readDeadline = 10 * time.Second
 	for {
 		if tc, ok := conn.(interface{ SetReadDeadline(time.Time) error }); ok {
 			_ = tc.SetReadDeadline(time.Now().Add(readDeadline))

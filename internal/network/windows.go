@@ -510,6 +510,23 @@ func (m *WindowsManager) PreCloseAdapterCleanup(ifaceName string) {
 // SetInterfaceDnsSettings (iphlpapi) rather than netsh — that API
 // completes in milliseconds.
 func (m *WindowsManager) RestoreDNS(ifaceName string) error {
+	// Skip the netsh call when the adapter is no longer attached to the
+	// IP stack — by the time Cleanup() reaches RestoreDNS, disconnectPhases
+	// has already run PreCloseAdapterCleanup (which did this same dhcp
+	// reset while the adapter was alive) AND engine.Close (which destroyed
+	// the wintun adapter). The kernel's LUID cache lingers for a second
+	// or two after the adapter detaches, so convertInterfaceAliasToLuid
+	// still returns success here — but netsh's own resolution fails with
+	// ERROR_INVALID_NAME because the adapter is no longer in the IP
+	// stack's adapter table. We check via net.InterfaceByName which
+	// goes through GetAdaptersAddresses (the same table netsh uses);
+	// if the adapter isn't there, the netsh call would just produce a
+	// confusing locale-encoded error.
+	if _, err := net.InterfaceByName(ifaceName); err != nil {
+		m.origDNSIface = ""
+		m.origDNS = nil
+		return nil
+	}
 	tryRunWin("reset VPN iface DNS to DHCP", "netsh", "interface", "ip", "set", "dns", ifaceName, "dhcp")
 	m.origDNSIface = ""
 	m.origDNS = nil

@@ -177,10 +177,29 @@ func NewEngine(cfg *config.WireGuardConfig) (*Engine, error) {
 	// sendto and subsequent packets bypass our newly-installed BLOCK.
 	// Callers MUST call engine.Start() after the firewall hooks ran.
 
-	// Start UAPI listener for status queries
+	// Start UAPI listener for status queries.
+	//
+	// On Windows this listener almost always fails to bind: wireguard-go's
+	// pipe target is \\.\pipe\ProtectedPrefix\Administrators\WireGuard\<name>,
+	// which requires the BUILTIN\Administrators group SID as the pipe's
+	// owner. Our helper runs as an elevated user (UAC-spawned), NOT as
+	// LocalSystem or as the Administrators group itself, so the kernel
+	// rejects the bind with "This security ID may not be assigned as the
+	// owner of this object." Status queries route through the in-process
+	// Engine.IpcGet path instead — the pipe is only used by external
+	// tools like the `wg` CLI, which we don't ship.
+	//
+	// Logging the failure at WARN every connect produces alarming noise
+	// for a state that's expected and not user-actionable. Downgrade to
+	// DEBUG on Windows; keep WARN on other platforms where this listener
+	// failing IS unexpected.
 	uapi, err := createUAPIListener(ifaceName)
 	if err != nil {
-		slog.Warn("UAPI listener failed, status queries may not work", "error", err)
+		if runtime.GOOS == "windows" {
+			slog.Debug("UAPI listener unavailable on Windows elevated helper (status served by in-process IpcGet)", "error", err)
+		} else {
+			slog.Warn("UAPI listener failed, status queries may not work", "error", err)
+		}
 	} else {
 		engine.uapiListener = uapi
 		go func() {
