@@ -4,7 +4,7 @@ package tunnel
 
 // Socket-level loop protection — IP_UNICAST_IF binding for the WireGuard
 // UDP sockets, mirroring what the official wireguard-windows client does
-// in tunnel/defaultroutemonitor.go.
+// in tunnel/defaultroutemonitor.go (v0.1.1).
 //
 // Why this exists ALONGSIDE the WFP block + iphlpapi bypass routes the
 // rest of this branch added:
@@ -34,59 +34,48 @@ package tunnel
 // because Donenfeld owns the BFE filter weight space; we're an uncertified
 // app, so belt-and-suspenders is the right call.
 //
-// What this file does NOT yet do: NotifyRouteChange2-based push
-// notification. We poll the route table every 5s instead. The latency
-// difference (push: ~10 ms; poll: up to 5 s) matters in theory but in
-// practice WG's own UDP send retry handles the 5 s gap on a network
-// transition — handshakes are exponential-backoff, payload is rate-
-// limited by congestion control. If we ever see field reports of "WG
-// stuck for 5 s after Wi-Fi → Ethernet handoff", upgrade to
-// NotifyRouteChange2 via syscall.NewCallback. Not before.
+// Change detection — NotifyRouteChange2 + NotifyIpInterfaceChange push
+// notifications, ported from wireguard-windows v0.1.1
+// tunnel/defaultroutemonitor.go + tunnel/winipcfg/route_change_handler.go.
+// Latency: ~150 ms from kernel route change to re-pin, vs the ~5 s a
+// polling design would deliver. Worth porting because the difference is
+// the user-visible "tunnel stuck for 5 s after Wi-Fi → Ethernet handoff"
+// gap.
 
 import (
 	"context"
+	"errors"
 	"log/slog"
+	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
+	"unsafe"
 
+	"golang.org/x/sys/windows"
 	"golang.zx2c4.com/wireguard/conn"
 
 	"github.com/korjwl1/wireguide/internal/network"
 )
 
-// socketBindPollInterval is the cadence at which we re-check the
-// upstream default route and (re)pin the WG socket if it has moved.
-// 5 s is fast enough that a Wi-Fi → Ethernet handoff settles into the
-// new physical interface well before the WG handshake retry budget
-// runs out, and slow enough that the per-poll cost (one
-// GetIpForwardTable2 syscall) is invisible against system idle.
-const socketBindPollInterval = 5 * time.Second
+// debounce timing — ported verbatim from wireguard-windows
+// tunnel/defaultroutemonitor.go. 150 ms coalesces the typical burst of
+// route/interface events Windows fires during a network handoff; the
+// 2 s burst-escape forces a re-evaluation even if the events never
+// stop arriving (e.g., a third-party VPN spamming routes).
+const (
+	socketBindDebounce     = 150 * time.Millisecond
+	socketBindBurstEscape  = 2 * time.Second
+)
 
-// pinSocketToPhysical finds the current best non-tunnel default route
-// and binds the WG UDP socket(s) to that interface index. Called once
-// at connect-time AFTER engine.Start has opened the sockets (otherwise
-// BindSocketToInterface4/6 has nothing to bind to).
-//
-// Returns the (ifIndexV4, ifIndexV6) pair that was bound, or 0/0 if
-// the bind type doesn't support interface binding (a no-op platform).
-// The returned pair is what the route monitor compares against to
-// decide whether re-pinning is needed.
-//
-// blackhole=true means "no usable default route found"; in that case
-// we still call BindSocketToInterface with index 0 and blackhole=true,
-// which directs the bind to drop sends rather than fall back to the
-// route table (and risk picking up wintun as the longest-prefix match).
-// The drop is recoverable — the next poll will repin once a real
-// default reappears.
+// pinSocketToPhysical does one pass of (find best non-tunnel default,
+// call BindSocketToInterface). Used at connect time before the monitor
+// is started, and as the implementation of every monitor re-evaluation.
+// Returns the (v4, v6) ifIndex pair actually bound (0 = blackhole/no
+// underlay for that family).
 func pinSocketToPhysical(bind conn.Bind, tunnelInterfaceName string) (uint32, uint32) {
 	binder, ok := bind.(conn.BindSocketToInterface)
 	if !ok {
-		// StdNetBind on non-Windows platforms doesn't implement this
-		// interface; nothing to pin. The wireguard-go conn package only
-		// exposes BindSocketToInterface on Windows (and the WinRingBind
-		// + StdNetBind on Windows both implement it). We're built with
-		// //go:build windows, so this path means the bind is some
-		// stub/mock (tests).
 		return 0, 0
 	}
 	v4 := pinFamily(binder, tunnelInterfaceName, false)
@@ -99,28 +88,26 @@ func pinSocketToPhysical(bind conn.Bind, tunnelInterfaceName string) (uint32, ui
 // no usable underlay was found and blackhole was applied).
 func pinFamily(binder conn.BindSocketToInterface, tunnelInterfaceName string, ipv6 bool) uint32 {
 	excludedAliases := []string{tunnelInterfaceName}
-	var (
-		ifIndex uint32
-		ok      bool
-	)
+	var ifIndex uint32
 	if ipv6 {
 		_, ifIndex, _ = network.DefaultRouteV6LuidAndIndex(excludedAliases)
-		ok = ifIndex != 0
 	} else {
 		_, ifIndex, _ = network.DefaultRouteV4LuidAndIndex(excludedAliases)
-		ok = ifIndex != 0
 	}
-	blackhole := !ok
+	blackhole := ifIndex == 0
+	var err error
 	if ipv6 {
-		if err := binder.BindSocketToInterface6(ifIndex, blackhole); err != nil {
-			slog.Warn("socket pin v6 failed", "ifIndex", ifIndex, "blackhole", blackhole, "error", err)
-			return 0
-		}
+		err = binder.BindSocketToInterface6(ifIndex, blackhole)
 	} else {
-		if err := binder.BindSocketToInterface4(ifIndex, blackhole); err != nil {
-			slog.Warn("socket pin v4 failed", "ifIndex", ifIndex, "blackhole", blackhole, "error", err)
-			return 0
-		}
+		err = binder.BindSocketToInterface4(ifIndex, blackhole)
+	}
+	if err != nil {
+		slog.Warn("socket pin failed",
+			"family", familyName(ipv6),
+			"ifIndex", ifIndex,
+			"blackhole", blackhole,
+			"error", err)
+		return 0
 	}
 	slog.Info("WG socket pinned to underlay",
 		"family", familyName(ipv6),
@@ -137,15 +124,21 @@ func familyName(ipv6 bool) string {
 	return "v4"
 }
 
-// startSocketBindMonitor spawns a goroutine that periodically re-evaluates
-// the best non-tunnel default route and re-pins the WG socket(s) when it
-// changes. Stops when ctx is cancelled. Safe to call with a nil bind
-// (no-op) or a bind that doesn't implement BindSocketToInterface
-// (no-op).
+// startSocketBindMonitor wires NotifyRouteChange2 + NotifyIpInterfaceChange
+// kernel callbacks. Any route or interface-parameter change pumps the
+// debounce timer; the timer fires re-evaluation in pinSocketToPhysical's
+// idempotent path (which is a no-op when the best underlay hasn't moved).
 //
-// Returns the started state via atomic.Pointer-style: a nil return means
-// nothing was started (caller has nothing to clean up); a non-nil return
-// is the active monitor's cancel-tracking pointer used internally.
+// initialV4/V6 are kept on the closure's atomic.Uint32 so the next pass's
+// pinFamily logs only when the index actually changes (via slog.Info
+// "WG socket pinned to underlay" — repeat for the same ifIndex is fine,
+// the kernel setsockopt is idempotent, but the log line is noisy if every
+// burst event re-fires it).
+//
+// Cleanup: ctx cancellation unregisters both callbacks and stops the
+// debounce timer. The callbacks themselves are guarded by sync.WaitGroup
+// so concurrent goroutines spawned by the kernel callback drain before
+// the manager calls engine.Close.
 func startSocketBindMonitor(ctx context.Context, bind conn.Bind, tunnelInterfaceName string, initialV4, initialV6 uint32) {
 	if bind == nil {
 		return
@@ -154,45 +147,104 @@ func startSocketBindMonitor(ctx context.Context, bind conn.Bind, tunnelInterface
 	if !ok {
 		return
 	}
-	// atomic so the goroutine's "previous" values are visible to the
-	// caller path (not needed today; futureproofing for status RPC).
-	var lastV4 atomic.Uint32
-	var lastV6 atomic.Uint32
-	lastV4.Store(initialV4)
-	lastV6.Store(initialV6)
 
+	mon := &socketBindMonitor{
+		binder:              binder,
+		tunnelInterfaceName: tunnelInterfaceName,
+	}
+	mon.lastV4.Store(initialV4)
+	mon.lastV6.Store(initialV6)
+
+	// Burst-debounce timer. Reset on every bump; fires reevaluate() once
+	// the burst quiets down for socketBindDebounce. Initial reset to a
+	// very long duration so it doesn't fire before the first bump.
+	mon.burstTimer = time.AfterFunc(time.Hour*200, mon.reevaluate)
+	mon.burstTimer.Stop()
+
+	// Register kernel callbacks. We unify both notifications onto one
+	// bump() path because the action we'd take (re-evaluate underlay
+	// and re-pin) is the same either way.
+	if err := mon.registerCallbacks(); err != nil {
+		slog.Warn("WG socket bind monitor: callback registration failed; reverting to no monitor",
+			"error", err)
+		return
+	}
+
+	// Tie lifecycle to ctx. When ctx is cancelled (DisconnectTunnel),
+	// unregister and stop the timer.
 	go func() {
-		t := time.NewTicker(socketBindPollInterval)
-		defer t.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				slog.Info("WG socket bind monitor stopped", "tunnel", tunnelInterfaceName)
-				return
-			case <-t.C:
-			}
-			newV4 := evaluateAndMaybeRepin(binder, tunnelInterfaceName, false, lastV4.Load())
-			if newV4 != 0 || newV4 != lastV4.Load() {
-				lastV4.Store(newV4)
-			}
-			newV6 := evaluateAndMaybeRepin(binder, tunnelInterfaceName, true, lastV6.Load())
-			if newV6 != 0 || newV6 != lastV6.Load() {
-				lastV6.Store(newV6)
-			}
-		}
+		<-ctx.Done()
+		mon.stop()
+		slog.Info("WG socket bind monitor stopped", "tunnel", tunnelInterfaceName)
 	}()
 }
 
-// evaluateAndMaybeRepin checks the current best non-tunnel default for
-// one address family. If it differs from `previous`, re-pins the socket
-// and returns the new ifIndex. Otherwise returns `previous` unchanged.
-//
-// The "no default route found" case is special: we re-pin to
-// (0, blackhole=true) so a transient underlay loss DOESN'T silently
-// fall back through the route table (where wintun could now be the
-// longest match for the peer endpoint, depending on bypass-route
-// state at that exact moment).
-func evaluateAndMaybeRepin(binder conn.BindSocketToInterface, tunnelInterfaceName string, ipv6 bool, previous uint32) uint32 {
+// socketBindMonitor holds the runtime state for one tunnel's bind monitor.
+// Lifecycle: created in startSocketBindMonitor, torn down via stop()
+// when ctx is cancelled.
+type socketBindMonitor struct {
+	binder              conn.BindSocketToInterface
+	tunnelInterfaceName string
+
+	lastV4 atomic.Uint32
+	lastV6 atomic.Uint32
+
+	burstMu     sync.Mutex
+	burstTimer  *time.Timer
+	firstBurst  time.Time // first event of the current burst; zero between bursts
+
+	cbMu       sync.Mutex
+	routeHnd   windows.Handle
+	ifaceHnd   windows.Handle
+	pending    sync.WaitGroup // tracks in-flight callback goroutines
+	stopped    atomic.Bool
+}
+
+// bump is called from kernel notification callbacks. Resets the
+// debounce timer; if the current burst has lasted > burstEscape,
+// force-fires reevaluate immediately so a continuously-noisy network
+// doesn't permanently postpone the re-pin.
+func (mon *socketBindMonitor) bump() {
+	mon.burstMu.Lock()
+	defer mon.burstMu.Unlock()
+	mon.burstTimer.Reset(socketBindDebounce)
+	if mon.firstBurst.IsZero() {
+		mon.firstBurst = time.Now()
+		return
+	}
+	if time.Since(mon.firstBurst) > socketBindBurstEscape {
+		mon.firstBurst = time.Time{}
+		mon.burstTimer.Stop()
+		// Reevaluate inline so we don't lose a re-pin opportunity while
+		// the burst continues forever.
+		go mon.reevaluate()
+	}
+}
+
+// reevaluate fires after the debounce timer has gone quiet, or
+// (force-path) from bump() when a burst has exceeded its escape budget.
+// Re-runs pinFamily for both address families; pinFamily logs only on
+// state change so calling it on every reevaluate is cheap and correct.
+func (mon *socketBindMonitor) reevaluate() {
+	if mon.stopped.Load() {
+		return
+	}
+	mon.burstMu.Lock()
+	mon.firstBurst = time.Time{}
+	mon.burstMu.Unlock()
+
+	newV4 := evaluateOneFamily(mon.binder, mon.tunnelInterfaceName, false, mon.lastV4.Load())
+	mon.lastV4.Store(newV4)
+	newV6 := evaluateOneFamily(mon.binder, mon.tunnelInterfaceName, true, mon.lastV6.Load())
+	mon.lastV6.Store(newV6)
+}
+
+// evaluateOneFamily resolves the best non-tunnel default for one
+// address family and (re-)binds. Logs "WG socket re-pinned" on a real
+// change; silent no-op when the index is unchanged so we don't spam
+// during noisy bursts. Returns the ifIndex now in force (caller updates
+// its lastV4/V6 atomic).
+func evaluateOneFamily(binder conn.BindSocketToInterface, tunnelInterfaceName string, ipv6 bool, previous uint32) uint32 {
 	excludedAliases := []string{tunnelInterfaceName}
 	var ifIndex uint32
 	if ipv6 {
@@ -225,4 +277,145 @@ func evaluateAndMaybeRepin(binder conn.BindSocketToInterface, tunnelInterfaceNam
 		"new_ifIndex", ifIndex,
 		"blackhole", blackhole)
 	return ifIndex
+}
+
+// --- Kernel callback wiring ----------------------------------------
+
+var (
+	procNotifyRouteChange2          = modIphlpapiSocketbind.NewProc("NotifyRouteChange2")
+	procNotifyIpInterfaceChange     = modIphlpapiSocketbind.NewProc("NotifyIpInterfaceChange")
+	procCancelMibChangeNotify2      = modIphlpapiSocketbind.NewProc("CancelMibChangeNotify2")
+	modIphlpapiSocketbind           = windows.NewLazySystemDLL("iphlpapi.dll")
+)
+
+// registerCallbacks subscribes to NotifyRouteChange2 + NotifyIpInterfaceChange.
+// Both share a single bump() target — the action is the same regardless of
+// which event class fired. AF_UNSPEC subscribes to both v4 and v6 in one
+// registration each (cheaper than two registrations per family).
+//
+// The kernel callbacks run on an arbitrary OS thread. We immediately spawn
+// a Go goroutine to do the actual bump (via mon.pending so stop() can
+// wait for in-flight handlers to drain). The callback itself returns
+// quickly so the kernel doesn't see a slow notifier.
+func (mon *socketBindMonitor) registerCallbacks() error {
+	routeCB := windows.NewCallback(func(callerContext uintptr, row uintptr, notificationType uint32) uintptr {
+		// We don't need to read the row — any default-prefix change is
+		// a reason to re-pin, and over-eager re-pins are no-ops via
+		// the unchanged-ifIndex guard in evaluateOneFamily.
+		if mon.stopped.Load() {
+			return 0
+		}
+		mon.pending.Add(1)
+		go func() {
+			defer mon.pending.Done()
+			mon.bump()
+		}()
+		return 0
+	})
+	ifaceCB := windows.NewCallback(func(callerContext uintptr, row uintptr, notificationType uint32) uintptr {
+		// Only parameter changes are interesting (metric flipped, AdminStatus
+		// toggled, etc.). MibParameterNotification == 0; add/delete are
+		// already covered by the route handler when they cause a default-
+		// route table mutation.
+		const mibParameterNotification uint32 = 0
+		if notificationType != mibParameterNotification {
+			return 0
+		}
+		if mon.stopped.Load() {
+			return 0
+		}
+		mon.pending.Add(1)
+		go func() {
+			defer mon.pending.Done()
+			mon.bump()
+		}()
+		return 0
+	})
+
+	mon.cbMu.Lock()
+	defer mon.cbMu.Unlock()
+	var rh windows.Handle
+	if err := notifyRouteChange2(windows.AF_UNSPEC, routeCB, 0, false, &rh); err != nil {
+		return err
+	}
+	mon.routeHnd = rh
+
+	var ih windows.Handle
+	if err := notifyIpInterfaceChange(windows.AF_UNSPEC, ifaceCB, 0, false, &ih); err != nil {
+		// Roll back the route subscription on partial failure so we don't
+		// leak a kernel callback handle on next attempt.
+		_ = cancelMibChangeNotify2(mon.routeHnd)
+		mon.routeHnd = 0
+		return err
+	}
+	mon.ifaceHnd = ih
+	return nil
+}
+
+func (mon *socketBindMonitor) stop() {
+	if !mon.stopped.CompareAndSwap(false, true) {
+		return
+	}
+	mon.cbMu.Lock()
+	rh, ih := mon.routeHnd, mon.ifaceHnd
+	mon.routeHnd, mon.ifaceHnd = 0, 0
+	mon.cbMu.Unlock()
+	if rh != 0 {
+		_ = cancelMibChangeNotify2(rh)
+	}
+	if ih != 0 {
+		_ = cancelMibChangeNotify2(ih)
+	}
+	mon.burstMu.Lock()
+	if mon.burstTimer != nil {
+		mon.burstTimer.Stop()
+	}
+	mon.burstMu.Unlock()
+	mon.pending.Wait()
+}
+
+// notifyRouteChange2 wraps iphlpapi!NotifyRouteChange2. Returns nil on
+// success (status 0); otherwise the Win32 error as an errno-equivalent.
+func notifyRouteChange2(family uint16, callback uintptr, callerContext uintptr, initialNotification bool, notificationHandle *windows.Handle) error {
+	var initial uint32
+	if initialNotification {
+		initial = 1
+	}
+	r0, _, _ := syscall.SyscallN(procNotifyRouteChange2.Addr(),
+		uintptr(family),
+		callback,
+		callerContext,
+		uintptr(initial),
+		uintptr(unsafe.Pointer(notificationHandle)))
+	if r0 != 0 {
+		return errors.New("NotifyRouteChange2 failed: " + windows.Errno(r0).Error())
+	}
+	return nil
+}
+
+// notifyIpInterfaceChange wraps iphlpapi!NotifyIpInterfaceChange.
+func notifyIpInterfaceChange(family uint16, callback uintptr, callerContext uintptr, initialNotification bool, notificationHandle *windows.Handle) error {
+	var initial uint32
+	if initialNotification {
+		initial = 1
+	}
+	r0, _, _ := syscall.SyscallN(procNotifyIpInterfaceChange.Addr(),
+		uintptr(family),
+		callback,
+		callerContext,
+		uintptr(initial),
+		uintptr(unsafe.Pointer(notificationHandle)))
+	if r0 != 0 {
+		return errors.New("NotifyIpInterfaceChange failed: " + windows.Errno(r0).Error())
+	}
+	return nil
+}
+
+// cancelMibChangeNotify2 wraps iphlpapi!CancelMibChangeNotify2.
+func cancelMibChangeNotify2(handle windows.Handle) error {
+	r0, _, _ := syscall.SyscallN(procCancelMibChangeNotify2.Addr(), uintptr(handle))
+	if r0 != 0 {
+		return errors.New("CancelMibChangeNotify2 failed: " + windows.Errno(r0).Error())
+	}
+	return nil
 }
