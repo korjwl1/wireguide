@@ -168,11 +168,27 @@ WireGuide가 유용하셨다면 후원으로 개발을 지원해 주세요.
 
 ## 코드 사이닝
 
-Windows 인스톨러는 SignPath Foundation을 통해 코드 사이닝됩니다.
-사이닝 인프라는 [SignPath.io](https://signpath.io)에서 제공하며,
-인증서는 [SignPath Foundation](https://signpath.org)에서 발급합니다.
-사이닝 정책은 [SIGNING-POLICY.md](SIGNING-POLICY.md)에 문서화되어
-있습니다.
+SignPath Foundation 오픈소스 프로그램 승인이 완료되면 Windows
+인스톨러는 SignPath를 통해 코드 사이닝됩니다. 사이닝 인프라는
+[SignPath.io](https://signpath.io)에서 제공하며, 인증서는
+[SignPath Foundation](https://signpath.org)에서 발급합니다.
+사이닝 정책은 [SIGNING-POLICY.md](SIGNING-POLICY.md)에
+문서화되어 있습니다.
 
 > Free code signing provided by [SignPath.io](https://signpath.io),
 > certificate by [SignPath Foundation](https://signpath.org).
+
+SignPath 승인 전까지는 unsigned 빌드가 릴리스되며 첫 실행 시
+SmartScreen이 노란색 "확인되지 않은 게시자" 경고를 표시합니다.
+CI 워크플로우는 SignPath 시크릿이 없으면 unsigned `.exe`를 그대로
+릴리스에 첨부하고 워크플로우 경고만 출력합니다(릴리스 실패가 아닙니다).
+
+SignPath 승인이 거절될 경우 — OSS 프로그램에 명시적인 별 수 / 프로젝트
+연차 기준은 없지만 통계적으로 더 성숙한 프로젝트가 통과하는 경향 —
+대안은 Microsoft Azure **Artifact Signing** (2026년 1월 "Trusted
+Signing"에서 이름 변경)입니다. 단, 개인 개발자 신원 검증을 거친
+Public Trust 인증서 발급은 현재 미국·캐나다 거주자에게만 열려
+있어, 그 외 국가 (한국 포함) 메인테이너는 법인 등록 후 조직
+신원으로만 사용할 수 있습니다. 즉, 한국 단일 메인테이너 입장에서
+이 폴백 경로는 "월 ~$10 구독"이 아니라 "법인 설립 + 월 ~$10
+구독"이 됩니다.

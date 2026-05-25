@@ -16,19 +16,36 @@ package firewall
 // routing; macOS's bind uses IP_BOUND_IF), so the host route is the only
 // safety net in the default code path.
 //
-// We install a narrow BLOCK filter at ALE_AUTH_CONNECT_V4 / V6 that fires
-// only when ALL of the following match:
+// We install BLOCK filters at TWO layers per IP family, matching the
+// same conditions:
 //
 //   protocol      = UDP (17)
 //   remote IP     = peer endpoint /32 or /128
 //   remote port   = peer endpoint port (when known)
 //   local LUID    = the tunnel adapter
 //
-// When the routing decision picks the tunnel (loop case) the filter
-// fires and the kernel drops the connect, so wireguard-go sees a clean
+//   - ALE_AUTH_CONNECT_V4 / V6 — per-FLOW classification. Fires once at
+//     the start of a 5-tuple's lifetime; the kernel caches the decision
+//     and subsequent packets bypass this layer entirely. Sufficient when
+//     wireguard-go's first send fires AFTER the filter is installed
+//     (which connect_phases sequences via engine.Start() ordering).
+//   - OUTBOUND_TRANSPORT_V4 / V6 — per-PACKET classification on the
+//     send path. Fires for every datagram, closing the residual race
+//     where the kernel's ALE flow cache locked in a PERMIT before our
+//     BLOCK arrived (typical of a third-party WFP sublayer installed
+//     after ours, or a network-state change that reclassifies the flow).
+//     Cost is slightly higher (per-packet vs once-per-flow) but the cost
+//     applies only to the narrow (UDP + peer endpoint + tunnel LUID)
+//     filter — i.e. only to packets that would already be inside a loop.
+//     Microsoft's own ALE Re-Authorization docs treat this layer as the
+//     correct site for per-packet enforcement that ALE_AUTH_CONNECT
+//     cannot provide.
+//
+// When the routing decision picks the tunnel (loop case) either filter
+// fires and the kernel drops the send, so wireguard-go sees a clean
 // send-error and retries — no exponential traffic amplification. When
 // the routing decision correctly picks the physical adapter (the normal
-// case), the local-LUID condition doesn't match and the filter is
+// case), the local-LUID condition doesn't match and the filters are
 // inert. We do NOT install a corresponding PERMIT on the physical
 // adapter: that would only be necessary if the kill switch's catch-all
 // is also in force, and the kill switch's own per-tunnel endpoint
@@ -138,11 +155,11 @@ func (f *WindowsFirewall) enableEndpointProtectionLocked(tunnelInterfaceName str
 			}
 			port = uint16(p)
 		}
-		id, err := f.installEndpointBlockFilter(ip, port, luid)
+		filterIDs, err := f.installEndpointBlockFilter(ip, port, luid)
 		if err != nil {
 			return fmt.Errorf("endpoint protection: install filter for %s: %w", ip, err)
 		}
-		ids = append(ids, id)
+		ids = append(ids, filterIDs...)
 	}
 
 	if len(ids) == 0 {
@@ -228,29 +245,80 @@ func (f *WindowsFirewall) removeEndpointProtectionFilters(tunnelInterfaceName st
 	return nil
 }
 
-// installEndpointBlockFilter installs ONE BLOCK filter for one endpoint
-// IP+port on the tunnel LUID, at the correct ALE_AUTH_CONNECT layer for
-// the IP family. Returns the WFP filter ID. Caller MUST hold f.mu AND
-// must be inside a WFP transaction.
+// installEndpointBlockFilter installs BLOCK filters for one endpoint
+// IP+port on the tunnel LUID, at BOTH the ALE_AUTH_CONNECT layer (per-
+// flow) AND the OUTBOUND_TRANSPORT layer (per-packet) for the matching
+// IP family. Returns every WFP filter ID created. Caller MUST hold
+// f.mu AND must be inside a WFP transaction.
 //
 // `port == 0` means "no port match"; that path is reserved for callers
 // that received a bare-IP endpoint string (no port). WireGuide's
 // resolvedEndpoints always carries a port so the port==0 branch is a
 // defensive fallback, not the hot path.
-func (f *WindowsFirewall) installEndpointBlockFilter(ip net.IP, port uint16, tunnelLUID uint64) (uint64, error) {
+func (f *WindowsFirewall) installEndpointBlockFilter(ip net.IP, port uint16, tunnelLUID uint64) ([]uint64, error) {
 	luidCopy := tunnelLUID
 	if v4 := ip.To4(); v4 != nil {
 		r := &fwpV4AddrMask{
 			addr: binary.BigEndian.Uint32(v4),
 			mask: 0xFFFFFFFF,
 		}
+		buildConds := func() []fwpmFilterCondition0 {
+			conds := []fwpmFilterCondition0{
+				{fieldKey: guidCondIPProtocol, matchType: matchEqual, conditionValue: uint8Value(17)},
+				{
+					fieldKey:  guidCondIPRemoteAddress,
+					matchType: matchEqual,
+					conditionValue: fwpConditionValue0{
+						dataType: dataTypeV4Address,
+						value:    uintptr(unsafe.Pointer(r)),
+					},
+				},
+				{
+					fieldKey:       guidCondIPLocalInterface,
+					matchType:      matchEqual,
+					conditionValue: uint64ValuePtr(&luidCopy),
+				},
+			}
+			if port != 0 {
+				conds = append(conds, fwpmFilterCondition0{
+					fieldKey: guidCondIPRemotePort, matchType: matchEqual, conditionValue: uint16Value(port),
+				})
+			}
+			return conds
+		}
+		ids := make([]uint64, 0, 2)
+		aleConds := buildConds()
+		aleID, err := f.addFilter("Block WG endpoint loop ALE v4 "+ip.String(),
+			guidLayerAleAuthConnectV4, actionBlock, endpointProtectionWeight, aleConds)
+		runtime.KeepAlive(aleConds)
+		if err != nil {
+			runtime.KeepAlive(r)
+			runtime.KeepAlive(&luidCopy)
+			return ids, err
+		}
+		ids = append(ids, aleID)
+		txConds := buildConds()
+		txID, err := f.addFilter("Block WG endpoint loop TX v4 "+ip.String(),
+			guidLayerOutboundTransportV4, actionBlock, endpointProtectionWeight, txConds)
+		runtime.KeepAlive(txConds)
+		runtime.KeepAlive(r)
+		runtime.KeepAlive(&luidCopy)
+		if err != nil {
+			return ids, err
+		}
+		ids = append(ids, txID)
+		return ids, nil
+	}
+	r := &fwpV6AddrMask{prefixLength: 128}
+	copy(r.addr[:], ip.To16())
+	buildConds := func() []fwpmFilterCondition0 {
 		conds := []fwpmFilterCondition0{
 			{fieldKey: guidCondIPProtocol, matchType: matchEqual, conditionValue: uint8Value(17)},
 			{
 				fieldKey:  guidCondIPRemoteAddress,
 				matchType: matchEqual,
 				conditionValue: fwpConditionValue0{
-					dataType: dataTypeV4Address,
+					dataType: dataTypeV6Address,
 					value:    uintptr(unsafe.Pointer(r)),
 				},
 			},
@@ -265,40 +333,28 @@ func (f *WindowsFirewall) installEndpointBlockFilter(ip net.IP, port uint16, tun
 				fieldKey: guidCondIPRemotePort, matchType: matchEqual, conditionValue: uint16Value(port),
 			})
 		}
-		id, err := f.addFilter("Block WG endpoint loop v4 "+ip.String(),
-			guidLayerAleAuthConnectV4, actionBlock, endpointProtectionWeight, conds)
+		return conds
+	}
+	ids := make([]uint64, 0, 2)
+	aleConds := buildConds()
+	aleID, err := f.addFilter("Block WG endpoint loop ALE v6 "+ip.String(),
+		guidLayerAleAuthConnectV6, actionBlock, endpointProtectionWeight, aleConds)
+	runtime.KeepAlive(aleConds)
+	if err != nil {
 		runtime.KeepAlive(r)
-		runtime.KeepAlive(conds)
 		runtime.KeepAlive(&luidCopy)
-		return id, err
+		return ids, err
 	}
-	r := &fwpV6AddrMask{prefixLength: 128}
-	copy(r.addr[:], ip.To16())
-	conds := []fwpmFilterCondition0{
-		{fieldKey: guidCondIPProtocol, matchType: matchEqual, conditionValue: uint8Value(17)},
-		{
-			fieldKey:  guidCondIPRemoteAddress,
-			matchType: matchEqual,
-			conditionValue: fwpConditionValue0{
-				dataType: dataTypeV6Address,
-				value:    uintptr(unsafe.Pointer(r)),
-			},
-		},
-		{
-			fieldKey:       guidCondIPLocalInterface,
-			matchType:      matchEqual,
-			conditionValue: uint64ValuePtr(&luidCopy),
-		},
-	}
-	if port != 0 {
-		conds = append(conds, fwpmFilterCondition0{
-			fieldKey: guidCondIPRemotePort, matchType: matchEqual, conditionValue: uint16Value(port),
-		})
-	}
-	id, err := f.addFilter("Block WG endpoint loop v6 "+ip.String(),
-		guidLayerAleAuthConnectV6, actionBlock, endpointProtectionWeight, conds)
+	ids = append(ids, aleID)
+	txConds := buildConds()
+	txID, err := f.addFilter("Block WG endpoint loop TX v6 "+ip.String(),
+		guidLayerOutboundTransportV6, actionBlock, endpointProtectionWeight, txConds)
+	runtime.KeepAlive(txConds)
 	runtime.KeepAlive(r)
-	runtime.KeepAlive(conds)
 	runtime.KeepAlive(&luidCopy)
-	return id, err
+	if err != nil {
+		return ids, err
+	}
+	ids = append(ids, txID)
+	return ids, nil
 }

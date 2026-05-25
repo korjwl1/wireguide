@@ -67,10 +67,11 @@ jobs:
     runs-on: windows-latest  # x86_64 host; cross-compiles arm64 fine (no cgo)
     permissions:
       # signpath/github-action-submit-signing-request reads the unsigned
-      # artifact from the GitHub Actions artifact store. id-token write
-      # is reserved for a future OIDC-based path (the action only
-      # supports api-token auth today; see SIGNING-POLICY.md).
-      id-token: write
+      # artifact from the GitHub Actions artifact store via the standard
+      # GITHUB_TOKEN (actions: read covers it). It uses api-token auth,
+      # not OIDC — id-token: write would be dead weight that just widens
+      # the job's token scope. If SignPath ever ships an OIDC path, add
+      # the permission scoped to that step only.
       contents: read
       actions: read
     steps:
@@ -165,7 +166,12 @@ jobs:
 
       - name: Submit signing request to SignPath
         if: steps.signpath-cfg.outputs.enabled == 'true'
-        uses: signpath/github-action-submit-signing-request@v2
+        # Pinned to commit SHA rather than @v2 floating tag — this action
+        # carries the signing api-token via `with:` and is the most
+        # privileged step in the workflow, so a compromised tag retag
+        # would be a direct supply-chain path to a signed-binary forgery.
+        # Update by bumping the SHA + the trailing `# v2.x.y` comment.
+        uses: signpath/github-action-submit-signing-request@b9d91eadd323de506c0c81cf0c7fe7438f3360fd  # v2
         with:
           api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
           organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}

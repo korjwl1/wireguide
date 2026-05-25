@@ -168,10 +168,30 @@ If WireGuide is useful to you, consider sponsoring to support development.
 
 ## Code signing
 
-The Windows installer is code-signed via SignPath Foundation. Signing
-infrastructure is contributed by [SignPath.io](https://signpath.io);
-the certificate is issued by [SignPath Foundation](https://signpath.org).
-Signing policy is documented in [SIGNING-POLICY.md](SIGNING-POLICY.md).
+The Windows installer is code-signed via SignPath Foundation once the
+project's OSS application is approved. Signing infrastructure is
+contributed by [SignPath.io](https://signpath.io); the certificate is
+issued by [SignPath Foundation](https://signpath.org). Signing policy
+is documented in [SIGNING-POLICY.md](SIGNING-POLICY.md).
 
 > Free code signing provided by [SignPath.io](https://signpath.io),
 > certificate by [SignPath Foundation](https://signpath.org).
+
+Until the SignPath application is approved, releases ship unsigned and
+SmartScreen will show a yellow "publisher unknown" warning on first
+run. The CI workflow detects the absence of the SignPath secret and
+publishes the unsigned `.exe` with a workflow warning rather than
+failing the release.
+
+If SignPath Foundation declines the application (the OSS programme has
+no documented project-age / star-count threshold but approvals tend
+toward more-established projects), the fallback is Microsoft's Azure
+**Artifact Signing** service (renamed from "Trusted Signing" in
+January 2026). At time of writing, the individual-developer eligibility
+for Public Trust certificates is limited to applicants in the United
+States and Canada; users outside those jurisdictions can use Azure
+Artifact Signing only under an organisation identity (registered legal
+business entity required). For a solo maintainer in Korea, this means
+forming a legal entity before the fallback path is open — the cost is
+not a flat ~$10/month subscription, the prerequisite is the entity
+registration itself.

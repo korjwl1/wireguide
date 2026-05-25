@@ -30,6 +30,49 @@ If additional maintainers join the project, the table will be updated
 and signing approval will become a two-person process (the committer
 of a release cannot also approve its signing).
 
+## Signing approval workflow
+
+Every signing request requires explicit human approval from an
+Approver before SignPath issues the signature. This is enforced at
+the SignPath policy level (`release-signing` policy, `Manual approval
+required: yes`); the workflow that uploads the unsigned artifact
+cannot trigger a signature without a separate, interactive approval
+step in the SignPath portal.
+
+While the project has a single maintainer, that maintainer reviews
+the diff between the previous release tag and the current one before
+issuing approval, and signing is deferred until that review is
+complete. The single-maintainer exemption is acknowledged with
+SignPath Foundation; if the project gains additional maintainers,
+the policy moves to two-person approval (the release Committer
+cannot also be the Approver for that release's signing request).
+
+## Account security
+
+All maintainers with signing-approval access have multi-factor
+authentication enabled on:
+
+- Their GitHub account (used for repository write + release tagging)
+- Their SignPath account (used for signing approval)
+
+GitHub MFA enforcement is also configured at the organization /
+repository level so that the requirement cannot be silently relaxed.
+Loss of an MFA device for the sole maintainer triggers the SignPath
+emergency-access procedure (key revocation + new project enrollment),
+not a recovery workaround.
+
+## Privacy &amp; data handling
+
+WireGuide does not transmit telemetry, analytics, or any other
+information to networked systems unless the user explicitly initiates
+a VPN connection. WireGuard tunnels carry only user-configured peer
+traffic; no usage data, configuration content, crash reports, or
+metadata is sent to the maintainer, SignPath, or any third party as
+a side effect of running the application. Update checks query GitHub
+Releases (a public API) only when the user opens the Updates UI;
+this is the only outbound HTTP request the application initiates
+that is not user-driven via a tunnel.
+
 ## Signing requests are accepted only from
 
 - The `release.yml` workflow in this repository, running on GitHub

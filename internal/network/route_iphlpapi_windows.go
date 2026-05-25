@@ -41,8 +41,9 @@ import (
 )
 
 var (
-	procCreateIpForwardEntry2 = modIphlpapi.NewProc("CreateIpForwardEntry2")
-	procDeleteIpForwardEntry2 = modIphlpapi.NewProc("DeleteIpForwardEntry2")
+	procCreateIpForwardEntry2     = modIphlpapi.NewProc("CreateIpForwardEntry2")
+	procDeleteIpForwardEntry2     = modIphlpapi.NewProc("DeleteIpForwardEntry2")
+	procInitializeIpForwardEntry  = modIphlpapi.NewProc("InitializeIpForwardEntry")
 )
 
 // Win32 status codes we surface specifically.
@@ -101,19 +102,27 @@ func AddIpForwardRoute(ifaceLuid uint64, ifaceIndex uint32, dest net.IP, prefixL
 	if ifaceLuid == 0 && ifaceIndex == 0 {
 		return fmt.Errorf("AddIpForwardRoute: must specify ifaceLuid or ifaceIndex")
 	}
-	row := mibIpforwardRow2{
-		InterfaceLuid:  ifaceLuid,
-		InterfaceIndex: ifaceIndex,
-		Metric:         metric,
-		// Protocol = MIB_IPPROTO_NETMGMT (3). When left at 0 the kernel
-		// behaviour is documented as "default to NETMGMT" but tooling
-		// downstream (Get-NetRoute display, kernel-side dedup key) reads
-		// the raw value. Setting it explicitly removes the ambiguity:
-		// Get-NetRoute shows "NetMgmt" consistently and a re-install
-		// after a leaked previous row hits ERROR_OBJECT_ALREADY_EXISTS
-		// deterministically rather than potentially duplicating the row.
-		Protocol: 3,
-	}
+	// Microsoft mandates InitializeIpForwardEntry before CreateIpForwardEntry2:
+	// it stamps the row with documented defaults — most importantly
+	// ValidLifetime/PreferredLifetime = INFINITE (0xFFFFFFFF), Immortal = TRUE,
+	// Loopback = AutoconfigureAddress = Publish = TRUE.
+	// Starting from a Go zero-value would leave those at 0/FALSE, which the
+	// route-lifetime timer treats as a "this expires in zero seconds" entry
+	// and the kernel will reap. Symptom: our /32 bypass disappearing days
+	// after a connect, the very loop class this whole module exists to
+	// prevent — slow-burn version. See
+	// https://learn.microsoft.com/en-us/windows/win32/api/netioapi/nf-netioapi-initializeipforwardentry
+	var row mibIpforwardRow2
+	procInitializeIpForwardEntry.Call(uintptr(unsafe.Pointer(&row)))
+	row.InterfaceLuid = ifaceLuid
+	row.InterfaceIndex = ifaceIndex
+	row.Metric = metric
+	// Protocol = MIB_IPPROTO_NETMGMT (3). When left at the InitializeIpForwardEntry
+	// default the kernel still routes correctly, but Get-NetRoute display
+	// shows "NetMgmt" only when we set it explicitly, and the kernel-side
+	// dedup key is more deterministic — a leaked previous row hits
+	// ERROR_OBJECT_ALREADY_EXISTS predictably rather than duplicating.
+	row.Protocol = 3
 	// DestinationPrefix
 	fillSockaddrInet(&row.DestinationPrefix.Prefix, dest)
 	row.DestinationPrefix.PrefixLength = prefixLen

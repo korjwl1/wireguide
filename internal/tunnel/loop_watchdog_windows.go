@@ -37,56 +37,66 @@ import (
 	"github.com/korjwl1/wireguide/internal/network"
 )
 
-// MIB_IF_ROW2 byte-offsets for the two counters we need on 64-bit
-// Windows. We read the row into a fixed byte buffer and pick the
-// counters out by offset rather than declaring a full Go-side struct
-// — the struct has 30+ fields, several enums and a packed bitfield,
-// and matching the exact C layout in Go is fragile across SDK
-// revisions. The byte-offset path only depends on the position of
-// InOctets and OutOctets, both of which have been stable since the
-// API was introduced in Windows 8.
+// mibIfRow2 mirrors the C MIB_IF_ROW2 struct so we can use
+// unsafe.Offsetof to locate the two counters we need (InOctets,
+// OutOctets) instead of hardcoding numeric byte offsets. Hardcoded
+// offsets would be a silent ABI break if Microsoft ever inserts a field
+// in a future SDK; the offsetof path moves with the struct definition.
 //
-// Derivation (cross-checked against netioapi.h):
+// Microsoft does NOT publicly document byte offsets in this struct —
+// they're a consequence of C layout rules on the declared fields. The
+// definition below matches netioapi.h exactly for both x64 and ARM64,
+// where every member is naturally aligned and there are no pointers.
 //
-//	NET_LUID InterfaceLuid                        8 bytes @   0
-//	NET_IFINDEX InterfaceIndex                    4 bytes @   8
-//	GUID InterfaceGuid                           16 bytes @  12 (align 4)
-//	WCHAR Alias[257]                            514 bytes @  28 (align 2)
-//	WCHAR Description[257]                      514 bytes @ 542
-//	ULONG PhysicalAddressLength                   4 bytes @1056 (align 4, no pad)
-//	UCHAR PhysicalAddress[32]                    32 bytes @1060
-//	UCHAR PermanentPhysicalAddress[32]           32 bytes @1092
-//	ULONG Mtu                                     4 bytes @1124
-//	6 × enum (Type/TunnelType/MediaType/PhysicalMediumType/
-//	         AccessType/DirectionType)         24 bytes @1128
-//	bitfield byte + 3 pad                         4 bytes @1152
-//	3 × enum (OperStatus/AdminStatus/MediaConnectState)
-//	                                              12 bytes @1156
-//	NET_IF_NETWORK_GUID NetworkGuid              16 bytes @1168
-//	NET_IF_CONNECTION_TYPE ConnectionType         4 bytes @1184
-//	4 bytes pad to ULONG64 alignment              4 bytes @1188
-//	ULONG64 TransmitLinkSpeed                     8 bytes @1192
-//	ULONG64 ReceiveLinkSpeed                      8 bytes @1200
-//	ULONG64 InOctets                              8 bytes @1208 ← TARGET
-//	ULONG64 InUcastPkts                           8 bytes @1216
-//	ULONG64 InNUcastPkts                          8 bytes @1224
-//	ULONG64 InDiscards                            8 bytes @1232
-//	ULONG64 InErrors                              8 bytes @1240
-//	ULONG64 InUnknownProtos                       8 bytes @1248
-//	ULONG64 InUcastOctets                         8 bytes @1256
-//	ULONG64 InMulticastOctets                     8 bytes @1264
-//	ULONG64 InBroadcastOctets                     8 bytes @1272
-//	ULONG64 OutOctets                             8 bytes @1280 ← TARGET
-//
-// The struct's total size is ~1352 bytes on x64. A 1500-byte buffer
-// safely accommodates the full row even if Microsoft extends the
-// struct in a future SDK revision (added fields are appended at the
-// end; In/Out octet offsets are stable).
-const (
-	mibIfRow2BufSize         = 1500
-	mibIfRow2OffsetOctetsIn  = 1208
-	mibIfRow2OffsetOctetsOut = 1280
-)
+// Fields we don't read are kept as fixed-size byte arrays / padding —
+// this saves the boilerplate of importing GUID and several enum types
+// while preserving the C struct's overall size and field-offset layout.
+type mibIfRow2 struct {
+	InterfaceLuid              uint64
+	InterfaceIndex             uint32
+	InterfaceGuid              [16]byte // GUID
+	Alias                      [257]uint16
+	Description                [257]uint16
+	PhysicalAddressLength      uint32
+	PhysicalAddress            [32]byte
+	PermanentPhysicalAddress   [32]byte
+	Mtu                        uint32
+	Type                       uint32
+	TunnelType                 uint32
+	MediaType                  uint32
+	PhysicalMediumType         uint32
+	AccessType                 uint32
+	DirectionType              uint32
+	InterfaceAndOperStatusFlags uint8
+	_padFlags                  [3]uint8
+	OperStatus                 uint32
+	AdminStatus                uint32
+	MediaConnectState          uint32
+	NetworkGuid                [16]byte
+	ConnectionType             uint32
+	_padToU64                  [4]byte
+	TransmitLinkSpeed          uint64
+	ReceiveLinkSpeed           uint64
+	InOctets                   uint64
+	InUcastPkts                uint64
+	InNUcastPkts               uint64
+	InDiscards                 uint64
+	InErrors                   uint64
+	InUnknownProtos            uint64
+	InUcastOctets              uint64
+	InMulticastOctets          uint64
+	InBroadcastOctets          uint64
+	OutOctets                  uint64
+	OutUcastPkts               uint64
+	OutNUcastPkts              uint64
+	OutDiscards                uint64
+	OutErrors                  uint64
+	OutUcastOctets             uint64
+	OutMulticastOctets         uint64
+	OutBroadcastOctets         uint64
+	OutQLen                    uint64
+}
+
 
 var (
 	procGetIfEntry2 = windows.NewLazySystemDLL("iphlpapi.dll").NewProc("GetIfEntry2")
@@ -237,16 +247,13 @@ func maxU64(a, b uint64) uint64 {
 // snapshots to compute a delta, two syscalls per sample to capture
 // asymmetry; this is one.
 func readInterfaceOctets(luid uint64) (in uint64, out uint64, ok bool) {
-	var buf [mibIfRow2BufSize]byte
-	// Set InterfaceLuid at the start of the row. The kernel uses LUID
-	// as the lookup key when InterfaceIndex is zero (which it is in
-	// our zeroed buffer).
-	*(*uint64)(unsafe.Pointer(&buf[0])) = luid
-	ret, _, _ := procGetIfEntry2.Call(uintptr(unsafe.Pointer(&buf[0])))
+	var row mibIfRow2
+	// Kernel uses InterfaceLuid as the lookup key when InterfaceIndex is
+	// zero — set the LUID and leave the rest of the struct zeroed.
+	row.InterfaceLuid = luid
+	ret, _, _ := procGetIfEntry2.Call(uintptr(unsafe.Pointer(&row)))
 	if ret != 0 {
 		return 0, 0, false
 	}
-	in = *(*uint64)(unsafe.Pointer(&buf[mibIfRow2OffsetOctetsIn]))
-	out = *(*uint64)(unsafe.Pointer(&buf[mibIfRow2OffsetOctetsOut]))
-	return in, out, true
+	return row.InOctets, row.OutOctets, true
 }
