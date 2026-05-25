@@ -54,6 +54,17 @@ type WindowsManager struct {
 	origGatewayV6   string   // original IPv6 default gateway for cleanup
 	origIfIdx6      string   // original IPv6 interface index for bypass route cleanup
 	splitRoutes     []string // split-tunnel routes we added (CIDR strings)
+
+	// bypassPhys{LuidV4,LuidV6,IfIdxV4} capture the underlay adapter
+	// addFullTunnelRoutes installed bypass /32 host routes against. We
+	// need them to delete the SAME rows via DeleteIpForwardEntry2 — the
+	// delete path is a 4-tuple match (LUID, dest, prefix, nexthop), so
+	// "best-effort sweep by route delete <ip>" can no longer pick up
+	// rows whose LUID we never knew. Captured once, cleared by
+	// RemoveRoutes / Cleanup.
+	bypassPhysLuidV4  uint64
+	bypassPhysLuidV6  uint64
+	bypassPhysIfIdxV4 uint32
 }
 
 func NewPlatformManager() NetworkManager {
@@ -164,14 +175,38 @@ func (m *WindowsManager) AddRoutes(ifaceName string, allowedIPs []string, fullTu
 }
 
 func (m *WindowsManager) addFullTunnelRoutes(ifaceName string, endpoints []string) error {
-	// Detect current default gateways before adding our routes.
+	// PREFLIGHT — fail FAST on the conditions that would otherwise produce
+	// the routing-loop class of bug (issue #14 / "6 GB upload spike"):
+	//
+	//   - No IPv4 default route detected. Without one we cannot install the
+	//     /32 bypass that keeps WireGuard's own UDP traffic off the tunnel.
+	//     Continuing to install /1 split routes would silently trap the
+	//     encrypted handshake inside the tunnel and recurse at line rate.
+	//
+	//   - No IPv4 endpoints to bypass. A full-tunnel config with zero
+	//     resolved IPv4 endpoints is either malformed or pure-IPv6; the
+	//     latter is handled by the IPv6 branch below. For IPv4 we refuse
+	//     rather than silently leave a hole.
+	//
+	// Errors here propagate to connectPhases which runs `rollback` — the
+	// caller never sees a partially-installed split route. No netsh-warn-
+	// and-continue fallback path: the user-visible failure mode of "Connect
+	// returned an error" is strictly better than "Connect succeeded and
+	// your upload meter spins to 6 GB".
 	origGw := getWindowsDefaultGateway()
 	origGw6 := getWindowsDefaultIPv6Gateway()
-	// Detect the physical IPv6 interface index for netsh route commands.
 	origIfIdx6 := getWindowsDefaultIPv6InterfaceIndex()
+	// Capture both IPv4 underlay LUID + nexthop in one call. The LUID is
+	// what CreateIpForwardEntry2 wants for the bypass /32; the nexthop
+	// fills NextHop. Excluding our own wintun adapter prevents the
+	// "second connect re-detects the just-up tunnel as the underlay"
+	// failure mode.
+	physLuidV4, physIfIdxV4, _ := DefaultRouteV4LuidAndIndex([]string{ifaceName})
+	physLuidV6, _, _ := DefaultRouteV6LuidAndIndex([]string{ifaceName})
 
-	// M10+C8: Add endpoint bypass routes via the original gateway. Handle
-	// both IPv4 and IPv6 endpoints with correct Windows route syntax.
+	// Classify endpoints by family so we can demand a usable underlay only
+	// for the families we actually need to bypass.
+	var v4Endpoints, v6Endpoints []net.IP
 	for _, ipStr := range endpoints {
 		if ipStr == "" {
 			continue
@@ -181,98 +216,148 @@ func (m *WindowsManager) addFullTunnelRoutes(ifaceName string, endpoints []strin
 			continue
 		}
 		if ip.To4() != nil {
-			// C8: Windows route command uses "mask" keyword, not CIDR notation.
-			if origGw != "" {
-				if err := runWin("route", "add", ipStr, "mask", "255.255.255.255", origGw, "metric", "1"); err != nil {
-					slog.Warn("endpoint bypass route add failed", "ip", ipStr, "gw", origGw, "error", err)
-				}
-			}
+			v4Endpoints = append(v4Endpoints, ip.To4())
 		} else {
-			// M10: IPv6 endpoint bypass route. netsh syntax requires
-			// interface index (not gateway IP) as the second positional arg,
-			// then nexthop= for the gateway.
-			if origGw6 != "" && origIfIdx6 != "" {
-				if err := runWin("netsh", "interface", "ipv6", "add", "route",
-					ipStr+"/128", origIfIdx6, "nexthop="+origGw6, "metric=1"); err != nil {
-					slog.Warn("IPv6 endpoint bypass route add failed", "ip", ipStr, "gw", origGw6, "error", err)
-				}
-			}
+			v6Endpoints = append(v6Endpoints, ip)
 		}
 	}
+
+	if len(v4Endpoints) > 0 && (origGw == "" || physLuidV4 == 0) {
+		return fmt.Errorf("full-tunnel: cannot detect a usable IPv4 default gateway "+
+			"(gw=%q, physLuid=%d). Refusing to install split routes — without an "+
+			"endpoint bypass the encrypted WireGuard traffic would loop through the "+
+			"tunnel and saturate the link",
+			origGw, physLuidV4)
+	}
+	if len(v6Endpoints) > 0 && (origGw6 == "" || physLuidV6 == 0) {
+		return fmt.Errorf("full-tunnel: cannot detect a usable IPv6 default gateway "+
+			"(gw=%q, physLuid=%d). IPv6 peer endpoint cannot be bypassed safely",
+			origGw6, physLuidV6)
+	}
+
+	// Resolve the tunnel adapter's LUID once — we'll use it for both the
+	// (later) /1 split routes and any IPv6 bypass tracking.
+	tunnelLuid, _ := convertInterfaceAliasToLuid(ifaceName)
+	if tunnelLuid == 0 {
+		return fmt.Errorf("full-tunnel: cannot resolve tunnel adapter LUID for %q", ifaceName)
+	}
+
+	gwIPv4 := net.ParseIP(origGw)
+
+	// PHASE 1: bypass /32 host routes for every IPv4 peer endpoint.
+	// Failure to install ANY bypass is fatal — without it the matching
+	// /1 split route will trap encrypted UDP back into the tunnel.
+	for _, ip := range v4Endpoints {
+		err := AddIpForwardRoute(physLuidV4, physIfIdxV4, ip, 32, gwIPv4, 1)
+		if err != nil && !IsRouteAlreadyExists(err) {
+			return fmt.Errorf("installing IPv4 endpoint bypass %s via %s: %w", ip, origGw, err)
+		}
+		// Even if the kernel said OK, double-check the row landed in the
+		// table. Defends against the rare "kernel accepted via nsi but
+		// dataplane has not picked up yet" race that only surfaces on
+		// fresh wintun adapters under heavy ETW load.
+		if !VerifyIpForwardRoute(physLuidV4, ip, 32) {
+			return fmt.Errorf("installing IPv4 endpoint bypass %s: kernel reported success but route not visible in table", ip)
+		}
+	}
+
+	// PHASE 2: bypass /128 host routes for IPv6 peer endpoints.
+	// Same fail-fast policy as IPv4.
+	gwIPv6 := net.ParseIP(origGw6)
+	for _, ip := range v6Endpoints {
+		err := AddIpForwardRoute(physLuidV6, 0, ip, 128, gwIPv6, 1)
+		if err != nil && !IsRouteAlreadyExists(err) {
+			return fmt.Errorf("installing IPv6 endpoint bypass %s via %s: %w", ip, origGw6, err)
+		}
+		if !VerifyIpForwardRoute(physLuidV6, ip, 128) {
+			return fmt.Errorf("installing IPv6 endpoint bypass %s: kernel reported success but route not visible in table", ip)
+		}
+	}
+
+	// Persist the bypass list so disconnect can target the same rows.
 	m.bypassEndpoints = endpoints
+	m.bypassPhysLuidV4 = physLuidV4
+	m.bypassPhysLuidV6 = physLuidV6
+	m.bypassPhysIfIdxV4 = physIfIdxV4
 	m.origGateway = origGw
 	m.origGatewayV6 = origGw6
 	m.origIfIdx6 = origIfIdx6
 
-	// IPv4: Use the /1 split-route trick (0.0.0.0/1 + 128.0.0.0/1) instead
-	// of a single 0.0.0.0/0. The /1 routes are more specific than the existing
-	// default route, so they take precedence WITHOUT replacing it. This means:
-	// - On disconnect, the original default route automatically resumes
-	// - On crash, the system is NOT left without a default route
-	// - No metric competition with existing default routes
-	// This is the same approach used by wg-quick on macOS/Linux and documented
-	// in wireguard-windows/docs/netquirk.md as the recommended user approach.
-	if err := runWin("netsh", "interface", "ip", "add", "route", "0.0.0.0/1", ifaceName, "nexthop=0.0.0.0", "metric=0"); err != nil {
+	// PHASE 3: IPv4 /1 split-route trick (0.0.0.0/1 + 128.0.0.0/1).
+	// More specific than the user's existing 0.0.0.0/0 default route, so
+	// it takes precedence WITHOUT replacing it — disconnect's row delete
+	// automatically restores the underlay's default-route precedence.
+	// metric=0 keeps the kernel-computed effective metric purely driven
+	// by the tunnel adapter's interface metric (set to 1 by SetDNS).
+	if err := AddIpForwardRoute(tunnelLuid, 0, net.IPv4(0, 0, 0, 0), 1, nil, 0); err != nil && !IsRouteAlreadyExists(err) {
 		return fmt.Errorf("adding 0.0.0.0/1: %w", err)
 	}
-	if err := runWin("netsh", "interface", "ip", "add", "route", "128.0.0.0/1", ifaceName, "nexthop=0.0.0.0", "metric=0"); err != nil {
+	if err := AddIpForwardRoute(tunnelLuid, 0, net.IPv4(128, 0, 0, 0), 1, nil, 0); err != nil && !IsRouteAlreadyExists(err) {
 		return fmt.Errorf("adding 128.0.0.0/1: %w", err)
 	}
-	// IPv6: Same /1 split-route trick (non-fatal if IPv6 is unavailable)
-	tryRunWin("IPv6 ::/1 split route add", "netsh", "interface", "ipv6", "add", "route", "::/1", "interface="+ifaceName, "nexthop=::", "metric=0")
-	tryRunWin("IPv6 8000::/1 split route add", "netsh", "interface", "ipv6", "add", "route", "8000::/1", "interface="+ifaceName, "nexthop=::", "metric=0")
+
+	// PHASE 4: IPv6 /1 split routes — best-effort. A box with no IPv6
+	// connectivity at all will still pass v4 traffic correctly even if
+	// these fail (no kernel-side loop risk because the only IPv6 routes
+	// installed are the ones we tried and failed to add).
+	v6Unspec := net.IPv6unspecified
+	if err := AddIpForwardRoute(tunnelLuid, 0, v6Unspec, 1, nil, 0); err != nil && !IsRouteAlreadyExists(err) {
+		slog.Warn("IPv6 ::/1 split route add failed", "error", err)
+	}
+	v68000 := net.ParseIP("8000::")
+	if err := AddIpForwardRoute(tunnelLuid, 0, v68000, 1, nil, 0); err != nil && !IsRouteAlreadyExists(err) {
+		slog.Warn("IPv6 8000::/1 split route add failed", "error", err)
+	}
 
 	return nil
 }
 
 func (m *WindowsManager) RemoveRoutes(ifaceName string, allowedIPs []string, fullTunnel bool) error {
 	if fullTunnel {
-		// Build the work list first, then fan it all out to parallelTry.
-		// Each netsh / route invocation is independent (different prefix
-		// entries in the route table), so running them concurrently
-		// drops wall-clock from ~5×cold-start to ~1×cold-start.
-		thunks := []func(){
-			func() {
-				tryRunWin("delete 0.0.0.0/1", "netsh", "interface", "ip", "delete", "route", "0.0.0.0/1", ifaceName)
-			},
-			func() {
-				tryRunWin("delete 128.0.0.0/1", "netsh", "interface", "ip", "delete", "route", "128.0.0.0/1", ifaceName)
-			},
-			func() {
-				tryRunWin("delete ::/1", "netsh", "interface", "ipv6", "delete", "route", "::/1", ifaceName)
-			},
-			func() {
-				tryRunWin("delete 8000::/1", "netsh", "interface", "ipv6", "delete", "route", "8000::/1", ifaceName)
-			},
-		}
-		origIfIdx6 := m.origIfIdx6 // snapshot before clearing below
-		for _, ipStr := range m.bypassEndpoints {
-			if ipStr == "" {
-				continue
+		// Use iphlpapi for the routes we installed via iphlpapi. Each
+		// Delete* call is ~microseconds, so we don't need parallelTry's
+		// goroutine fan-out anymore — the wall-clock cost of all six
+		// deletes is dominated by the kernel's nsi serialisation, not
+		// console startup.
+		tunnelLuid, _ := convertInterfaceAliasToLuid(ifaceName)
+		tryDeleteRoute := func(luid uint64, dest net.IP, prefix uint8, nextHop net.IP, name string) {
+			if luid == 0 {
+				return
 			}
+			if err := DeleteIpForwardRoute(luid, 0, dest, prefix, nextHop); err != nil && !IsRouteNotFound(err) {
+				slog.Debug("RemoveRoutes: "+name+" delete failed", "error", err)
+			}
+		}
+		// /1 split routes on the tunnel adapter.
+		tryDeleteRoute(tunnelLuid, net.IPv4(0, 0, 0, 0), 1, nil, "0.0.0.0/1")
+		tryDeleteRoute(tunnelLuid, net.IPv4(128, 0, 0, 0), 1, nil, "128.0.0.0/1")
+		tryDeleteRoute(tunnelLuid, net.IPv6unspecified, 1, nil, "::/1")
+		if v6 := net.ParseIP("8000::"); v6 != nil {
+			tryDeleteRoute(tunnelLuid, v6, 1, nil, "8000::/1")
+		}
+
+		// IPv4 endpoint bypass /32 routes on the physical adapter.
+		gwV4 := net.ParseIP(m.origGateway)
+		for _, ipStr := range m.bypassEndpoints {
 			ip := net.ParseIP(ipStr)
 			if ip == nil {
 				continue
 			}
-			if ip.To4() != nil {
-				ipStr := ipStr
-				thunks = append(thunks, func() {
-					// `route delete` (not netsh) for v4 — Windows
-					// route command uses non-CIDR notation here.
-					tryRunWin("delete bypass route", "route", "delete", ipStr)
-				})
-			} else if origIfIdx6 != "" {
-				ipStr := ipStr
-				thunks = append(thunks, func() {
-					tryRunWin("delete IPv6 bypass route", "netsh", "interface", "ipv6", "delete", "route", ipStr+"/128", origIfIdx6)
-				})
+			if v4 := ip.To4(); v4 != nil {
+				tryDeleteRoute(m.bypassPhysLuidV4, v4, 32, gwV4, "bypass v4 "+ipStr)
+				continue
 			}
+			gwV6 := net.ParseIP(m.origGatewayV6)
+			tryDeleteRoute(m.bypassPhysLuidV6, ip, 128, gwV6, "bypass v6 "+ipStr)
 		}
-		parallelTry(thunks...)
+
 		m.bypassEndpoints = nil
 		m.origGateway = ""
 		m.origGatewayV6 = ""
 		m.origIfIdx6 = ""
+		m.bypassPhysLuidV4 = 0
+		m.bypassPhysLuidV6 = 0
+		m.bypassPhysIfIdxV4 = 0
 		return nil
 	}
 	thunks := make([]func(), 0, len(allowedIPs))
@@ -402,21 +487,41 @@ func (m *WindowsManager) Cleanup(ifaceName string) error {
 	if err := m.RestoreDNS(ifaceName); err != nil {
 		slog.Warn("Cleanup: RestoreDNS failed", "iface", ifaceName, "error", err)
 	}
-	// Defensive route cleanup: most of these are duplicates of what
-	// RemoveRoutes already did, but we keep them so a Cleanup called
-	// without a prior RemoveRoutes (e.g. after a partial connect that
-	// failed before activeCfg was set) still leaves the route table
-	// tidy. parallelTry collapses the wall-clock cost to roughly one
-	// netsh cold-start regardless of how many no-op deletes we issue.
-	thunks := []func(){
-		func() { tryRunWin("cleanup 0.0.0.0/1", "netsh", "interface", "ip", "delete", "route", "0.0.0.0/1", ifaceName) },
-		func() { tryRunWin("cleanup 128.0.0.0/1", "netsh", "interface", "ip", "delete", "route", "128.0.0.0/1", ifaceName) },
-		func() { tryRunWin("cleanup 0.0.0.0/0", "netsh", "interface", "ip", "delete", "route", "0.0.0.0/0", ifaceName) },
-		func() { tryRunWin("cleanup ::/1", "netsh", "interface", "ipv6", "delete", "route", "::/1", ifaceName) },
-		func() { tryRunWin("cleanup 8000::/1", "netsh", "interface", "ipv6", "delete", "route", "8000::/1", ifaceName) },
-		func() { tryRunWin("cleanup ::/0", "netsh", "interface", "ipv6", "delete", "route", "::/0", ifaceName) },
+	// Defensive route cleanup. RemoveRoutes(fullTunnel=true) is the
+	// primary path; Cleanup runs as a belt-and-suspenders sweep for
+	// the case where Cleanup was reached without a prior RemoveRoutes
+	// (e.g. partial connect rollback). All deletes are best-effort —
+	// errRouteNotFound is the expected state when the row was already
+	// reaped by RemoveRoutes.
+	tunnelLuid, _ := convertInterfaceAliasToLuid(ifaceName)
+	tryDelete := func(luid uint64, dest net.IP, prefix uint8, nextHop net.IP, name string) {
+		if luid == 0 || dest == nil {
+			return
+		}
+		if err := DeleteIpForwardRoute(luid, 0, dest, prefix, nextHop); err != nil && !IsRouteNotFound(err) {
+			slog.Debug("Cleanup: "+name+" delete failed", "error", err)
+		}
 	}
-	origIfIdx6 := m.origIfIdx6
+	if tunnelLuid != 0 {
+		tryDelete(tunnelLuid, net.IPv4(0, 0, 0, 0), 1, nil, "0.0.0.0/1")
+		tryDelete(tunnelLuid, net.IPv4(128, 0, 0, 0), 1, nil, "128.0.0.0/1")
+		tryDelete(tunnelLuid, net.IPv4(0, 0, 0, 0), 0, nil, "0.0.0.0/0")
+		tryDelete(tunnelLuid, net.IPv6unspecified, 1, nil, "::/1")
+		if v6 := net.ParseIP("8000::"); v6 != nil {
+			tryDelete(tunnelLuid, v6, 1, nil, "8000::/1")
+		}
+		tryDelete(tunnelLuid, net.IPv6unspecified, 0, nil, "::/0")
+		for _, cidr := range m.splitRoutes {
+			_, ipNet, err := net.ParseCIDR(cidr)
+			if err != nil {
+				continue
+			}
+			ones, _ := ipNet.Mask.Size()
+			tryDelete(tunnelLuid, ipNet.IP, uint8(ones), nil, "split "+cidr)
+		}
+	}
+	gwV4 := net.ParseIP(m.origGateway)
+	gwV6 := net.ParseIP(m.origGatewayV6)
 	for _, ipStr := range m.bypassEndpoints {
 		if ipStr == "" {
 			continue
@@ -425,23 +530,12 @@ func (m *WindowsManager) Cleanup(ifaceName string) error {
 		if ip == nil {
 			continue
 		}
-		if ip.To4() != nil {
-			ipStr := ipStr
-			thunks = append(thunks, func() { tryRunWin("cleanup bypass route", "route", "delete", ipStr) })
-		} else if origIfIdx6 != "" {
-			ipStr := ipStr
-			thunks = append(thunks, func() {
-				tryRunWin("cleanup IPv6 bypass route", "netsh", "interface", "ipv6", "delete", "route", ipStr+"/128", origIfIdx6)
-			})
+		if v4 := ip.To4(); v4 != nil {
+			tryDelete(m.bypassPhysLuidV4, v4, 32, gwV4, "bypass v4 "+ipStr)
+			continue
 		}
+		tryDelete(m.bypassPhysLuidV6, ip, 128, gwV6, "bypass v6 "+ipStr)
 	}
-	for _, cidr := range m.splitRoutes {
-		cidr := cidr
-		thunks = append(thunks, func() {
-			tryRunWin("cleanup split route", "netsh", "interface", "ip", "delete", "route", cidr, ifaceName)
-		})
-	}
-	parallelTry(thunks...)
 
 	// Flush the DNS resolver cache so any responses that came back via
 	// the tunnel before disconnect (now invalid because the tunnel's
@@ -454,6 +548,9 @@ func (m *WindowsManager) Cleanup(ifaceName string) error {
 	m.bypassEndpoints = nil
 	m.origGatewayV6 = ""
 	m.origIfIdx6 = ""
+	m.bypassPhysLuidV4 = 0
+	m.bypassPhysLuidV6 = 0
+	m.bypassPhysIfIdxV4 = 0
 	m.splitRoutes = nil
 	return nil
 }

@@ -84,6 +84,7 @@ task build
 | **설정 에디터** | CodeMirror 6 기반 WireGuard 문법 강조 및 자동완성 |
 | **시스템 트레이** | 연결 상태 뱃지, 1클릭 연결/해제 |
 | **킬 스위치** | VPN 외 모든 트래픽 차단 — macOS `pf`, Linux `nftables`, Windows WFP (선택) |
+| **루프 보호** | 항상 켜진 WFP 필터가 암호화된 피어 트래픽이 터널 어댑터로 다시 들어가는 것을 차단 — bypass /32 호스트 라우트가 누락돼도 Windows 풀터널 라우팅 루프(업로드 폭증 버그)를 막아냄 |
 | **DNS 보호** | DNS 쿼리를 VPN 터널로만 강제 (선택) |
 | **헬스 체크** | 핸드셰이크 상태 모니터링 및 자동 재연결 (선택) |
 | **슬립/웨이크 복구** | macOS `NSWorkspace`, Linux `systemd-logind`, Windows 전원 알림 |

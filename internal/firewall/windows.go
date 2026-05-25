@@ -66,6 +66,24 @@ type WindowsFirewall struct {
 	// is "WireGuide" today but the map is multi-tunnel-ready for the
 	// per-tunnel-adapter naming change we'll need to ship later).
 	tunnelFilterIDs map[string][]uint64
+
+	// endpointProtectionFilterIDs tracks the BLOCK filters installed by
+	// EnableEndpointProtection. Keyed by tunnel interface name. Separate
+	// from tunnelFilterIDs so the two features have independent lifetimes
+	// — toggling the kill switch off must not strip the loop protection,
+	// and disconnecting one tunnel must not touch another tunnel's
+	// protection set.
+	endpointProtectionFilterIDs map[string][]uint64
+
+	// endpointProtectionState remembers (iface → endpoints) for each
+	// active endpoint protection install so we can re-install after a
+	// dynamic-session close. Session close happens whenever the user
+	// toggles the kill switch off (closeSession is the simple cascade
+	// path), which would otherwise silently strip an active tunnel's
+	// loop protection. The snapshot-and-rebuild pattern lets the kill
+	// switch keep its tear-down-everything-rebuild simplicity while
+	// preserving endpoint protection across the transition.
+	endpointProtectionState map[string][]string
 }
 
 func NewPlatformFirewall() FirewallManager {
@@ -232,9 +250,14 @@ func (f *WindowsFirewall) closeSession() {
 	f.killSwitchEnabled = false
 	f.dnsProtectionEnabled = false
 	// Closing the session cascades all filter IDs we tracked — there's no
-	// per-ID delete to do, but we drop the map so a re-Enable starts
-	// from a clean slate.
+	// per-ID delete to do, but we drop every map so a re-Enable starts
+	// from a clean slate. Callers that need to PRESERVE state across a
+	// session close (e.g. DisableKillSwitch snapshotting endpoint
+	// protection so it can be reinstalled in a fresh session) must do
+	// that snapshot themselves before calling closeSession.
 	f.tunnelFilterIDs = nil
+	f.endpointProtectionFilterIDs = nil
+	f.endpointProtectionState = nil
 }
 
 // resolveInterfaceLUID looks up the LUID of the tunnel interface by its
@@ -741,12 +764,41 @@ func (f *WindowsFirewall) permitEndpoint(ip net.IP) error {
 func (f *WindowsFirewall) DisableKillSwitch() error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+
+	// Snapshot endpoint protection state BEFORE the session close —
+	// otherwise the cascade-delete strips the loop-protection BLOCK
+	// filters along with the kill switch's permits, leaving an active
+	// full-tunnel connect exposed to the very loop class the protection
+	// is meant to prevent.
+	//
+	// We deliberately rebuild rather than carrying filters across
+	// sessions because WFP filter IDs are session-scoped: a fresh
+	// session gets fresh IDs, so we'd need full re-registration anyway.
+	epSnapshot := make(map[string][]string, len(f.endpointProtectionState))
+	for iface, eps := range f.endpointProtectionState {
+		cp := make([]string, len(eps))
+		copy(cp, eps)
+		epSnapshot[iface] = cp
+	}
+
 	// Closing the dynamic session removes every filter in one shot. If
 	// DNS protection is also active it will be torn down together —
 	// that's acceptable because the DNS rules only matter when a tunnel
 	// is up, and DisableKillSwitch implies the user is taking the
 	// tunnel down.
 	f.closeSession()
+
+	// Re-install endpoint protection in a fresh session for every tunnel
+	// that had it active at session-close time. Best-effort: a failure
+	// here is logged but doesn't fail the user-visible "kill switch off"
+	// action, since the failure mode is "tunnel keeps running without
+	// loop protection" — same as before this code existed.
+	for iface, eps := range epSnapshot {
+		if err := f.enableEndpointProtectionLocked(iface, eps); err != nil {
+			slog.Warn("DisableKillSwitch: failed to reinstall endpoint protection",
+				"interface", iface, "error", err)
+		}
+	}
 	return nil
 }
 

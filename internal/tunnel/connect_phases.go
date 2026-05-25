@@ -49,6 +49,16 @@ func (m *Manager) connectPhases(ctx context.Context, cfg *domain.WireGuardConfig
 		if err := netMgr.RemoveRoutes(ifaceName, nil, fullTunnel); err != nil {
 			slog.Warn("rollback: RemoveRoutes failed", "error", err)
 		}
+		// Strip any endpoint loop protection filters we installed before
+		// the failure point — leaving them in force after a failed
+		// connect would block re-connects to the same endpoint until
+		// the helper restarted (the WFP BLOCK targets remote IP+port +
+		// tunnel LUID; on a re-connect the LUID matches again).
+		if m.endpointProtector != nil {
+			if err := m.endpointProtector.DisableEndpointProtection(ifaceName); err != nil {
+				slog.Warn("rollback: DisableEndpointProtection failed", "iface", ifaceName, "error", err)
+			}
+		}
 		if err := netMgr.Cleanup(ifaceName); err != nil {
 			slog.Warn("rollback: network Cleanup failed", "iface", ifaceName, "error", err)
 		}
@@ -95,6 +105,24 @@ func (m *Manager) connectPhases(ctx context.Context, cfg *domain.WireGuardConfig
 	// 5. Bring up
 	if err := netMgr.BringUp(ifaceName); err != nil {
 		return nil, rollback(newTunnelError(ErrNetwork, "bringing up interface", err))
+	}
+	if err := checkCtx(); err != nil {
+		return nil, err
+	}
+
+	// 5.5 Endpoint loop protection (Windows full-tunnel only on the
+	// firewall side; nil-protector platforms are no-ops). Installed
+	// BEFORE AddRoutes because step 6 is what arms the routing trap
+	// the protection defends against — if AddRoutes goes wrong (bypass
+	// /32 install fails on a flaky stack) we want the WFP BLOCK in
+	// place to fail-stop the WireGuard handshake rather than let it
+	// loop. For split-tunnel / Table=off this is a no-op on the
+	// firewall side (no endpoints → no filters).
+	if m.endpointProtector != nil && fullTunnel {
+		eps := engine.ResolvedEndpoints()
+		if err := m.endpointProtector.EnableEndpointProtection(ifaceName, eps); err != nil {
+			return nil, rollback(newTunnelError(ErrNetwork, "installing endpoint loop protection", err))
+		}
 	}
 	if err := checkCtx(); err != nil {
 		return nil, err
@@ -238,6 +266,20 @@ func (m *Manager) disconnectPhases(cfg *domain.WireGuardConfig, engine *Engine, 
 			slog.Warn("disconnect: RemoveRoutes failed", "iface", ifaceName, "error", err)
 		}
 		logStep("RemoveRoutes", ts)
+	}
+
+	// Endpoint loop protection — remove AFTER RemoveRoutes so the WFP
+	// BLOCK is the last line of defence while the kernel route table
+	// is still in the loop-prone /1-split state. On a clean disconnect
+	// the route deletes always win, but DisableEndpointProtection here
+	// guarantees no orphaned BLOCK survives a subsequent re-connect
+	// against a different endpoint IP for the same interface name.
+	if m.endpointProtector != nil {
+		tsEP := time.Now()
+		if err := m.endpointProtector.DisableEndpointProtection(ifaceName); err != nil {
+			slog.Warn("disconnect: DisableEndpointProtection failed", "iface", ifaceName, "error", err)
+		}
+		logStep("DisableEndpointProtection", tsEP)
 	}
 
 	// On Windows the wintun adapter doesn't actually disappear when

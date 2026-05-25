@@ -295,6 +295,15 @@ func (f *DarwinFirewall) RemoveKillSwitchTunnel(interfaceName string) error {
 	return nil
 }
 
+// EnableEndpointProtection is a no-op on macOS. The userspace
+// wireguard-go bind on macOS sets IP_BOUND_IF on its UDP socket to the
+// physical interface (utun routes don't trap it), so the routing loop
+// this guards against on Windows doesn't manifest here.
+func (f *DarwinFirewall) EnableEndpointProtection(string, []string) error { return nil }
+
+// DisableEndpointProtection mirrors the macOS no-op.
+func (f *DarwinFirewall) DisableEndpointProtection(string) error { return nil }
+
 func (f *DarwinFirewall) DisableKillSwitch() error {
 	f.mu.Lock()
 	pfWas := f.pfWasEnabled

@@ -84,6 +84,7 @@ task build
 | **Config Editor** | CodeMirror 6 with WireGuard syntax highlighting and autocompletion |
 | **System Tray** | Connection status badge, 1-click connect/disconnect |
 | **Kill Switch** | Blocks all non-VPN traffic — macOS `pf`, Linux `nftables`, Windows WFP (optional) |
+| **Loop Protection** | Always-on WFP filter blocks encrypted peer traffic from re-entering the tunnel adapter — defends against the routing-loop / "upload spike" class of bug on Windows full-tunnel even when the bypass /32 host route is missing |
 | **DNS Protection** | Forces DNS queries through the VPN tunnel only (optional) |
 | **Health Check** | Handshake age monitoring with auto-reconnect (optional) |
 | **Sleep/Wake Recovery** | macOS `NSWorkspace`, Linux `systemd-logind`, Windows power notifications |
