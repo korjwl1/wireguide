@@ -34,6 +34,19 @@ type tunnelEntry struct {
 	// after a successful full-tunnel connect. nil for split-tunnel and
 	// non-Windows where the watchdog is a no-op.
 	watchdogCancel context.CancelFunc
+
+	// socketBindCancel stops the IP_UNICAST_IF re-pin monitor goroutine.
+	// Lives next to watchdogCancel because both have the same lifetime
+	// (start at end-of-connect, stop at disconnect-begin). nil on
+	// non-Windows where the monitor is a no-op.
+	socketBindCancel context.CancelFunc
+
+	// socketBindInitialV4/V6 are the ifIndex values pin succeeded against
+	// at connect time. The monitor uses them as its "previous" baseline
+	// so the first poll only triggers a re-pin if the route table has
+	// actually moved since connect.
+	socketBindInitialV4 uint32
+	socketBindInitialV6 uint32
 }
 
 // Manager orchestrates the tunnel lifecycle using a small state machine
@@ -280,6 +293,20 @@ func (m *Manager) ConnectWithContext(ctx context.Context, cfg *domain.WireGuardC
 				}
 			}()
 		})
+
+		// Start the IP_UNICAST_IF re-pin monitor (Windows-only, no-op
+		// elsewhere). Hooks off the same context-lifetime pattern as the
+		// watchdog so DisconnectTunnel cleanly stops both without
+		// depending on Manager lifetime. The initial v4/v6 ifIndex
+		// values came from the connectPhases pin call; the monitor
+		// compares against them and only re-pins when the underlay
+		// actually moves (Wi-Fi → Ethernet handoff, DHCP gateway change,
+		// VPN-over-VPN etc.).
+		sbCtx, sbCancel := context.WithCancel(context.Background())
+		entry.socketBindCancel = sbCancel
+		entry.socketBindInitialV4 = engine.SocketPinV4
+		entry.socketBindInitialV6 = engine.SocketPinV6
+		startSocketBindMonitor(sbCtx, engine.bind, ifaceName, engine.SocketPinV4, engine.SocketPinV6)
 	}
 	return nil
 }
@@ -351,6 +378,7 @@ func (m *Manager) DisconnectTunnel(name string) error {
 	cfg := entry.cfg
 	netMgr := entry.netMgr
 	watchdogCancel := entry.watchdogCancel
+	socketBindCancel := entry.socketBindCancel
 	if engine == nil {
 		m.removeEntry(name)
 		m.mu.Unlock()
@@ -358,12 +386,21 @@ func (m *Manager) DisconnectTunnel(name string) error {
 	}
 	entry.state = stateDisconnecting
 	entry.watchdogCancel = nil
+	entry.socketBindCancel = nil
 	m.mu.Unlock()
 
 	// Cancel the watchdog BEFORE the slow teardown so it can't trip on
 	// the disconnect-phase TX burst (DNS flush, route deletes, etc.).
 	if watchdogCancel != nil {
 		watchdogCancel()
+	}
+	// Cancel the socket-bind monitor too — its next poll would call
+	// BindSocketToInterface on a wgDevice we're about to Close, which
+	// is benign (the bind layer's sockets are still alive until
+	// wgDev.Close) but logging the resulting "interface gone" errors
+	// would be confusing noise in the disconnect path.
+	if socketBindCancel != nil {
+		socketBindCancel()
 	}
 
 	// --- Phase 2: slow teardown outside the lock ---

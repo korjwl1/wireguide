@@ -27,6 +27,22 @@ type Engine struct {
 	ifaceName    string
 	closeOnce    sync.Once
 
+	// bind is the wireguard-go conn.Bind we passed to device.NewDevice.
+	// Held so the socket-pinning path (Windows: IP_UNICAST_IF; see
+	// internal/tunnel/socketbind_windows.go) can downcast it to
+	// conn.BindSocketToInterface and pin the WG UDP socket to the
+	// physical underlay's ifIndex after engine.Start has opened the
+	// sockets. The cast may yield nil on platforms whose default bind
+	// doesn't implement that interface — every call site checks.
+	bind conn.Bind
+
+	// SocketPinV4/V6 record the ifIndex pinSocketToPhysical succeeded
+	// against at connect time. Read by the manager to seed the socket-
+	// bind monitor's "previous" baseline so the first poll only fires
+	// a re-pin if the underlay has actually moved since connect.
+	SocketPinV4 uint32
+	SocketPinV6 uint32
+
 	// resolvedEndpointIPs caches the IP address each peer endpoint was
 	// resolved to during NewEngine. The network adapter uses these when
 	// installing bypass routes, instead of doing a second round of DNS
@@ -146,11 +162,13 @@ func NewEngine(cfg *config.WireGuardConfig) (*Engine, error) {
 	// rejections / MTU issues aren't invisible. Previously this was
 	// LogLevelSilent which made debugging impossible.
 	logger := newWireguardSlogLogger(ifaceName)
-	wgDev := device.NewDevice(tunDev, conn.NewDefaultBind(), logger)
+	bind := conn.NewDefaultBind()
+	wgDev := device.NewDevice(tunDev, bind, logger)
 
 	engine := &Engine{
 		tunDevice:           tunDev,
 		wgDevice:            wgDev,
+		bind:                bind,
 		ifaceName:           ifaceName,
 		resolvedEndpointIPs: resolvedEndpointIPs,
 		resolvedEndpoints:   resolvedEndpoints,

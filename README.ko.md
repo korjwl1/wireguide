@@ -39,6 +39,15 @@
 
 **macOS 15+ (Apple Silicon)** 및 **Windows 11 (amd64)** 에서 테스트 완료.
 
+> **크로스플랫폼 동등성 노트 (2026년 5월).** 이번 릴리스의 Windows 풀터널 루프
+> 보호 개편 (WFP `ALE_AUTH_CONNECT` + `OUTBOUND_TRANSPORT` 블록, iphlpapi `/32`
+> bypass + `InitializeIpForwardEntry`, 런어웨이 TX 워치독, `IP_UNICAST_IF`
+> 소켓 바인딩 + 재핀 모니터)은 Windows 11 라이브 테스트 완료 — 검증 매트릭스는
+> 루프 보호 브랜치 커밋 메시지 참조. 동일 클래스 버그를 macOS에서도 같은
+> 릴리스에서 fix (bypass-우선 순서, 게이트웨이 누락 시 fail-fast, 5초 언더레이
+> 재시도) 했으나 cross-compile + 유닛 테스트만 수행됨 — macOS 하드웨어
+> 라이브 테스트는 macOS 사용자 대상 정식 배포 전 권장.
+
 ### macOS (Homebrew) — 권장
 
 ```bash
