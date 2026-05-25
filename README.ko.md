@@ -163,3 +163,16 @@ WireGuide가 유용하셨다면 후원으로 개발을 지원해 주세요.
 ## 라이선스
 
 [MIT](LICENSE)
+
+---
+
+## 코드 사이닝
+
+Windows 인스톨러는 SignPath Foundation을 통해 코드 사이닝됩니다.
+사이닝 인프라는 [SignPath.io](https://signpath.io)에서 제공하며,
+인증서는 [SignPath Foundation](https://signpath.org)에서 발급합니다.
+사이닝 정책은 [SIGNING-POLICY.md](SIGNING-POLICY.md)에 문서화되어
+있습니다.
+
+> Free code signing provided by [SignPath.io](https://signpath.io),
+> certificate by [SignPath Foundation](https://signpath.org).

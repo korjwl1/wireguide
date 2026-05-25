@@ -65,6 +65,14 @@ jobs:
       matrix:
         arch: [amd64, arm64]
     runs-on: windows-latest  # x86_64 host; cross-compiles arm64 fine (no cgo)
+    permissions:
+      # signpath/github-action-submit-signing-request reads the unsigned
+      # artifact from the GitHub Actions artifact store. id-token write
+      # is reserved for a future OIDC-based path (the action only
+      # supports api-token auth today; see SIGNING-POLICY.md).
+      id-token: write
+      contents: read
+      actions: read
     steps:
       - uses: actions/checkout@v4
 
@@ -119,6 +127,73 @@ jobs:
           fi
           cp "$out" "bin/WireGuide-windows-${{ matrix.arch }}.exe"
 
+      # --- SignPath Foundation code signing ---------------------------
+      # Gated by SIGNPATH_API_TOKEN presence. While SignPath onboarding
+      # is pending the entire signing chain skips and the unsigned .exe
+      # ships (legacy behaviour). Once the maintainer's SignPath project
+      # is approved and SIGNPATH_API_TOKEN is set as a repo secret +
+      # SIGNPATH_ORGANIZATION_ID as a repo variable, this block runs
+      # automatically on tagged releases. See SIGNING-POLICY.md for the
+      # full policy.
+      - name: Detect SignPath config
+        id: signpath-cfg
+        shell: bash
+        env:
+          SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
+        run: |
+          if [ -n "$SIGNPATH_API_TOKEN" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+            echo "SignPath signing ENABLED for this build."
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::SIGNPATH_API_TOKEN not set — skipping code signing. Onboarding pending; see SIGNING-POLICY.md."
+          fi
+
+      - name: Upload unsigned installer for SignPath
+        if: steps.signpath-cfg.outputs.enabled == 'true'
+        id: upload-unsigned
+        uses: actions/upload-artifact@v4
+        with:
+          # transient name — the final published artifact stays
+          # 'windows-${{ matrix.arch }}' and contains the signed exe;
+          # the release job's download-artifact step excludes this one
+          # via pattern '!unsigned-*'.
+          name: unsigned-windows-${{ matrix.arch }}
+          path: bin/WireGuide-windows-${{ matrix.arch }}.exe
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Submit signing request to SignPath
+        if: steps.signpath-cfg.outputs.enabled == 'true'
+        uses: signpath/github-action-submit-signing-request@v2
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: wireguide
+          # Tagged releases only — the policy's origin verification
+          # also enforces this, but conditioning here makes the
+          # workflow's intent obvious.
+          signing-policy-slug: ${{ startsWith(github.ref, 'refs/tags/v') && 'release-signing' || 'test-signing' }}
+          github-artifact-id: ${{ steps.upload-unsigned.outputs.artifact-id }}
+          wait-for-completion: true
+          output-artifact-directory: bin/signed
+          wait-for-completion-timeout-in-seconds: 1800
+
+      - name: Replace unsigned installer with signed
+        if: steps.signpath-cfg.outputs.enabled == 'true'
+        shell: bash
+        run: |
+          set -e
+          signed=$(find bin/signed -type f -name "*.exe" | head -1)
+          test -n "$signed" || { echo "no signed .exe found"; ls -laR bin/signed; exit 1; }
+          mv "$signed" "bin/WireGuide-windows-${{ matrix.arch }}.exe"
+          # Sanity check: Get-AuthenticodeSignature reports Valid on
+          # a properly signed binary. Status NotSigned / HashMismatch
+          # would mean the replacement didn't happen.
+          powershell -Command "(Get-AuthenticodeSignature 'bin/WireGuide-windows-${{ matrix.arch }}.exe').Status" | tee /tmp/sigstatus
+          grep -q '^Valid' /tmp/sigstatus
+      # --- end signing -------------------------------------------------
+
       - uses: actions/upload-artifact@v4
         with:
           name: windows-${{ matrix.arch }}
@@ -142,7 +217,13 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
-          merge-multiple: true  # flattens 4 sub-dirs into one folder
+          merge-multiple: true  # flattens platform sub-dirs into one folder
+          # Exclude the transient unsigned-windows-* artifacts that the
+          # build-windows job uploads only to feed SignPath. Without
+          # this exclusion, the unsigned and signed .exes share the
+          # same filename (WireGuide-windows-<arch>.exe) and one
+          # silently overwrites the other under merge-multiple.
+          pattern: '!unsigned-*'
 
       - name: Generate SHA256SUMS
         # Matches the format internal/update/checker.go expects (GNU

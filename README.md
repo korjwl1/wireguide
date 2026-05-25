@@ -163,3 +163,15 @@ If WireGuide is useful to you, consider sponsoring to support development.
 ## License
 
 [MIT](LICENSE)
+
+---
+
+## Code signing
+
+The Windows installer is code-signed via SignPath Foundation. Signing
+infrastructure is contributed by [SignPath.io](https://signpath.io);
+the certificate is issued by [SignPath Foundation](https://signpath.org).
+Signing policy is documented in [SIGNING-POLICY.md](SIGNING-POLICY.md).
+
+> Free code signing provided by [SignPath.io](https://signpath.io),
+> certificate by [SignPath Foundation](https://signpath.org).
