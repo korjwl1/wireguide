@@ -108,14 +108,24 @@
     if (lastLoadedName && notesValue !== notesSaved) {
       flushNotes(lastLoadedName, notesValue);
     }
+    if (lastLoadedName && latencyTargetValue !== latencyTargetSaved) {
+      flushLatencyTarget(lastLoadedName, latencyTargetValue);
+    }
     if (notesSaveTimer) {
       clearTimeout(notesSaveTimer);
       notesSaveTimer = null;
+    }
+    if (latencyTargetSaveTimer) {
+      clearTimeout(latencyTargetSaveTimer);
+      latencyTargetSaveTimer = null;
     }
     lastLoadedName = $selectedTunnel.name;
     notesValue = $selectedTunnel.notes || '';
     notesSaved = notesValue;
     notesError = '';
+    latencyTargetValue = $selectedTunnel.latency_probe_target || '';
+    latencyTargetSaved = latencyTargetValue;
+    latencyTargetError = '';
     loadDetail($selectedTunnel.name);
     loadWifiRules($selectedTunnel.name);
   }
@@ -128,6 +138,12 @@
   let notesSaved = '';
   let notesSaveTimer = null;
   let notesError = '';
+  let latencyTargetValue = '';
+  let latencyTargetSaved = '';
+  let latencyTargetSaveTimer = null;
+  let latencyTargetError = '';
+  let latencyTargetEditing = false;
+  let latencyTargetInput = null;
 
   // flushNotes is the single write path used by both the debounce/blur
   // saver and the cross-tunnel-switch flush. It patches BOTH stores —
@@ -171,12 +187,97 @@
     notesSaveTimer = setTimeout(saveNotes, 800);
   }
 
+  async function flushLatencyTarget(name, value) {
+    if (!name) return false;
+    const normalized = (value || '').trim();
+    try {
+      await TunnelService.SetTunnelLatencyProbeTarget(name, normalized);
+      tunnels.update(list => list.map(t => t.name === name ? { ...t, latency_probe_target: normalized } : t));
+      selectedTunnel.update(sel => sel && sel.name === name ? { ...sel, latency_probe_target: normalized } : sel);
+      if ($selectedTunnel && $selectedTunnel.name === name) {
+        latencyTargetSaved = normalized;
+        latencyTargetValue = normalized;
+        latencyTargetError = '';
+      }
+      return true;
+    } catch (e) {
+      if ($selectedTunnel && $selectedTunnel.name === name) {
+        latencyTargetError = errText(e);
+      } else {
+        console.error('flushLatencyTarget for', name, e);
+      }
+      return false;
+    }
+  }
+
+  async function saveLatencyTarget() {
+    if (!$selectedTunnel) return;
+    if (latencyTargetValue === latencyTargetSaved) return;
+    await flushLatencyTarget($selectedTunnel.name, latencyTargetValue);
+  }
+
+  function onLatencyTargetInput() {
+    if (latencyTargetSaveTimer) clearTimeout(latencyTargetSaveTimer);
+    latencyTargetSaveTimer = setTimeout(saveLatencyTarget, 600);
+  }
+
+  function autoLatencyTarget() {
+    if (!detail) return { label: $selectedTunnel?.endpoint || '—', fallback: true };
+    for (const peer of detail.Peers || []) {
+      for (const allowed of peer.AllowedIPs || []) {
+        if (allowed.endsWith('/32')) return { label: allowed.slice(0, -3), fallback: false };
+        if (allowed.endsWith('/128')) return { label: allowed.slice(0, -4), fallback: false };
+      }
+    }
+    const fullTunnel = (detail.Peers || []).some(peer =>
+      (peer.AllowedIPs || []).some(ip => ip === '0.0.0.0/0' || ip === '::/0')
+    );
+    if (fullTunnel) return { label: '8.8.8.8', fallback: false };
+    return { label: $selectedTunnel?.endpoint || '—', fallback: true };
+  }
+
+  $: autoLatency = autoLatencyTarget();
+  $: latencyTargetDisplay = latencyTargetSaved
+    ? latencyTargetSaved
+    : `${$t('tunnel.latency_target_placeholder')}: ${autoLatency.fallback ? $t('tunnel.endpoint') : autoLatency.label}`;
+  $: latencyTargetTitle = latencyTargetSaved
+    ? latencyTargetSaved
+    : `${$t('tunnel.latency_target_placeholder')}: ${autoLatency.label}`;
+
+  async function editLatencyTarget() {
+    latencyTargetEditing = true;
+    await tick();
+    latencyTargetInput?.focus();
+    latencyTargetInput?.select();
+  }
+
+  async function finishLatencyTargetEdit() {
+    await saveLatencyTarget();
+    latencyTargetEditing = false;
+  }
+
+  function onLatencyTargetKeydown(e) {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      finishLatencyTargetEdit();
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      latencyTargetValue = latencyTargetSaved;
+      latencyTargetEditing = false;
+      latencyTargetError = '';
+    }
+  }
+
   onDestroy(() => {
     if (notesSaveTimer) clearTimeout(notesSaveTimer);
+    if (latencyTargetSaveTimer) clearTimeout(latencyTargetSaveTimer);
     // Best-effort flush on unmount (e.g. user deselected the tunnel
     // while a debounce was still pending).
     if (lastLoadedName && notesValue !== notesSaved) {
       flushNotes(lastLoadedName, notesValue);
+    }
+    if (lastLoadedName && latencyTargetValue !== latencyTargetSaved) {
+      flushLatencyTarget(lastLoadedName, latencyTargetValue);
     }
   });
 
@@ -556,38 +657,65 @@
     <!-- INFO SECTION: card with rows + dividers -->
     {#if $selectedTunnel.endpoint || detail}
       <div class="info-section">
-        <h3 class="section-label">{$t('tunnel.endpoint')}</h3>
-        <div class="info-card">
-          {#if $selectedTunnel.endpoint}
-            <div class="info-row">
-              <span class="info-label">{$t('tunnel.endpoint')}</span>
-              <span class="info-value mono">{$selectedTunnel.endpoint}</span>
+        {#if $selectedTunnel.endpoint}
+          <div class="endpoint-block-grid">
+            <div class="endpoint-block">
+              <h3 class="section-label">{$t('tunnel.endpoint')}</h3>
+              <div class="info-card endpoint-card">
+                <span class="info-value mono endpoint-value" title={$selectedTunnel.endpoint}>{$selectedTunnel.endpoint}</span>
+              </div>
             </div>
-          {/if}
-          {#if detail}
+            <div class="endpoint-block">
+              <h3 class="section-label">{$t('tunnel.latency_target')}</h3>
+              <div class="info-card endpoint-card">
+                {#if latencyTargetEditing}
+                  <input
+                    bind:this={latencyTargetInput}
+                    id="latency-target"
+                    class="latency-target-input"
+                    type="text"
+                    spellcheck="false"
+                    autocomplete="off"
+                    placeholder={$t('tunnel.latency_target_placeholder')}
+                    bind:value={latencyTargetValue}
+                    on:input={onLatencyTargetInput}
+                    on:blur={finishLatencyTargetEdit}
+                    on:keydown={onLatencyTargetKeydown} />
+                {:else}
+                  <div class="editable-info-value">
+                    <span class="info-value mono endpoint-value" title={latencyTargetTitle}>{latencyTargetDisplay}</span>
+                    <button class="inline-edit-btn" type="button" on:click={editLatencyTarget} aria-label={$t('tunnel.latency_target')}>
+                      <Icon name="pencil" size={13} strokeWidth={1.9} />
+                    </button>
+                  </div>
+                {/if}
+                {#if latencyTargetError}
+                  <span class="latency-target-error">{latencyTargetError}</span>
+                {/if}
+              </div>
+            </div>
+          </div>
+        {/if}
+        {#if detail}
+          <div class="info-card detail-info-card">
             {#each detail.Peers || [] as peer}
-              {#if $selectedTunnel.endpoint || (peer.AllowedIPs || []).length}
-                <div class="row-divider"></div>
-              {/if}
               <div class="info-row">
                 <span class="info-label">{$t('tunnel.allowed_ips')}</span>
                 <span class="info-value">{(peer.AllowedIPs || []).join(', ') || '—'}</span>
               </div>
-              <div class="row-divider"></div>
               <div class="info-row">
                 <span class="info-label">{$t('tunnel.public_key')}</span>
                 <span class="info-value mono">{peer.PublicKey?.substring(0, 20)}…</span>
               </div>
             {/each}
             {#if detail.Interface?.DNS?.length}
-              <div class="row-divider"></div>
               <div class="info-row">
                 <span class="info-label">DNS</span>
                 <span class="info-value">{detail.Interface.DNS.join(', ')}</span>
               </div>
             {/if}
-          {/if}
-        </div>
+          </div>
+        {/if}
       </div>
     {/if}
 
@@ -1281,6 +1409,11 @@
     border-radius: 12px;
     overflow: hidden;
   }
+  .detail-info-card {
+    border: 0;
+    background: transparent;
+    border-radius: 0;
+  }
   .info-row {
     display: flex;
     justify-content: space-between;
@@ -1288,11 +1421,6 @@
     gap: 16px;
     padding: 11px 14px;
     font: 13px/18px var(--font-sans);
-  }
-  .row-divider {
-    height: 0.5px;
-    background: var(--border);
-    margin: 0 14px;
   }
   .info-label { color: var(--text-secondary); flex-shrink: 0; }
   .info-value {
@@ -1305,6 +1433,97 @@
   .info-value.mono {
     font-family: var(--font-mono);
     font-size: 11px;
+  }
+  .endpoint-block-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 12px;
+    margin-bottom: 12px;
+  }
+  .endpoint-block {
+    min-width: 0;
+  }
+  .endpoint-card {
+    min-height: 50px;
+    padding: 11px 14px;
+    box-sizing: border-box;
+    display: flex;
+    justify-content: center;
+    flex-direction: column;
+  }
+  .endpoint-value {
+    display: block;
+    text-align: left;
+  }
+  .editable-info-value {
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+  }
+  .editable-info-value .endpoint-value {
+    flex: 1;
+  }
+  .inline-edit-btn {
+    width: 24px;
+    height: 24px;
+    border: 0;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--text-muted);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    flex: 0 0 auto;
+  }
+  @media (prefers-reduced-motion: no-preference) {
+    .inline-edit-btn {
+      transition: background-color 140ms ease, color 140ms ease;
+    }
+  }
+  .inline-edit-btn:hover,
+  .inline-edit-btn:focus-visible {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+    outline: none;
+  }
+  .latency-target-input {
+    width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
+    height: 26px;
+    padding: 0 8px;
+    background: color-mix(in srgb, var(--bg-primary) 78%, transparent);
+    border: 0.5px solid var(--border);
+    border-radius: 7px;
+    color: var(--text-primary);
+    font: 11px/16px var(--font-mono);
+    outline: none;
+  }
+  @media (prefers-reduced-motion: no-preference) {
+    .latency-target-input {
+      transition: border-color 140ms ease, box-shadow 140ms ease, background 140ms ease;
+    }
+  }
+  .latency-target-input:focus-visible {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--blue-tint);
+    background: var(--bg-primary);
+  }
+  .latency-target-input::placeholder {
+    color: var(--text-muted);
+    font-family: var(--font-sans);
+  }
+  .latency-target-error {
+    color: var(--red);
+    font: 10px/13px var(--font-sans);
+  }
+  @media (max-width: 520px) {
+    .endpoint-block-grid {
+      grid-template-columns: 1fr;
+    }
   }
 
   /* ========== NOTES ========== */

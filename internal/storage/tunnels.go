@@ -312,7 +312,8 @@ func (s *TunnelStore) path(name string) string {
 // format is shared with other clients (wg-quick, official apps) and embedding
 // app-specific fields as comments would be lost on round-trip through them.
 type TunnelMeta struct {
-	Notes string `json:"notes,omitempty"`
+	Notes              string `json:"notes,omitempty"`
+	LatencyProbeTarget string `json:"latency_probe_target,omitempty"`
 }
 
 func (s *TunnelStore) metaPath(name string) string {

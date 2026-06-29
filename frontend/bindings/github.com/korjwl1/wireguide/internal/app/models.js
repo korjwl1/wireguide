@@ -260,6 +260,13 @@ export class TunnelInfo {
              */
             this["notes"] = undefined;
         }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {string | undefined}
+             */
+            this["latency_probe_target"] = undefined;
+        }
 
         Object.assign(this, $$source);
     }

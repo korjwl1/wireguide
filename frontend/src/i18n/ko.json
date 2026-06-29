@@ -50,6 +50,8 @@
     "export": "내보내기",
     "status": "상태",
     "endpoint": "엔드포인트",
+    "latency_target": "지연 측정 대상",
+    "latency_target_placeholder": "자동",
     "allowed_ips": "허용 IP",
     "public_key": "공개 키",
     "handshake": "핸드셰이크",

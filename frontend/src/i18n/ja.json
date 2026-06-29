@@ -50,6 +50,8 @@
     "export": "エクスポート",
     "status": "ステータス",
     "endpoint": "エンドポイント",
+    "latency_target": "遅延測定先",
+    "latency_target_placeholder": "自動",
     "allowed_ips": "許可 IP",
     "public_key": "公開鍵",
     "handshake": "ハンドシェイク",

@@ -572,6 +572,18 @@ export function SetPinInterface(enabled) {
 }
 
 /**
+ * SetTunnelLatencyProbeTarget persists the optional per-tunnel ICMP target
+ * used only for latency display. The value is deliberately stored outside the
+ * WireGuard .conf so exports remain compatible with other clients.
+ * @param {string} name
+ * @param {string} target
+ * @returns {$CancellablePromise<void>}
+ */
+export function SetTunnelLatencyProbeTarget(name, target) {
+    return $Call.ByID(139371444, name, target);
+}
+
+/**
  * SetTunnelNotes persists a freeform note for a tunnel. Empty notes still
  * write an empty .meta.json — that matches the contract the frontend
  * expects (write always succeeds, no special-case for "clear").

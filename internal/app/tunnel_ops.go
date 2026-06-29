@@ -36,13 +36,16 @@ func (s *TunnelService) ListTunnelsLocal() ([]TunnelInfo, error) {
 			endpoint = cfg.Peers[0].Endpoint
 		}
 		notes := ""
+		latencyProbeTarget := ""
 		if meta != nil {
 			notes = meta.Notes
+			latencyProbeTarget = meta.LatencyProbeTarget
 		}
 		result = append(result, TunnelInfo{
-			Name:     name,
-			Endpoint: endpoint,
-			Notes:    notes,
+			Name:               name,
+			Endpoint:           endpoint,
+			Notes:              notes,
+			LatencyProbeTarget: latencyProbeTarget,
 		})
 	}
 	return result, nil
@@ -61,7 +64,27 @@ func (s *TunnelService) SetTunnelNotes(name, notes string) error {
 	if !s.tunnelStore.Exists(name) {
 		return fmt.Errorf("tunnel %q does not exist", name)
 	}
-	return s.tunnelStore.SaveMeta(name, &storage.TunnelMeta{Notes: notes})
+	meta, err := s.tunnelStore.LoadMeta(name)
+	if err != nil {
+		return err
+	}
+	meta.Notes = notes
+	return s.tunnelStore.SaveMeta(name, meta)
+}
+
+// SetTunnelLatencyProbeTarget persists the optional per-tunnel ICMP target
+// used only for latency display. The value is deliberately stored outside the
+// WireGuard .conf so exports remain compatible with other clients.
+func (s *TunnelService) SetTunnelLatencyProbeTarget(name, target string) error {
+	if !s.tunnelStore.Exists(name) {
+		return fmt.Errorf("tunnel %q does not exist", name)
+	}
+	meta, err := s.tunnelStore.LoadMeta(name)
+	if err != nil {
+		return err
+	}
+	meta.LatencyProbeTarget = strings.TrimSpace(target)
+	return s.tunnelStore.SaveMeta(name, meta)
 }
 
 // ListTunnels returns every stored tunnel with its summary info.
@@ -97,14 +120,17 @@ func (s *TunnelService) ListTunnels() ([]TunnelInfo, error) {
 			endpoint = cfg.Peers[0].Endpoint
 		}
 		notes := ""
+		latencyProbeTarget := ""
 		if meta != nil {
 			notes = meta.Notes
+			latencyProbeTarget = meta.LatencyProbeTarget
 		}
 		result = append(result, TunnelInfo{
-			Name:        name,
-			IsConnected: name == active.Value,
-			Endpoint:    endpoint,
-			Notes:       notes,
+			Name:               name,
+			IsConnected:        name == active.Value,
+			Endpoint:           endpoint,
+			Notes:              notes,
+			LatencyProbeTarget: latencyProbeTarget,
 		})
 	}
 	return result, nil

@@ -50,6 +50,8 @@
     "export": "Export",
     "status": "Status",
     "endpoint": "Endpoint",
+    "latency_target": "Latency target",
+    "latency_target_placeholder": "Auto",
     "allowed_ips": "Allowed IPs",
     "public_key": "Public Key",
     "handshake": "Handshake",
