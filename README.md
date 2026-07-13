@@ -168,6 +168,15 @@ wireguide ctl automation add <name> <connect|disconnect> <cond>
     #   cond = ssid:<wifi>  subnet:<CIDR>  mac:<gateway-MAC>  else
 wireguide ctl automation rm <name> <n>
 
+# Settings & diagnostics:
+wireguide ctl set killswitch <on|off>       # block non-VPN traffic if the tunnel drops
+wireguide ctl set dns-protection <on|off>   # pin DNS to the tunnel
+wireguide ctl set healthcheck <on|off>
+wireguide ctl set pin-interface <on|off>
+wireguide ctl set loglevel <debug|info|warn|error>
+wireguide ctl dnsleak                        # check whether DNS leaks outside the tunnel
+wireguide ctl routes                         # OS routing table
+
 # e.g. turn the work VPN off on the office network, on everywhere else:
 wireguide ctl automation add work disconnect mac:b0:38:6c:54:8b:ab
 wireguide ctl automation add work connect else

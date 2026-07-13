@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/korjwl1/wireguide/internal/config"
+	"github.com/korjwl1/wireguide/internal/diag"
 	"github.com/korjwl1/wireguide/internal/domain"
 	"github.com/korjwl1/wireguide/internal/ipc"
 	"github.com/korjwl1/wireguide/internal/storage"
@@ -58,6 +59,12 @@ func Run(args []string) int {
 		return cmdDelete(rest)
 	case "automation":
 		return cmdAutomation(rest)
+	case "set":
+		return cmdSet(rest)
+	case "dnsleak":
+		return cmdDNSLeak(rest)
+	case "routes":
+		return cmdRoutes(rest)
 	default:
 		fmt.Fprintf(os.Stderr, "unknown command %q\n\n", cmd)
 		usage(os.Stderr)
@@ -85,6 +92,15 @@ Automation (per-tunnel connect/disconnect rules):
                                             ssid:<wifi-name>   subnet:<CIDR>
                                             mac:<gateway-MAC>  else
   wireguide ctl automation rm <name> <n>  remove rule number <n> (from 'rules')
+
+Settings & diagnostics:
+  wireguide ctl set killswitch <on|off>       block non-VPN traffic if the tunnel drops
+  wireguide ctl set dns-protection <on|off>   pin DNS to the tunnel
+  wireguide ctl set healthcheck <on|off>      handshake monitor + auto-reconnect
+  wireguide ctl set pin-interface <on|off>    bind sockets to the upstream interface
+  wireguide ctl set loglevel <debug|info|warn|error>
+  wireguide ctl dnsleak                        check whether DNS leaks outside the tunnel
+  wireguide ctl routes                         show the OS routing table
 
 Examples:
   wireguide ctl automation add work disconnect mac:b0:38:6c:54:8b:ab
@@ -213,6 +229,18 @@ func cmdConnect(args []string) int {
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "connect: no such tunnel %q: %v\n", name, err)
 		return 1
+	}
+	// Pre-connect conflict check — mirrors the GUI's warning-on-connect.
+	// Non-interactive: we warn and proceed (the GUI shows a dialog).
+	var allowedIPs []string
+	for _, p := range cfg.Peers {
+		allowedIPs = append(allowedIPs, p.AllowedIPs...)
+	}
+	if conflicts, cerr := diag.CheckConflicts(allowedIPs); cerr == nil {
+		for _, cf := range conflicts {
+			fmt.Fprintf(os.Stderr, "warning: routes overlap with %s (%s): %s\n",
+				cf.Owner, cf.InterfaceName, strings.Join(cf.OverlappingIPs, ", "))
+		}
 	}
 	c, err := dialHelper()
 	if err != nil {
@@ -577,6 +605,198 @@ func cmdDelete(args []string) int {
 		return 1
 	}
 	fmt.Printf("deleted %s\n", name)
+	return 0
+}
+
+// --- settings toggles (persist to config.json + apply live via IPC) ---
+
+func parseOnOff(v string) (bool, bool) {
+	switch strings.ToLower(v) {
+	case "on", "true", "1", "yes", "enable", "enabled":
+		return true, true
+	case "off", "false", "0", "no", "disable", "disabled":
+		return false, true
+	}
+	return false, false
+}
+
+func cmdSet(args []string) int {
+	if len(args) < 2 {
+		fmt.Fprintln(os.Stderr, "usage: wireguide ctl set <killswitch|dns-protection|healthcheck|pin-interface|loglevel> <value>")
+		return 2
+	}
+	setting, value := strings.ToLower(args[0]), args[1]
+
+	ss, err := settingsStore()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "set:", err)
+		return 1
+	}
+	s, err := ss.Load()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "set:", err)
+		return 1
+	}
+
+	// applyIPC runs a helper call best-effort — the setting is already
+	// persisted, so a missing helper just means "applies on next launch".
+	applyIPC := func(method string, params interface{}) {
+		c, derr := dialHelper()
+		if derr != nil {
+			fmt.Println("(helper not running — saved; will take effect when the app starts)")
+			return
+		}
+		defer c.Close()
+		if err := c.Call(method, params, nil); err != nil {
+			fmt.Fprintln(os.Stderr, "warning: saved but live apply failed:", err)
+		}
+	}
+
+	switch setting {
+	case "killswitch", "kill-switch", "kill_switch":
+		v, ok := parseOnOff(value)
+		if !ok {
+			fmt.Fprintln(os.Stderr, "value must be on/off")
+			return 2
+		}
+		s.KillSwitch = v
+		if err := ss.Save(s); err != nil {
+			fmt.Fprintln(os.Stderr, "set:", err)
+			return 1
+		}
+		applyIPC(ipc.MethodSetKillSwitch, ipc.KillSwitchRequest{Enabled: v})
+	case "dns-protection", "dnsprotection", "dns_protection":
+		v, ok := parseOnOff(value)
+		if !ok {
+			fmt.Fprintln(os.Stderr, "value must be on/off")
+			return 2
+		}
+		s.DNSProtection = v
+		if err := ss.Save(s); err != nil {
+			fmt.Fprintln(os.Stderr, "set:", err)
+			return 1
+		}
+		// When enabling, the helper needs the active tunnel's DNS servers.
+		var servers []string
+		if v {
+			if name := activeTunnelName(); name != "" {
+				if store, e := tunnelStore(); e == nil {
+					if cfg, e := store.Load(name); e == nil {
+						servers = cfg.Interface.DNS
+					}
+				}
+			}
+		}
+		applyIPC(ipc.MethodSetDNSProtection, ipc.DNSProtectionRequest{Enabled: v, DNSServers: servers})
+	case "healthcheck", "health-check", "health_check":
+		v, ok := parseOnOff(value)
+		if !ok {
+			fmt.Fprintln(os.Stderr, "value must be on/off")
+			return 2
+		}
+		s.HealthCheck = v
+		if err := ss.Save(s); err != nil {
+			fmt.Fprintln(os.Stderr, "set:", err)
+			return 1
+		}
+		applyIPC(ipc.MethodSetHealthCheck, ipc.SetHealthCheckRequest{Enabled: v})
+	case "pin-interface", "pininterface", "pin_interface":
+		v, ok := parseOnOff(value)
+		if !ok {
+			fmt.Fprintln(os.Stderr, "value must be on/off")
+			return 2
+		}
+		s.PinInterface = v
+		if err := ss.Save(s); err != nil {
+			fmt.Fprintln(os.Stderr, "set:", err)
+			return 1
+		}
+		applyIPC(ipc.MethodSetPinInterface, ipc.SetPinInterfaceRequest{Enabled: v})
+	case "loglevel", "log-level", "log_level":
+		lvl := strings.ToLower(value)
+		switch lvl {
+		case "debug", "info", "warn", "error":
+		default:
+			fmt.Fprintln(os.Stderr, "loglevel must be one of: debug, info, warn, error")
+			return 2
+		}
+		s.LogLevel = lvl
+		if err := ss.Save(s); err != nil {
+			fmt.Fprintln(os.Stderr, "set:", err)
+			return 1
+		}
+		applyIPC(ipc.MethodSetLogLevel, ipc.SetLogLevelRequest{Level: lvl})
+	default:
+		fmt.Fprintf(os.Stderr, "unknown setting %q (killswitch, dns-protection, healthcheck, pin-interface, loglevel)\n", setting)
+		return 2
+	}
+	fmt.Printf("%s = %s\n", setting, value)
+	return 0
+}
+
+// activeTunnelName returns the currently-active tunnel via IPC, or "".
+func activeTunnelName() string {
+	c, err := dialHelper()
+	if err != nil {
+		return ""
+	}
+	defer c.Close()
+	var resp ipc.StringResponse
+	if c.Call(ipc.MethodActiveName, nil, &resp) != nil {
+		return ""
+	}
+	return resp.Value
+}
+
+// --- diagnostics ---
+
+func cmdDNSLeak(_ []string) int {
+	// Compare against the active tunnel's DNS servers when there is one.
+	var expected []string
+	if name := activeTunnelName(); name != "" {
+		if store, err := tunnelStore(); err == nil {
+			if cfg, err := store.Load(name); err == nil {
+				expected = cfg.Interface.DNS
+			}
+		}
+	}
+	res := diag.RunDNSLeakTest(expected)
+	if res == nil {
+		fmt.Fprintln(os.Stderr, "dnsleak: no result")
+		return 1
+	}
+	if res.Error != "" {
+		fmt.Fprintln(os.Stderr, "dnsleak:", res.Error)
+		return 1
+	}
+	if res.Leaked {
+		fmt.Println("LEAK: DNS queries are resolving outside the tunnel")
+	} else {
+		fmt.Println("OK: DNS is pinned to the tunnel")
+	}
+	for _, srv := range res.DNSServers {
+		fmt.Printf("  resolver %s\n", srv.IP)
+	}
+	if res.Leaked {
+		return 1
+	}
+	return 0
+}
+
+func cmdRoutes(_ []string) int {
+	rows, err := diag.GetRoutingTable()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "routes:", err)
+		return 1
+	}
+	if len(rows) == 0 {
+		fmt.Println("(no routes)")
+		return 0
+	}
+	fmt.Printf("%-24s %-18s %-10s %s\n", "DESTINATION", "GATEWAY", "IFACE", "FLAGS")
+	for _, r := range rows {
+		fmt.Printf("%-24s %-18s %-10s %s\n", r.Destination, r.Gateway, r.Interface, r.Flags)
+	}
 	return 0
 }
 
