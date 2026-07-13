@@ -23,6 +23,9 @@
   let currentSubnets = [];      // autocomplete suggestions for the subnet field
   let currentGatewayMAC = '';   // autocomplete suggestion for the MAC field
   let saveError = '';
+  // loadGen tags each async load so a slow in-flight load(A) can't clobber
+  // the rules after the user has already switched to load(B) (issue #12).
+  let loadGen = 0;
 
   // Reload whenever the modal opens for a (possibly different) tunnel.
   $: if (open && tunnelName && loadedFor !== tunnelName) {
@@ -30,10 +33,15 @@
   }
 
   async function load(name) {
+    // Persist any pending edit for the tunnel we're leaving BEFORE we
+    // overwrite `rules`, so switching tunnels never drops the last change.
+    await flush();
+    const gen = ++loadGen;
     loadedFor = name;
     saveError = '';
     try {
       const s = await TunnelService.GetSettings();
+      if (gen !== loadGen) return; // a newer load superseded this one
       const per = s?.automation?.per_tunnel_rules || {};
       // Deep-copy so edits don't mutate the fetched object before save.
       rules = (per[name] || []).map(r => ({
@@ -46,20 +54,25 @@
         do: r.do || 'connect',
       }));
     } catch (e) {
-      rules = [];
+      if (gen === loadGen) rules = [];
       console.error('automation load:', e);
     }
     try {
       const r = await TunnelService.GetKnownSSIDs();
+      if (gen !== loadGen) return;
       knownSSIDs = r?.known || [];
       currentSSID = r?.current || '';
     } catch (_) {}
     try {
-      currentSubnets = (await TunnelService.GetCurrentSubnets()) || [];
-    } catch (_) { currentSubnets = []; }
+      const subs = (await TunnelService.GetCurrentSubnets()) || [];
+      if (gen !== loadGen) return;
+      currentSubnets = subs;
+    } catch (_) { if (gen === loadGen) currentSubnets = []; }
     try {
-      currentGatewayMAC = (await TunnelService.GetCurrentNetwork())?.gateway_mac || '';
-    } catch (_) { currentGatewayMAC = ''; }
+      const mac = (await TunnelService.GetCurrentNetwork())?.gateway_mac || '';
+      if (gen !== loadGen) return;
+      currentGatewayMAC = mac;
+    } catch (_) { if (gen === loadGen) currentGatewayMAC = ''; }
   }
 
   const MAX_RULES = 50;
@@ -171,24 +184,38 @@
     });
   }
 
+  // Debounced, snapshot-based save. The pending snapshot binds the rules
+  // to the tunnel they were edited for AT SCHEDULE TIME — the old code read
+  // `tunnelName` and the live `rules` when the 300ms timer fired, so closing
+  // one tunnel and opening another within the debounce window could persist
+  // the wrong tunnel's rules under the new name (issue #12). saveChain
+  // serialises overlapping saves so a fast burst can't interleave writes.
   let saveTimer = null;
+  let pending = null;             // { name, rules } snapshot to persist
+  let saveChain = Promise.resolve();
+
   function save() {
+    pending = { name: tunnelName, rules: cleaned() };
     if (saveTimer) clearTimeout(saveTimer);
-    saveTimer = setTimeout(doSave, 300);
+    saveTimer = setTimeout(runSave, 300);
   }
-  async function doSave() {
+  function runSave() {
     saveTimer = null;
+    const snap = pending;
+    pending = null;
+    if (!snap) return;
+    saveChain = saveChain.then(() => persist(snap));
+  }
+  async function persist(snap) {
     saveError = '';
-    const name = tunnelName;
     try {
       const s = await TunnelService.GetSettings();
       const automation = s?.automation || { per_tunnel_rules: {} };
       automation.per_tunnel_rules = automation.per_tunnel_rules || {};
-      const c = cleaned();
-      if (c.length === 0) {
-        delete automation.per_tunnel_rules[name];
+      if (snap.rules.length === 0) {
+        delete automation.per_tunnel_rules[snap.name];
       } else {
-        automation.per_tunnel_rules[name] = c;
+        automation.per_tunnel_rules[snap.name] = snap.rules;
       }
       await TunnelService.SaveSettings({ ...s, automation });
     } catch (e) {
@@ -196,8 +223,16 @@
       console.error('automation save:', e);
     }
   }
+  // flush persists any debounced edit immediately and waits for all
+  // in-flight/queued saves — used before switching tunnels and on close so
+  // the last edit is never lost.
+  async function flush() {
+    if (saveTimer) { clearTimeout(saveTimer); runSave(); }
+    await saveChain;
+  }
 
-  function close() {
+  async function close() {
+    await flush();
     open = false;
     loadedFor = '';
   }
