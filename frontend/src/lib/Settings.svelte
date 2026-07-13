@@ -3,6 +3,7 @@
   import { t, setLanguage, getLanguage, detectLanguage } from '../i18n/index.js';
   import { applyTheme } from '../stores/theme.js';
   import { connectionStatus, tunnels } from '../stores/tunnels.js';
+  import { compactList } from '../stores/ui.js';
   import WifiRules from './WifiRules.svelte';
   import Icon from './Icon.svelte';
 
@@ -134,6 +135,7 @@
     log_level: 'info',
     tray_icon_style: 'color',
     auto_update_check: true,
+    compact_list: false,
     wifi_rules: {
       trusted_ssids: [],
       per_tunnel: {},
@@ -155,6 +157,7 @@
         settings.pin_interface = s.pin_interface ?? false;
         settings.log_level = s.log_level || 'info';
         settings.tray_icon_style = s.tray_icon_style || 'color';
+        settings.compact_list = s.compact_list ?? false;
         // Legacy settings.json predates this field — *bool null on
         // the Go side becomes undefined here; default to true to match
         // Settings.AutoUpdateCheckEnabled() semantics.
@@ -202,6 +205,7 @@
         pin_interface: settings.pin_interface,
         log_level: settings.log_level,
         auto_update_check: settings.auto_update_check,
+        compact_list: settings.compact_list,
         wifi_rules: {
           trusted_ssids: settings.wifi_rules?.trusted_ssids || [],
           per_tunnel: perTunnel,
@@ -231,6 +235,14 @@
     settings.language = e.target.value;
     const resolved = settings.language === 'auto' ? detectLanguage() : settings.language;
     setLanguage(resolved);
+    scheduleSave();
+  }
+
+  function onCompactListChange(e) {
+    settings.compact_list = e.target.checked;
+    // Update the shared store so the tunnel list re-renders immediately,
+    // then persist.
+    compactList.set(settings.compact_list);
     scheduleSave();
   }
 
@@ -385,6 +397,16 @@
                   <option value="ko">한국어</option>
                   <option value="ja">日本語</option>
                 </select>
+              </div>
+              <div class="setting-row setting-row--toggle">
+                <div class="setting-info">
+                  <label class="setting-label" for="compact-list">{$t('settings.compact_list')}</label>
+                  <p class="setting-desc">{$t('settings.compact_list_hint')}</p>
+                </div>
+                <label class="toggle">
+                  <input id="compact-list" type="checkbox" checked={settings.compact_list} on:change={onCompactListChange} />
+                  <span class="toggle-track"></span>
+                </label>
               </div>
             </div>
           </div>

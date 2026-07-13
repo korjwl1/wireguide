@@ -121,6 +121,8 @@
     "theme_light": "Light",
     "theme_system": "System",
     "language": "Language",
+    "compact_list": "Compact tunnel list",
+    "compact_list_hint": "Denser rows — hides the endpoint line and shrinks row height so more tunnels fit without scrolling.",
     "lang_auto": "Auto",
     "close": "Close",
     "advanced": "Advanced",

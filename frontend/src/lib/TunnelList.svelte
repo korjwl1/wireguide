@@ -2,6 +2,7 @@
   import { createEventDispatcher } from 'svelte';
   import Icon from './Icon.svelte';
   import { tunnels, selectedTunnel, connectionStatus } from '../stores/tunnels.js';
+  import { compactList } from '../stores/ui.js';
   import { t } from '../i18n/index.js';
 
   const dispatch = createEventDispatcher();
@@ -54,7 +55,7 @@
     {/if}
   </div>
 
-  <div class="list-items">
+  <div class="list-items" class:compact={$compactList}>
     {#if filtered.length === 0 && search === ''}
       <div class="empty-state">
         <Icon name="shield-off" size={28} strokeWidth={1.5} className="empty-icon" />
@@ -304,6 +305,19 @@
     font: 400 11px/14px var(--font-mono);
     color: var(--text-muted);
     letter-spacing: 0.01em;
+  }
+
+  /* --- Compact mode: dense single-line rows (issue #16) --- */
+  .list-items.compact .tunnel-item {
+    min-height: 34px;
+    padding: 4px 10px;
+    margin-bottom: 1px;
+  }
+  .list-items.compact .tunnel-meta {
+    display: none;
+  }
+  .list-items.compact .tunnel-item.connected::before {
+    height: 18px;
   }
 
   /* --- Empty state --- */

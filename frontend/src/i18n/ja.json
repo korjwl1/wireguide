@@ -121,6 +121,8 @@
     "theme_light": "ライト",
     "theme_system": "システム",
     "language": "言語",
+    "compact_list": "コンパクトなトンネル一覧",
+    "compact_list_hint": "行をより高密度に — エンドポイント行を隠して行の高さを縮小し、スクロールせずに多くのトンネルを表示します。",
     "lang_auto": "自動",
     "close": "閉じる",
     "advanced": "詳細",

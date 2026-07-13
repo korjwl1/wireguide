@@ -21,6 +21,7 @@ type Settings struct {
 	HealthCheck   bool   `json:"health_check"`  // periodic handshake age monitoring
 	PinInterface  bool   `json:"pin_interface"` // pin bypass routes to upstream interface (-ifscope)
 	LogLevel      string `json:"log_level"`     // "debug", "info", "warn", "error"
+	CompactList   bool   `json:"compact_list"`  // dense tunnel list: hide endpoint line, shorter rows
 
 	// AutoUpdateCheck controls the periodic update scheduler. *bool so we
 	// can distinguish "user never touched this" from "user explicitly

@@ -121,6 +121,8 @@
     "theme_light": "밝음",
     "theme_system": "시스템",
     "language": "언어",
+    "compact_list": "컴팩트 터널 목록",
+    "compact_list_hint": "행을 더 촘촘하게 — 엔드포인트 줄을 숨기고 행 높이를 줄여 스크롤 없이 더 많은 터널을 표시합니다.",
     "lang_auto": "자동",
     "close": "닫기",
     "advanced": "고급",
