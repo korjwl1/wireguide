@@ -205,13 +205,17 @@ func Run(assetsHandler http.Handler, dataDir string) error {
 
 	// 6. System tray. macOS uses non-template coloured icons (the
 	// connected badge must stay green; template images are alpha-only),
-	// with the W glyph colour matched to the current system appearance —
-	// setDarkMenuBar below keeps it in sync on theme changes. Never call
-	// SetTemplateIcon: Wails's sticky isTemplateIcon flag would render
-	// every later SetIcon monochrome.
+	// with the W glyph colour following the menu bar's actual rendered
+	// appearance — refreshMenuBarAppearance keeps it in sync from the
+	// status stream and theme events. Never call SetTemplateIcon:
+	// Wails's sticky isTemplateIcon flag would render every later
+	// SetIcon monochrome.
 	tray := app.SystemTray.New()
 	if runtime.GOOS == "darwin" {
-		if app.Env.IsDarkMode() {
+		// The status-bar window doesn't exist yet, so this samples the
+		// app appearance; the first status event corrects it if the
+		// wallpaper makes the menu bar deviate from the theme.
+		if menuBarIsDark() {
 			tray.SetIcon(trayOffIconDark)
 		} else {
 			tray.SetIcon(trayOffIconLight)
@@ -273,15 +277,16 @@ func Run(assetsHandler http.Handler, dataDir string) error {
 	}
 
 	trayMgr := newTrayManager(app, win, tray, tunnelService, doShutdown)
-	// Seed the appearance flag before the first status event so the
-	// initial connect renders the right-contrast glyph, then keep it in
-	// sync with system theme switches.
-	trayMgr.setDarkMenuBar(app.Env.IsDarkMode())
+	// Seed the appearance flag to match the icon set above, then keep
+	// it in sync: theme events give an immediate kick, and the 1 Hz
+	// status stream (setIconState) covers wallpaper/space changes that
+	// fire no event.
+	trayMgr.darkMenuBar.Store(menuBarIsDark())
 	trayMgr.initialBuild()
 
 	if runtime.GOOS == "darwin" {
-		app.Event.OnApplicationEvent(events.Mac.ApplicationDidChangeTheme, func(e *application.ApplicationEvent) {
-			trayMgr.setDarkMenuBar(e.Context().IsDarkMode())
+		app.Event.OnApplicationEvent(events.Mac.ApplicationDidChangeTheme, func(_ *application.ApplicationEvent) {
+			trayMgr.refreshMenuBarAppearance()
 		})
 	}
 

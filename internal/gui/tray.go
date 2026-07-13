@@ -25,15 +25,16 @@ import (
 // chosen originally. Legibility across menu-bar appearances (issue #18:
 // a fixed white W is invisible on a light menu bar) is handled by
 // keeping one icon set per appearance and swapping the W glyph colour
-// when the system theme changes (events.Mac.ApplicationDidChangeTheme →
-// trayManager.setDarkMenuBar). We never call SetTemplateIcon, so the
-// Wails v3 sticky-isTemplateIcon bug (once set, later SetIcon calls
-// render monochrome) is never triggered.
-//
-// Known limit: this keys off the system light/dark theme. Extreme
-// wallpaper-tinting edge cases where the menu bar deviates from the
-// theme are not tracked — only template icons get that for free, and
-// template would cost the green dot.
+// to follow the menu bar's ACTUAL rendered appearance, sampled from the
+// status-bar window (menubar_appearance_darwin.go) on every status
+// event and on theme-change events. The menu bar's appearance is driven
+// by the wallpaper behind it, not the system theme: a light-theme
+// desktop over a dark wallpaper renders a dark menu bar and every other
+// (template) icon white — sampling the real appearance keeps our W
+// matching them there, where a theme check would wrongly pick black.
+// We never call SetTemplateIcon, so the Wails v3 sticky-isTemplateIcon
+// bug (once set, later SetIcon calls render monochrome) is never
+// triggered.
 var (
 	trayOnIconDark   []byte // white W + green dot (dark menu bar)
 	trayOffIconDark  []byte // white W, no badge
@@ -353,6 +354,14 @@ type trayManager struct {
 	activeTunnels map[string]bool // cached from status events
 	hasHandshake  map[string]bool // per-tunnel handshake status
 	rebuildTimer  *time.Timer     // debounce timer for rebuildMenu
+	// menu is the ONE Menu object backing the tray for the app's whole
+	// lifetime. rebuildMenu clears and refills it in place instead of
+	// creating a fresh Menu: Wails reuses the same NSMenu instance on
+	// Update(), and AppKit live-updates a menu that is currently open —
+	// swapping in a new NSMenu (the old design) left an open menu
+	// showing stale connection glyphs until dismissed, and leaked the
+	// replaced NSMenu on every rebuild. Guarded by rebuildMu.
+	menu *application.Menu
 	// rebuildMu serialises rebuildMenu calls so two concurrent rebuilds
 	// can't interleave their ListTunnelsLocal snapshot and SetMenu —
 	// rebuilds are sub-ms so queued callers never wait meaningfully.
@@ -377,14 +386,19 @@ func (t *trayManager) macIcons() (on, off []byte) {
 	return trayOnIconLight, trayOffIconLight
 }
 
-// setDarkMenuBar records the system appearance and immediately re-applies
-// the icon for the current connection state, so a theme switch doesn't
-// leave a low-contrast glyph up until the next connect/disconnect.
-func (t *trayManager) setDarkMenuBar(dark bool) {
+// refreshMenuBarAppearance samples the menu bar's ACTUAL rendered
+// appearance (wallpaper-driven, not the system theme — see
+// menubar_appearance_darwin.go) and, when it changed, immediately
+// re-applies the icon for the current connection state. Returns whether
+// the appearance flipped so setIconState can fold it into its own gate.
+func (t *trayManager) refreshMenuBarAppearance() bool {
 	if runtime.GOOS != "darwin" {
-		return
+		return false
 	}
-	t.darkMenuBar.Store(dark)
+	dark := menuBarIsDark()
+	if t.darkMenuBar.Swap(dark) == dark {
+		return false
+	}
 	t.mu.Lock()
 	anyConnected := len(t.activeTunnels) > 0
 	t.mu.Unlock()
@@ -394,6 +408,7 @@ func (t *trayManager) setDarkMenuBar(dark bool) {
 	} else {
 		t.tray.SetIcon(off)
 	}
+	return true
 }
 
 func newTrayManager(app *application.App, win *application.WebviewWindow, tray *application.SystemTray, svc *wgapp.TunnelService, doShutdown func()) *trayManager {
@@ -427,6 +442,12 @@ func (t *trayManager) initialBuild() {
 //   disconnected → W glyph (white on dark menu bars, black on light)
 //   connected    → same W with a green dot badge
 func (t *trayManager) setIconState(activeNames []string, handshakeMap map[string]bool) {
+	// Piggyback the menu-bar appearance sample on the 1 Hz status
+	// stream — wallpaper/space changes flip the menu bar's appearance
+	// without firing any theme event. Sub-ms main-thread hop; when the
+	// appearance flipped, refresh re-applies the icon itself.
+	t.refreshMenuBarAppearance()
+
 	newSet := make(map[string]bool, len(activeNames))
 	for _, n := range activeNames {
 		newSet[n] = true
@@ -555,7 +576,17 @@ func (t *trayManager) rebuildMenu() {
 	hsMap := t.hasHandshake
 	t.mu.Unlock()
 
-	m := t.app.NewMenu()
+	// Refill the single persistent Menu in place (see the menu field
+	// doc): Wails reuses its NSMenu on Update(), and AppKit live-updates
+	// an NSMenu that is currently open — creating a fresh Menu here left
+	// an open tray menu showing stale glyphs until dismissed.
+	created := t.menu == nil
+	if created {
+		t.menu = t.app.NewMenu()
+	} else {
+		t.menu.Clear()
+	}
+	m := t.menu
 	m.Add("WireGuide").SetEnabled(false)
 	m.AddSeparator()
 
@@ -605,5 +636,9 @@ func (t *trayManager) rebuildMenu() {
 		t.tray.Destroy()
 		t.app.Quit()
 	})
-	t.tray.SetMenu(m)
+	if created {
+		t.tray.SetMenu(m) // runs m.Update() and caches the NSMenu
+	} else {
+		m.Update() // in-place refresh of the same NSMenu — live even while open
+	}
 }
