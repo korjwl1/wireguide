@@ -41,6 +41,18 @@ type routeMonitor struct {
 	// until it finishes. Without this, Stop() followed by Connect()
 	// could race with a pending reapply that's still touching shared state.
 	pending sync.WaitGroup
+
+	// stopped latches once Stop() has run. It blocks any Start that is
+	// still in flight (a StartDelayed AfterFunc that fired concurrently
+	// with Stop, or loop()'s crash-restart) from resurrecting a monitor
+	// whose owner has already torn down.
+	stopped bool
+
+	// startedAt / restarts implement the crash-restart cap in loop():
+	// a subprocess that survived >1 min resets the counter; one that
+	// keeps dying immediately stops being restarted after a few tries.
+	startedAt time.Time
+	restarts  int
 }
 
 // Only lines containing these RTM_ event types trigger a reapply. wg-quick's
@@ -147,7 +159,7 @@ func (mgr *routeMonitorMgr) fanOut() {
 func (rm *routeMonitor) StartDelayed(d time.Duration) {
 	rm.mu.Lock()
 	defer rm.mu.Unlock()
-	if rm.running || rm.pendingStart != nil {
+	if rm.running || rm.pendingStart != nil || rm.stopped {
 		return
 	}
 	rm.pendingStart = time.AfterFunc(d, func() {
@@ -162,7 +174,7 @@ func (rm *routeMonitor) StartDelayed(d time.Duration) {
 func (rm *routeMonitor) Start() {
 	rm.mu.Lock()
 	defer rm.mu.Unlock()
-	if rm.running {
+	if rm.running || rm.stopped {
 		return
 	}
 
@@ -182,6 +194,7 @@ func (rm *routeMonitor) Start() {
 	rm.stopCh = make(chan struct{})
 	rm.kick = make(chan struct{}, 1)
 	rm.running = true
+	rm.startedAt = time.Now()
 
 	go rm.loop(stdout)
 	go rm.debounceLoop()
@@ -194,6 +207,10 @@ func (rm *routeMonitor) Start() {
 // occur, so the caller can safely tear down shared state.
 func (rm *routeMonitor) Stop() {
 	rm.mu.Lock()
+	// Latch first: any Start still in flight (a StartDelayed AfterFunc
+	// that fired concurrently, or loop()'s crash-restart) must not
+	// resurrect the monitor after we return.
+	rm.stopped = true
 	// Cancel any pending delayed Start so a fast Connect→Disconnect doesn't
 	// leak a `route -n monitor` subprocess. Safe to call when nil.
 	if rm.pendingStart != nil {
@@ -209,6 +226,7 @@ func (rm *routeMonitor) Stop() {
 		_ = rm.cmd.Process.Kill()
 		_ = rm.cmd.Wait() // reap the zombie
 	}
+	rm.cmd = nil
 	rm.running = false
 	rm.mu.Unlock()
 
@@ -237,6 +255,51 @@ func (rm *routeMonitor) loop(stdout interface {
 		}
 		rm.trigger()
 	}
+
+	// Scan returned false: either Stop() killed the subprocess, or it
+	// died on its own (killed externally, crashed). The latter used to
+	// go completely unhandled — zombie process, running stuck true,
+	// debounceLoop parked forever, and network changes silently stopped
+	// triggering reapply (stale endpoint bypass → broken tunnel, or the
+	// very routing loop the bypass exists to prevent).
+	select {
+	case <-rm.stopCh:
+		return // normal Stop(); it reaps the subprocess itself
+	default:
+	}
+
+	rm.mu.Lock()
+	if !rm.running || rm.stopped {
+		rm.mu.Unlock()
+		return
+	}
+	cmd := rm.cmd
+	rm.cmd = nil
+	rm.running = false
+	// Release debounceLoop. Safe against Stop()'s close: Stop returns
+	// early on !running, and both run under rm.mu.
+	close(rm.stopCh)
+	// Crash-restart cap: a subprocess that survived >1 min earns a fresh
+	// counter; one that keeps dying immediately stops being restarted.
+	if time.Since(rm.startedAt) > time.Minute {
+		rm.restarts = 0
+	}
+	rm.restarts++
+	restarts := rm.restarts
+	rm.mu.Unlock()
+
+	if cmd != nil {
+		_ = cmd.Wait() // reap the zombie
+	}
+
+	const maxRestarts = 5
+	if restarts > maxRestarts {
+		slog.Error("route monitor subprocess keeps dying; giving up — network changes will not trigger reapply until the next connect",
+			"restarts", restarts-1)
+		return
+	}
+	slog.Error("route monitor subprocess exited unexpectedly; restarting", "attempt", restarts)
+	rm.StartDelayed(time.Second)
 }
 
 // trigger signals the debounce loop. Non-blocking: if a kick is already
@@ -307,8 +370,18 @@ func (rm *routeMonitor) debounceLoop() {
 			}
 		}
 		// Burst settled; run reapply under pending so Stop() waits for it
-		// before returning.
+		// before returning. The Add must be ordered against Stop's
+		// running=false under rm.mu: with a bare Add here, a Stop that
+		// lands between the timer firing and the Add would see a zero
+		// WaitGroup, return, and the reapply would still run afterwards —
+		// violating Stop's "no reapply after return" guarantee.
+		rm.mu.Lock()
+		if !rm.running {
+			rm.mu.Unlock()
+			return
+		}
 		rm.pending.Add(1)
+		rm.mu.Unlock()
 		runReapply()
 		rm.pending.Done()
 	}
