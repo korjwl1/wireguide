@@ -206,20 +206,14 @@ func Run(assetsHandler http.Handler, dataDir string) error {
 	// 6. System tray. macOS uses non-template coloured icons (the
 	// connected badge must stay green; template images are alpha-only),
 	// with the W glyph colour following the menu bar's actual rendered
-	// appearance — refreshMenuBarAppearance keeps it in sync from the
-	// status stream and theme events. Never call SetTemplateIcon:
-	// Wails's sticky isTemplateIcon flag would render every later
-	// SetIcon monochrome.
+	// appearance via the KVO observer the tray manager installs. Never
+	// call SetTemplateIcon: Wails's sticky isTemplateIcon flag would
+	// render every later SetIcon monochrome.
 	tray := app.SystemTray.New()
 	if runtime.GOOS == "darwin" {
-		// The status-bar window doesn't exist yet, so this samples the
-		// app appearance; the first status event corrects it if the
-		// wallpaper makes the menu bar deviate from the theme.
-		if menuBarIsDark() {
-			tray.SetIcon(trayOffIconDark)
-		} else {
-			tray.SetIcon(trayOffIconLight)
-		}
+		// White W first (historical default); the appearance observer
+		// swaps in the black set only if the menu bar is really light.
+		tray.SetIcon(trayOffIconDark)
 	} else {
 		tray.SetLabel("WireGuide")
 		// Windows also needs an explicit SetIcon at init or Wails falls
@@ -277,18 +271,7 @@ func Run(assetsHandler http.Handler, dataDir string) error {
 	}
 
 	trayMgr := newTrayManager(app, win, tray, tunnelService, doShutdown)
-	// Seed the appearance flag to match the icon set above, then keep
-	// it in sync: theme events give an immediate kick, and the 1 Hz
-	// status stream (setIconState) covers wallpaper/space changes that
-	// fire no event.
-	trayMgr.darkMenuBar.Store(menuBarIsDark())
 	trayMgr.initialBuild()
-
-	if runtime.GOOS == "darwin" {
-		app.Event.OnApplicationEvent(events.Mac.ApplicationDidChangeTheme, func(_ *application.ApplicationEvent) {
-			trayMgr.refreshMenuBarAppearance()
-		})
-	}
 
 	if runtime.GOOS == "darwin" {
 		app.Event.OnApplicationEvent(events.Mac.ApplicationWillTerminate, func(_ *application.ApplicationEvent) {

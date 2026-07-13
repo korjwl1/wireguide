@@ -2,6 +2,6 @@
 
 package gui
 
-// menuBarIsDark is only meaningful on macOS; other platforms never
-// reach the appearance-dependent icon paths.
-func menuBarIsDark() bool { return false }
+// watchMenuBarAppearance is only meaningful on macOS; other platforms
+// never reach the appearance-dependent icon paths.
+func watchMenuBarAppearance(func(dark bool)) {}

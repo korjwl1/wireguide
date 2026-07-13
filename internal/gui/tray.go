@@ -23,18 +23,15 @@ import (
 // the connected state can keep its GREEN dot badge — template images are
 // alpha-only masks and cannot carry colour, which is why this design was
 // chosen originally. Legibility across menu-bar appearances (issue #18:
-// a fixed white W is invisible on a light menu bar) is handled by
-// keeping one icon set per appearance and swapping the W glyph colour
-// to follow the menu bar's ACTUAL rendered appearance, sampled from the
-// status-bar window (menubar_appearance_darwin.go) on every status
-// event and on theme-change events. The menu bar's appearance is driven
-// by the wallpaper behind it, not the system theme: a light-theme
-// desktop over a dark wallpaper renders a dark menu bar and every other
-// (template) icon white — sampling the real appearance keeps our W
-// matching them there, where a theme check would wrongly pick black.
-// We never call SetTemplateIcon, so the Wails v3 sticky-isTemplateIcon
-// bug (once set, later SetIcon calls render monochrome) is never
-// triggered.
+// a fixed white W is invisible on a light menu bar) is handled the way
+// native colour-icon apps do it: a KVO observation of the status-item
+// button's effectiveAppearance (menubar_appearance_darwin.go), which
+// tracks the menu bar's ACTUAL rendered appearance — wallpaper-driven,
+// not the system theme — and swaps between the white-W and black-W
+// sets. The default is white (historical behaviour); black is used only
+// when the observer verifiably reports a light menu bar. We never call
+// SetTemplateIcon, so the Wails v3 sticky-isTemplateIcon bug (once set,
+// later SetIcon calls render monochrome) is never triggered.
 var (
 	trayOnIconDark   []byte // white W + green dot (dark menu bar)
 	trayOffIconDark  []byte // white W, no badge
@@ -371,9 +368,12 @@ type trayManager struct {
 	// set, so a late-firing timer can't call SetMenu on a tray that
 	// has already been Destroy()'d.
 	quitting atomic.Bool
-	// darkMenuBar tracks the current system appearance (macOS only) so
-	// setIconState can pick the icon variant whose W glyph contrasts
-	// with the menu bar. Updated via setDarkMenuBar on theme changes.
+	// darkMenuBar tracks the menu bar's current rendered appearance
+	// (macOS only) so setIconState can pick the icon variant whose W
+	// glyph contrasts with the menu bar. Initialised to true (white W —
+	// the app's historical behaviour, correct on the common dark menu
+	// bar) and updated by the KVO observer in startAppearanceWatch; it
+	// only ever becomes false when the menu bar is verifiably light.
 	darkMenuBar atomic.Bool
 }
 
@@ -386,39 +386,50 @@ func (t *trayManager) macIcons() (on, off []byte) {
 	return trayOnIconLight, trayOffIconLight
 }
 
-// refreshMenuBarAppearance samples the menu bar's ACTUAL rendered
-// appearance (wallpaper-driven, not the system theme — see
-// menubar_appearance_darwin.go) and, when it changed, immediately
-// re-applies the icon for the current connection state. Returns whether
-// the appearance flipped so setIconState can fold it into its own gate.
-func (t *trayManager) refreshMenuBarAppearance() bool {
+// startAppearanceWatch installs the KVO-based menu-bar appearance
+// observer (menubar_appearance_darwin.go). The callback delivers the
+// exact appearance the menu bar is rendering us with — initial value
+// included — so the icon flips to the black-W set only when the menu
+// bar is genuinely light, and stays white everywhere else.
+func (t *trayManager) startAppearanceWatch() {
 	if runtime.GOOS != "darwin" {
-		return false
+		return
 	}
-	dark := menuBarIsDark()
-	if t.darkMenuBar.Swap(dark) == dark {
-		return false
-	}
-	t.mu.Lock()
-	anyConnected := len(t.activeTunnels) > 0
-	t.mu.Unlock()
-	on, off := t.macIcons()
-	if anyConnected {
-		t.tray.SetIcon(on)
-	} else {
-		t.tray.SetIcon(off)
-	}
-	return true
+	watchMenuBarAppearance(func(dark bool) {
+		// KVO delivers on the AppKit main thread; hop to a goroutine so
+		// SetIcon's own main-thread dispatch can't deadlock against it.
+		go func() {
+			if t.quitting.Load() {
+				return
+			}
+			if t.darkMenuBar.Swap(dark) == dark {
+				return
+			}
+			slog.Debug("menubar appearance changed", "dark", dark)
+			t.mu.Lock()
+			anyConnected := len(t.activeTunnels) > 0
+			t.mu.Unlock()
+			on, off := t.macIcons()
+			if anyConnected {
+				t.tray.SetIcon(on)
+			} else {
+				t.tray.SetIcon(off)
+			}
+		}()
+	})
 }
 
 func newTrayManager(app *application.App, win *application.WebviewWindow, tray *application.SystemTray, svc *wgapp.TunnelService, doShutdown func()) *trayManager {
-	return &trayManager{
+	t := &trayManager{
 		app:        app,
 		win:        win,
 		tray:       tray,
 		svc:        svc,
 		doShutdown: doShutdown,
 	}
+	// White W until the appearance observer proves the menu bar is light.
+	t.darkMenuBar.Store(true)
+	return t
 }
 
 // initialBuild draws the menu once at startup. No OnClick handler is
@@ -433,6 +444,7 @@ func newTrayManager(app *application.App, win *application.WebviewWindow, tray *
 // live state at click time, so a ≤1s-stale glyph is the worst case.
 func (t *trayManager) initialBuild() {
 	t.rebuildMenu()
+	t.startAppearanceWatch()
 }
 
 // setIconState swaps the tray ICON (not a text label) based on connection
@@ -442,12 +454,6 @@ func (t *trayManager) initialBuild() {
 //   disconnected → W glyph (white on dark menu bars, black on light)
 //   connected    → same W with a green dot badge
 func (t *trayManager) setIconState(activeNames []string, handshakeMap map[string]bool) {
-	// Piggyback the menu-bar appearance sample on the 1 Hz status
-	// stream — wallpaper/space changes flip the menu bar's appearance
-	// without firing any theme event. Sub-ms main-thread hop; when the
-	// appearance flipped, refresh re-applies the icon itself.
-	t.refreshMenuBarAppearance()
-
 	newSet := make(map[string]bool, len(activeNames))
 	for _, n := range activeNames {
 		newSet[n] = true
