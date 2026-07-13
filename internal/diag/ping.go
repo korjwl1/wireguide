@@ -41,10 +41,13 @@ func PingEndpointContext(ctx context.Context, endpoint string) *PingResult {
 		host = endpoint
 	}
 
-	// Resolve hostname. LookupHost can return (nil, nil) on some
-	// resolver edge cases, so the empty-slice check is mandatory
-	// before indexing.
-	ips, err := net.LookupHost(host)
+	// Resolve hostname honouring ctx — net.LookupHost uses
+	// context.Background() internally, so against a black-holed resolver
+	// it would ignore both the caller's cancellation and PingEndpoint's
+	// 15s deadline, leaving the goroutine blocked past panel close.
+	// LookupHost can return (nil, nil) on some resolver edge cases, so
+	// the empty-slice check is mandatory before indexing.
+	ips, err := net.DefaultResolver.LookupHost(ctx, host)
 	if err != nil {
 		return &PingResult{Host: host, Error: fmt.Sprintf("DNS resolution failed: %v", err)}
 	}

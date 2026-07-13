@@ -30,9 +30,15 @@ type SpeedTestResult struct {
 func RunSpeedTest(ctx context.Context) *SpeedTestResult {
 	result := &SpeedTestResult{}
 
-	// Measure latency first
+	// Measure latency first. Bound the HEAD with its own sub-timeout:
+	// http.DefaultClient has no client-level timeout, so if the caller
+	// passed a context without a deadline (e.g. context.Background) a
+	// black-holed network would hang this HEAD indefinitely, before the
+	// download's own 60s cap is ever reached.
 	start := time.Now()
-	headReq, err := http.NewRequestWithContext(ctx, http.MethodHead, "https://www.google.com", nil)
+	headCtx, headCancel := context.WithTimeout(ctx, 10*time.Second)
+	defer headCancel()
+	headReq, err := http.NewRequestWithContext(headCtx, http.MethodHead, "https://www.google.com", nil)
 	if err != nil {
 		result.Error = fmt.Sprintf("connectivity check setup: %v", err)
 		return result

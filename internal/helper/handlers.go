@@ -158,6 +158,16 @@ func (h *Helper) handleRename(params json.RawMessage) (interface{}, error) {
 		h.autoConnectedBy[req.NewName] = owner
 	}
 	h.wifiMu.Unlock()
+
+	// Move the cached latency under the new key so the old name doesn't
+	// linger as an orphaned map entry (the sibling maps above are already
+	// re-keyed; this one was missed).
+	h.latencyMu.Lock()
+	if lat, ok := h.latencyByTunnel[req.OldName]; ok {
+		delete(h.latencyByTunnel, req.OldName)
+		h.latencyByTunnel[req.NewName] = lat
+	}
+	h.latencyMu.Unlock()
 	return ipc.Empty{}, nil
 }
 
@@ -324,6 +334,9 @@ func (h *Helper) handleDisconnect(params json.RawMessage) (interface{}, error) {
 		h.wifiMu.Lock()
 		delete(h.autoConnectedBy, tunnelName)
 		h.wifiMu.Unlock()
+		h.latencyMu.Lock()
+		delete(h.latencyByTunnel, tunnelName)
+		h.latencyMu.Unlock()
 	} else {
 		// Legacy "no name" path: tear down EVERY active tunnel via
 		// per-tunnel calls so manager.Disconnect()'s "pick the first"
@@ -349,6 +362,9 @@ func (h *Helper) handleDisconnect(params json.RawMessage) (interface{}, error) {
 			h.wifiMu.Lock()
 			delete(h.autoConnectedBy, name)
 			h.wifiMu.Unlock()
+			h.latencyMu.Lock()
+			delete(h.latencyByTunnel, name)
+			h.latencyMu.Unlock()
 		}
 		if firstErr != nil {
 			return nil, firstErr
