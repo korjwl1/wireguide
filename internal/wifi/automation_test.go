@@ -63,6 +63,17 @@ func TestEvaluate_NetworkGatewayMAC(t *testing.T) {
 	if got := Evaluate(rules, NetworkContext{GatewayMAC: ""}); got != StateConnect {
 		t.Errorf("empty gateway MAC: got %v, want connect", got)
 	}
+	// Separator/case variants of the SAME MAC must all match — users
+	// paste dashes, no separators, upper-case, etc.
+	for _, variant := range []string{"B0-38-6C-54-8B-AB", "b0386c548bab", "B0:38:6C:54:8B:AB", "b0-38-6c-54-8b-ab"} {
+		vr := []Rule{
+			{When: Condition{Type: CondNetwork, GatewayMAC: variant}, Do: ActionDisconnect},
+			{When: Condition{Type: CondNoneMatch}, Do: ActionConnect},
+		}
+		if got := Evaluate(vr, NetworkContext{GatewayMAC: "b0:38:6c:54:8b:ab"}); got != StateDisconnect {
+			t.Errorf("MAC variant %q should match canonical form: got %v", variant, got)
+		}
+	}
 }
 
 func TestEvaluate_FirstConcreteMatchWins(t *testing.T) {

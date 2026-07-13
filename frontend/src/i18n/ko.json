@@ -334,6 +334,8 @@
     "net_not_set": "해당 네트워크에서 \"현재 사용\" 클릭",
     "net_placeholder": "네트워크 선택 또는 \"현재 사용\" 클릭",
     "mac_placeholder": "게이트웨이 MAC (예: b0:38:6c:54:8b:ab)",
-    "drag_hint": "드래그해서 순서 변경 — 맨 위의 일치 규칙이 우선"
+    "drag_hint": "드래그해서 순서 변경 — 맨 위의 일치 규칙이 우선",
+    "mac_invalid": "올바른 MAC 주소가 아닙니다 (예: b0:38:6c:54:8b:ab)",
+    "subnet_invalid": "올바른 CIDR이 아닙니다 (예: 192.168.0.0/24)"
   }
 }

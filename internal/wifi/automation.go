@@ -149,9 +149,32 @@ func conditionMatches(c Condition, ctx NetworkContext) bool {
 			}
 		}
 	case CondNetwork:
-		return ctx.GatewayMAC != "" && strings.EqualFold(strings.TrimSpace(c.GatewayMAC), ctx.GatewayMAC)
+		want := canonicalMAC(c.GatewayMAC)
+		got := canonicalMAC(ctx.GatewayMAC)
+		return want != "" && want == got
 	}
 	return false
+}
+
+// canonicalMAC reduces a MAC to its bare lower-case hex digits so that
+// values differing only in separator (":" vs "-" vs none) or case
+// compare equal — users paste MACs in every style. Returns "" when there
+// aren't exactly 12 hex digits (malformed / empty), which never matches.
+func canonicalMAC(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		switch {
+		case r >= '0' && r <= '9', r >= 'a' && r <= 'f':
+			b.WriteRune(r)
+		case r >= 'A' && r <= 'F':
+			b.WriteRune(r + ('a' - 'A'))
+		}
+	}
+	hex := b.String()
+	if len(hex) != 12 {
+		return ""
+	}
+	return hex
 }
 
 // TunnelNames returns the rule set's tunnel names in deterministic

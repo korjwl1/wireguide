@@ -6,6 +6,7 @@
   // Settings.automation.per_tunnel_rules[tunnelName]; the whole settings
   // object is re-fetched and spread on save so other screens' edits (and
   // other tunnels' rules) are never clobbered.
+  import { afterUpdate } from 'svelte';
   import Icon from './Icon.svelte';
   import { t } from '../i18n/index.js';
   import { errText } from './errors.js';
@@ -61,7 +62,9 @@
     } catch (_) { currentGatewayMAC = ''; }
   }
 
+  const MAX_RULES = 50;
   function addRule() {
+    if (rules.length >= MAX_RULES) return;
     rules = [...rules, { when: { type: 'network', ssid: '', subnet: '', gateway_mac: '' }, do: 'connect' }];
     save();
   }
@@ -71,32 +74,84 @@
     save();
   }
 
-  // Drag-to-reorder. Rule order IS priority: the engine applies the
-  // first rule whose condition matches (top wins), so dragging a rule up
-  // gives it precedence over lower ones on a conflict.
+  // Lightweight format validation for user feedback. The engine is
+  // already safe against garbage (a bad CIDR / MAC simply never matches,
+  // never panics, never reaches a shell), but without this a malformed
+  // value would save and silently never fire — so mark it invalid so the
+  // user can fix it. Empty is "incomplete", not "invalid".
+  // A MAC is valid in any common style — colon, dash, or no separator —
+  // as long as it reduces to exactly 12 hex digits. The engine compares
+  // canonically (separator/case-insensitive), and we normalise on commit.
+  function macHex(v) { return (v || '').replace(/[^0-9a-fA-F]/g, '').toLowerCase(); }
+  function macInvalid(v) { const s = (v || '').trim(); return s !== '' && macHex(s).length !== 12; }
+  // Canonical form: lower-case, colon-separated (b0:38:6c:54:8b:ab).
+  function macCanon(v) {
+    const h = macHex(v);
+    if (h.length !== 12) return (v || '').trim(); // leave as-is so the user can keep fixing
+    return h.match(/.{2}/g).join(':');
+  }
+  function onMacChange(rule) {
+    rule.when.gateway_mac = macCanon(rule.when.gateway_mac);
+    rules = rules;
+    save();
+  }
+  function cidrInvalid(v) {
+    const s = (v || '').trim();
+    if (s === '') return false;
+    const m = s.match(/^([^/]+)\/(\d{1,3})$/);
+    if (!m) return true;
+    const prefix = Number(m[2]);
+    const ip = m[1];
+    if (ip.includes(':')) return prefix < 0 || prefix > 128; // IPv6 — trust the notation
+    const octets = ip.split('.');
+    if (octets.length !== 4) return true;
+    if (octets.some(o => o === '' || !/^\d+$/.test(o) || Number(o) > 255)) return true;
+    return prefix < 0 || prefix > 32;
+  }
+
+  // Drag-to-reorder with LIVE reordering: as the cursor passes over
+  // another row the list re-sorts in real time (the standard sortable-
+  // list feel), the dragged row is dimmed, and the browser's drag image
+  // is the whole row. Rule order IS priority — the engine applies the
+  // first matching rule (top wins) — so this both reorders and re-prioritises.
   let dragIndex = null;
-  let dragOverIndex = null;
   function onDragStart(e, i) {
     dragIndex = i;
     e.dataTransfer.effectAllowed = 'move';
-    // Firefox needs data set for the drag to start.
     try { e.dataTransfer.setData('text/plain', String(i)); } catch (_) {}
+    // Ghost = the full row (drag starts from the handle, so inputs stay usable).
+    const row = e.currentTarget.closest('.am-rule');
+    if (row) {
+      try { e.dataTransfer.setDragImage(row, 24, row.offsetHeight / 2); } catch (_) {}
+    }
   }
-  function onDragOver(e, i) {
+  function onRowDragOver(e, i) {
     e.preventDefault();
     e.dataTransfer.dropEffect = 'move';
-    dragOverIndex = i;
-  }
-  function onDrop(i) {
-    if (dragIndex === null || dragIndex === i) { dragIndex = dragOverIndex = null; return; }
+    if (dragIndex === null || dragIndex === i) return;
+    // Move the dragged item to this row's position, live.
     const arr = [...rules];
     const [moved] = arr.splice(dragIndex, 1);
     arr.splice(i, 0, moved);
     rules = arr;
-    dragIndex = dragOverIndex = null;
-    save();
+    dragIndex = i;
   }
-  function onDragEnd() { dragIndex = dragOverIndex = null; }
+  function onDragEnd() {
+    if (dragIndex !== null) { dragIndex = null; save(); }
+  }
+
+  // Scroll affordance: show a fade at the top/bottom of the rule list
+  // only when there's hidden content in that direction, so it's obvious
+  // the list scrolls. Recomputed after every render and on scroll.
+  let rulesEl;
+  let canScrollUp = false;
+  let canScrollDown = false;
+  function updateScroll() {
+    if (!rulesEl) return;
+    canScrollUp = rulesEl.scrollTop > 2;
+    canScrollDown = rulesEl.scrollTop + rulesEl.clientHeight < rulesEl.scrollHeight - 2;
+  }
+  afterUpdate(updateScroll);
 
   // Drop rules whose condition has no value before persisting.
   function cleaned() {
@@ -110,7 +165,7 @@
       let when;
       if (r.when.type === 'ssid') when = { type: 'ssid', ssid: r.when.ssid.trim() };
       else if (r.when.type === 'subnet') when = { type: 'subnet', subnet: r.when.subnet.trim() };
-      else if (r.when.type === 'network') when = { type: 'network', gateway_mac: r.when.gateway_mac.trim().toLowerCase() };
+      else if (r.when.type === 'network') when = { type: 'network', gateway_mac: macCanon(r.when.gateway_mac) };
       else when = { type: 'none_match' };
       return { when, do: r.do };
     });
@@ -163,14 +218,17 @@
 
       <SSIDPermissionBanner {TunnelService} />
 
-      <div class="am-rules">
+      <div class="am-rules-wrap">
+        <div class="am-fade am-fade-top" class:show={canScrollUp}>
+          <span class="am-chevron am-chevron-up"><Icon name="chevron-down" size={15} strokeWidth={2.5} /></span>
+        </div>
+        <div class="am-rules" bind:this={rulesEl} on:scroll={updateScroll}>
         {#if rules.length === 0}
           <div class="am-empty">{$t('automation.empty')}</div>
         {:else}
           {#each rules as rule, i (rule)}
-            <div class="am-rule" class:am-dragover={dragOverIndex === i && dragIndex !== i}
-              on:dragover={(e) => onDragOver(e, i)}
-              on:drop={() => onDrop(i)}
+            <div class="am-rule" class:am-dragging={dragIndex === i}
+              on:dragover={(e) => onRowDragOver(e, i)}
               on:dragend={onDragEnd}>
               <span class="am-handle" draggable="true" title={$t('automation.drag_hint')}
                 on:dragstart={(e) => onDragStart(e, i)}>⋮⋮</span>
@@ -188,16 +246,18 @@
               </select>
               {#if rule.when.type === 'network'}
                 <input
-                  class="am-val"
+                  class="am-val" class:am-invalid={macInvalid(rule.when.gateway_mac)}
                   list="am-mac-list"
                   placeholder={currentGatewayMAC || $t('automation.mac_placeholder')}
+                  title={macInvalid(rule.when.gateway_mac) ? $t('automation.mac_invalid') : ''}
                   bind:value={rule.when.gateway_mac}
-                  on:input={save} on:change={save} />
+                  on:input={save} on:change={() => onMacChange(rule)} />
               {:else if rule.when.type === 'subnet'}
                 <input
-                  class="am-val"
+                  class="am-val" class:am-invalid={cidrInvalid(rule.when.subnet)}
                   list="am-subnet-list"
                   placeholder={currentSubnets[0] || '192.168.0.0/24'}
+                  title={cidrInvalid(rule.when.subnet) ? $t('automation.subnet_invalid') : ''}
                   bind:value={rule.when.subnet}
                   on:input={save} on:change={save} />
               {:else if rule.when.type === 'ssid'}
@@ -214,6 +274,10 @@
             </div>
           {/each}
         {/if}
+        </div>
+        <div class="am-fade am-fade-bottom" class:show={canScrollDown}>
+          <span class="am-chevron"><Icon name="chevron-down" size={15} strokeWidth={2.5} /></span>
+        </div>
       </div>
 
       <datalist id="am-ssid-list">
@@ -228,7 +292,7 @@
 
       {#if saveError}<div class="am-error">{saveError}</div>{/if}
 
-      <button class="am-add" on:click={addRule}>
+      <button class="am-add" on:click={addRule} disabled={rules.length >= MAX_RULES}>
         <Icon name="plus" size={13} strokeWidth={2.25} /> {$t('automation.add_rule')}
       </button>
     </div>
@@ -266,14 +330,56 @@
   .am-close:hover { background: var(--bg-hover); color: var(--text-primary); }
   .am-hint { margin: 12px 0; font: 400 12px/1.5 var(--font-sans); color: var(--text-secondary); flex-shrink: 0; }
   /* The one scrolling region: fills the space between the fixed header
-     and the fixed add-button, so the dialog stays a constant size. */
+     and the fixed add-button, so the dialog stays a constant size. The
+     wrap hosts the top/bottom scroll-affordance fades. */
+  .am-rules-wrap { flex: 1; min-height: 0; position: relative; display: flex; }
   .am-rules { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; margin: 4px 0; padding-right: 4px; }
+  .am-fade {
+    position: absolute; left: 0; right: 4px; height: 52px; pointer-events: none;
+    opacity: 0; z-index: 2;
+    display: flex; justify-content: center;
+  }
+  @media (prefers-reduced-motion: no-preference) {
+    .am-fade { transition: opacity 140ms ease; }
+    .am-chevron { animation: am-bob 1.4s ease-in-out infinite; }
+  }
+  .am-fade.show { opacity: 1; }
+  /* Stronger, taller gradient — stays near-solid at the edge so hidden
+     rows are clearly cut off, not just barely tinted. */
+  .am-fade-top {
+    top: 0; align-items: flex-start; padding-top: 2px;
+    background: linear-gradient(to bottom,
+      var(--bg-elevated, var(--bg-secondary)) 0%,
+      color-mix(in srgb, var(--bg-elevated, var(--bg-secondary)) 88%, transparent) 45%,
+      transparent 100%);
+  }
+  .am-fade-bottom {
+    bottom: 0; align-items: flex-end; padding-bottom: 2px;
+    background: linear-gradient(to top,
+      var(--bg-elevated, var(--bg-secondary)) 0%,
+      color-mix(in srgb, var(--bg-elevated, var(--bg-secondary)) 88%, transparent) 45%,
+      transparent 100%);
+  }
+  .am-chevron { color: var(--accent); display: inline-flex; }
+  .am-chevron-up { transform: rotate(180deg); }
+  @keyframes am-bob {
+    0%, 100% { transform: translateY(0); }
+    50% { transform: translateY(3px); }
+  }
+  .am-chevron-up { animation: am-bob-up 1.4s ease-in-out infinite; }
+  @keyframes am-bob-up {
+    0%, 100% { transform: rotate(180deg) translateY(0); }
+    50% { transform: rotate(180deg) translateY(3px); }
+  }
   .am-empty { padding: 16px; text-align: center; font: 400 12px var(--font-sans); color: var(--text-muted); border: 1px dashed var(--border); border-radius: 8px; }
   .am-rule {
     display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
     padding: 6px; border: 1px solid transparent; border-radius: 9px;
   }
-  .am-rule.am-dragover { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, transparent); }
+  .am-rule.am-dragging { opacity: 0.35; }
+  @media (prefers-reduced-motion: no-preference) {
+    .am-rule { transition: opacity 120ms ease; }
+  }
   .am-handle {
     cursor: grab; color: var(--text-muted); font: 700 12px/1 var(--font-sans);
     letter-spacing: -2px; padding: 0 2px; user-select: none; flex-shrink: 0;
@@ -294,6 +400,10 @@
   .am-when { font: 400 11px var(--font-sans); color: var(--text-muted); }
   .am-val { flex: 1; min-width: 120px; }
   .am-val-none { color: var(--text-muted); border: 0 !important; background: transparent !important; }
+  .am-rule input.am-invalid {
+    border-color: var(--error-text, #ff453a);
+    background: color-mix(in srgb, var(--error-text, #ff453a) 8%, var(--bg-primary));
+  }
   .am-val-network { flex: 1; min-width: 120px; display: inline-flex; align-items: baseline; gap: 6px; font: 400 12px var(--font-sans); color: var(--text-primary); }
   .am-mac { font: 400 10px var(--font-mono); color: var(--text-muted); }
   .am-usecurrent {
@@ -312,6 +422,7 @@
     background: transparent; border: 1px dashed color-mix(in srgb, var(--accent) 45%, transparent);
     border-radius: 8px; padding: 7px 12px; cursor: pointer;
   }
-  .am-add:hover { background: color-mix(in srgb, var(--accent) 10%, transparent); }
+  .am-add:hover:not(:disabled) { background: color-mix(in srgb, var(--accent) 10%, transparent); }
+  .am-add:disabled { opacity: 0.45; cursor: not-allowed; }
   .am-error { margin-top: 8px; font: 400 12px var(--font-sans); color: var(--error-text, #ff453a); flex-shrink: 0; }
 </style>
