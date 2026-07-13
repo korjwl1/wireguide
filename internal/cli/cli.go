@@ -11,8 +11,10 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -20,6 +22,7 @@ import (
 	"github.com/korjwl1/wireguide/internal/domain"
 	"github.com/korjwl1/wireguide/internal/ipc"
 	"github.com/korjwl1/wireguide/internal/storage"
+	"github.com/korjwl1/wireguide/internal/wifi"
 )
 
 // Run dispatches a `ctl` subcommand. args is everything after "ctl".
@@ -49,6 +52,10 @@ func Run(args []string) int {
 		return cmdDisconnect(rest)
 	case "import":
 		return cmdImport(rest)
+	case "rename":
+		return cmdRename(rest)
+	case "delete", "rm":
+		return cmdDelete(rest)
 	case "automation":
 		return cmdAutomation(rest)
 	default:
@@ -61,15 +68,30 @@ func Run(args []string) int {
 func usage(w io.Writer) {
 	fmt.Fprint(w, `wireguide ctl — control the WireGuide helper from the command line
 
-Usage:
-  wireguide ctl status                 show connection status
-  wireguide ctl list                   list tunnels (● = connected)
-  wireguide ctl connect <name>         connect a tunnel
-  wireguide ctl disconnect [name]      disconnect one tunnel (or all)
-  wireguide ctl import <file> [name]   import a .conf (name defaults to filename)
-  wireguide ctl automation             show what the automation engine decides now
+Tunnels:
+  wireguide ctl status                    show connection status
+  wireguide ctl list                      list tunnels (● = connected)
+  wireguide ctl connect <name>            connect a tunnel
+  wireguide ctl disconnect [name]         disconnect one tunnel (or all)
+  wireguide ctl import <file> [name]      import a .conf (name defaults to filename)
+  wireguide ctl rename <old> <new>        rename a tunnel
+  wireguide ctl delete <name>             delete a tunnel (disconnects first if active)
 
-The WireGuide app (or its helper) must be running.
+Automation (per-tunnel connect/disconnect rules):
+  wireguide ctl automation                show the engine's current decision
+  wireguide ctl automation rules <name>   list a tunnel's rules (in priority order)
+  wireguide ctl automation add <name> <connect|disconnect> <cond>
+                                          append a rule; <cond> is one of:
+                                            ssid:<wifi-name>   subnet:<CIDR>
+                                            mac:<gateway-MAC>  else
+  wireguide ctl automation rm <name> <n>  remove rule number <n> (from 'rules')
+
+Examples:
+  wireguide ctl automation add work disconnect mac:b0:38:6c:54:8b:ab
+  wireguide ctl automation add work connect else
+
+The WireGuide app (or its helper) must be running for connect/disconnect/status;
+list, import, rename, delete and automation edits work against local files.
 `)
 }
 
@@ -269,7 +291,26 @@ func cmdImport(args []string) int {
 	return 0
 }
 
-func cmdAutomation(_ []string) int {
+func cmdAutomation(args []string) int {
+	if len(args) > 0 {
+		switch args[0] {
+		case "rules", "list":
+			return automationRules(args[1:])
+		case "add":
+			return automationAdd(args[1:])
+		case "rm", "remove", "delete":
+			return automationRm(args[1:])
+		case "show", "status":
+			// fall through to the live preview below
+		default:
+			fmt.Fprintf(os.Stderr, "unknown automation subcommand %q (try: rules, add, rm)\n", args[0])
+			return 2
+		}
+	}
+	return automationPreview()
+}
+
+func automationPreview() int {
 	c, err := dialHelper()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -302,6 +343,240 @@ func cmdAutomation(_ []string) int {
 		fmt.Printf("  %-28s rules=%d  currently=%s  decision=%s\n",
 			tdec.Name, tdec.RuleCount, state, tdec.Decision)
 	}
+	return 0
+}
+
+// --- automation rule configuration (edits config.json directly) ---
+
+func settingsStore() (*storage.SettingsStore, error) {
+	paths, err := storage.GetPaths()
+	if err != nil {
+		return nil, err
+	}
+	return storage.NewSettingsStore(paths.ConfigDir), nil
+}
+
+// loadSettingsWithAutomation loads settings and ensures Automation is
+// populated (migrating legacy rules once) so edits build on the current
+// effective rule set.
+func loadSettingsWithAutomation() (*storage.SettingsStore, *storage.Settings, error) {
+	ss, err := settingsStore()
+	if err != nil {
+		return nil, nil, err
+	}
+	s, err := ss.Load()
+	if err != nil {
+		return nil, nil, err
+	}
+	s.EnsureAutomation()
+	if s.Automation.PerTunnel == nil {
+		s.Automation.PerTunnel = map[string][]wifi.Rule{}
+	}
+	return ss, s, nil
+}
+
+func formatCondition(c wifi.Condition) string {
+	switch c.Type {
+	case wifi.CondSSID:
+		return "ssid=" + c.SSID
+	case wifi.CondSubnet:
+		return "subnet=" + c.Subnet
+	case wifi.CondNetwork:
+		return "network(mac)=" + c.GatewayMAC
+	case wifi.CondNoneMatch:
+		return "otherwise"
+	}
+	return c.Type
+}
+
+func automationRules(args []string) int {
+	if len(args) < 1 {
+		fmt.Fprintln(os.Stderr, "usage: wireguide ctl automation rules <tunnel>")
+		return 2
+	}
+	name := args[0]
+	_, s, err := loadSettingsWithAutomation()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "automation:", err)
+		return 1
+	}
+	rules := s.Automation.PerTunnel[name]
+	if len(rules) == 0 {
+		fmt.Printf("%s has no automation rules\n", name)
+		return 0
+	}
+	fmt.Printf("%s (top rule wins on conflict):\n", name)
+	for i, r := range rules {
+		fmt.Printf("  %d. %-10s when %s\n", i+1, r.Do, formatCondition(r.When))
+	}
+	return 0
+}
+
+// parseCondition turns "ssid:home" / "subnet:10.0.0.0/24" / "mac:.." /
+// "else" into a wifi.Condition. Returns an error for malformed values.
+func parseCondition(spec string) (wifi.Condition, error) {
+	if spec == "else" || spec == "otherwise" || spec == "none" {
+		return wifi.Condition{Type: wifi.CondNoneMatch}, nil
+	}
+	kind, val, ok := strings.Cut(spec, ":")
+	if !ok || val == "" {
+		return wifi.Condition{}, fmt.Errorf("condition %q must be ssid:<name>, subnet:<CIDR>, mac:<MAC> or else", spec)
+	}
+	switch kind {
+	case "ssid":
+		return wifi.Condition{Type: wifi.CondSSID, SSID: val}, nil
+	case "subnet":
+		if _, _, err := net.ParseCIDR(strings.TrimSpace(val)); err != nil {
+			return wifi.Condition{}, fmt.Errorf("subnet %q is not a valid CIDR (e.g. 192.168.0.0/24)", val)
+		}
+		return wifi.Condition{Type: wifi.CondSubnet, Subnet: val}, nil
+	case "mac":
+		hex := strings.Map(func(r rune) rune {
+			if (r >= '0' && r <= '9') || (r >= 'a' && r <= 'f') || (r >= 'A' && r <= 'F') {
+				return r
+			}
+			return -1
+		}, val)
+		if len(hex) != 12 {
+			return wifi.Condition{}, fmt.Errorf("mac %q is not a valid MAC address", val)
+		}
+		return wifi.Condition{Type: wifi.CondNetwork, GatewayMAC: strings.ToLower(val)}, nil
+	default:
+		return wifi.Condition{}, fmt.Errorf("unknown condition kind %q (use ssid/subnet/mac/else)", kind)
+	}
+}
+
+func automationAdd(args []string) int {
+	if len(args) < 3 {
+		fmt.Fprintln(os.Stderr, "usage: wireguide ctl automation add <tunnel> <connect|disconnect> <cond>")
+		return 2
+	}
+	name, action, spec := args[0], args[1], args[2]
+	if action != "connect" && action != "disconnect" {
+		fmt.Fprintf(os.Stderr, "action must be 'connect' or 'disconnect', got %q\n", action)
+		return 2
+	}
+	cond, err := parseCondition(spec)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "automation:", err)
+		return 2
+	}
+	store, err := tunnelStore()
+	if err == nil && !store.Exists(name) {
+		fmt.Fprintf(os.Stderr, "warning: no tunnel named %q — the rule is saved but won't do anything until it exists\n", name)
+	}
+	ss, s, err := loadSettingsWithAutomation()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "automation:", err)
+		return 1
+	}
+	s.Automation.PerTunnel[name] = append(s.Automation.PerTunnel[name], wifi.Rule{When: cond, Do: wifi.Action(action)})
+	if err := ss.Save(s); err != nil {
+		fmt.Fprintln(os.Stderr, "automation: save failed:", err)
+		return 1
+	}
+	fmt.Printf("added rule %d for %s: %s when %s\n", len(s.Automation.PerTunnel[name]), name, action, formatCondition(cond))
+	return 0
+}
+
+func automationRm(args []string) int {
+	if len(args) < 2 {
+		fmt.Fprintln(os.Stderr, "usage: wireguide ctl automation rm <tunnel> <rule-number>")
+		return 2
+	}
+	name := args[0]
+	idx, err := strconv.Atoi(args[1])
+	if err != nil || idx < 1 {
+		fmt.Fprintf(os.Stderr, "rule number must be a positive integer (see 'automation rules %s')\n", name)
+		return 2
+	}
+	ss, s, err := loadSettingsWithAutomation()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "automation:", err)
+		return 1
+	}
+	rules := s.Automation.PerTunnel[name]
+	if idx > len(rules) {
+		fmt.Fprintf(os.Stderr, "%s has only %d rule(s)\n", name, len(rules))
+		return 1
+	}
+	removed := rules[idx-1]
+	s.Automation.PerTunnel[name] = append(rules[:idx-1:idx-1], rules[idx:]...)
+	if len(s.Automation.PerTunnel[name]) == 0 {
+		delete(s.Automation.PerTunnel, name)
+	}
+	if err := ss.Save(s); err != nil {
+		fmt.Fprintln(os.Stderr, "automation: save failed:", err)
+		return 1
+	}
+	fmt.Printf("removed rule %d for %s: %s when %s\n", idx, name, removed.Do, formatCondition(removed.When))
+	return 0
+}
+
+// --- tunnel management ---
+
+func cmdRename(args []string) int {
+	if len(args) < 2 {
+		fmt.Fprintln(os.Stderr, "usage: wireguide ctl rename <old> <new>")
+		return 2
+	}
+	old, newName := args[0], args[1]
+	// Prefer the helper's rename (it serialises against connect/disconnect);
+	// fall back to a local store rename if the helper isn't reachable.
+	if c, err := dialHelper(); err == nil {
+		defer c.Close()
+		if err := c.Call(ipc.MethodRename, ipc.RenameRequest{OldName: old, NewName: newName}, nil); err != nil {
+			fmt.Fprintln(os.Stderr, "rename:", err)
+			return 1
+		}
+		fmt.Printf("renamed %s → %s\n", old, newName)
+		return 0
+	}
+	store, err := tunnelStore()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "rename:", err)
+		return 1
+	}
+	if err := store.Rename(old, newName); err != nil {
+		fmt.Fprintln(os.Stderr, "rename:", err)
+		return 1
+	}
+	fmt.Printf("renamed %s → %s\n", old, newName)
+	return 0
+}
+
+func cmdDelete(args []string) int {
+	if len(args) < 1 {
+		fmt.Fprintln(os.Stderr, "usage: wireguide ctl delete <name>")
+		return 2
+	}
+	name := args[0]
+	// Disconnect first if it's active, so we don't delete a live tunnel's
+	// config out from under the helper.
+	if c, err := dialHelper(); err == nil {
+		var active ipc.ActiveTunnelsResponse
+		if c.Call(ipc.MethodActiveTunnels, nil, &active) == nil {
+			for _, n := range active.Names {
+				if n == name {
+					ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+					_ = c.CallWithContext(ctx, ipc.MethodDisconnect, ipc.DisconnectRequest{TunnelName: name}, nil)
+					cancel()
+					break
+				}
+			}
+		}
+		c.Close()
+	}
+	store, err := tunnelStore()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "delete:", err)
+		return 1
+	}
+	if err := store.Delete(name); err != nil {
+		fmt.Fprintln(os.Stderr, "delete:", err)
+		return 1
+	}
+	fmt.Printf("deleted %s\n", name)
 	return 0
 }
 
