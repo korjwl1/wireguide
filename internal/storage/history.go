@@ -339,7 +339,7 @@ func (h *HistoryStore) saveLocked(sessions []Session) error {
 		os.Remove(tmpPath)
 		return err
 	}
-	if err := atomicRename(tmpPath, h.path); err != nil {
+	if err := atomicRenameDurable(tmpPath, h.path); err != nil {
 		os.Remove(tmpPath)
 		return err
 	}

@@ -150,7 +150,7 @@ func (s *SettingsStore) Save(settings *Settings) error {
 		os.Remove(tmpPath)
 		return err
 	}
-	if err := atomicRename(tmpPath, s.path); err != nil {
+	if err := atomicRenameDurable(tmpPath, s.path); err != nil {
 		os.Remove(tmpPath)
 		return err
 	}

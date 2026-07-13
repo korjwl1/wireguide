@@ -67,7 +67,7 @@ func (s *TunnelStore) Save(cfg *config.WireGuardConfig) error {
 		os.Remove(tmpPath)
 		return err
 	}
-	if err := atomicRename(tmpPath, path); err != nil {
+	if err := atomicRenameDurable(tmpPath, path); err != nil {
 		os.Remove(tmpPath)
 		return err
 	}
@@ -496,7 +496,7 @@ func (s *TunnelStore) saveMetaLocked(name string, meta *TunnelMeta) error {
 		os.Remove(tmpPath)
 		return err
 	}
-	if err := atomicRename(tmpPath, dst); err != nil {
+	if err := atomicRenameDurable(tmpPath, dst); err != nil {
 		os.Remove(tmpPath)
 		return err
 	}
