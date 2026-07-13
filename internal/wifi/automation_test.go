@@ -97,9 +97,10 @@ func TestMigrateFromLegacy(t *testing.T) {
 	auto := MigrateFromLegacy(legacy)
 
 	got := auto.PerTunnel["company"]
-	// trusted disconnect + connect home + connect cafe + none_match disconnect
-	if len(got) != 4 {
-		t.Fatalf("company rules: got %d, want 4 (%+v)", len(got), got)
+	// trusted disconnect + connect home + connect cafe (no synthesized
+	// none_match — migration translates only explicit legacy settings).
+	if len(got) != 3 {
+		t.Fatalf("company rules: got %d, want 3 (%+v)", len(got), got)
 	}
 	// Trusted disconnect must come first (precedence).
 	if got[0].Do != ActionDisconnect || got[0].When.SSID != "corp-wifi" {
@@ -108,10 +109,11 @@ func TestMigrateFromLegacy(t *testing.T) {
 	if got[1].Do != ActionConnect || got[1].When.SSID != "home" {
 		t.Errorf("second rule should be connect home, got %+v", got[1])
 	}
-	// Last rule preserves "off when away".
-	last := got[len(got)-1]
-	if last.When.Type != CondNoneMatch || last.Do != ActionDisconnect {
-		t.Errorf("last rule should be none_match disconnect, got %+v", last)
+	// Migration must NOT synthesize a none_match rule.
+	for _, r := range got {
+		if r.When.Type == CondNoneMatch {
+			t.Errorf("migration should not add a none_match rule, got %+v", r)
+		}
 	}
 	// A tunnel with no legacy rules gets no rules.
 	if _, ok := auto.PerTunnel["nolegacy"]; ok {
@@ -126,10 +128,15 @@ func TestMigrateFromLegacy(t *testing.T) {
 	if s := Evaluate(got, NetworkContext{SSID: "home"}); s != StateConnect {
 		t.Errorf("migrated: home got %v, want connect", s)
 	}
-	// A network matching none of the tunnel's SSIDs disconnects it
-	// (legacy "off when you leave the zone").
-	if s := Evaluate(got, NetworkContext{SSID: "random-cafe"}); s != StateDisconnect {
-		t.Errorf("migrated: away network got %v, want disconnect", s)
+	// A network matching none of the tunnel's rules leaves it untouched —
+	// migration no longer forces a disconnect on unlisted networks
+	// (including Ethernet / no-SSID). This is the fix for the observed
+	// "manually connected on Ethernet, got auto-killed" behaviour.
+	if s := Evaluate(got, NetworkContext{SSID: "random-cafe"}); s != StateUnmanaged {
+		t.Errorf("migrated: away network got %v, want unmanaged", s)
+	}
+	if s := Evaluate(got, NetworkContext{PhysicalIPs: ips("192.168.0.5")}); s != StateUnmanaged {
+		t.Errorf("migrated: ethernet (no ssid) got %v, want unmanaged", s)
 	}
 }
 

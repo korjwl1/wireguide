@@ -205,14 +205,17 @@ func MigrateFromLegacy(legacy *Rules) *Automation {
 			})
 		}
 		rules = append(rules, connectRules...)
-		// Preserve the legacy "disconnect when you leave the auto-connect
-		// zone" behaviour: on any network that matches none of this
-		// tunnel's SSIDs, the tunnel comes down. Placed last so concrete
-		// connect/disconnect rules win.
-		rules = append(rules, Rule{
-			When: Condition{Type: CondNoneMatch},
-			Do:   ActionDisconnect,
-		})
+		// NOTE: we deliberately do NOT synthesize a none_match→disconnect
+		// rule here. Legacy auto-connect implicitly disconnected the
+		// tunnel when you left its Wi-Fi zone, but that behaviour was
+		// coarse (Wi-Fi-transition only, auto-managed only) and, ported
+		// literally into the new any-network-change engine, would
+		// aggressively tear down tunnels on Ethernet or after a manual
+		// connect. Migration therefore translates only what the user
+		// EXPLICITLY configured (connect on SSID, disconnect on trusted
+		// SSID); a user who wants "off when I leave" adds that rule
+		// explicitly in the Automation editor, alongside separate
+		// connect/disconnect conditions.
 		out.PerTunnel[name] = rules
 	}
 	return out
