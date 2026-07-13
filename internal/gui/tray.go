@@ -19,21 +19,26 @@ import (
 	"golang.org/x/image/draw"
 )
 
-// Tray icon variants. On macOS both states are TEMPLATE icons
-// (SetTemplateIcon): macOS uses only the alpha channel as a mask and
-// tints the glyph itself for the current menu-bar appearance, so the
-// icon stays legible on light AND dark menu bars (issue #18 — the
-// previous plain white-W was invisible on a light menu bar; vibrancy
-// only auto-adapts template images, not regular ones). The old code
-// avoided SetTemplateIcon because Wails v3 never clears the sticky
-// isTemplateIcon flag once set — that bug only bites when MIXING
-// template and coloured icons; with every macOS state template, the
-// sticky flag is the desired steady state. The trade-off: the badge
-// renders monochrome (template = mask), so connected is "W + dot" and
-// disconnected is a bare W, rather than a green dot.
+// Tray icon variants. macOS uses plain (non-template) coloured icons so
+// the connected state can keep its GREEN dot badge — template images are
+// alpha-only masks and cannot carry colour, which is why this design was
+// chosen originally. Legibility across menu-bar appearances (issue #18:
+// a fixed white W is invisible on a light menu bar) is handled by
+// keeping one icon set per appearance and swapping the W glyph colour
+// when the system theme changes (events.Mac.ApplicationDidChangeTheme →
+// trayManager.setDarkMenuBar). We never call SetTemplateIcon, so the
+// Wails v3 sticky-isTemplateIcon bug (once set, later SetIcon calls
+// render monochrome) is never triggered.
+//
+// Known limit: this keys off the system light/dark theme. Extreme
+// wallpaper-tinting edge cases where the menu bar deviates from the
+// theme are not tracked — only template icons get that for free, and
+// template would cost the green dot.
 var (
-	trayOnIcon  []byte // W + dot badge (template: colour irrelevant, alpha is the mask)
-	trayOffIcon []byte // W, no badge
+	trayOnIconDark   []byte // white W + green dot (dark menu bar)
+	trayOffIconDark  []byte // white W, no badge
+	trayOnIconLight  []byte // black W + green dot (light menu bar)
+	trayOffIconLight []byte // black W, no badge
 
 	// Windows-only variants rendered from the full app icon (rounded
 	// red tile + white W) so the system tray actually shows something
@@ -56,11 +61,12 @@ var (
 func SetTrayIconPNG(b []byte) { customTrayIconPNG = b }
 
 func init() {
-	// Template rendering ignores colour — black keeps the PNGs readable
-	// when inspected and matches AppKit's template-image convention.
+	white := color.NRGBA{255, 255, 255, 255}
 	black := color.NRGBA{0, 0, 0, 255}
-	trayOnIcon = buildTrayOnIcon(black)
-	trayOffIcon = buildTrayOffIcon(black)
+	trayOnIconDark = buildTrayOnIcon(white)
+	trayOffIconDark = buildTrayOffIcon(white)
+	trayOnIconLight = buildTrayOnIcon(black)
+	trayOffIconLight = buildTrayOffIcon(black)
 }
 
 // buildWindowsTrayIcons renders the rounded-red app icon at tray size
@@ -236,9 +242,10 @@ func trimAndSquare(src image.Image) *image.NRGBA {
 	return dst
 }
 
-// buildTrayOnIcon composites a W glyph (in wColor) with a solid dot badge
-// at the bottom-left — the "connected" state. Rendered colour is irrelevant
-// on macOS (used as a template mask); only the alpha channel matters.
+// buildTrayOnIcon composites a W glyph (in wColor) with a green dot badge
+// at the bottom-left — the "connected" state. wColor should be white for
+// dark menu bars and black for light menu bars; the dot stays green in
+// both variants (the whole point of using non-template icons).
 func buildTrayOnIcon(wColor color.NRGBA) []byte {
 	base, err := png.Decode(bytes.NewReader(icons.SystrayMacTemplate))
 	if err != nil {
@@ -355,6 +362,38 @@ type trayManager struct {
 	// set, so a late-firing timer can't call SetMenu on a tray that
 	// has already been Destroy()'d.
 	quitting atomic.Bool
+	// darkMenuBar tracks the current system appearance (macOS only) so
+	// setIconState can pick the icon variant whose W glyph contrasts
+	// with the menu bar. Updated via setDarkMenuBar on theme changes.
+	darkMenuBar atomic.Bool
+}
+
+// macIcons returns the on/off icon pair matching the current menu-bar
+// appearance.
+func (t *trayManager) macIcons() (on, off []byte) {
+	if t.darkMenuBar.Load() {
+		return trayOnIconDark, trayOffIconDark
+	}
+	return trayOnIconLight, trayOffIconLight
+}
+
+// setDarkMenuBar records the system appearance and immediately re-applies
+// the icon for the current connection state, so a theme switch doesn't
+// leave a low-contrast glyph up until the next connect/disconnect.
+func (t *trayManager) setDarkMenuBar(dark bool) {
+	if runtime.GOOS != "darwin" {
+		return
+	}
+	t.darkMenuBar.Store(dark)
+	t.mu.Lock()
+	anyConnected := len(t.activeTunnels) > 0
+	t.mu.Unlock()
+	on, off := t.macIcons()
+	if anyConnected {
+		t.tray.SetIcon(on)
+	} else {
+		t.tray.SetIcon(off)
+	}
 }
 
 func newTrayManager(app *application.App, win *application.WebviewWindow, tray *application.SystemTray, svc *wgapp.TunnelService, doShutdown func()) *trayManager {
@@ -385,8 +424,8 @@ func (t *trayManager) initialBuild() {
 // state, and updates the tooltip. Called from the status event stream, so
 // it must stay O(1) — no IPC, no disk I/O.
 //
-//   disconnected → template W (monochrome, auto-adapts to menu-bar theme)
-//   connected    → template W with a dot badge
+//   disconnected → W glyph (white on dark menu bars, black on light)
+//   connected    → same W with a green dot badge
 func (t *trayManager) setIconState(activeNames []string, handshakeMap map[string]bool) {
 	newSet := make(map[string]bool, len(activeNames))
 	for _, n := range activeNames {
@@ -418,26 +457,20 @@ func (t *trayManager) setIconState(activeNames []string, handshakeMap map[string
 	}
 
 	if activeChanged {
-		onIcon, offIcon := trayOnIcon, trayOffIcon
+		onIcon, offIcon := t.macIcons()
 		if runtime.GOOS == "windows" && len(trayOnIconWindows) > 0 {
 			// Use the rounded-red app-icon variants on Windows so the
 			// tray icon actually stands out against a light system-tray
 			// background and isn't framed by a white square.
 			onIcon, offIcon = trayOnIconWindows, trayOffIconWindows
 		}
-		// macOS: template icons so the system tints the glyph for the
-		// current menu-bar appearance. Windows: regular coloured icons.
-		setIcon := t.tray.SetIcon
-		if runtime.GOOS == "darwin" {
-			setIcon = t.tray.SetTemplateIcon
-		}
 		if anyConnected {
-			setIcon(onIcon)
+			t.tray.SetIcon(onIcon)
 			tooltip := "WireGuide — " + strings.Join(activeNames, ", ")
 			t.tray.SetTooltip(tooltip)
 		} else {
 			if runtime.GOOS == "darwin" || (runtime.GOOS == "windows" && len(offIcon) > 0) {
-				setIcon(offIcon)
+				t.tray.SetIcon(offIcon)
 			}
 			t.tray.SetTooltip("WireGuide")
 		}

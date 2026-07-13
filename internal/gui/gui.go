@@ -203,13 +203,19 @@ func Run(assetsHandler http.Handler, dataDir string) error {
 		app.Event.Emit("files-dropped", map[string]any{"files": files})
 	})
 
-	// 6. System tray. macOS uses TEMPLATE icons for every state so the
-	// glyph auto-adapts to light/dark menu bars (Wails's sticky
-	// isTemplateIcon flag is harmless when nothing ever switches back to
-	// a coloured icon); Windows keeps regular coloured icons.
+	// 6. System tray. macOS uses non-template coloured icons (the
+	// connected badge must stay green; template images are alpha-only),
+	// with the W glyph colour matched to the current system appearance —
+	// setDarkMenuBar below keeps it in sync on theme changes. Never call
+	// SetTemplateIcon: Wails's sticky isTemplateIcon flag would render
+	// every later SetIcon monochrome.
 	tray := app.SystemTray.New()
 	if runtime.GOOS == "darwin" {
-		tray.SetTemplateIcon(trayOffIcon)
+		if app.Env.IsDarkMode() {
+			tray.SetIcon(trayOffIconDark)
+		} else {
+			tray.SetIcon(trayOffIconLight)
+		}
 	} else {
 		tray.SetLabel("WireGuide")
 		// Windows also needs an explicit SetIcon at init or Wails falls
@@ -267,7 +273,17 @@ func Run(assetsHandler http.Handler, dataDir string) error {
 	}
 
 	trayMgr := newTrayManager(app, win, tray, tunnelService, doShutdown)
+	// Seed the appearance flag before the first status event so the
+	// initial connect renders the right-contrast glyph, then keep it in
+	// sync with system theme switches.
+	trayMgr.setDarkMenuBar(app.Env.IsDarkMode())
 	trayMgr.initialBuild()
+
+	if runtime.GOOS == "darwin" {
+		app.Event.OnApplicationEvent(events.Mac.ApplicationDidChangeTheme, func(e *application.ApplicationEvent) {
+			trayMgr.setDarkMenuBar(e.Context().IsDarkMode())
+		})
+	}
 
 	if runtime.GOOS == "darwin" {
 		app.Event.OnApplicationEvent(events.Mac.ApplicationWillTerminate, func(_ *application.ApplicationEvent) {
