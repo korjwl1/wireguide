@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/korjwl1/wireguide/internal/config"
 )
@@ -38,6 +39,10 @@ func (s *TunnelStore) Save(cfg *config.WireGuardConfig) error {
 	if variant, ok := s.caseVariantLocked(cfg.Name); ok {
 		return fmt.Errorf("tunnel %q conflicts with existing %q on case-insensitive filesystems; choose a distinct name", cfg.Name, variant)
 	}
+
+	// A tunnel that doesn't exist yet is being created now — remember when,
+	// so the date-added sort survives later edits (issue #17).
+	isNew := !s.exists(cfg.Name)
 
 	content := config.Serialize(cfg)
 	path := s.path(cfg.Name)
@@ -71,7 +76,37 @@ func (s *TunnelStore) Save(cfg *config.WireGuardConfig) error {
 		os.Remove(tmpPath)
 		return err
 	}
+
+	// Stamp the creation time for a brand-new tunnel (best-effort — the
+	// .conf is already durably written; a meta hiccup must not fail the
+	// save). Only when new, so edits preserve the original date-added.
+	if isNew {
+		if meta, err := s.loadMetaLocked(cfg.Name); err == nil && meta.CreatedUnix == 0 {
+			meta.CreatedUnix = time.Now().Unix()
+			_ = s.saveMetaLocked(cfg.Name, meta)
+		}
+	}
 	return nil
+}
+
+// AddedUnix returns the tunnel's date-added as a Unix timestamp: the
+// stamped creation time when known, else the .conf mtime as a fallback
+// for tunnels created before creation-time stamping existed. Used for the
+// list's date-added sort (issue #17).
+func (s *TunnelStore) AddedUnix(name string) int64 {
+	if err := ValidateTunnelName(name); err != nil {
+		return 0
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if meta, err := s.loadMetaLocked(name); err == nil && meta.CreatedUnix > 0 {
+		return meta.CreatedUnix
+	}
+	fi, err := os.Stat(s.path(name))
+	if err != nil {
+		return 0
+	}
+	return fi.ModTime().Unix()
 }
 
 // Load reads a tunnel config from disk by name.
@@ -381,6 +416,13 @@ func (s *TunnelStore) path(name string) string {
 type TunnelMeta struct {
 	Notes              string `json:"notes,omitempty"`
 	LatencyProbeTarget string `json:"latency_probe_target,omitempty"`
+	// CreatedUnix is when the tunnel was first added, stamped once on
+	// creation and preserved across edits/rename. The .conf mtime is NOT a
+	// reliable "date added": editing a tunnel rewrites the file and would
+	// make it look freshly added, corrupting the list's date-added sort
+	// (issue #17). 0 means "unknown" (tunnel predates this field) — callers
+	// fall back to the mtime.
+	CreatedUnix int64 `json:"created_unix,omitempty"`
 }
 
 func (s *TunnelStore) metaPath(name string) string {

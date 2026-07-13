@@ -387,3 +387,26 @@ func TestRenameAndDeleteTunnelRules(t *testing.T) {
 		t.Error("rules should be gone after delete")
 	}
 }
+
+func TestAddedUnixStableAcrossEdits(t *testing.T) {
+	dir := t.TempDir()
+	st := NewTunnelStore(dir)
+	cfg := testConfig()
+	cfg.Name = "added-test"
+	if err := st.Save(cfg); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	created := st.AddedUnix("added-test")
+	if created <= 0 {
+		t.Fatalf("AddedUnix should be stamped on create, got %d", created)
+	}
+	// Edit the tunnel (rewrites the .conf, bumping its mtime); the stamped
+	// date-added must NOT move.
+	cfg.Interface.DNS = []string{"9.9.9.9"}
+	if err := st.Save(cfg); err != nil {
+		t.Fatalf("re-save: %v", err)
+	}
+	if got := st.AddedUnix("added-test"); got != created {
+		t.Errorf("AddedUnix changed after edit: was %d, now %d", created, got)
+	}
+}

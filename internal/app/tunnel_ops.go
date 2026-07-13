@@ -48,7 +48,7 @@ func (s *TunnelService) ListTunnelsLocal() ([]TunnelInfo, error) {
 			Endpoint:           endpoint,
 			Notes:              notes,
 			LatencyProbeTarget: latencyProbeTarget,
-			CreatedAtUnix:      s.tunnelStore.ModTimeUnix(name),
+			CreatedAtUnix:      s.tunnelStore.AddedUnix(name),
 			LastUsedUnix:       lastUsed[name],
 		})
 	}
@@ -150,7 +150,7 @@ func (s *TunnelService) ListTunnels() ([]TunnelInfo, error) {
 			Endpoint:           endpoint,
 			Notes:              notes,
 			LatencyProbeTarget: latencyProbeTarget,
-			CreatedAtUnix:      s.tunnelStore.ModTimeUnix(name),
+			CreatedAtUnix:      s.tunnelStore.AddedUnix(name),
 			LastUsedUnix:       lastUsed[name],
 		})
 	}
