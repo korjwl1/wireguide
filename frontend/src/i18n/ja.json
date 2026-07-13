@@ -333,6 +333,7 @@
     "net_captured": "このネットワーク",
     "net_not_set": "対象ネットワークで「現在を使用」をクリック",
     "net_placeholder": "ネットワークを選択、または「現在を使用」",
-    "mac_placeholder": "ゲートウェイMAC (例: b0:38:6c:54:8b:ab)"
+    "mac_placeholder": "ゲートウェイMAC (例: b0:38:6c:54:8b:ab)",
+    "drag_hint": "ドラッグで並べ替え — 最上位の一致ルールが優先"
   }
 }

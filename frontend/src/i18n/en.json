@@ -333,6 +333,7 @@
     "net_captured": "this network",
     "net_not_set": "click \"Use current\" while on the network",
     "net_placeholder": "pick a network or click \"Use current\"",
-    "mac_placeholder": "gateway MAC (e.g. b0:38:6c:54:8b:ab)"
+    "mac_placeholder": "gateway MAC (e.g. b0:38:6c:54:8b:ab)",
+    "drag_hint": "drag to reorder — the topmost matching rule wins"
   }
 }

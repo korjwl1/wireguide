@@ -71,6 +71,33 @@
     save();
   }
 
+  // Drag-to-reorder. Rule order IS priority: the engine applies the
+  // first rule whose condition matches (top wins), so dragging a rule up
+  // gives it precedence over lower ones on a conflict.
+  let dragIndex = null;
+  let dragOverIndex = null;
+  function onDragStart(e, i) {
+    dragIndex = i;
+    e.dataTransfer.effectAllowed = 'move';
+    // Firefox needs data set for the drag to start.
+    try { e.dataTransfer.setData('text/plain', String(i)); } catch (_) {}
+  }
+  function onDragOver(e, i) {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    dragOverIndex = i;
+  }
+  function onDrop(i) {
+    if (dragIndex === null || dragIndex === i) { dragIndex = dragOverIndex = null; return; }
+    const arr = [...rules];
+    const [moved] = arr.splice(dragIndex, 1);
+    arr.splice(i, 0, moved);
+    rules = arr;
+    dragIndex = dragOverIndex = null;
+    save();
+  }
+  function onDragEnd() { dragIndex = dragOverIndex = null; }
+
   // Drop rules whose condition has no value before persisting.
   function cleaned() {
     return rules.filter(r => {
@@ -140,8 +167,14 @@
         {#if rules.length === 0}
           <div class="am-empty">{$t('automation.empty')}</div>
         {:else}
-          {#each rules as rule, i}
-            <div class="am-rule">
+          {#each rules as rule, i (rule)}
+            <div class="am-rule" class:am-dragover={dragOverIndex === i && dragIndex !== i}
+              on:dragover={(e) => onDragOver(e, i)}
+              on:drop={() => onDrop(i)}
+              on:dragend={onDragEnd}>
+              <span class="am-handle" draggable="true" title={$t('automation.drag_hint')}
+                on:dragstart={(e) => onDragStart(e, i)}>⋮⋮</span>
+              <span class="am-priority">{i + 1}</span>
               <select class="am-do" bind:value={rule.do} on:change={save} aria-label={$t('automation.action')}>
                 <option value="connect">{$t('automation.connect')}</option>
                 <option value="disconnect">{$t('automation.disconnect')}</option>
@@ -210,13 +243,16 @@
     padding: 24px;
   }
   .am-dialog {
-    width: 100%; max-width: 560px; max-height: 80vh; overflow-y: auto;
+    /* Fixed size — the dialog never grows/shrinks with the rule count.
+       Rules scroll inside .am-rules; a few rules just leave empty space. */
+    width: 100%; max-width: 560px; height: 540px; max-height: 88vh;
+    display: flex; flex-direction: column;
     background: var(--bg-elevated, var(--bg-secondary));
     border: 1px solid var(--border);
     border-radius: 14px; padding: 20px;
     box-shadow: 0 16px 48px rgba(0,0,0,0.35);
   }
-  .am-header { display: flex; align-items: center; gap: 12px; }
+  .am-header { display: flex; align-items: center; gap: 12px; flex-shrink: 0; }
   .am-icon {
     width: 36px; height: 36px; border-radius: 9px; flex-shrink: 0;
     display: flex; align-items: center; justify-content: center;
@@ -228,10 +264,27 @@
   .am-sub { margin: 2px 0 0; font: 400 12px/1.2 var(--font-mono); color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .am-close { background: transparent; border: 0; color: var(--text-muted); cursor: pointer; padding: 4px; border-radius: 6px; }
   .am-close:hover { background: var(--bg-hover); color: var(--text-primary); }
-  .am-hint { margin: 12px 0; font: 400 12px/1.5 var(--font-sans); color: var(--text-secondary); }
-  .am-rules { display: flex; flex-direction: column; gap: 8px; margin: 8px 0; }
+  .am-hint { margin: 12px 0; font: 400 12px/1.5 var(--font-sans); color: var(--text-secondary); flex-shrink: 0; }
+  /* The one scrolling region: fills the space between the fixed header
+     and the fixed add-button, so the dialog stays a constant size. */
+  .am-rules { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; margin: 4px 0; padding-right: 4px; }
   .am-empty { padding: 16px; text-align: center; font: 400 12px var(--font-sans); color: var(--text-muted); border: 1px dashed var(--border); border-radius: 8px; }
-  .am-rule { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .am-rule {
+    display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+    padding: 6px; border: 1px solid transparent; border-radius: 9px;
+  }
+  .am-rule.am-dragover { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, transparent); }
+  .am-handle {
+    cursor: grab; color: var(--text-muted); font: 700 12px/1 var(--font-sans);
+    letter-spacing: -2px; padding: 0 2px; user-select: none; flex-shrink: 0;
+  }
+  .am-handle:active { cursor: grabbing; }
+  .am-priority {
+    flex-shrink: 0; width: 18px; height: 18px; border-radius: 50%;
+    display: inline-flex; align-items: center; justify-content: center;
+    font: 600 10px var(--font-sans); color: var(--text-secondary);
+    background: color-mix(in srgb, var(--text-muted) 18%, transparent);
+  }
   .am-rule select, .am-rule input {
     font: 400 12px var(--font-sans); color: var(--text-primary);
     background: var(--bg-primary); border: 1px solid var(--border);
@@ -253,11 +306,12 @@
   .am-remove { background: transparent; border: 0; color: var(--text-muted); cursor: pointer; padding: 4px; border-radius: 6px; flex-shrink: 0; }
   .am-remove:hover { background: color-mix(in srgb, var(--red, #ff3b30) 18%, transparent); color: var(--red, #ff3b30); }
   .am-add {
-    display: inline-flex; align-items: center; gap: 6px; margin-top: 10px;
+    display: inline-flex; align-self: flex-start; align-items: center; gap: 6px;
+    margin-top: 12px; flex-shrink: 0;
     font: 500 12px var(--font-sans); color: var(--accent);
     background: transparent; border: 1px dashed color-mix(in srgb, var(--accent) 45%, transparent);
     border-radius: 8px; padding: 7px 12px; cursor: pointer;
   }
   .am-add:hover { background: color-mix(in srgb, var(--accent) 10%, transparent); }
-  .am-error { margin-top: 8px; font: 400 12px var(--font-sans); color: var(--error-text, #ff453a); }
+  .am-error { margin-top: 8px; font: 400 12px var(--font-sans); color: var(--error-text, #ff453a); flex-shrink: 0; }
 </style>

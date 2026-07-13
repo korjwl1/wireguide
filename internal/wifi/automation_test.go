@@ -75,6 +75,26 @@ func TestEvaluate_FirstConcreteMatchWins(t *testing.T) {
 	}
 }
 
+func TestEvaluate_ConflictTopWins(t *testing.T) {
+	// Two DIFFERENT condition types that both match the same context but
+	// disagree on the action — the topmost rule must win, and reordering
+	// must flip the result (drag-to-reorder = priority).
+	ctx := NetworkContext{
+		SSID:        "office-wifi",
+		GatewayMAC:  "b0:38:6c:54:8b:ab",
+		PhysicalIPs: ips("192.168.0.5"),
+	}
+	netRule := Rule{When: Condition{Type: CondNetwork, GatewayMAC: "b0:38:6c:54:8b:ab"}, Do: ActionDisconnect}
+	wifiRule := Rule{When: Condition{Type: CondSSID, SSID: "office-wifi"}, Do: ActionConnect}
+
+	if got := Evaluate([]Rule{netRule, wifiRule}, ctx); got != StateDisconnect {
+		t.Errorf("network rule on top: got %v, want disconnect", got)
+	}
+	if got := Evaluate([]Rule{wifiRule, netRule}, ctx); got != StateConnect {
+		t.Errorf("wifi rule on top (reordered): got %v, want connect", got)
+	}
+}
+
 func TestEvaluate_NoRulesOrNoMatch(t *testing.T) {
 	if got := Evaluate(nil, NetworkContext{SSID: "x"}); got != StateUnmanaged {
 		t.Errorf("no rules: got %v, want unmanaged", got)
