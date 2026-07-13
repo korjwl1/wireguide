@@ -515,27 +515,75 @@ func callGetAdaptersAddresses() (*adapterEnumeration, error) {
 	}, nil
 }
 
+// mibIpinterfaceRow mirrors MIB_IPINTERFACE_ROW from netioapi.h (168
+// bytes on amd64/arm64). GetIpInterfaceEntry takes no size parameter and
+// writes the WHOLE struct into the caller's buffer, so the layout must be
+// complete — the previous 120-byte buffer let the kernel write ~48 bytes
+// past the end of the stack array, and read "NlMtu" from offset 56, which
+// is actually DadTransmits (typically 1-3), so auto-MTU always fell back.
+type mibIpinterfaceRow struct {
+	Family                               uint16
+	_                                    [6]byte // align InterfaceLuid to 8
+	InterfaceLuid                        uint64
+	InterfaceIndex                       uint32
+	MaxReassemblySize                    uint32
+	InterfaceIdentifier                  uint64
+	MinRouterAdvertisementInterval       uint32
+	MaxRouterAdvertisementInterval       uint32
+	AdvertisingEnabled                   byte
+	ForwardingEnabled                    byte
+	WeakHostSend                         byte
+	WeakHostReceive                      byte
+	UseAutomaticMetric                   byte
+	UseNeighborUnreachabilityDetection   byte
+	ManagedAddressConfigurationSupported byte
+	OtherStatefulConfigurationSupported  byte
+	AdvertiseDefaultRoute                byte
+	_                                    [3]byte // align RouterDiscoveryBehavior to 4
+	RouterDiscoveryBehavior              int32
+	DadTransmits                         uint32
+	BaseReachableTime                    uint32
+	RetransmitTime                       uint32
+	PathMtuDiscoveryTimeout              uint32
+	LinkLocalAddressBehavior             int32
+	LinkLocalAddressTimeout              uint32
+	ZoneIndices                          [16]uint32 // ScopeLevelCount
+	SitePrefixLength                     uint32
+	Metric                               uint32
+	NlMtu                                uint32
+	Connected                            byte
+	SupportsWakeUpPatterns               byte
+	SupportsNeighborDiscovery            byte
+	SupportsRouterDiscovery              byte
+	ReachableTime                        uint32
+	TransmitOffload                      byte // NL_INTERFACE_OFFLOAD_ROD bitfield byte
+	ReceiveOffload                       byte
+	DisableDefaultRoutes                 byte
+	_                                    [1]byte // tail pad to 8-byte struct alignment
+}
+
+// Compile-time layout assertions (both directions, so any drift fails
+// the build): total size and the one field we actually read.
+const _ = uintptr(168 - unsafe.Sizeof(mibIpinterfaceRow{}))
+const _ = uintptr(unsafe.Sizeof(mibIpinterfaceRow{}) - 168)
+const _ = uintptr(152 - unsafe.Offsetof(mibIpinterfaceRow{}.NlMtu))
+const _ = uintptr(unsafe.Offsetof(mibIpinterfaceRow{}.NlMtu) - 152)
+
 // findInterfaceMTU returns the MTU of the adapter with the given IPv4
 // interface index. Uses GetIpInterfaceEntry which is locale-independent.
 // Returns 0 on lookup failure.
 func findInterfaceMTU(ifIndex uint32) uint32 {
-	// mibIpinterfaceRow is a large struct (~120 bytes). We zero a byte slice
-	// of the right size and set Family + InterfaceIndex; the kernel fills
-	// the rest. We only read NlMtu.
-	var row [120]byte
-	*(*uint16)(unsafe.Pointer(&row[0])) = afInet
-	// InterfaceLuid is the first 8 bytes after Family/_pad; we leave it 0
-	// because InterfaceIndex (next 4 bytes) is sufficient when LUID==0.
-	*(*uint32)(unsafe.Pointer(&row[16])) = ifIndex
+	// Zero LUID + a set InterfaceIndex is the documented lookup form
+	// for GetIpInterfaceEntry; the kernel fills the rest of the row.
+	var row mibIpinterfaceRow
+	row.Family = afInet
+	row.InterfaceIndex = ifIndex
 
-	ret, _, _ := procGetIpInterfaceEntry.Call(uintptr(unsafe.Pointer(&row[0])))
+	ret, _, _ := procGetIpInterfaceEntry.Call(uintptr(unsafe.Pointer(&row)))
 	if ret != 0 {
 		return 0
 	}
-	// NlMtu is at offset 56 in MIB_IPINTERFACE_ROW (after the small fields).
-	// This offset was determined from sdkddkver.h / netioapi.h analysis;
-	// it has been stable since Windows 8.
-	return *(*uint32)(unsafe.Pointer(&row[56]))
+	return row.NlMtu
 }
 
 // strconvU32 is a tiny helper used by tests; centralised so the formatting
