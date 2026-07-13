@@ -84,6 +84,17 @@ type WindowsFirewall struct {
 	// switch keep its tear-down-everything-rebuild simplicity while
 	// preserving endpoint protection across the transition.
 	endpointProtectionState map[string][]string
+
+	// dnsFilterIDs tracks the WFP filter IDs installed by
+	// EnableDNSProtection (per-server permits + the block-all-53
+	// catch-all) so they can be removed precisely — on a re-enable with
+	// changed servers, and on DisableDNSProtection while the kill switch
+	// stays up — without tearing down the whole session.
+	dnsFilterIDs []uint64
+	// dnsServers remembers the last DNS set installed so DisableKillSwitch
+	// (which closes and rebuilds the session) can reinstall DNS protection
+	// alongside endpoint protection instead of silently dropping it.
+	dnsServers []string
 }
 
 func NewPlatformFirewall() FirewallManager {
@@ -258,6 +269,10 @@ func (f *WindowsFirewall) closeSession() {
 	f.tunnelFilterIDs = nil
 	f.endpointProtectionFilterIDs = nil
 	f.endpointProtectionState = nil
+	f.dnsFilterIDs = nil
+	// NB: dnsServers is intentionally NOT cleared here — DisableKillSwitch
+	// closes the session and then wants to reinstall DNS protection, so it
+	// needs the remembered server set to survive the cascade.
 }
 
 // procConvertAliasToLuidFW is the package-level iphlpapi handle used by
@@ -789,11 +804,19 @@ func (f *WindowsFirewall) DisableKillSwitch() error {
 		epSnapshot[iface] = cp
 	}
 
-	// Closing the dynamic session removes every filter in one shot. If
-	// DNS protection is also active it will be torn down together —
-	// that's acceptable because the DNS rules only matter when a tunnel
-	// is up, and DisableKillSwitch implies the user is taking the
-	// tunnel down.
+	// Snapshot DNS protection too: closeSession cascades the DNS filters
+	// away, and the kill switch and DNS protection are independent
+	// toggles — if a tunnel is still connected, turning the kill switch
+	// off must not silently strip DNS-leak protection.
+	var dnsSnapshot []string
+	if f.dnsProtectionEnabled && len(f.dnsServers) > 0 {
+		dnsSnapshot = make([]string, len(f.dnsServers))
+		copy(dnsSnapshot, f.dnsServers)
+	}
+
+	// Closing the dynamic session removes every filter in one shot; the
+	// endpoint-protection and DNS-protection sets are reinstalled below in
+	// the fresh session from the snapshots taken above.
 	f.closeSession()
 
 	// Re-install endpoint protection in a fresh session for every tunnel
@@ -811,8 +834,17 @@ func (f *WindowsFirewall) DisableKillSwitch() error {
 				fmt.Errorf("reinstall endpoint protection for %s: %w", iface, err))
 		}
 	}
+	// Reinstall DNS protection in the same fresh session if it was active.
+	if len(dnsSnapshot) > 0 {
+		if err := f.enableDNSProtectionLocked(dnsSnapshot); err != nil {
+			slog.Error("DisableKillSwitch: failed to reinstall DNS protection",
+				"error", err)
+			rebuildErrs = append(rebuildErrs, fmt.Errorf("reinstall DNS protection: %w", err))
+		}
+	}
+
 	if len(rebuildErrs) > 0 {
-		return fmt.Errorf("kill switch disabled but loop protection rebuild failed for %d tunnel(s); first error: %w",
+		return fmt.Errorf("kill switch disabled but protection rebuild failed for %d item(s); first error: %w",
 			len(rebuildErrs), rebuildErrs[0])
 	}
 	return nil
@@ -828,7 +860,13 @@ func (f *WindowsFirewall) DisableKillSwitch() error {
 func (f *WindowsFirewall) EnableDNSProtection(interfaceName string, dnsServers []string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	return f.enableDNSProtectionLocked(dnsServers)
+}
 
+// enableDNSProtectionLocked is the body of EnableDNSProtection. Caller
+// MUST hold f.mu. Also used by DisableKillSwitch to reinstall DNS
+// protection in the fresh session it rebuilds.
+func (f *WindowsFirewall) enableDNSProtectionLocked(dnsServers []string) error {
 	if len(dnsServers) == 0 {
 		return nil
 	}
@@ -846,28 +884,51 @@ func (f *WindowsFirewall) EnableDNSProtection(interfaceName string, dnsServers [
 		}
 	}()
 
+	// Idempotency: delete any DNS filters from a previous enable in the
+	// SAME transaction. Without this, re-enabling (reconnect, or a DNS
+	// server change) stacked duplicate filters unboundedly and, worse,
+	// left the OLD servers' weight-15 permits in place — a hole to a
+	// resolver the user just removed.
+	for _, id := range f.dnsFilterIDs {
+		if status := fwpmFilterDeleteById0(f.sessionHandle, id); status != 0 {
+			slog.Warn("DNS protection: stale filter delete failed (continuing)",
+				"filter_id", id, "status", fmt.Sprintf("0x%x", status))
+		}
+	}
+	f.dnsFilterIDs = nil
+
+	newIDs := make([]uint64, 0, len(dnsServers)*4+len(allConnectLayers)*2)
+
 	// Permit DNS to each whitelisted server first — weight 15 (higher
 	// than the block below). Both UDP and TCP, because DNS-over-TCP is a
 	// legitimate fallback for >512-byte responses.
+	cleanServers := make([]string, 0, len(dnsServers))
 	for _, dns := range dnsServers {
 		ip := net.ParseIP(dns)
 		if ip == nil {
 			continue
 		}
-		if err := f.permitDNSServer(ip); err != nil {
+		ids, err := f.permitDNSServer(ip)
+		if err != nil {
 			return err
 		}
+		newIDs = append(newIDs, ids...)
+		cleanServers = append(cleanServers, dns)
 	}
 
 	// Block UDP/TCP port 53 to everything else — weight 14.
-	if err := f.blockAllDNS(); err != nil {
+	blockIDs, err := f.blockAllDNS()
+	if err != nil {
 		return err
 	}
+	newIDs = append(newIDs, blockIDs...)
 
 	if status := fwpmTransactionCommit0(f.sessionHandle); status != 0 {
 		return fmt.Errorf("FwpmTransactionCommit0(DNS): 0x%x", status)
 	}
 	committed = true
+	f.dnsFilterIDs = newIDs
+	f.dnsServers = cleanServers
 	f.dnsProtectionEnabled = true
 	return nil
 }
@@ -895,19 +956,29 @@ func (f *WindowsFirewall) EnableDNSProtection(interfaceName string, dnsServers [
 // surface but builds each filter in its own goroutine-local scope —
 // mirroring that here avoids the implicit "stack frame lives long
 // enough" assumption.
-func (f *WindowsFirewall) permitDNSServer(ip net.IP) error {
+func (f *WindowsFirewall) permitDNSServer(ip net.IP) ([]uint64, error) {
 	if v4 := ip.To4(); v4 != nil {
-		if err := f.permitDNSv4(ip, v4, 17, "UDP"); err != nil {
-			return err
+		udp, err := f.permitDNSv4(ip, v4, 17, "UDP")
+		if err != nil {
+			return nil, err
 		}
-		return f.permitDNSv4(ip, v4, 6, "TCP")
+		tcp, err := f.permitDNSv4(ip, v4, 6, "TCP")
+		if err != nil {
+			return nil, err
+		}
+		return []uint64{udp, tcp}, nil
 	}
 	var addr [16]byte
 	copy(addr[:], ip.To16())
-	if err := f.permitDNSv6(ip, addr, 17, "UDP"); err != nil {
-		return err
+	udp, err := f.permitDNSv6(ip, addr, 17, "UDP")
+	if err != nil {
+		return nil, err
 	}
-	return f.permitDNSv6(ip, addr, 6, "TCP")
+	tcp, err := f.permitDNSv6(ip, addr, 6, "TCP")
+	if err != nil {
+		return nil, err
+	}
+	return []uint64{udp, tcp}, nil
 }
 
 // permitDNSv4 installs ONE WFP filter permitting UDP/TCP port 53 traffic
@@ -916,7 +987,7 @@ func (f *WindowsFirewall) permitDNSServer(ip net.IP) error {
 // pointer); the uintptr stored in the condition value field is just a
 // number for the kernel to dereference, and runtime.KeepAlive(r) after
 // the syscall ensures the GC won't reclaim the heap object mid-call.
-func (f *WindowsFirewall) permitDNSv4(ip net.IP, v4 net.IP, proto uint8, protoName string) error {
+func (f *WindowsFirewall) permitDNSv4(ip net.IP, v4 net.IP, proto uint8, protoName string) (uint64, error) {
 	r := &fwpV4AddrMask{
 		addr: binary.BigEndian.Uint32(v4),
 		mask: 0xFFFFFFFF,
@@ -933,18 +1004,15 @@ func (f *WindowsFirewall) permitDNSv4(ip net.IP, v4 net.IP, proto uint8, protoNa
 			},
 		},
 	}
-	_, err := f.addFilter("Permit DNS v4 "+protoName+" "+ip.String(), guidLayerAleAuthConnectV4, actionPermit, 15, conds)
+	id, err := f.addFilter("Permit DNS v4 "+protoName+" "+ip.String(), guidLayerAleAuthConnectV4, actionPermit, 15, conds)
 	runtime.KeepAlive(r)
 	runtime.KeepAlive(conds)
-	if err != nil {
-		return err
-	}
-	return nil
+	return id, err
 }
 
 // permitDNSv6 mirrors permitDNSv4 for IPv6 — single filter, heap-
 // allocated V6_ADDR_MASK, KeepAlive immediately after the syscall.
-func (f *WindowsFirewall) permitDNSv6(ip net.IP, addr [16]byte, proto uint8, protoName string) error {
+func (f *WindowsFirewall) permitDNSv6(ip net.IP, addr [16]byte, proto uint8, protoName string) (uint64, error) {
 	r := &fwpV6AddrMask{
 		addr:         addr,
 		prefixLength: 128,
@@ -961,13 +1029,10 @@ func (f *WindowsFirewall) permitDNSv6(ip net.IP, addr [16]byte, proto uint8, pro
 			},
 		},
 	}
-	_, err := f.addFilter("Permit DNS v6 "+protoName+" "+ip.String(), guidLayerAleAuthConnectV6, actionPermit, 15, conds)
+	id, err := f.addFilter("Permit DNS v6 "+protoName+" "+ip.String(), guidLayerAleAuthConnectV6, actionPermit, 15, conds)
 	runtime.KeepAlive(r)
 	runtime.KeepAlive(conds)
-	if err != nil {
-		return err
-	}
-	return nil
+	return id, err
 }
 
 // fwpV4AddrMask mirrors FWP_V4_ADDR_AND_MASK: addr + mask, both UINT32
@@ -992,37 +1057,75 @@ type fwpV6AddrMask struct {
 	prefixLength uint8
 }
 
-func (f *WindowsFirewall) blockAllDNS() error {
+func (f *WindowsFirewall) blockAllDNS() ([]uint64, error) {
+	ids := make([]uint64, 0, len(allConnectLayers)*2)
 	for _, layer := range allConnectLayers {
 		for _, proto := range []uint8{17, 6} {
 			conds := []fwpmFilterCondition0{
 				{fieldKey: guidCondIPProtocol, matchType: matchEqual, conditionValue: uint8Value(proto)},
 				{fieldKey: guidCondIPRemotePort, matchType: matchEqual, conditionValue: uint16Value(53)},
 			}
-			if _, err := f.addFilter("Block DNS catch-all", layer, actionBlock, 14, conds); err != nil {
-				return err
+			id, err := f.addFilter("Block DNS catch-all", layer, actionBlock, 14, conds)
+			if err != nil {
+				return nil, err
 			}
+			ids = append(ids, id)
 		}
 	}
-	return nil
+	return ids, nil
 }
 
 func (f *WindowsFirewall) DisableDNSProtection() error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	// We can't remove just the DNS filters without tracking their IDs —
-	// for simplicity, tear down everything and the next EnableKillSwitch
-	// will rebuild. The kill switch is the more critical of the two
-	// features; DNS protection toggling without an active tunnel is rare.
-	if !f.killSwitchEnabled {
-		f.closeSession()
+
+	f.dnsProtectionEnabled = false
+	f.dnsServers = nil
+
+	// Delete only the DNS filters, by tracked ID, so the kill switch (if
+	// up) and everything else stay intact. Previously, with no kill
+	// switch this tore down the whole session, and with a kill switch up
+	// it left the port-53 block filters installed — so a user who then
+	// switched to a non-whitelisted resolver silently lost all DNS.
+	if len(f.dnsFilterIDs) == 0 {
+		// Nothing tracked. If no kill switch is holding the session
+		// open, close it so we don't leak an idle dynamic session.
+		if !f.killSwitchEnabled {
+			f.closeSession()
+		}
 		return nil
 	}
-	// Kill switch is up — preserving its filters means we'd need to track
-	// DNS-specific IDs and delete each. TODO: when WFP filter ID tracking
-	// is added, do precise removal. For now, log that DNS protection is
-	// implicitly tied to the kill switch lifetime.
-	f.dnsProtectionEnabled = false
+	if f.sessionHandle == 0 {
+		f.dnsFilterIDs = nil
+		return nil
+	}
+
+	if status := fwpmTransactionBegin0(f.sessionHandle); status != 0 {
+		return fmt.Errorf("FwpmTransactionBegin0(DNS rm): 0x%x", status)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			fwpmTransactionAbort0(f.sessionHandle)
+		}
+	}()
+	for _, id := range f.dnsFilterIDs {
+		if status := fwpmFilterDeleteById0(f.sessionHandle, id); status != 0 {
+			slog.Warn("DNS protection: filter delete failed (continuing)",
+				"filter_id", id, "status", fmt.Sprintf("0x%x", status))
+		}
+	}
+	if status := fwpmTransactionCommit0(f.sessionHandle); status != 0 {
+		return fmt.Errorf("FwpmTransactionCommit0(DNS rm): 0x%x", status)
+	}
+	committed = true
+	f.dnsFilterIDs = nil
+
+	// If the kill switch isn't holding the session, close it now that the
+	// DNS filters are gone.
+	if !f.killSwitchEnabled {
+		f.closeSession()
+	}
 	return nil
 }
 
