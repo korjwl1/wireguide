@@ -4,56 +4,56 @@ package wifi
 
 import (
 	"fmt"
+	"net"
 	"syscall"
 	"unsafe"
+
+	"github.com/korjwl1/wireguide/internal/network"
 )
 
 var (
-	modIphlpapi      = syscall.NewLazyDLL("iphlpapi.dll")
-	procGetBestRoute = modIphlpapi.NewProc("GetBestRoute")
-	procSendARP      = modIphlpapi.NewProc("SendARP")
+	modIphlpapi = syscall.NewLazyDLL("iphlpapi.dll")
+	procSendARP = modIphlpapi.NewProc("SendARP")
 )
 
-// mibIPForwardRow mirrors MIB_IPFORWARDROW (ipmib.h): 14 consecutive
-// DWORDs. Only dwForwardNextHop is read; the rest exist so the kernel
-// has the full buffer to write into.
-type mibIPForwardRow struct {
-	dest      uint32
-	mask      uint32
-	policy    uint32
-	nextHop   uint32
-	ifIndex   uint32
-	fType     uint32
-	proto     uint32
-	age       uint32
-	nextHopAS uint32
-	metric1   uint32
-	metric2   uint32
-	metric3   uint32
-	metric4   uint32
-	metric5   uint32
-}
+// vpnAdapterAliases are the interface friendly-names to exclude when
+// resolving the underlay gateway, so a full tunnel doesn't hide the
+// physical network. WireGuide's adapter is "WireGuide" (see
+// reconnect/network_windows.go, which uses the same constant).
+var vpnAdapterAliases = []string{"WireGuide"}
 
-// GatewayMAC returns the lower-cased MAC of the IPv4 default gateway.
-// GetBestRoute to a public address yields the gateway (dwForwardNextHop);
-// SendARP resolves that gateway IP to its MAC from the neighbour cache.
-// Both are unprivileged and locale-independent. "" on any failure.
+// GatewayMAC returns the lower-cased MAC of the IPv4 default gateway — a
+// precise, medium-agnostic fingerprint of the physical network. "" when
+// it can't be determined.
+//
+// It resolves the PHYSICAL default gateway via the routing table while
+// excluding the WireGuard adapter, then SendARP-resolves that gateway IP
+// to its MAC. Using the routing table (not GetBestRoute to a public IP)
+// is deliberate: once a full tunnel is up, WireGuard's 0.0.0.0/1 +
+// 128.0.0.0/1 routes would make GetBestRoute return the tunnel, whose
+// on-link next-hop is zero — the gateway MAC would go blank exactly when
+// the tunnel connected, flapping any `mac:` automation rule. Both steps
+// are unprivileged and locale-independent.
 func GatewayMAC() string {
-	// 8.8.8.8 as an IN_ADDR DWORD (network byte order == 0x08080808).
-	const dest = uint32(8) | uint32(8)<<8 | uint32(8)<<16 | uint32(8)<<24
-	var row mibIPForwardRow
-	ret, _, _ := procGetBestRoute.Call(uintptr(dest), 0, uintptr(unsafe.Pointer(&row)))
-	if ret != 0 || row.nextHop == 0 {
+	gw := network.UnderlayDefaultGatewayV4(vpnAdapterAliases)
+	if gw == "" {
 		return ""
 	}
+	ip4 := net.ParseIP(gw).To4()
+	if ip4 == nil {
+		return ""
+	}
+	// SendARP's destination is an IPAddr (a DWORD in network byte order);
+	// build it so its in-memory bytes are ip4[0..3], matching the wire order.
+	dest := uint32(ip4[0]) | uint32(ip4[1])<<8 | uint32(ip4[2])<<16 | uint32(ip4[3])<<24
 	var mac [8]byte
 	macLen := uint32(6)
-	ret2, _, _ := procSendARP.Call(
-		uintptr(row.nextHop), 0,
+	ret, _, _ := procSendARP.Call(
+		uintptr(dest), 0,
 		uintptr(unsafe.Pointer(&mac[0])),
 		uintptr(unsafe.Pointer(&macLen)),
 	)
-	if ret2 != 0 || macLen < 6 {
+	if ret != 0 || macLen < 6 {
 		return ""
 	}
 	return fmt.Sprintf("%02x:%02x:%02x:%02x:%02x:%02x",

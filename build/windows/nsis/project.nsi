@@ -109,9 +109,21 @@ Section
     # Done via PowerShell/.NET rather than raw NSIS registry edits: .NET
     # reads and writes the full PATH value (NSIS's ReadRegStr truncates at
     # 1024 chars and would corrupt a long PATH), skips if already present,
-    # and broadcasts WM_SETTINGCHANGE so new shells pick it up. $$x is an
-    # escaped literal `$x` for PowerShell; $INSTDIR is expanded by NSIS.
-    nsExec::ExecToLog `powershell -NoProfile -ExecutionPolicy Bypass -Command "$$p=[Environment]::GetEnvironmentVariable('Path','Machine'); if(($$p -split ';') -notcontains '$INSTDIR'){[Environment]::SetEnvironmentVariable('Path',$$p.TrimEnd(';')+';$INSTDIR','Machine')}"`
+    # and broadcasts WM_SETTINGCHANGE so new shells pick it up.
+    #
+    # $INSTDIR is passed to PowerShell as a PROCESS ENVIRONMENT VARIABLE,
+    # never interpolated into the script source — a user-chosen install
+    # path can legally contain a single quote, which would otherwise break
+    # out of a PowerShell string literal and run as code under the
+    # installer's admin token. `"` can't appear in a Windows path, so the
+    # SetEnvironmentVariable marshalling below is safe. $$x is an escaped
+    # literal `$x` for PowerShell.
+    System::Call 'kernel32::SetEnvironmentVariable(t "WIREGUIDE_DIR", t "$INSTDIR")'
+    nsExec::ExecToLog `powershell -NoProfile -ExecutionPolicy Bypass -Command "$$d=$$env:WIREGUIDE_DIR; $$p=[Environment]::GetEnvironmentVariable('Path','Machine'); if(($$p -split ';') -notcontains $$d){[Environment]::SetEnvironmentVariable('Path',$$p.TrimEnd(';')+';'+$$d,'Machine')}"`
+    Pop $0
+    ${If} $0 != 0
+        DetailPrint "Note: could not add WireGuide to PATH (exit $0). Use the full path to wireguide.exe, or add it to PATH manually."
+    ${EndIf}
 
     !insertmacro wails.associateFiles
     !insertmacro wails.associateCustomProtocols
@@ -124,8 +136,10 @@ Section "uninstall"
 
     RMDir /r "$AppData\${PRODUCT_EXECUTABLE}" # Remove the WebView2 DataPath
 
-    # Remove the install dir from the system PATH (mirror of the install step).
-    nsExec::ExecToLog `powershell -NoProfile -ExecutionPolicy Bypass -Command "$$p=[Environment]::GetEnvironmentVariable('Path','Machine'); $$n=(($$p -split ';') | Where-Object { $$_ -ne '$INSTDIR' }) -join ';'; [Environment]::SetEnvironmentVariable('Path',$$n,'Machine')"`
+    # Remove the install dir from the system PATH (mirror of the install
+    # step; $INSTDIR passed via env var, not interpolated — see install).
+    System::Call 'kernel32::SetEnvironmentVariable(t "WIREGUIDE_DIR", t "$INSTDIR")'
+    nsExec::ExecToLog `powershell -NoProfile -ExecutionPolicy Bypass -Command "$$d=$$env:WIREGUIDE_DIR; $$p=[Environment]::GetEnvironmentVariable('Path','Machine'); $$n=(($$p -split ';') | Where-Object { $$_ -ne $$d }) -join ';'; [Environment]::SetEnvironmentVariable('Path',$$n,'Machine')"`
 
     RMDir /r $INSTDIR
 

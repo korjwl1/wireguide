@@ -362,6 +362,34 @@ func BestNonExcludedDefaultRouteLUIDv4(excludedAliases []string) uint64 {
 	return r.InterfaceLuid
 }
 
+// UnderlayDefaultGatewayV4 returns the dotted-quad IPv4 next-hop
+// (gateway) of the lowest-metric default route that is NOT on one of the
+// excluded (VPN) adapters, or "" if there is none.
+//
+// This is how a caller finds the PHYSICAL gateway even while a full
+// tunnel is active. A GetBestRoute() lookup to a public IP would instead
+// resolve WireGuard's own 0.0.0.0/1 + 128.0.0.0/1 split routes (whose
+// on-link next-hop is zero), so gateway-MAC network fingerprinting would
+// go blank the moment the tunnel came up and flap connect/disconnect
+// rules. Filtering the WireGuard adapter out of the default-route search
+// keeps the underlay gateway visible.
+func UnderlayDefaultGatewayV4(excludedAliases []string) string {
+	excludedLuids := make(map[uint64]struct{}, len(excludedAliases))
+	for _, alias := range excludedAliases {
+		if luid, ok := convertInterfaceAliasToLuid(alias); ok {
+			excludedLuids[luid] = struct{}{}
+		}
+	}
+	r := getDefaultRouteFiltered(afInet, func(luid uint64) bool {
+		_, ok := excludedLuids[luid]
+		return ok
+	})
+	if r == nil || r.NextHop == nil {
+		return ""
+	}
+	return r.NextHop.String()
+}
+
 // IPAdapterAddresses is a partial mirror of IP_ADAPTER_ADDRESSES_LH. We only
 // touch the fields we need; the full struct is ~448 bytes on 64-bit Windows
 // and we let the kernel write the full layout into our buffer.
