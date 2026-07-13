@@ -9,6 +9,7 @@ import (
 	"net"
 	"os/exec"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -73,8 +74,17 @@ func (f *LinuxFirewall) EnableKillSwitch(interfaceName string, ifaceAddresses []
 		if strings.Contains(ip, ":") {
 			addrKw = "ip6"
 		}
+		// Validate the port before interpolating: net.SplitHostPort does
+		// NOT check that the port is numeric, so a crafted endpoint could
+		// otherwise inject nft syntax (or break the ruleset load, which
+		// fails the kill switch open).
 		if port != "" {
-			fmt.Fprintf(&endpointRules, "    %s daddr %s udp dport %s accept\n", addrKw, ip, port)
+			p, err := strconv.Atoi(port)
+			if err != nil || p < 1 || p > 65535 {
+				slog.Warn("skipping endpoint with invalid port in nft rules", "endpoint", ep)
+				continue
+			}
+			fmt.Fprintf(&endpointRules, "    %s daddr %s udp dport %d accept\n", addrKw, ip, p)
 		} else {
 			fmt.Fprintf(&endpointRules, "    %s daddr %s accept\n", addrKw, ip)
 		}
@@ -121,14 +131,14 @@ table inet %s {
     udp sport 546 udp dport 547 accept
     # Allow WireGuard endpoints
 %s    # Allow WireGuard tunnel
-    oif %s accept
+    oifname %s accept
     # Allow established connections
     ct state established,related accept
   }
   chain input {
     type filter hook input priority 0; policy drop;
     iif lo accept
-    iif %s accept
+    iifname %s accept
     # Allow DHCP responses
     udp sport 67 udp dport 68 accept
     # Allow DHCPv6 responses (H11)
@@ -185,10 +195,18 @@ func (f *LinuxFirewall) DisableEndpointProtection(string) error { return nil }
 func (f *LinuxFirewall) DisableKillSwitch() error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	// Clear the in-memory flag regardless of the flush outcome: a "table
+	// not found" error means the kill switch is already gone, which is
+	// success for a disable. Leaving killSwitchEnabled=true on that error
+	// (the previous behaviour) made IsKillSwitchEnabled() report a rule
+	// that no longer exists.
+	f.killSwitchEnabled = false
 	if err := nftFlush(); err != nil {
+		if isNftNotFound(err) {
+			return nil
+		}
 		return err
 	}
-	f.killSwitchEnabled = false
 	return nil
 }
 
@@ -319,4 +337,16 @@ func nftFlush() error {
 		return fmt.Errorf("nft delete table: %w (%s)", err, strings.TrimSpace(string(out)))
 	}
 	return nil
+}
+
+// isNftNotFound reports whether an nft error means the target object
+// didn't exist — which, for a delete/disable, is an already-done success
+// rather than a failure. nft phrases this as "No such file or directory".
+func isNftNotFound(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "no such file or directory") ||
+		strings.Contains(msg, "does not exist")
 }
