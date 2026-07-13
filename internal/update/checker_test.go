@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"os/exec"
 	"runtime"
@@ -446,6 +447,30 @@ func TestDownloadUpdate_SignedHappyPath(t *testing.T) {
 	}
 	if err := removeIfExists(path); err != nil {
 		t.Logf("cleanup warning: %v", err)
+	}
+}
+
+func TestCheckUpdateURLStrict(t *testing.T) {
+	cases := []struct {
+		url string
+		ok  bool
+	}{
+		{"https://github.com/korjwl1/wireguide/releases/download/v1/asset.dmg", true},
+		{"https://objects.githubusercontent.com/x", true},
+		{"http://github.com/x", false},             // non-https
+		{"https://evil.example.com/asset.dmg", false}, // disallowed host
+		{"https://github.com.evil.com/x", false},   // lookalike host
+		{"ftp://github.com/x", false},              // non-https scheme
+	}
+	for _, c := range cases {
+		u, err := url.Parse(c.url)
+		if err != nil {
+			t.Fatalf("parse %q: %v", c.url, err)
+		}
+		got := checkUpdateURLStrict(u) == nil
+		if got != c.ok {
+			t.Errorf("checkUpdateURLStrict(%q) ok=%v, want %v", c.url, got, c.ok)
+		}
 	}
 }
 

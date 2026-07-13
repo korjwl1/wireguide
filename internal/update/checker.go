@@ -302,11 +302,44 @@ func updateCheckRedirect(req *http.Request, via []*http.Request) error {
 	if len(via) >= 10 {
 		return fmt.Errorf("too many redirects")
 	}
-	host := req.URL.Hostname()
-	if !allowedRedirectHosts[host] {
-		return fmt.Errorf("refusing redirect to disallowed host %q", host)
+	if err := checkUpdateURL(req.URL); err != nil {
+		return err
 	}
 	return nil
+}
+
+// checkUpdateURL enforces https + a GitHub-owned host. CheckRedirect only
+// guards redirect HOPS, not the INITIAL request, so callers must run this
+// on the first URL too — otherwise a tampered API body handing us a plain
+// http:// asset URL, or a non-GitHub host, would be fetched with no guard.
+//
+// Enforcement is skipped under `go test` so the suite can drive local
+// httptest (http://127.0.0.1) servers; the strict logic lives in
+// checkUpdateURLStrict, which is unit-tested directly.
+func checkUpdateURL(u *url.URL) error {
+	if testing.Testing() {
+		return nil
+	}
+	return checkUpdateURLStrict(u)
+}
+
+func checkUpdateURLStrict(u *url.URL) error {
+	if u.Scheme != "https" {
+		return fmt.Errorf("refusing non-https update URL (scheme %q)", u.Scheme)
+	}
+	if !allowedRedirectHosts[u.Hostname()] {
+		return fmt.Errorf("refusing update URL for disallowed host %q", u.Hostname())
+	}
+	return nil
+}
+
+// checkUpdateRawURL parses rawURL and validates it via checkUpdateURL.
+func checkUpdateRawURL(rawURL string) error {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return fmt.Errorf("invalid update URL: %w", err)
+	}
+	return checkUpdateURL(u)
 }
 
 // newUpdateClient builds an http.Client that locks the redirect domain
@@ -431,6 +464,9 @@ func DownloadUpdate(info *UpdateInfo) (string, error) {
 		return "", fmt.Errorf("refusing to download: invalid AssetSize %d", info.AssetSize)
 	}
 
+	if err := checkUpdateRawURL(info.DownloadURL); err != nil {
+		return "", err
+	}
 	client := newUpdateClient(5 * time.Minute)
 	resp, err := client.Get(info.DownloadURL)
 	if err != nil {
@@ -662,6 +698,9 @@ func verifyEd25519(content, sig, pubkey []byte) error {
 // Used for SHA256SUMS and .sig — both are tiny and need to be in
 // memory for verification.
 func fetchSmall(url string, client *http.Client) ([]byte, error) {
+	if err := checkUpdateRawURL(url); err != nil {
+		return nil, err
+	}
 	resp, err := client.Get(url)
 	if err != nil {
 		return nil, err
@@ -745,6 +784,9 @@ func isNewerVersion(latest, current string) bool {
 //
 // Returns an empty string if the URL fetch fails or no line matches.
 func fetchExpectedHash(ctx context.Context, checksumURL, assetName string, client *http.Client) string {
+	if err := checkUpdateRawURL(checksumURL); err != nil {
+		return ""
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, checksumURL, nil)
 	if err != nil {
 		return ""

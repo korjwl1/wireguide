@@ -180,12 +180,27 @@ func (s *Scheduler) loop(ctx context.Context) {
 	delay := jitterRange(initialDelayMin, initialDelayMax)
 	slog.Info("update scheduler: first check scheduled", "delay", delay)
 
+	// One reusable timer instead of a fresh time.After each iteration: a
+	// time.After timer isn't collected until it fires, so every Kick or
+	// ctx cancel that beat the timer left a live ~26h timer parked in the
+	// runtime. Start it stopped+drained so the loop-top Reset is always
+	// well-defined (Reset requires a stopped, drained timer).
+	timer := time.NewTimer(0)
+	if !timer.Stop() {
+		<-timer.C
+	}
+	defer timer.Stop()
+
 	for {
+		timer.Reset(delay)
 		select {
 		case <-ctx.Done():
 			return
-		case <-time.After(delay):
+		case <-timer.C:
 		case <-s.kick:
+			if !timer.Stop() {
+				<-timer.C
+			}
 		}
 
 		if !s.enabled() {
