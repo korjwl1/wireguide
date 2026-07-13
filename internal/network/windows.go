@@ -255,17 +255,37 @@ func (m *WindowsManager) addFullTunnelRoutes(ifaceName string, endpoints []strin
 		}
 	}
 
-	if len(v4Endpoints) > 0 && (origGw == "" || physLuidV4 == 0) {
-		return fmt.Errorf("full-tunnel: cannot detect a usable IPv4 default gateway "+
-			"(gw=%q, physLuid=%d). Refusing to install split routes — without an "+
-			"endpoint bypass the encrypted WireGuard traffic would loop through the "+
-			"tunnel and saturate the link",
-			origGw, physLuidV4)
+	// A family whose underlay (default gateway + physical LUID) is missing
+	// cannot carry WireGuard's own encrypted traffic anyway, so an
+	// endpoint in that family can't loop — drop it from the bypass set
+	// rather than failing the whole connect. The common case is an
+	// endpoint hostname that resolves to BOTH A and AAAA while the host
+	// is on a v4-only network: WireGuard uses the reachable v4 endpoint,
+	// and the un-bypassable v6 address is unreachable and harmless.
+	usableV4 := origGw != "" && physLuidV4 != 0
+	usableV6 := origGw6 != "" && physLuidV6 != 0
+	if len(v4Endpoints) > 0 && !usableV4 {
+		if !usableV6 {
+			return fmt.Errorf("full-tunnel: cannot detect a usable IPv4 default gateway "+
+				"(gw=%q, physLuid=%d) and no usable IPv6 underlay either. Refusing to "+
+				"install split routes — without an endpoint bypass the encrypted "+
+				"WireGuard traffic would loop through the tunnel and saturate the link",
+				origGw, physLuidV4)
+		}
+		slog.Warn("full-tunnel: no usable IPv4 underlay; skipping IPv4 endpoint bypass (v6 underlay will carry the tunnel)",
+			"v4_endpoints", len(v4Endpoints))
+		v4Endpoints = nil
 	}
-	if len(v6Endpoints) > 0 && (origGw6 == "" || physLuidV6 == 0) {
-		return fmt.Errorf("full-tunnel: cannot detect a usable IPv6 default gateway "+
-			"(gw=%q, physLuid=%d). IPv6 peer endpoint cannot be bypassed safely",
-			origGw6, physLuidV6)
+	if len(v6Endpoints) > 0 && !usableV6 {
+		if !usableV4 {
+			return fmt.Errorf("full-tunnel: cannot detect a usable IPv6 default gateway "+
+				"(gw=%q, physLuid=%d) and no usable IPv4 underlay either. IPv6 peer "+
+				"endpoint cannot be bypassed safely",
+				origGw6, physLuidV6)
+		}
+		slog.Warn("full-tunnel: no usable IPv6 underlay; skipping IPv6 endpoint bypass (v4 underlay will carry the tunnel)",
+			"v6_endpoints", len(v6Endpoints))
+		v6Endpoints = nil
 	}
 
 	// Resolve the tunnel adapter's LUID once — we'll use it for both the
