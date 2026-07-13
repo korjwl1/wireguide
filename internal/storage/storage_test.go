@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/korjwl1/wireguide/internal/config"
+	"github.com/korjwl1/wireguide/internal/wifi"
 )
 
 func testConfig() *config.WireGuardConfig {
@@ -322,5 +323,67 @@ func TestEnsureDirs(t *testing.T) {
 		if _, err := os.Stat(d); os.IsNotExist(err) {
 			t.Errorf("directory should exist: %s", d)
 		}
+	}
+}
+
+// --- SettingsStore.Update + rule migration tests ---
+
+func TestSettingsUpdateRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	st := NewSettingsStore(dir)
+	if err := st.Update(func(s *Settings) error {
+		s.KillSwitch = true
+		s.LogLevel = "debug"
+		return nil
+	}); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	got, err := st.Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !got.KillSwitch || got.LogLevel != "debug" {
+		t.Fatalf("Update did not persist: %+v", got)
+	}
+}
+
+func TestRenameAndDeleteTunnelRules(t *testing.T) {
+	dir := t.TempDir()
+	st := NewSettingsStore(dir)
+	if err := st.Update(func(s *Settings) error {
+		s.EnsureAutomation()
+		s.Automation.PerTunnel["old"] = []wifi.Rule{
+			{When: wifi.Condition{Type: wifi.CondNoneMatch}, Do: wifi.ActionConnect},
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	// Rename carries the rules over.
+	if err := st.Update(func(s *Settings) error {
+		s.RenameTunnelRules("old", "new")
+		return nil
+	}); err != nil {
+		t.Fatalf("rename: %v", err)
+	}
+	got, _ := st.Load()
+	got.EnsureAutomation()
+	if _, ok := got.Automation.PerTunnel["old"]; ok {
+		t.Error("old key should be gone after rename")
+	}
+	if len(got.Automation.PerTunnel["new"]) != 1 {
+		t.Errorf("new key should hold the migrated rule, got %+v", got.Automation.PerTunnel)
+	}
+	// Delete removes them.
+	if err := st.Update(func(s *Settings) error {
+		s.DeleteTunnelRules("new")
+		return nil
+	}); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	got, _ = st.Load()
+	got.EnsureAutomation()
+	if _, ok := got.Automation.PerTunnel["new"]; ok {
+		t.Error("rules should be gone after delete")
 	}
 }

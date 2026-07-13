@@ -67,6 +67,41 @@ func (s *Settings) EnsureAutomation() {
 	s.Automation = wifi.MigrateFromLegacy(&s.WifiRules)
 }
 
+// RenameTunnelRules moves a tunnel's Automation (and legacy WifiRules)
+// entries from oldName to newName. Automation rules are keyed by tunnel
+// name, so a rename that doesn't carry them over silently orphans the
+// rules — and, worse, they'd re-attach if a new tunnel later reused the
+// old name (issue #12). Call inside a SettingsStore.Update.
+func (s *Settings) RenameTunnelRules(oldName, newName string) {
+	if oldName == newName {
+		return
+	}
+	if s.Automation != nil && s.Automation.PerTunnel != nil {
+		if r, ok := s.Automation.PerTunnel[oldName]; ok {
+			s.Automation.PerTunnel[newName] = r
+			delete(s.Automation.PerTunnel, oldName)
+		}
+	}
+	if s.WifiRules.PerTunnel != nil {
+		if r, ok := s.WifiRules.PerTunnel[oldName]; ok {
+			s.WifiRules.PerTunnel[newName] = r
+			delete(s.WifiRules.PerTunnel, oldName)
+		}
+	}
+}
+
+// DeleteTunnelRules drops a tunnel's Automation (and legacy WifiRules)
+// entries so a deleted tunnel leaves no stale rules behind that could
+// unexpectedly attach to a same-named tunnel created later (issue #12).
+func (s *Settings) DeleteTunnelRules(name string) {
+	if s.Automation != nil {
+		delete(s.Automation.PerTunnel, name)
+	}
+	if s.WifiRules.PerTunnel != nil {
+		delete(s.WifiRules.PerTunnel, name)
+	}
+}
+
 // DefaultSettings returns settings with sensible defaults.
 func DefaultSettings() *Settings {
 	on := true
@@ -118,6 +153,13 @@ func NewSettingsStore(configDir string) *SettingsStore {
 func (s *SettingsStore) Load() (*Settings, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.loadLocked()
+}
+
+// loadLocked is Load without the mutex, for callers (Update) that already
+// hold s.mu. Writes are atomic renames, so a concurrent writer never
+// exposes a torn file to a reader — no file lock is needed just to read.
+func (s *SettingsStore) loadLocked() (*Settings, error) {
 	data, err := os.ReadFile(s.path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -153,10 +195,59 @@ func (s *SettingsStore) Load() (*Settings, error) {
 	return settings, nil
 }
 
-// Save writes settings to disk atomically.
+// Update runs a read-modify-write of the settings file that is atomic
+// ACROSS PROCESSES: it holds an exclusive file lock across the whole
+// load → mutate → save, so a `wireguide ctl` edit and a GUI edit can't
+// clobber each other (e.g. a CLI automation edit reverting a GUI
+// kill-switch change). Field-level mutators (the CLI, tunnel rename/
+// delete) should use this rather than Load-then-Save. mutate sees the
+// freshest on-disk state.
+func (s *SettingsStore) Update(mutate func(*Settings) error) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := os.MkdirAll(filepath.Dir(s.path), 0700); err != nil {
+		return err
+	}
+	lf, err := os.OpenFile(s.path+".lock", os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		return err
+	}
+	defer lf.Close()
+	if err := flockExclusive(int(lf.Fd())); err != nil {
+		return err
+	}
+	defer flockUnlock(int(lf.Fd())) //nolint:errcheck
+	settings, err := s.loadLocked()
+	if err != nil {
+		return err
+	}
+	if err := mutate(settings); err != nil {
+		return err
+	}
+	return s.saveLocked(settings)
+}
+
+// Save writes settings to disk atomically. It takes the same
+// cross-process file lock as Update so a whole-object GUI write can't
+// interleave with an in-progress CLI Update at the file level.
 func (s *SettingsStore) Save(settings *Settings) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := os.MkdirAll(filepath.Dir(s.path), 0700); err != nil {
+		return err
+	}
+	if lf, err := os.OpenFile(s.path+".lock", os.O_CREATE|os.O_RDWR, 0600); err == nil {
+		defer lf.Close()
+		if flockExclusive(int(lf.Fd())) == nil {
+			defer flockUnlock(int(lf.Fd())) //nolint:errcheck
+		}
+	}
+	return s.saveLocked(settings)
+}
+
+// saveLocked is Save's body without the mutex/flock, for callers (Update)
+// that already hold both.
+func (s *SettingsStore) saveLocked(settings *Settings) error {
 	data, err := json.MarshalIndent(settings, "", "  ")
 	if err != nil {
 		return err

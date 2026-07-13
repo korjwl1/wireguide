@@ -581,7 +581,19 @@ func (s *TunnelService) DeleteTunnel(name string) error {
 	if active {
 		return fmt.Errorf("cannot delete connected tunnel %q — disconnect first", name)
 	}
-	return s.tunnelStore.Delete(name)
+	if err := s.tunnelStore.Delete(name); err != nil {
+		return err
+	}
+	// Drop the tunnel's automation rules so they don't linger and re-attach
+	// to a future same-named tunnel (issue #12). Best-effort — the tunnel
+	// is already gone.
+	if err := s.settingsStore.Update(func(cfg *storage.Settings) error {
+		cfg.DeleteTunnelRules(name)
+		return nil
+	}); err != nil {
+		slog.Warn("deleted tunnel but could not remove its automation rules", "tunnel", name, "error", err)
+	}
+	return nil
 }
 
 // RenameTunnel changes a tunnel's name. Rejects rename of the connected
@@ -602,10 +614,10 @@ func (s *TunnelService) RenameTunnel(oldName, newName string) error {
 		return nil
 	}
 	err := s.call(ipc.MethodRename, ipc.RenameRequest{OldName: oldName, NewName: newName}, nil)
-	if err == nil {
-		return nil
-	}
-	if isMethodNotFound(err) {
+	if err != nil {
+		if !isMethodNotFound(err) {
+			return err
+		}
 		active, activeErr := s.isActiveTunnel(oldName)
 		if activeErr != nil {
 			return fmt.Errorf("cannot verify tunnel state (helper unreachable): %w", activeErr)
@@ -613,9 +625,20 @@ func (s *TunnelService) RenameTunnel(oldName, newName string) error {
 		if active {
 			return fmt.Errorf("cannot rename connected tunnel %q — disconnect first", oldName)
 		}
-		return s.tunnelStore.Rename(oldName, newName)
+		if err := s.tunnelStore.Rename(oldName, newName); err != nil {
+			return err
+		}
 	}
-	return err
+	// Carry the tunnel's automation rules over to the new name so they
+	// aren't orphaned (issue #12). Best-effort — the rename succeeded.
+	if err := s.settingsStore.Update(func(cfg *storage.Settings) error {
+		cfg.RenameTunnelRules(oldName, newName)
+		return nil
+	}); err != nil {
+		slog.Warn("renamed tunnel but could not move its automation rules",
+			"from", oldName, "to", newName, "error", err)
+	}
+	return nil
 }
 
 // isMethodNotFound classifies an IPC error as "old helper doesn't know

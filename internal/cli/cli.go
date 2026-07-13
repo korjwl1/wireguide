@@ -510,17 +510,26 @@ func automationAdd(args []string) int {
 	if err == nil && !store.Exists(name) {
 		fmt.Fprintf(os.Stderr, "warning: no tunnel named %q — the rule is saved but won't do anything until it exists\n", name)
 	}
-	ss, s, err := loadSettingsWithAutomation()
+	ss, err := settingsStore()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "automation:", err)
 		return 1
 	}
-	s.Automation.PerTunnel[name] = append(s.Automation.PerTunnel[name], wifi.Rule{When: cond, Do: wifi.Action(action)})
-	if err := ss.Save(s); err != nil {
+	ruleNum := 0
+	err = ss.Update(func(s *storage.Settings) error {
+		s.EnsureAutomation()
+		if s.Automation.PerTunnel == nil {
+			s.Automation.PerTunnel = map[string][]wifi.Rule{}
+		}
+		s.Automation.PerTunnel[name] = append(s.Automation.PerTunnel[name], wifi.Rule{When: cond, Do: wifi.Action(action)})
+		ruleNum = len(s.Automation.PerTunnel[name])
+		return nil
+	})
+	if err != nil {
 		fmt.Fprintln(os.Stderr, "automation: save failed:", err)
 		return 1
 	}
-	fmt.Printf("added rule %d for %s: %s when %s\n", len(s.Automation.PerTunnel[name]), name, action, formatCondition(cond))
+	fmt.Printf("added rule %d for %s: %s when %s\n", ruleNum, name, action, formatCondition(cond))
 	return 0
 }
 
@@ -535,22 +544,32 @@ func automationRm(args []string) int {
 		fmt.Fprintf(os.Stderr, "rule number must be a positive integer (see 'automation rules %s')\n", name)
 		return 2
 	}
-	ss, s, err := loadSettingsWithAutomation()
+	ss, err := settingsStore()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "automation:", err)
 		return 1
 	}
-	rules := s.Automation.PerTunnel[name]
-	if idx > len(rules) {
-		fmt.Fprintf(os.Stderr, "%s has only %d rule(s)\n", name, len(rules))
+	var removed wifi.Rule
+	tooFew := -1 // set to the actual rule count if idx is out of range
+	err = ss.Update(func(s *storage.Settings) error {
+		s.EnsureAutomation()
+		rules := s.Automation.PerTunnel[name]
+		if idx > len(rules) {
+			tooFew = len(rules)
+			return fmt.Errorf("rule number out of range")
+		}
+		removed = rules[idx-1]
+		s.Automation.PerTunnel[name] = append(rules[:idx-1:idx-1], rules[idx:]...)
+		if len(s.Automation.PerTunnel[name]) == 0 {
+			delete(s.Automation.PerTunnel, name)
+		}
+		return nil
+	})
+	if tooFew >= 0 {
+		fmt.Fprintf(os.Stderr, "%s has only %d rule(s)\n", name, tooFew)
 		return 1
 	}
-	removed := rules[idx-1]
-	s.Automation.PerTunnel[name] = append(rules[:idx-1:idx-1], rules[idx:]...)
-	if len(s.Automation.PerTunnel[name]) == 0 {
-		delete(s.Automation.PerTunnel, name)
-	}
-	if err := ss.Save(s); err != nil {
+	if err != nil {
 		fmt.Fprintln(os.Stderr, "automation: save failed:", err)
 		return 1
 	}
@@ -568,23 +587,36 @@ func cmdRename(args []string) int {
 	old, newName := args[0], args[1]
 	// Prefer the helper's rename (it serialises against connect/disconnect);
 	// fall back to a local store rename if the helper isn't reachable.
+	renamed := false
 	if c, err := dialHelper(); err == nil {
 		defer c.Close()
 		if err := c.Call(ipc.MethodRename, ipc.RenameRequest{OldName: old, NewName: newName}, nil); err != nil {
 			fmt.Fprintln(os.Stderr, "rename:", err)
 			return 1
 		}
-		fmt.Printf("renamed %s → %s\n", old, newName)
-		return 0
+		renamed = true
 	}
-	store, err := tunnelStore()
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "rename:", err)
-		return 1
+	if !renamed {
+		store, err := tunnelStore()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "rename:", err)
+			return 1
+		}
+		if err := store.Rename(old, newName); err != nil {
+			fmt.Fprintln(os.Stderr, "rename:", err)
+			return 1
+		}
 	}
-	if err := store.Rename(old, newName); err != nil {
-		fmt.Fprintln(os.Stderr, "rename:", err)
-		return 1
+	// Carry the tunnel's automation rules over to the new name so they
+	// aren't orphaned (issue #12). Best-effort: the rename already
+	// succeeded; a rules-migration failure shouldn't fail the command.
+	if ss, err := settingsStore(); err == nil {
+		if err := ss.Update(func(s *storage.Settings) error {
+			s.RenameTunnelRules(old, newName)
+			return nil
+		}); err != nil {
+			fmt.Fprintln(os.Stderr, "warning: renamed the tunnel but could not move its automation rules:", err)
+		}
 	}
 	fmt.Printf("renamed %s → %s\n", old, newName)
 	return 0
@@ -636,6 +668,16 @@ func cmdDelete(args []string) int {
 		fmt.Fprintln(os.Stderr, "delete:", err)
 		return 1
 	}
+	// Drop the tunnel's automation rules so they don't linger and re-attach
+	// to a future same-named tunnel (issue #12). Best-effort.
+	if ss, err := settingsStore(); err == nil {
+		if err := ss.Update(func(s *storage.Settings) error {
+			s.DeleteTunnelRules(name)
+			return nil
+		}); err != nil {
+			fmt.Fprintln(os.Stderr, "warning: deleted the tunnel but could not remove its automation rules:", err)
+		}
+	}
 	fmt.Printf("deleted %s\n", name)
 	return 0
 }
@@ -660,11 +702,6 @@ func cmdSet(args []string) int {
 	setting, value := strings.ToLower(args[0]), args[1]
 
 	ss, err := settingsStore()
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "set:", err)
-		return 1
-	}
-	s, err := ss.Load()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "set:", err)
 		return 1
@@ -699,8 +736,7 @@ func cmdSet(args []string) int {
 			fmt.Fprintln(os.Stderr, "value must be on/off")
 			return 2
 		}
-		s.KillSwitch = v
-		if err := ss.Save(s); err != nil {
+		if err := ss.Update(func(s *storage.Settings) error { s.KillSwitch = v; return nil }); err != nil {
 			fmt.Fprintln(os.Stderr, "set:", err)
 			return 1
 		}
@@ -711,8 +747,7 @@ func cmdSet(args []string) int {
 			fmt.Fprintln(os.Stderr, "value must be on/off")
 			return 2
 		}
-		s.DNSProtection = v
-		if err := ss.Save(s); err != nil {
+		if err := ss.Update(func(s *storage.Settings) error { s.DNSProtection = v; return nil }); err != nil {
 			fmt.Fprintln(os.Stderr, "set:", err)
 			return 1
 		}
@@ -734,8 +769,7 @@ func cmdSet(args []string) int {
 			fmt.Fprintln(os.Stderr, "value must be on/off")
 			return 2
 		}
-		s.HealthCheck = v
-		if err := ss.Save(s); err != nil {
+		if err := ss.Update(func(s *storage.Settings) error { s.HealthCheck = v; return nil }); err != nil {
 			fmt.Fprintln(os.Stderr, "set:", err)
 			return 1
 		}
@@ -746,8 +780,7 @@ func cmdSet(args []string) int {
 			fmt.Fprintln(os.Stderr, "value must be on/off")
 			return 2
 		}
-		s.PinInterface = v
-		if err := ss.Save(s); err != nil {
+		if err := ss.Update(func(s *storage.Settings) error { s.PinInterface = v; return nil }); err != nil {
 			fmt.Fprintln(os.Stderr, "set:", err)
 			return 1
 		}
@@ -760,8 +793,7 @@ func cmdSet(args []string) int {
 			fmt.Fprintln(os.Stderr, "loglevel must be one of: debug, info, warn, error")
 			return 2
 		}
-		s.LogLevel = lvl
-		if err := ss.Save(s); err != nil {
+		if err := ss.Update(func(s *storage.Settings) error { s.LogLevel = lvl; return nil }); err != nil {
 			fmt.Fprintln(os.Stderr, "set:", err)
 			return 1
 		}
