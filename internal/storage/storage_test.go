@@ -54,6 +54,59 @@ func TestTunnelStoreSaveAndLoad(t *testing.T) {
 	}
 }
 
+func TestTunnelStoreSaveCaseCollision(t *testing.T) {
+	dir := t.TempDir()
+	store := NewTunnelStore(dir)
+
+	cfg := testConfig()
+	cfg.Name = "Work"
+	if err := store.Save(cfg); err != nil {
+		t.Fatalf("Save(Work) failed: %v", err)
+	}
+
+	// A differently-cased new tunnel must be refused — on a
+	// case-insensitive filesystem it would overwrite Work's key file.
+	clash := testConfig()
+	clash.Name = "work"
+	clash.Interface.PrivateKey = "aBcz5TF+lXXJte14tji3zlMNq+hd2rYUIgJBgB3fBmk="
+	if err := store.Save(clash); err == nil {
+		t.Fatal("expected Save(work) to be refused as a case collision with Work")
+	}
+
+	// The exact-case update path must still work.
+	cfg.Interface.Address = []string{"10.0.0.9/24"}
+	if err := store.Save(cfg); err != nil {
+		t.Fatalf("exact-case update of Work failed: %v", err)
+	}
+}
+
+func TestTunnelStorePureCaseRename(t *testing.T) {
+	dir := t.TempDir()
+	store := NewTunnelStore(dir)
+
+	cfg := testConfig()
+	cfg.Name = "Work"
+	if err := store.Save(cfg); err != nil {
+		t.Fatalf("Save failed: %v", err)
+	}
+	if err := store.Rename("Work", "work"); err != nil {
+		t.Fatalf("pure case rename Work->work failed: %v", err)
+	}
+	if _, err := store.Load("work"); err != nil {
+		t.Fatalf("Load(work) after rename failed: %v", err)
+	}
+}
+
+func TestTunnelStoreReservedName(t *testing.T) {
+	dir := t.TempDir()
+	store := NewTunnelStore(dir)
+	cfg := testConfig()
+	cfg.Name = "CON"
+	if err := store.Save(cfg); err == nil {
+		t.Fatal("expected Save(CON) to be refused as a reserved device name")
+	}
+}
+
 func TestTunnelStoreFilePermissions(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("file permissions not applicable on Windows")

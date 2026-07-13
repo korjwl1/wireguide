@@ -1,6 +1,21 @@
 package storage
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
+
+// reservedDeviceNames are Windows reserved device names that cannot be used
+// as a file's base name regardless of extension (CON.conf still resolves to
+// the console device). Rejected on every platform for portability — a config
+// synced from macOS/Linux to Windows must not become unusable.
+var reservedDeviceNames = map[string]bool{
+	"CON": true, "PRN": true, "AUX": true, "NUL": true,
+	"COM1": true, "COM2": true, "COM3": true, "COM4": true, "COM5": true,
+	"COM6": true, "COM7": true, "COM8": true, "COM9": true,
+	"LPT1": true, "LPT2": true, "LPT3": true, "LPT4": true, "LPT5": true,
+	"LPT6": true, "LPT7": true, "LPT8": true, "LPT9": true,
+}
 
 // ValidateTunnelName ensures a tunnel name is safe for use as a filesystem
 // path (preventing traversal) and consistent across all entry points —
@@ -25,6 +40,9 @@ func ValidateTunnelName(name string) error {
 		if !valid {
 			return fmt.Errorf("invalid character in tunnel name %q (letters, digits, '-', '_' and spaces only)", name)
 		}
+	}
+	if reservedDeviceNames[strings.ToUpper(name)] {
+		return fmt.Errorf("tunnel name %q is a reserved device name and cannot be used", name)
 	}
 	return nil
 }

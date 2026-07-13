@@ -31,6 +31,14 @@ func (s *TunnelStore) Save(cfg *config.WireGuardConfig) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	// Refuse to overwrite a differently-cased existing tunnel: on a
+	// case-insensitive filesystem that write would replace the other
+	// tunnel's file (and its private key). An exact-case match is a
+	// legitimate update and is allowed through.
+	if variant, ok := s.caseVariantLocked(cfg.Name); ok {
+		return fmt.Errorf("tunnel %q conflicts with existing %q on case-insensitive filesystems; choose a distinct name", cfg.Name, variant)
+	}
+
 	content := config.Serialize(cfg)
 	path := s.path(cfg.Name)
 
@@ -156,8 +164,17 @@ func (s *TunnelStore) Rename(oldName, newName string) error {
 	if !s.exists(oldName) {
 		return fmt.Errorf("tunnel %q does not exist", oldName)
 	}
-	if s.exists(newName) {
-		return fmt.Errorf("tunnel %q already exists", newName)
+	// A pure case change (Work → work) is allowed: on a case-insensitive
+	// filesystem s.exists(newName) is true only because it resolves to
+	// oldName's own file, so skip the collision check for that case.
+	pureCaseChange := strings.EqualFold(oldName, newName)
+	if !pureCaseChange {
+		if s.exists(newName) {
+			return fmt.Errorf("tunnel %q already exists", newName)
+		}
+		if variant, ok := s.caseVariantLocked(newName); ok {
+			return fmt.Errorf("tunnel %q conflicts with existing %q on case-insensitive filesystems; choose a distinct name", newName, variant)
+		}
 	}
 	// Two-phase commit for the (.conf, .meta.json) pair. The rollback-
 	// based design (rename .conf, then rename .meta, roll back .conf on
@@ -185,12 +202,18 @@ func (s *TunnelStore) Rename(oldName, newName string) error {
 		hasMeta = true
 	}
 
-	if err := preCheckWritable(oldPath, newPath); err != nil {
-		return fmt.Errorf("rename pre-check failed for .conf: %w", err)
-	}
-	if hasMeta {
-		if err := preCheckWritable(oldMeta, newMeta); err != nil {
-			return fmt.Errorf("rename pre-check failed for .meta: %w", err)
+	// Skip the writability pre-check for a pure case change: on a
+	// case-insensitive filesystem the destination "already exists"
+	// (it's the same file), which the probe would reject. os.Rename
+	// handles the case-only rename directly and surfaces any real error.
+	if !pureCaseChange {
+		if err := preCheckWritable(oldPath, newPath); err != nil {
+			return fmt.Errorf("rename pre-check failed for .conf: %w", err)
+		}
+		if hasMeta {
+			if err := preCheckWritable(oldMeta, newMeta); err != nil {
+				return fmt.Errorf("rename pre-check failed for .meta: %w", err)
+			}
 		}
 	}
 
@@ -282,6 +305,34 @@ func (s *TunnelStore) Exists(name string) bool {
 func (s *TunnelStore) exists(name string) bool {
 	_, err := os.Stat(s.path(name))
 	return err == nil
+}
+
+// caseVariantLocked returns the stored tunnel name that differs from `name`
+// only by case, if one exists on disk. Caller MUST hold s.mu.
+//
+// On case-insensitive filesystems (APFS on macOS — the primary target —
+// and NTFS on Windows) "Work.conf" and "work.conf" are the same file, so
+// saving "work" over an existing "Work" would silently destroy the first
+// tunnel's private key. Detecting the variant lets callers refuse instead.
+func (s *TunnelStore) caseVariantLocked(name string) (string, bool) {
+	entries, err := os.ReadDir(s.dir)
+	if err != nil {
+		return "", false
+	}
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		fn := e.Name()
+		if !strings.HasSuffix(fn, ".conf") {
+			continue
+		}
+		stored := strings.TrimSuffix(fn, ".conf")
+		if stored != name && strings.EqualFold(stored, name) {
+			return stored, true
+		}
+	}
+	return "", false
 }
 
 // ImportFromContent parses content, assigns a name, and saves.
