@@ -177,6 +177,31 @@ export class Settings {
              */
             this["log_level"] = "";
         }
+        if (!("compact_list" in $$source)) {
+            /**
+             * dense tunnel list: hide endpoint line, shorter rows
+             * @member
+             * @type {boolean}
+             */
+            this["compact_list"] = false;
+        }
+        if (!("list_sort" in $$source)) {
+            /**
+             * ListSort controls tunnel-list ordering: "name_asc" (default),
+             * "name_desc". ListActiveOnTop floats connected tunnels above the
+             * sort. Both are pure view state managed from the list header.
+             * @member
+             * @type {string}
+             */
+            this["list_sort"] = "";
+        }
+        if (!("list_active_on_top" in $$source)) {
+            /**
+             * @member
+             * @type {boolean}
+             */
+            this["list_active_on_top"] = false;
+        }
         if (/** @type {any} */(false)) {
             /**
              * AutoUpdateCheck controls the periodic update scheduler. *bool so we
@@ -192,13 +217,25 @@ export class Settings {
         }
         if (!("wifi_rules" in $$source)) {
             /**
-             * WifiRules holds the SSID-based auto-connect / auto-disconnect
-             * policy. Per-tunnel auto-connect SSIDs are managed in TunnelDetail;
-             * trusted SSIDs (global disconnect on join) are managed in Settings.
+             * WifiRules holds the LEGACY SSID-based auto-connect / auto-disconnect
+             * policy. Retained for migration; superseded by Automation. Once
+             * Automation is populated it is the source of truth and WifiRules is
+             * no longer consulted by the rule engine.
              * @member
              * @type {wifi$0.Rules}
              */
             this["wifi_rules"] = (new wifi$0.Rules());
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * Automation is the per-tunnel condition→action rule model (issue
+             * #12). A nil pointer means "not yet migrated from WifiRules";
+             * EnsureAutomation() populates it once from the legacy rules. A
+             * non-nil (possibly empty) value means the user is on the new model.
+             * @member
+             * @type {wifi$0.Automation | null | undefined}
+             */
+            this["automation"] = undefined;
         }
 
         Object.assign(this, $$source);
@@ -210,10 +247,14 @@ export class Settings {
      * @returns {Settings}
      */
     static createFrom($$source = {}) {
-        const $$createField10_0 = $$createType0;
+        const $$createField13_0 = $$createType0;
+        const $$createField14_0 = $$createType2;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("wifi_rules" in $$parsedSource) {
-            $$parsedSource["wifi_rules"] = $$createField10_0($$parsedSource["wifi_rules"]);
+            $$parsedSource["wifi_rules"] = $$createField13_0($$parsedSource["wifi_rules"]);
+        }
+        if ("automation" in $$parsedSource) {
+            $$parsedSource["automation"] = $$createField14_0($$parsedSource["automation"]);
         }
         return new Settings(/** @type {Partial<Settings>} */($$parsedSource));
     }
@@ -221,3 +262,5 @@ export class Settings {
 
 // Private type creation functions
 const $$createType0 = wifi$0.Rules.createFrom;
+const $$createType1 = wifi$0.Automation.createFrom;
+const $$createType2 = $Create.Nullable($$createType1);

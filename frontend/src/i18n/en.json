@@ -326,6 +326,7 @@
     "cond_subnet": "on subnet",
     "cond_none": "otherwise",
     "cond_none_desc": "no other rule matched",
-    "ssid_placeholder": "Wi-Fi name"
+    "ssid_placeholder": "Wi-Fi name",
+    "subnet_current": "current network"
   }
 }

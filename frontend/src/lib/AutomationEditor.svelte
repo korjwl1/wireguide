@@ -19,6 +19,7 @@
   let loadedFor = '';
   let knownSSIDs = [];
   let currentSSID = '';
+  let currentSubnets = [];
   let saveError = '';
 
   // Reload whenever the modal opens for a (possibly different) tunnel.
@@ -46,6 +47,9 @@
       knownSSIDs = r?.known || [];
       currentSSID = r?.current || '';
     } catch (_) {}
+    try {
+      currentSubnets = (await TunnelService.GetCurrentSubnets()) || [];
+    } catch (_) { currentSubnets = []; }
   }
 
   function addRule() {
@@ -147,7 +151,8 @@
               {:else if rule.when.type === 'subnet'}
                 <input
                   class="am-val"
-                  placeholder="10.0.0.0/24"
+                  list="am-subnet-list"
+                  placeholder={currentSubnets[0] || '10.0.0.0/24'}
                   bind:value={rule.when.subnet}
                   on:input={save} on:change={save} />
               {:else}
@@ -161,6 +166,9 @@
 
       <datalist id="am-ssid-list">
         {#each knownSSIDs as s}<option value={s}></option>{/each}
+      </datalist>
+      <datalist id="am-subnet-list">
+        {#each currentSubnets as sn}<option value={sn}>{$t('automation.subnet_current')}</option>{/each}
       </datalist>
 
       {#if saveError}<div class="am-error">{saveError}</div>{/if}

@@ -326,6 +326,7 @@
     "cond_subnet": "このサブネットで",
     "cond_none": "それ以外",
     "cond_none_desc": "他のルールに一致しないとき",
-    "ssid_placeholder": "Wi-Fi名"
+    "ssid_placeholder": "Wi-Fi名",
+    "subnet_current": "現在のネットワーク"
   }
 }

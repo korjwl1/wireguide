@@ -326,6 +326,7 @@
     "cond_subnet": "이 서브넷에서",
     "cond_none": "그 외",
     "cond_none_desc": "다른 규칙이 안 맞을 때",
-    "ssid_placeholder": "Wi-Fi 이름"
+    "ssid_placeholder": "Wi-Fi 이름",
+    "subnet_current": "현재 네트워크"
   }
 }

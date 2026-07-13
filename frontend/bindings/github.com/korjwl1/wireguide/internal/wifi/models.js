@@ -7,6 +7,154 @@
 import { Create as $Create } from "@wailsio/runtime";
 
 /**
+ * Action is what a matched rule does to its tunnel.
+ * @readonly
+ * @enum {string}
+ */
+export const Action = {
+    /**
+     * The Go zero value for the underlying type of the enum.
+     */
+    $zero: "",
+
+    ActionConnect: "connect",
+    ActionDisconnect: "disconnect",
+};
+
+/**
+ * Automation is the per-tunnel condition→action rule model that
+ * generalises the older TrustedSSIDs + AutoConnectSSIDs pair (issue #12).
+ * Each tunnel owns an ordered list of rules; evaluation decides, from the
+ * current network context, whether that tunnel should be connected or
+ * disconnected — independently of how it was brought up.
+ * 
+ * This type is additive: the legacy Rules (TrustedSSIDs / PerTunnel
+ * AutoConnectSSIDs) still exist for migration. MigrateFromLegacy builds
+ * an equivalent Automation from a legacy Rules value.
+ */
+export class Automation {
+    /**
+     * Creates a new Automation instance.
+     * @param {Partial<Automation>} [$$source = {}] - The source object to create the Automation.
+     */
+    constructor($$source = {}) {
+        if (!("per_tunnel_rules" in $$source)) {
+            /**
+             * PerTunnel maps a tunnel name to its ordered rule list.
+             * @member
+             * @type {{ [_ in string]?: Rule[] }}
+             */
+            this["per_tunnel_rules"] = {};
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new Automation instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {Automation}
+     */
+    static createFrom($$source = {}) {
+        const $$createField0_0 = $$createType2;
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("per_tunnel_rules" in $$parsedSource) {
+            $$parsedSource["per_tunnel_rules"] = $$createField0_0($$parsedSource["per_tunnel_rules"]);
+        }
+        return new Automation(/** @type {Partial<Automation>} */($$parsedSource));
+    }
+}
+
+/**
+ * Condition is a single match predicate. Only the field relevant to Type
+ * is used.
+ */
+export class Condition {
+    /**
+     * Creates a new Condition instance.
+     * @param {Partial<Condition>} [$$source = {}] - The source object to create the Condition.
+     */
+    constructor($$source = {}) {
+        if (!("type" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["type"] = "";
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {string | undefined}
+             */
+            this["ssid"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * CIDR, e.g. "10.0.0.0/24"
+             * @member
+             * @type {string | undefined}
+             */
+            this["subnet"] = undefined;
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new Condition instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {Condition}
+     */
+    static createFrom($$source = {}) {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new Condition(/** @type {Partial<Condition>} */($$parsedSource));
+    }
+}
+
+/**
+ * Rule is one condition→action pair.
+ */
+export class Rule {
+    /**
+     * Creates a new Rule instance.
+     * @param {Partial<Rule>} [$$source = {}] - The source object to create the Rule.
+     */
+    constructor($$source = {}) {
+        if (!("when" in $$source)) {
+            /**
+             * @member
+             * @type {Condition}
+             */
+            this["when"] = (new Condition());
+        }
+        if (!("do" in $$source)) {
+            /**
+             * @member
+             * @type {Action}
+             */
+            this["do"] = Action.$zero;
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new Rule instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {Rule}
+     */
+    static createFrom($$source = {}) {
+        const $$createField0_0 = $$createType3;
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("when" in $$parsedSource) {
+            $$parsedSource["when"] = $$createField0_0($$parsedSource["when"]);
+        }
+        return new Rule(/** @type {Partial<Rule>} */($$parsedSource));
+    }
+}
+
+/**
  * Rules defines WiFi auto-connect behavior. The model is per-tunnel:
  * each tunnel owns the list of SSIDs that should auto-activate it.
  * The "trusted" list is a global override that disconnects auto-managed
@@ -44,8 +192,8 @@ export class Rules {
      * @returns {Rules}
      */
     static createFrom($$source = {}) {
-        const $$createField0_0 = $$createType0;
-        const $$createField1_0 = $$createType2;
+        const $$createField0_0 = $$createType4;
+        const $$createField1_0 = $$createType6;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("trusted_ssids" in $$parsedSource) {
             $$parsedSource["trusted_ssids"] = $$createField0_0($$parsedSource["trusted_ssids"]);
@@ -125,7 +273,7 @@ export class TunnelSSIDs {
      * @returns {TunnelSSIDs}
      */
     static createFrom($$source = {}) {
-        const $$createField0_0 = $$createType0;
+        const $$createField0_0 = $$createType4;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("auto_connect_ssids" in $$parsedSource) {
             $$parsedSource["auto_connect_ssids"] = $$createField0_0($$parsedSource["auto_connect_ssids"]);
@@ -135,6 +283,10 @@ export class TunnelSSIDs {
 }
 
 // Private type creation functions
-const $$createType0 = $Create.Array($Create.Any);
-const $$createType1 = TunnelSSIDs.createFrom;
+const $$createType0 = Rule.createFrom;
+const $$createType1 = $Create.Array($$createType0);
 const $$createType2 = $Create.Map($Create.Any, $$createType1);
+const $$createType3 = Condition.createFrom;
+const $$createType4 = $Create.Array($Create.Any);
+const $$createType5 = TunnelSSIDs.createFrom;
+const $$createType6 = $Create.Map($Create.Any, $$createType5);

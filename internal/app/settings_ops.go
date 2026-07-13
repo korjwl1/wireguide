@@ -36,6 +36,14 @@ func (s *TunnelService) GetKnownSSIDs() KnownSSIDs {
 	}
 }
 
+// GetCurrentSubnets returns the network CIDRs of the physical interfaces
+// the machine is currently on (Wi-Fi or Ethernet). The Automation editor
+// offers these as suggestions for subnet conditions so the user can
+// target the network they're on without knowing its CIDR.
+func (s *TunnelService) GetCurrentSubnets() []string {
+	return wifi.PhysicalSubnets()
+}
+
 // CheckSSIDPermission reports whether the process can read the current SSID.
 // Used by the frontend to prompt the user for Location Services access before
 // Wi-Fi auto-connect rules can fire.

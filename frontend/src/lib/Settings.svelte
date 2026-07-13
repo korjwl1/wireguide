@@ -4,7 +4,6 @@
   import { applyTheme } from '../stores/theme.js';
   import { connectionStatus, tunnels } from '../stores/tunnels.js';
   import { compactList } from '../stores/ui.js';
-  import WifiRules from './WifiRules.svelte';
   import Icon from './Icon.svelte';
 
   export let TunnelService;
@@ -211,6 +210,10 @@
         // Settings toggle doesn't wipe them back to defaults.
         list_sort: fresh?.list_sort || 'name_asc',
         list_active_on_top: fresh?.list_active_on_top ?? true,
+        // Automation rules are owned by the per-tunnel editor — carry
+        // them from the fresh fetch so saving a Settings toggle never
+        // wipes them.
+        automation: fresh?.automation,
         wifi_rules: {
           trusted_ssids: settings.wifi_rules?.trusted_ssids || [],
           per_tunnel: perTunnel,
@@ -371,10 +374,6 @@
           <Icon name="wrench" size={14} strokeWidth={1.75} />
           <span>{$t('settings.advanced')}</span>
         </button>
-        <button role="tab" aria-selected={activeTab === 'wifi_rules'} class:active={activeTab === 'wifi_rules'} on:click={() => activeTab = 'wifi_rules'}>
-          <Icon name="wifi" size={14} strokeWidth={1.75} />
-          <span>{$t('settings.wifi_rules')}</span>
-        </button>
         <button role="tab" aria-selected={activeTab === 'about'} class:active={activeTab === 'about'} on:click={() => activeTab = 'about'}>
           <Icon name="info" size={14} strokeWidth={1.75} />
           <span>{$t('settings.about')}</span>
@@ -520,12 +519,6 @@
               </div>
             </div>
           </div>
-
-        {:else if activeTab === 'wifi_rules'}
-          <WifiRules
-            rules={settings.wifi_rules}
-            {TunnelService}
-            on:change={(e) => { settings.wifi_rules = e.detail; scheduleSave(); }} />
 
         {:else if activeTab === 'about'}
           <div class="about-tab">
