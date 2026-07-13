@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"runtime"
 
+	"github.com/korjwl1/wireguide/internal/cli"
 	"github.com/korjwl1/wireguide/internal/gui"
 	"github.com/korjwl1/wireguide/internal/helper"
 	"github.com/wailsapp/wails/v3/pkg/application"
@@ -36,6 +37,13 @@ var assets embed.FS
 var trayIconBytes []byte
 
 func main() {
+	// `wireguide ctl …` is the command-line control interface (issue #10).
+	// Dispatched before flag parsing because it has its own positional
+	// sub-commands rather than the helper/GUI flag set.
+	if len(os.Args) > 1 && os.Args[1] == "ctl" {
+		os.Exit(cli.Run(os.Args[2:]))
+	}
+
 	helperMode := flag.Bool("helper", false, "run as privileged helper")
 	socketPath := flag.String("socket", "", "socket path for IPC")
 	socketUID := flag.Int("uid", -1, "socket owner UID (Unix only)")
