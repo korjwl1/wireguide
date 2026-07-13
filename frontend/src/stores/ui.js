@@ -12,6 +12,12 @@ export const compactList = writable(false);
 export const listSort = writable('name_asc');       // "name_asc" | "name_desc"
 export const listActiveOnTop = writable(true);
 
+// Draggable width (px) of the tunnel-list column.
+export const LIST_PANE_MIN = 190;
+export const LIST_PANE_MAX = 460;
+export const LIST_PANE_DEFAULT = 240;
+export const listPaneWidth = writable(LIST_PANE_DEFAULT);
+
 let saveTimer = null;
 
 // saveListPrefs persists the list-ordering prefs. It re-fetches the
@@ -28,6 +34,7 @@ export function saveListPrefs() {
         ...fresh,
         list_sort: get(listSort),
         list_active_on_top: get(listActiveOnTop),
+        list_pane_width: Math.round(get(listPaneWidth)),
       });
     } catch (e) {
       console.warn('saveListPrefs failed (will retry on next change):', e);

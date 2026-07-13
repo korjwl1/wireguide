@@ -204,6 +204,15 @@ export class Settings {
         }
         if (/** @type {any} */(false)) {
             /**
+             * ListPaneWidth is the draggable width (px) of the tunnel-list
+             * column. 0 falls back to the default.
+             * @member
+             * @type {number | undefined}
+             */
+            this["list_pane_width"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
              * AutoUpdateCheck controls the periodic update scheduler. *bool so we
              * can distinguish "user never touched this" from "user explicitly
              * turned it off" — defaults to true on first load. A user who installs
@@ -247,14 +256,14 @@ export class Settings {
      * @returns {Settings}
      */
     static createFrom($$source = {}) {
-        const $$createField13_0 = $$createType0;
-        const $$createField14_0 = $$createType2;
+        const $$createField14_0 = $$createType0;
+        const $$createField15_0 = $$createType2;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("wifi_rules" in $$parsedSource) {
-            $$parsedSource["wifi_rules"] = $$createField13_0($$parsedSource["wifi_rules"]);
+            $$parsedSource["wifi_rules"] = $$createField14_0($$parsedSource["wifi_rules"]);
         }
         if ("automation" in $$parsedSource) {
-            $$parsedSource["automation"] = $$createField14_0($$parsedSource["automation"]);
+            $$parsedSource["automation"] = $$createField15_0($$parsedSource["automation"]);
         }
         return new Settings(/** @type {Partial<Settings>} */($$parsedSource));
     }

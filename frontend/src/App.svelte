@@ -15,7 +15,7 @@
   import { tunnels, selectedTunnel, refreshTunnels, refreshStatus, subscribeToEvents, unsubscribe, initialLoad, connectionStatus } from './stores/tunnels.js';
   import { applyTheme, initThemeWatcher } from './stores/theme.js';
   import { startLogListener, stopLogListener } from './stores/logs.js';
-  import { compactList, listSort, listActiveOnTop } from './stores/ui.js';
+  import { compactList, listSort, listActiveOnTop, listPaneWidth, saveListPrefs, LIST_PANE_MIN, LIST_PANE_MAX, LIST_PANE_DEFAULT } from './stores/ui.js';
   import { errText } from './lib/errors.js';
   import { t, setLanguage, detectLanguage } from './i18n/index.js';
   import { TunnelService } from '../bindings/github.com/korjwl1/wireguide/internal/app';
@@ -82,6 +82,7 @@
       compactList.set(s?.compact_list ?? false);
       listSort.set(s?.list_sort || 'name_asc');
       listActiveOnTop.set(s?.list_active_on_top ?? true);
+      listPaneWidth.set(s?.list_pane_width || LIST_PANE_DEFAULT);
       // Apply persisted language. 'auto' means "follow OS locale" — we
       // resolve that via detectLanguage(). Without this, launching the
       // app always showed the detected language even if the user had
@@ -379,6 +380,43 @@
       showToast("Import failed: " + errText(e));
     }
   }
+
+  // Drag-resize of the tunnel-list column. Listeners are attached to
+  // window only for the duration of a drag (added on mousedown, removed
+  // on mouseup) so no window listener leaks across renders.
+  let resizing = false;
+  let resizeStartX = 0;
+  let resizeStartW = 0;
+  function onResizeMove(e) {
+    if (!resizing) return;
+    const w = Math.min(LIST_PANE_MAX, Math.max(LIST_PANE_MIN, resizeStartW + (e.clientX - resizeStartX)));
+    listPaneWidth.set(w);
+  }
+  function onResizeEnd() {
+    if (!resizing) return;
+    resizing = false;
+    document.body.style.cursor = '';
+    document.body.style.userSelect = '';
+    window.removeEventListener('mousemove', onResizeMove);
+    window.removeEventListener('mouseup', onResizeEnd);
+    saveListPrefs();
+  }
+  function onResizeStart(e) {
+    e.preventDefault();
+    resizing = true;
+    resizeStartX = e.clientX;
+    resizeStartW = $listPaneWidth;
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+    window.addEventListener('mousemove', onResizeMove);
+    window.addEventListener('mouseup', onResizeEnd);
+  }
+  function onResizeReset() {
+    // Double-click the handle to reset to the default width.
+    listPaneWidth.set(LIST_PANE_DEFAULT);
+    saveListPrefs();
+  }
+  onDestroy(onResizeEnd);
 
   async function handleImportOpen() {
     // Directly open the native file picker — no modal needed.
@@ -698,9 +736,12 @@
 
       {#if currentView === 'tunnels'}
         <div class="tunnels-view">
-          <div class="tunnel-list-pane">
+          <div class="tunnel-list-pane" style="width: {$listPaneWidth}px;">
             <TunnelList on:import={handleImportOpen} on:new={handleNewTunnelOpen} />
           </div>
+          <div class="pane-resizer" class:resizing
+            on:mousedown={onResizeStart} on:dblclick={onResizeReset}
+            role="separator" aria-orientation="vertical" title="Drag to resize · double-click to reset"></div>
           <div class="tunnel-detail-pane">
             {#if $selectedTunnel}
               <TunnelDetail {TunnelService}
@@ -1065,9 +1106,28 @@
   }
   .tunnel-list-pane {
     width: 240px;
-    border-right: 0.5px solid var(--border);
+    flex-shrink: 0;
     overflow-y: auto;
     background: var(--bg-secondary);
+  }
+  /* Thin draggable divider between the list and detail panes. The hit
+     area is a few px wide; a hairline shows the border, and it tints on
+     hover/drag so the resize affordance is discoverable. */
+  .pane-resizer {
+    flex-shrink: 0;
+    width: 5px;
+    margin: 0 -2px;
+    cursor: col-resize;
+    background: var(--border);
+    background-clip: content-box;
+    padding: 0 2px;
+    z-index: 3;
+  }
+  @media (prefers-reduced-motion: no-preference) {
+    .pane-resizer { transition: background-color 120ms ease; }
+  }
+  .pane-resizer:hover, .pane-resizer.resizing {
+    background: var(--accent);
   }
   .tunnel-detail-pane {
     flex: 1;

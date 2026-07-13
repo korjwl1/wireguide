@@ -210,6 +210,7 @@
         // Settings toggle doesn't wipe them back to defaults.
         list_sort: fresh?.list_sort || 'name_asc',
         list_active_on_top: fresh?.list_active_on_top ?? true,
+        list_pane_width: fresh?.list_pane_width || 0,
         // Automation rules are owned by the per-tunnel editor — carry
         // them from the fresh fetch so saving a Settings toggle never
         // wipes them.

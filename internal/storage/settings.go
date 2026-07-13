@@ -28,6 +28,9 @@ type Settings struct {
 	// sort. Both are pure view state managed from the list header.
 	ListSort        string `json:"list_sort"`
 	ListActiveOnTop bool   `json:"list_active_on_top"`
+	// ListPaneWidth is the draggable width (px) of the tunnel-list
+	// column. 0 falls back to the default.
+	ListPaneWidth int `json:"list_pane_width,omitempty"`
 
 	// AutoUpdateCheck controls the periodic update scheduler. *bool so we
 	// can distinguish "user never touched this" from "user explicitly
@@ -79,6 +82,7 @@ func DefaultSettings() *Settings {
 		AutoUpdateCheck: &on,
 		ListSort:        "name_asc",
 		ListActiveOnTop: true,
+		ListPaneWidth:   240,
 		WifiRules: wifi.Rules{
 			// Initialize the map so JSON serialization round-trips
 			// produce {} rather than null for an empty mapping.
