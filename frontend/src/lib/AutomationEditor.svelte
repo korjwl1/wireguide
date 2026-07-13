@@ -6,7 +6,8 @@
   // Settings.automation.per_tunnel_rules[tunnelName]; the whole settings
   // object is re-fetched and spread on save so other screens' edits (and
   // other tunnels' rules) are never clobbered.
-  import { afterUpdate } from 'svelte';
+  import { afterUpdate, onMount, onDestroy } from 'svelte';
+  import { Events } from '@wailsio/runtime';
   import Icon from './Icon.svelte';
   import { t } from '../i18n/index.js';
   import { errText } from './errors.js';
@@ -236,6 +237,27 @@
     open = false;
     loadedFor = '';
   }
+
+  // Live-reflect an external edit to config.json (e.g. `wireguide ctl
+  // automation ...`, or another window) while the editor is open — the
+  // file is the single source of truth, so we reload rather than sitting
+  // on a stale in-memory copy that our next save would write back over.
+  // Skip while the user has an unsaved local edit pending (saveTimer set):
+  // that debounced save lands last and wins, and its own write re-fires
+  // config_changed, so we reload the settled value right after. This is
+  // the standard "watch the file, last write wins" model (git config,
+  // editor settings.json) — no save button, no lock dialogs.
+  let cfgChangedUnsub = null;
+  onMount(() => {
+    cfgChangedUnsub = Events.On('config_changed', () => {
+      if (open && tunnelName && saveTimer === null) {
+        load(tunnelName);
+      }
+    });
+  });
+  onDestroy(() => {
+    if (cfgChangedUnsub) cfgChangedUnsub();
+  });
 </script>
 
 {#if open}
