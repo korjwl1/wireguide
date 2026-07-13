@@ -13,6 +13,12 @@ import (
 // which wg-quick treats as search domains rather than servers.
 var hostnameRegex = regexp.MustCompile(`^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$`)
 
+// IsValidHostOrIP reports whether s is an IP literal or an RFC 1035 hostname.
+// Used for user-supplied probe targets that end up as ping arguments.
+func IsValidHostOrIP(s string) bool {
+	return net.ParseIP(s) != nil || (len(s) <= 253 && hostnameRegex.MatchString(s))
+}
+
 // ValidationError represents a single validation issue.
 type ValidationError struct {
 	Field   string // e.g., "Interface.PrivateKey", "Peer[0].PublicKey"

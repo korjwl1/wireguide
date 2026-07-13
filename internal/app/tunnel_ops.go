@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/korjwl1/wireguide/internal/config"
 	"github.com/korjwl1/wireguide/internal/diag"
 	"github.com/korjwl1/wireguide/internal/domain"
 	"github.com/korjwl1/wireguide/internal/ipc"
@@ -64,12 +65,9 @@ func (s *TunnelService) SetTunnelNotes(name, notes string) error {
 	if !s.tunnelStore.Exists(name) {
 		return fmt.Errorf("tunnel %q does not exist", name)
 	}
-	meta, err := s.tunnelStore.LoadMeta(name)
-	if err != nil {
-		return err
-	}
-	meta.Notes = notes
-	return s.tunnelStore.SaveMeta(name, meta)
+	return s.tunnelStore.UpdateMeta(name, func(meta *storage.TunnelMeta) {
+		meta.Notes = notes
+	})
 }
 
 // SetTunnelLatencyProbeTarget persists the optional per-tunnel ICMP target
@@ -79,12 +77,13 @@ func (s *TunnelService) SetTunnelLatencyProbeTarget(name, target string) error {
 	if !s.tunnelStore.Exists(name) {
 		return fmt.Errorf("tunnel %q does not exist", name)
 	}
-	meta, err := s.tunnelStore.LoadMeta(name)
-	if err != nil {
-		return err
+	target = strings.TrimSpace(target)
+	if target != "" && !config.IsValidHostOrIP(target) {
+		return fmt.Errorf("latency target %q is not a valid IP address or hostname", target)
 	}
-	meta.LatencyProbeTarget = strings.TrimSpace(target)
-	return s.tunnelStore.SaveMeta(name, meta)
+	return s.tunnelStore.UpdateMeta(name, func(meta *storage.TunnelMeta) {
+		meta.LatencyProbeTarget = target
+	})
 }
 
 // ListTunnels returns every stored tunnel with its summary info.

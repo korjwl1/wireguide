@@ -386,6 +386,32 @@ func (s *TunnelStore) SaveMeta(name string, meta *TunnelMeta) error {
 	if err := ValidateTunnelName(name); err != nil {
 		return err
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.saveMetaLocked(name, meta)
+}
+
+// UpdateMeta applies fn to the current meta and persists the result under a
+// single write lock, so two concurrent single-field updates (e.g. notes and
+// latency target flushed back-to-back by the frontend) can't interleave a
+// load-then-save and silently drop each other's field.
+func (s *TunnelStore) UpdateMeta(name string, fn func(*TunnelMeta)) error {
+	if err := ValidateTunnelName(name); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	meta, err := s.loadMetaLocked(name)
+	if err != nil {
+		return err
+	}
+	fn(meta)
+	return s.saveMetaLocked(name, meta)
+}
+
+// saveMetaLocked writes the .meta.json sidecar atomically. Caller MUST hold
+// s.mu (write).
+func (s *TunnelStore) saveMetaLocked(name string, meta *TunnelMeta) error {
 	if meta == nil {
 		meta = &TunnelMeta{}
 	}
@@ -394,9 +420,6 @@ func (s *TunnelStore) SaveMeta(name string, meta *TunnelMeta) error {
 	if err != nil {
 		return err
 	}
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
 
 	dst := s.metaPath(name)
 	tmpFile, err := os.CreateTemp(filepath.Dir(dst), ".wireguide-meta-*.tmp")
