@@ -2,7 +2,7 @@
   import { createEventDispatcher } from 'svelte';
   import Icon from './Icon.svelte';
   import { tunnels, selectedTunnel, connectionStatus } from '../stores/tunnels.js';
-  import { compactList } from '../stores/ui.js';
+  import { compactList, listSort, listActiveOnTop, saveListPrefs } from '../stores/ui.js';
   import { t } from '../i18n/index.js';
 
   const dispatch = createEventDispatcher();
@@ -14,6 +14,29 @@
 
   // Connected indicators from active_tunnels array (multi-tunnel aware).
   $: activeSet = new Set($connectionStatus?.active_tunnels || []);
+
+  // Sorted view. Array.sort is stable, so sorting by name first and then
+  // stably floating active tunnels keeps name order within each group.
+  $: sorted = (() => {
+    const arr = [...filtered];
+    arr.sort((a, b) => {
+      const c = a.name.localeCompare(b.name, undefined, { sensitivity: 'base', numeric: true });
+      return $listSort === 'name_desc' ? -c : c;
+    });
+    if ($listActiveOnTop) {
+      arr.sort((a, b) => (activeSet.has(b.name) ? 1 : 0) - (activeSet.has(a.name) ? 1 : 0));
+    }
+    return arr;
+  })();
+
+  function onSortChange(e) {
+    listSort.set(e.target.value);
+    saveListPrefs();
+  }
+  function onActiveTopChange(e) {
+    listActiveOnTop.set(e.target.checked);
+    saveListPrefs();
+  }
   // Build a map of tunnel name → has handshake for dot color.
   $: tunnelHandshakes = (() => {
     const map = {};
@@ -55,6 +78,22 @@
     {/if}
   </div>
 
+  {#if ($tunnels || []).length > 1}
+    <div class="sort-bar">
+      <label class="sort-select-wrap">
+        <span class="sort-label">{$t('tunnel.sort_by')}</span>
+        <select class="sort-select" value={$listSort} on:change={onSortChange} aria-label={$t('tunnel.sort_by')}>
+          <option value="name_asc">{$t('tunnel.sort_name_asc')}</option>
+          <option value="name_desc">{$t('tunnel.sort_name_desc')}</option>
+        </select>
+      </label>
+      <label class="sort-active-top" title={$t('tunnel.sort_active_top')}>
+        <input type="checkbox" checked={$listActiveOnTop} on:change={onActiveTopChange} />
+        <span>{$t('tunnel.sort_active_top')}</span>
+      </label>
+    </div>
+  {/if}
+
   <div class="list-items" class:compact={$compactList}>
     {#if filtered.length === 0 && search === ''}
       <div class="empty-state">
@@ -63,7 +102,7 @@
         <p class="hint">{$t('tunnel.drop_hint')}</p>
       </div>
     {:else}
-      {#each filtered as tun}
+      {#each sorted as tun}
         <button
           class="tunnel-item"
           class:active={$selectedTunnel?.name === tun.name}
@@ -191,6 +230,53 @@
   .search-clear:hover {
     background: color-mix(in srgb, var(--text-muted) 36%, transparent);
     color: var(--text-primary);
+  }
+
+  /* --- Sort bar (issue #17) --- */
+  .sort-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 0 var(--space-3) 6px;
+  }
+  .sort-select-wrap {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    min-width: 0;
+  }
+  .sort-label {
+    font: 400 11px/1 var(--font-sans);
+    color: var(--text-muted);
+    white-space: nowrap;
+  }
+  .sort-select {
+    font: 400 11px/1 var(--font-sans);
+    color: var(--text-secondary);
+    background: transparent;
+    border: 0;
+    padding: 2px 4px;
+    border-radius: 6px;
+    cursor: pointer;
+  }
+  .sort-select:hover {
+    background: var(--bg-hover);
+  }
+  .sort-active-top {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    font: 400 11px/1 var(--font-sans);
+    color: var(--text-muted);
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  .sort-active-top input {
+    width: 12px;
+    height: 12px;
+    accent-color: var(--accent);
+    cursor: pointer;
   }
 
   /* --- List items: card-style with name + endpoint --- */

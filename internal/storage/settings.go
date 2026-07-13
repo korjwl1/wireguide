@@ -23,6 +23,12 @@ type Settings struct {
 	LogLevel      string `json:"log_level"`     // "debug", "info", "warn", "error"
 	CompactList   bool   `json:"compact_list"`  // dense tunnel list: hide endpoint line, shorter rows
 
+	// ListSort controls tunnel-list ordering: "name_asc" (default),
+	// "name_desc". ListActiveOnTop floats connected tunnels above the
+	// sort. Both are pure view state managed from the list header.
+	ListSort        string `json:"list_sort"`
+	ListActiveOnTop bool   `json:"list_active_on_top"`
+
 	// AutoUpdateCheck controls the periodic update scheduler. *bool so we
 	// can distinguish "user never touched this" from "user explicitly
 	// turned it off" — defaults to true on first load. A user who installs
@@ -50,6 +56,8 @@ func DefaultSettings() *Settings {
 		PinInterface:    false, // off by default — enable for dual-network setups
 		LogLevel:        "info",
 		AutoUpdateCheck: &on,
+		ListSort:        "name_asc",
+		ListActiveOnTop: true,
 		WifiRules: wifi.Rules{
 			// Initialize the map so JSON serialization round-trips
 			// produce {} rather than null for an empty mapping.

@@ -15,7 +15,7 @@
   import { tunnels, selectedTunnel, refreshTunnels, refreshStatus, subscribeToEvents, unsubscribe, initialLoad, connectionStatus } from './stores/tunnels.js';
   import { applyTheme, initThemeWatcher } from './stores/theme.js';
   import { startLogListener, stopLogListener } from './stores/logs.js';
-  import { compactList } from './stores/ui.js';
+  import { compactList, listSort, listActiveOnTop } from './stores/ui.js';
   import { errText } from './lib/errors.js';
   import { t, setLanguage, detectLanguage } from './i18n/index.js';
   import { TunnelService } from '../bindings/github.com/korjwl1/wireguide/internal/app';
@@ -80,6 +80,8 @@
       const s = await TunnelService.GetSettings();
       applyTheme(s?.theme || 'system');
       compactList.set(s?.compact_list ?? false);
+      listSort.set(s?.list_sort || 'name_asc');
+      listActiveOnTop.set(s?.list_active_on_top ?? true);
       // Apply persisted language. 'auto' means "follow OS locale" — we
       // resolve that via detectLanguage(). Without this, launching the
       // app always showed the detected language even if the user had

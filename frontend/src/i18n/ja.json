@@ -35,6 +35,10 @@
   "tunnel": {
     "list_title": "トンネル",
     "search": "検索…",
+    "sort_by": "並び替え",
+    "sort_name_asc": "名前 (A–Z)",
+    "sort_name_desc": "名前 (Z–A)",
+    "sort_active_top": "接続中を上に",
     "no_tunnels": "設定済みのトンネルがありません",
     "no_selection": "トンネルを選択するか、新しく作成してください",
     "drop_hint": ".conf、.zip または QR 画像 (PNG/JPG) をドロップするか、インポートをクリック",

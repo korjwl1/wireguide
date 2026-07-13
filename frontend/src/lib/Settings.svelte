@@ -206,6 +206,11 @@
         log_level: settings.log_level,
         auto_update_check: settings.auto_update_check,
         compact_list: settings.compact_list,
+        // List-ordering prefs are owned by the tunnel-list header, not
+        // this screen — carry them from the fresh fetch so saving any
+        // Settings toggle doesn't wipe them back to defaults.
+        list_sort: fresh?.list_sort || 'name_asc',
+        list_active_on_top: fresh?.list_active_on_top ?? true,
         wifi_rules: {
           trusted_ssids: settings.wifi_rules?.trusted_ssids || [],
           per_tunnel: perTunnel,

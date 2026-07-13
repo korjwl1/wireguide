@@ -35,6 +35,10 @@
   "tunnel": {
     "list_title": "Tunnels",
     "search": "Search...",
+    "sort_by": "Sort",
+    "sort_name_asc": "Name (A–Z)",
+    "sort_name_desc": "Name (Z–A)",
+    "sort_active_top": "Active on top",
     "no_tunnels": "No tunnels configured",
     "no_selection": "Select a tunnel or create a new one",
     "drop_hint": "Drop a .conf, .zip, or QR image (PNG/JPG) here, or click Import",
