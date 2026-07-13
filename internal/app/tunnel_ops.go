@@ -25,6 +25,7 @@ func (s *TunnelService) ListTunnelsLocal() ([]TunnelInfo, error) {
 	if err != nil {
 		return nil, err
 	}
+	lastUsed := s.lastUsedByTunnel()
 	var result []TunnelInfo
 	for _, name := range names {
 		cfg, meta, err := s.tunnelStore.LoadWithMeta(name)
@@ -47,9 +48,27 @@ func (s *TunnelService) ListTunnelsLocal() ([]TunnelInfo, error) {
 			Endpoint:           endpoint,
 			Notes:              notes,
 			LatencyProbeTarget: latencyProbeTarget,
+			CreatedAtUnix:      s.tunnelStore.ModTimeUnix(name),
+			LastUsedUnix:       lastUsed[name],
 		})
 	}
 	return result, nil
+}
+
+// lastUsedByTunnel maps each tunnel name to the Unix time of its most
+// recent connection start, from history. Missing tunnels get the zero
+// value (0 = never connected). Computed once per list call.
+func (s *TunnelService) lastUsedByTunnel() map[string]int64 {
+	out := map[string]int64{}
+	if s.historyStore == nil {
+		return out
+	}
+	for _, sess := range s.historyStore.GetAll() {
+		if t := sess.StartTime.Unix(); t > out[sess.TunnelName] {
+			out[sess.TunnelName] = t
+		}
+	}
+	return out
 }
 
 // SetTunnelNotes persists a freeform note for a tunnel. Empty notes still
@@ -107,6 +126,7 @@ func (s *TunnelService) ListTunnels() ([]TunnelInfo, error) {
 	var active ipc.StringResponse
 	_ = s.call(ipc.MethodActiveName, nil, &active)
 
+	lastUsed := s.lastUsedByTunnel()
 	var result []TunnelInfo
 	for _, name := range names {
 		cfg, meta, err := s.tunnelStore.LoadWithMeta(name)
@@ -130,6 +150,8 @@ func (s *TunnelService) ListTunnels() ([]TunnelInfo, error) {
 			Endpoint:           endpoint,
 			Notes:              notes,
 			LatencyProbeTarget: latencyProbeTarget,
+			CreatedAtUnix:      s.tunnelStore.ModTimeUnix(name),
+			LastUsedUnix:       lastUsed[name],
 		})
 	}
 	return result, nil

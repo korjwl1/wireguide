@@ -307,6 +307,22 @@ func (s *TunnelStore) exists(name string) bool {
 	return err == nil
 }
 
+// ModTimeUnix returns the .conf file's modification time as a Unix
+// timestamp — used as the tunnel's "date added" for sorting. Returns 0
+// when the file can't be stat'd.
+func (s *TunnelStore) ModTimeUnix(name string) int64 {
+	if err := ValidateTunnelName(name); err != nil {
+		return 0
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	fi, err := os.Stat(s.path(name))
+	if err != nil {
+		return 0
+	}
+	return fi.ModTime().Unix()
+}
+
 // caseVariantLocked returns the stored tunnel name that differs from `name`
 // only by case, if one exists on disk. Caller MUST hold s.mu.
 //

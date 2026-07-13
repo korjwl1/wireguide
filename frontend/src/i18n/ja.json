@@ -80,7 +80,10 @@
     "details": "詳細",
     "rename_hint": "ダブルクリックで名前変更",
     "notes": "メモ",
-    "notes_placeholder": "エンドポイントの場所、認証情報のヒントなど自由メモ"
+    "notes_placeholder": "エンドポイントの場所、認証情報のヒントなど自由メモ",
+    "sort_last_used": "最終使用順",
+    "sort_added_new": "新しい順",
+    "sort_added_old": "古い順"
   },
   "import": {
     "title": "トンネルのインポート",

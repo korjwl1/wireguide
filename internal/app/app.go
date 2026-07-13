@@ -146,6 +146,11 @@ type TunnelInfo struct {
 	Endpoint           string `json:"endpoint"`
 	Notes              string `json:"notes,omitempty"`
 	LatencyProbeTarget string `json:"latency_probe_target,omitempty"`
+	// CreatedAtUnix is the .conf file's mtime; LastUsedUnix is the most
+	// recent connection start from history (0 if never connected). Both
+	// feed the tunnel-list "date added" / "last used" sort (issue #17).
+	CreatedAtUnix int64 `json:"created_at_unix,omitempty"`
+	LastUsedUnix  int64 `json:"last_used_unix,omitempty"`
 }
 
 // ConnectionStatus is re-exported from the domain package so Wails bindings

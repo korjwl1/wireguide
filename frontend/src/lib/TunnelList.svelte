@@ -15,13 +15,23 @@
   // Connected indicators from active_tunnels array (multi-tunnel aware).
   $: activeSet = new Set($connectionStatus?.active_tunnels || []);
 
-  // Sorted view. Array.sort is stable, so sorting by name first and then
-  // stably floating active tunnels keeps name order within each group.
+  // Sorted view. Array.sort is stable, so sorting by the chosen key first
+  // and then stably floating active tunnels keeps key order within groups.
+  function nameCmp(a, b) {
+    return a.name.localeCompare(b.name, undefined, { sensitivity: 'base', numeric: true });
+  }
   $: sorted = (() => {
     const arr = [...filtered];
     arr.sort((a, b) => {
-      const c = a.name.localeCompare(b.name, undefined, { sensitivity: 'base', numeric: true });
-      return $listSort === 'name_desc' ? -c : c;
+      switch ($listSort) {
+        case 'name_desc': return -nameCmp(a, b);
+        // Newest first; ties (or missing timestamps) fall back to name.
+        case 'added_desc': return (b.created_at_unix || 0) - (a.created_at_unix || 0) || nameCmp(a, b);
+        case 'added_asc':  return (a.created_at_unix || 0) - (b.created_at_unix || 0) || nameCmp(a, b);
+        case 'used_desc':  return (b.last_used_unix || 0) - (a.last_used_unix || 0) || nameCmp(a, b);
+        case 'name_asc':
+        default:           return nameCmp(a, b);
+      }
     });
     if ($listActiveOnTop) {
       arr.sort((a, b) => (activeSet.has(b.name) ? 1 : 0) - (activeSet.has(a.name) ? 1 : 0));
@@ -85,6 +95,9 @@
         <select class="sort-select" value={$listSort} on:change={onSortChange} aria-label={$t('tunnel.sort_by')}>
           <option value="name_asc">{$t('tunnel.sort_name_asc')}</option>
           <option value="name_desc">{$t('tunnel.sort_name_desc')}</option>
+          <option value="used_desc">{$t('tunnel.sort_last_used')}</option>
+          <option value="added_desc">{$t('tunnel.sort_added_new')}</option>
+          <option value="added_asc">{$t('tunnel.sort_added_old')}</option>
         </select>
       </label>
       <label class="sort-active-top" title={$t('tunnel.sort_active_top')}>

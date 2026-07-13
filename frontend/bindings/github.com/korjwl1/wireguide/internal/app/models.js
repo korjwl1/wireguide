@@ -308,6 +308,23 @@ export class TunnelInfo {
              */
             this["latency_probe_target"] = undefined;
         }
+        if (/** @type {any} */(false)) {
+            /**
+             * CreatedAtUnix is the .conf file's mtime; LastUsedUnix is the most
+             * recent connection start from history (0 if never connected). Both
+             * feed the tunnel-list "date added" / "last used" sort (issue #17).
+             * @member
+             * @type {number | undefined}
+             */
+            this["created_at_unix"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {number | undefined}
+             */
+            this["last_used_unix"] = undefined;
+        }
 
         Object.assign(this, $$source);
     }

@@ -80,7 +80,10 @@
     "details": "Details",
     "rename_hint": "Double-click to rename",
     "notes": "Notes",
-    "notes_placeholder": "Freeform notes — endpoint location, credentials hint, etc."
+    "notes_placeholder": "Freeform notes — endpoint location, credentials hint, etc.",
+    "sort_last_used": "Last used",
+    "sort_added_new": "Newest first",
+    "sort_added_old": "Oldest first"
   },
   "import": {
     "title": "Import Tunnel",

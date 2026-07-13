@@ -80,7 +80,10 @@
     "details": "상세 정보",
     "rename_hint": "두 번 클릭해서 이름 변경",
     "notes": "메모",
-    "notes_placeholder": "엔드포인트 위치, 자격증명 힌트 등 자유 메모"
+    "notes_placeholder": "엔드포인트 위치, 자격증명 힌트 등 자유 메모",
+    "sort_last_used": "마지막 사용순",
+    "sort_added_new": "최근 추가순",
+    "sort_added_old": "오래된 추가순"
   },
   "import": {
     "title": "터널 가져오기",
