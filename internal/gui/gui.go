@@ -50,6 +50,8 @@ func init() {
 	application.RegisterEvent[struct{}]("helper_reset")
 	application.RegisterEvent[update.UpdateInfo]("update-available")
 	application.RegisterEvent[ipc.SettingsChangedPayload]("settings_changed")
+	application.RegisterEvent[struct{}]("config_changed")
+	application.RegisterEvent[struct{}]("tunnels_changed")
 }
 
 // Run starts the GUI process. Blocks until the Wails app exits.
@@ -308,6 +310,11 @@ func Run(assetsHandler http.Handler, dataDir string) error {
 	// goroutine until process death.
 	healthWg.Add(1)
 	startSSIDReporter(clients, healthDone, &healthWg)
+
+	// Watch config.json + the tunnels dir so external changes (the CLI)
+	// reflect in a running GUI. Shares the shutdown channel/WaitGroup.
+	healthWg.Add(1)
+	startConfigWatcher(app, configFilePath(paths.ConfigDir), paths.TunnelsDir, healthDone, &healthWg)
 
 	// Update scheduler — periodic GitHub Releases check. Lives in the GUI
 	// process (not the helper) because update notifications are a pure UI

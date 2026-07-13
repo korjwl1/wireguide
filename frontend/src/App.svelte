@@ -51,6 +51,8 @@
   let autoConnectedUnsub = null;
   let criticalErrorUnsub = null;
   let updateUnsub = null;
+  let configChangedUnsub = null;
+  let tunnelsChangedUnsub = null;
   let criticalErrors = []; // array of { where, detail, at } — shown as a persistent banner
 
   // App-level ESC handler: close the editor modal. ConfigEditor wraps
@@ -72,23 +74,31 @@
     onDestroy(() => window.removeEventListener('keydown', appEscHandler, { capture: true }));
   }
 
+  // Apply the settings-derived global UI state (theme, language, and the
+  // list view stores). Reused on launch and whenever config.json changes
+  // externally (the CLI) — every set is idempotent, so re-applying our own
+  // writes is harmless.
+  async function applySettingsToUI() {
+    const s = await TunnelService.GetSettings();
+    applyTheme(s?.theme || 'system');
+    compactList.set(s?.compact_list ?? false);
+    listSort.set(s?.list_sort || 'name_asc');
+    listActiveOnTop.set(s?.list_active_on_top ?? true);
+    listPaneWidth.set(s?.list_pane_width || LIST_PANE_DEFAULT);
+    // Apply persisted language. 'auto' means "follow OS locale" — we
+    // resolve that via detectLanguage(). Without this, launching the
+    // app always showed the detected language even if the user had
+    // explicitly picked Korean before.
+    const lang = s?.language || 'auto';
+    setLanguage(lang === 'auto' ? detectLanguage() : lang);
+  }
+
   onMount(async () => {
     // Load and apply saved theme before loading other data.
     // applyTheme sets the data-theme attribute AND the resolvedTheme store
     // that CodeMirror subscribes to for its own light/dark swap.
     try {
-      const s = await TunnelService.GetSettings();
-      applyTheme(s?.theme || 'system');
-      compactList.set(s?.compact_list ?? false);
-      listSort.set(s?.list_sort || 'name_asc');
-      listActiveOnTop.set(s?.list_active_on_top ?? true);
-      listPaneWidth.set(s?.list_pane_width || LIST_PANE_DEFAULT);
-      // Apply persisted language. 'auto' means "follow OS locale" — we
-      // resolve that via detectLanguage(). Without this, launching the
-      // app always showed the detected language even if the user had
-      // explicitly picked Korean before.
-      const lang = s?.language || 'auto';
-      setLanguage(lang === 'auto' ? detectLanguage() : lang);
+      await applySettingsToUI();
     } catch (e) {
       applyTheme('system');
     }
@@ -197,6 +207,15 @@
       await applyFirewallSettings();
     });
 
+    // External config.json / tunnel-file changes (the CLI) — reflect them
+    // in the running GUI so it never sits on stale state.
+    configChangedUnsub = Events.On('config_changed', () => {
+      applySettingsToUI().catch(() => {});
+    });
+    tunnelsChangedUnsub = Events.On('tunnels_changed', () => {
+      refreshTunnels(TunnelService).catch(() => {});
+    });
+
     // Critical helper-side failures (background goroutine exceeded its
     // restart budget). Show as a persistent banner — these mean some
     // helper subsystem (status broadcast, latency probe, wifi rules)
@@ -225,6 +244,8 @@
     if (autoConnectedUnsub) autoConnectedUnsub();
     if (criticalErrorUnsub) criticalErrorUnsub();
     if (updateUnsub) updateUnsub();
+    if (configChangedUnsub) configChangedUnsub();
+    if (tunnelsChangedUnsub) tunnelsChangedUnsub();
     if (toastTimer) clearTimeout(toastTimer);
   });
 
