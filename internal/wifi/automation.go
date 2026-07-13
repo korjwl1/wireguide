@@ -38,7 +38,8 @@ const (
 const (
 	CondSSID      = "ssid"       // current Wi-Fi SSID equals SSID
 	CondSubnet    = "subnet"     // a physical-interface address is inside Subnet (CIDR)
-	CondNoneMatch = "none_match" // none of this tunnel's ssid/subnet conditions matched
+	CondNetwork   = "network"    // the default gateway's MAC equals GatewayMAC
+	CondNoneMatch = "none_match" // none of this tunnel's concrete conditions matched
 )
 
 // Condition is a single match predicate. Only the field relevant to Type
@@ -47,6 +48,14 @@ type Condition struct {
 	Type   string `json:"type"`
 	SSID   string `json:"ssid,omitempty"`
 	Subnet string `json:"subnet,omitempty"` // CIDR, e.g. "10.0.0.0/24"
+	// GatewayMAC fingerprints a SPECIFIC network by its default-gateway
+	// (router) MAC address — precise and medium-agnostic, so it
+	// disambiguates two different networks that share a common subnet
+	// like 192.168.0.0/24. Lower-cased colon form, e.g. "b0:38:6c:...".
+	GatewayMAC string `json:"gateway_mac,omitempty"`
+	// Label is a human-readable hint shown in the editor for a network
+	// condition (e.g. "Office · 192.168.0.0/24"). Not used for matching.
+	Label string `json:"label,omitempty"`
 }
 
 // NetworkContext is the current network state a rule set is evaluated
@@ -56,6 +65,9 @@ type NetworkContext struct {
 	// PhysicalIPs are the IP addresses currently assigned to physical
 	// (non-tunnel) interfaces. Used for subnet conditions.
 	PhysicalIPs []net.IP
+	// GatewayMAC is the current default gateway's MAC ("" if unknown).
+	// Used for network conditions.
+	GatewayMAC string
 }
 
 // DefaultAutomation returns an empty Automation with the map initialised
@@ -101,7 +113,7 @@ func Evaluate(rules []Rule, ctx NetworkContext) DesiredState {
 				a := r.Do
 				noneMatchAction = &a
 			}
-		case CondSSID, CondSubnet:
+		case CondSSID, CondSubnet, CondNetwork:
 			if conditionMatches(r.When, ctx) {
 				return actionToState(r.Do)
 			}
@@ -136,6 +148,8 @@ func conditionMatches(c Condition, ctx NetworkContext) bool {
 				return true
 			}
 		}
+	case CondNetwork:
+		return ctx.GatewayMAC != "" && strings.EqualFold(strings.TrimSpace(c.GatewayMAC), ctx.GatewayMAC)
 	}
 	return false
 }

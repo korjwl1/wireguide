@@ -285,7 +285,11 @@ func cmdAutomation(_ []string) int {
 	if ssid == "" {
 		ssid = "(none)"
 	}
-	fmt.Printf("network context: ssid=%s  physical-ips=%v\n", ssid, resp.PhysicalIPs)
+	gwMAC := resp.GatewayMAC
+	if gwMAC == "" {
+		gwMAC = "(unknown)"
+	}
+	fmt.Printf("network context: ssid=%s  gateway-mac=%s  physical-ips=%v\n", ssid, gwMAC, resp.PhysicalIPs)
 	if len(resp.Tunnels) == 0 {
 		fmt.Println("no tunnels have automation rules")
 		return 0

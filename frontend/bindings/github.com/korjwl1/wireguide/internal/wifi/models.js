@@ -97,6 +97,26 @@ export class Condition {
              */
             this["subnet"] = undefined;
         }
+        if (/** @type {any} */(false)) {
+            /**
+             * GatewayMAC fingerprints a SPECIFIC network by its default-gateway
+             * (router) MAC address — precise and medium-agnostic, so it
+             * disambiguates two different networks that share a common subnet
+             * like 192.168.0.0/24. Lower-cased colon form, e.g. "b0:38:6c:...".
+             * @member
+             * @type {string | undefined}
+             */
+            this["gateway_mac"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * Label is a human-readable hint shown in the editor for a network
+             * condition (e.g. "Office · 192.168.0.0/24"). Not used for matching.
+             * @member
+             * @type {string | undefined}
+             */
+            this["label"] = undefined;
+        }
 
         Object.assign(this, $$source);
     }

@@ -44,6 +44,27 @@ func TestEvaluate_SubnetDisconnect(t *testing.T) {
 	}
 }
 
+func TestEvaluate_NetworkGatewayMAC(t *testing.T) {
+	// Two homes both on 192.168.0.0/24 but with different routers — the
+	// gateway-MAC fingerprint disambiguates them where subnet can't.
+	rules := []Rule{
+		{When: Condition{Type: CondNetwork, GatewayMAC: "b0:38:6c:54:8b:ab"}, Do: ActionDisconnect},
+		{When: Condition{Type: CondNoneMatch}, Do: ActionConnect},
+	}
+	// On the fingerprinted network → disconnect (case-insensitive match).
+	if got := Evaluate(rules, NetworkContext{GatewayMAC: "B0:38:6C:54:8B:AB", PhysicalIPs: ips("192.168.0.5")}); got != StateDisconnect {
+		t.Errorf("matching gateway MAC: got %v, want disconnect", got)
+	}
+	// A different router on the SAME subnet → not matched → connect.
+	if got := Evaluate(rules, NetworkContext{GatewayMAC: "aa:bb:cc:dd:ee:ff", PhysicalIPs: ips("192.168.0.5")}); got != StateConnect {
+		t.Errorf("different gateway MAC, same subnet: got %v, want connect", got)
+	}
+	// Unknown gateway MAC → does not match.
+	if got := Evaluate(rules, NetworkContext{GatewayMAC: ""}); got != StateConnect {
+		t.Errorf("empty gateway MAC: got %v, want connect", got)
+	}
+}
+
 func TestEvaluate_FirstConcreteMatchWins(t *testing.T) {
 	rules := []Rule{
 		{When: Condition{Type: CondSSID, SSID: "a"}, Do: ActionConnect},

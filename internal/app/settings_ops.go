@@ -44,6 +44,29 @@ func (s *TunnelService) GetCurrentSubnets() []string {
 	return wifi.PhysicalSubnets()
 }
 
+// CurrentNetwork is the fingerprint of the network the machine is on now,
+// for the Automation editor's "use current network" button.
+type CurrentNetwork struct {
+	GatewayMAC string `json:"gateway_mac"` // "" when unavailable (e.g. Windows, no gateway)
+	Label      string `json:"label"`       // human hint, e.g. "192.168.0.0/24"
+}
+
+// GetCurrentNetwork returns the current default-gateway MAC fingerprint
+// plus a readable label (the current subnet) so the editor can capture
+// "this network" precisely without the user typing a MAC. GatewayMAC is
+// empty when it can't be determined; the UI should fall back to a subnet
+// condition in that case.
+func (s *TunnelService) GetCurrentNetwork() CurrentNetwork {
+	label := ""
+	if subs := wifi.PhysicalSubnets(); len(subs) > 0 {
+		label = subs[0]
+	}
+	return CurrentNetwork{
+		GatewayMAC: wifi.GatewayMAC(),
+		Label:      label,
+	}
+}
+
 // CheckSSIDPermission reports whether the process can read the current SSID.
 // Used by the frontend to prompt the user for Location Services access before
 // Wi-Fi auto-connect rules can fire.

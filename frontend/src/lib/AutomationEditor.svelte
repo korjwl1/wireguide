@@ -35,7 +35,13 @@
       const per = s?.automation?.per_tunnel_rules || {};
       // Deep-copy so edits don't mutate the fetched object before save.
       rules = (per[name] || []).map(r => ({
-        when: { type: r.when?.type || 'ssid', ssid: r.when?.ssid || '', subnet: r.when?.subnet || '' },
+        when: {
+          type: r.when?.type || 'ssid',
+          ssid: r.when?.ssid || '',
+          subnet: r.when?.subnet || '',
+          gateway_mac: r.when?.gateway_mac || '',
+          label: r.when?.label || '',
+        },
         do: r.do || 'connect',
       }));
     } catch (e) {
@@ -53,7 +59,29 @@
   }
 
   function addRule() {
-    rules = [...rules, { when: { type: 'ssid', ssid: '', subnet: '' }, do: 'connect' }];
+    rules = [...rules, { when: { type: 'ssid', ssid: '', subnet: '', gateway_mac: '', label: '' }, do: 'connect' }];
+  }
+
+  // Capture the current network's gateway-MAC fingerprint into a network
+  // rule, so the user targets exactly the network they're on without
+  // typing a MAC. Falls back to a subnet condition when no gateway MAC is
+  // available (e.g. Windows, or no default route).
+  async function useCurrentNetwork(rule) {
+    try {
+      const n = await TunnelService.GetCurrentNetwork();
+      if (n?.gateway_mac) {
+        rule.when.gateway_mac = n.gateway_mac;
+        rule.when.label = n.label || '';
+      } else if (n?.label) {
+        // No gateway fingerprint here — degrade to a subnet condition.
+        rule.when.type = 'subnet';
+        rule.when.subnet = n.label;
+      }
+      rules = rules; // trigger reactivity
+      save();
+    } catch (e) {
+      console.error('useCurrentNetwork:', e);
+    }
   }
   function removeRule(i) {
     rules = rules.filter((_, idx) => idx !== i);
@@ -67,15 +95,16 @@
       if (r.when.type === 'none_match') return true;
       if (r.when.type === 'ssid') return r.when.ssid.trim() !== '';
       if (r.when.type === 'subnet') return r.when.subnet.trim() !== '';
+      if (r.when.type === 'network') return r.when.gateway_mac.trim() !== '';
       return false;
-    }).map(r => ({
-      when: r.when.type === 'ssid'
-        ? { type: 'ssid', ssid: r.when.ssid.trim() }
-        : r.when.type === 'subnet'
-          ? { type: 'subnet', subnet: r.when.subnet.trim() }
-          : { type: 'none_match' },
-      do: r.do,
-    }));
+    }).map(r => {
+      let when;
+      if (r.when.type === 'ssid') when = { type: 'ssid', ssid: r.when.ssid.trim() };
+      else if (r.when.type === 'subnet') when = { type: 'subnet', subnet: r.when.subnet.trim() };
+      else if (r.when.type === 'network') when = { type: 'network', gateway_mac: r.when.gateway_mac.trim(), label: r.when.label };
+      else when = { type: 'none_match' };
+      return { when, do: r.do };
+    });
   }
 
   let saveTimer = null;
@@ -137,11 +166,22 @@
               </select>
               <span class="am-when">{$t('automation.when')}</span>
               <select class="am-type" bind:value={rule.when.type} on:change={save} aria-label={$t('automation.condition')}>
+                <option value="network">{$t('automation.cond_network')}</option>
                 <option value="ssid">{$t('automation.cond_ssid')}</option>
                 <option value="subnet">{$t('automation.cond_subnet')}</option>
                 <option value="none_match">{$t('automation.cond_none')}</option>
               </select>
-              {#if rule.when.type === 'ssid'}
+              {#if rule.when.type === 'network'}
+                <span class="am-val am-val-network">
+                  {#if rule.when.gateway_mac}
+                    {rule.when.label || $t('automation.net_captured')}
+                    <span class="am-mac">({rule.when.gateway_mac})</span>
+                  {:else}
+                    <span class="am-val-none">{$t('automation.net_not_set')}</span>
+                  {/if}
+                </span>
+                <button class="am-usecurrent" on:click={() => useCurrentNetwork(rule)}>{$t('automation.use_current')}</button>
+              {:else if rule.when.type === 'ssid'}
                 <input
                   class="am-val"
                   list="am-ssid-list"
@@ -219,6 +259,15 @@
   .am-when { font: 400 11px var(--font-sans); color: var(--text-muted); }
   .am-val { flex: 1; min-width: 120px; }
   .am-val-none { color: var(--text-muted); border: 0 !important; background: transparent !important; }
+  .am-val-network { flex: 1; min-width: 120px; display: inline-flex; align-items: baseline; gap: 6px; font: 400 12px var(--font-sans); color: var(--text-primary); }
+  .am-mac { font: 400 10px var(--font-mono); color: var(--text-muted); }
+  .am-usecurrent {
+    font: 500 11px var(--font-sans); color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 10%, transparent);
+    border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+    border-radius: 7px; padding: 4px 9px; cursor: pointer; flex-shrink: 0; white-space: nowrap;
+  }
+  .am-usecurrent:hover { background: color-mix(in srgb, var(--accent) 18%, transparent); }
   .am-remove { background: transparent; border: 0; color: var(--text-muted); cursor: pointer; padding: 4px; border-radius: 6px; flex-shrink: 0; }
   .am-remove:hover { background: color-mix(in srgb, var(--red, #ff3b30) 18%, transparent); color: var(--red, #ff3b30); }
   .am-add {

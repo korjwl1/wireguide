@@ -314,7 +314,7 @@
   },
   "automation": {
     "title": "Automation",
-    "hint": "Rules run top to bottom; the first matching condition wins. Add separate rules to connect and to disconnect on different networks.",
+    "hint": "Rules run top to bottom; the first matching condition wins. \"This network\" fingerprints a specific router (works on Wi-Fi and Ethernet, and tells apart two networks that share a subnet like 192.168.0.0/24). Add separate rules to connect and to disconnect.",
     "empty": "No rules — this tunnel is never auto-managed. Add a rule below.",
     "add_rule": "Add rule",
     "action": "Action",
@@ -327,6 +327,10 @@
     "cond_none": "otherwise",
     "cond_none_desc": "no other rule matched",
     "ssid_placeholder": "Wi-Fi name",
-    "subnet_current": "current network"
+    "subnet_current": "current network",
+    "cond_network": "on this network",
+    "use_current": "Use current",
+    "net_captured": "this network",
+    "net_not_set": "click \"Use current\" while on the network"
   }
 }

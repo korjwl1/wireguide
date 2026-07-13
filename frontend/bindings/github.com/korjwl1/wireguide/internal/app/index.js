@@ -9,6 +9,7 @@ export {
 
 export {
     ConnectionStatus,
+    CurrentNetwork,
     DNSLeakResult,
     DNSServer,
     KnownSSIDs,

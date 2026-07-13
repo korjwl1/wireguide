@@ -76,6 +76,7 @@ func (h *Helper) reevaluateAutomation(reason string) {
 	ctx := wifi.NetworkContext{
 		SSID:        ssid,
 		PhysicalIPs: wifi.PhysicalInterfaceIPs(),
+		GatewayMAC:  wifi.GatewayMAC(),
 	}
 
 	active := make(map[string]bool)
@@ -117,7 +118,8 @@ func (h *Helper) handleAutomationPreview(_ json.RawMessage) (interface{}, error)
 		ssid = h.wifiMon.LastSSID()
 	}
 	physIPs := wifi.PhysicalInterfaceIPs()
-	ctx := wifi.NetworkContext{SSID: ssid, PhysicalIPs: physIPs}
+	gwMAC := wifi.GatewayMAC()
+	ctx := wifi.NetworkContext{SSID: ssid, PhysicalIPs: physIPs, GatewayMAC: gwMAC}
 
 	ipStrs := make([]string, 0, len(physIPs))
 	for _, ip := range physIPs {
@@ -129,7 +131,7 @@ func (h *Helper) handleAutomationPreview(_ json.RawMessage) (interface{}, error)
 		active[n] = true
 	}
 
-	resp := ipc.AutomationPreviewResponse{SSID: ssid, PhysicalIPs: ipStrs}
+	resp := ipc.AutomationPreviewResponse{SSID: ssid, PhysicalIPs: ipStrs, GatewayMAC: gwMAC}
 	if auto != nil {
 		for _, name := range auto.TunnelNames() {
 			rules := auto.PerTunnel[name]

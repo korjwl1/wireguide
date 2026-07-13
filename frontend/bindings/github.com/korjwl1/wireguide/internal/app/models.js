@@ -25,6 +25,47 @@ export const ConnectionStatus = domain$0.ConnectionStatus;
  */
 
 /**
+ * CurrentNetwork is the fingerprint of the network the machine is on now,
+ * for the Automation editor's "use current network" button.
+ */
+export class CurrentNetwork {
+    /**
+     * Creates a new CurrentNetwork instance.
+     * @param {Partial<CurrentNetwork>} [$$source = {}] - The source object to create the CurrentNetwork.
+     */
+    constructor($$source = {}) {
+        if (!("gateway_mac" in $$source)) {
+            /**
+             * "" when unavailable (e.g. Windows, no gateway)
+             * @member
+             * @type {string}
+             */
+            this["gateway_mac"] = "";
+        }
+        if (!("label" in $$source)) {
+            /**
+             * human hint, e.g. "192.168.0.0/24"
+             * @member
+             * @type {string}
+             */
+            this["label"] = "";
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new CurrentNetwork instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {CurrentNetwork}
+     */
+    static createFrom($$source = {}) {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new CurrentNetwork(/** @type {Partial<CurrentNetwork>} */($$parsedSource));
+    }
+}
+
+/**
  * DNSLeakResult mirrors diag.DNSLeakResult for Wails JSON serialisation.
  */
 export class DNSLeakResult {

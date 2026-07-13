@@ -143,6 +143,7 @@ type CriticalErrorPayload struct {
 type AutomationPreviewResponse struct {
 	SSID        string                     `json:"ssid"`
 	PhysicalIPs []string                   `json:"physical_ips"`
+	GatewayMAC  string                     `json:"gateway_mac"`
 	Tunnels     []AutomationTunnelDecision `json:"tunnels"`
 }
 
