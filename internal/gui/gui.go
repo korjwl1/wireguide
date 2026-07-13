@@ -203,12 +203,13 @@ func Run(assetsHandler http.Handler, dataDir string) error {
 		app.Event.Emit("files-dropped", map[string]any{"files": files})
 	})
 
-	// 6. System tray — always use SetIcon (never SetTemplateIcon) to avoid
-	// a Wails v3 bug where the isTemplateIcon sticky flag makes all
-	// subsequent SetIcon calls render as monochrome template icons.
+	// 6. System tray. macOS uses TEMPLATE icons for every state so the
+	// glyph auto-adapts to light/dark menu bars (Wails's sticky
+	// isTemplateIcon flag is harmless when nothing ever switches back to
+	// a coloured icon); Windows keeps regular coloured icons.
 	tray := app.SystemTray.New()
 	if runtime.GOOS == "darwin" {
-		tray.SetIcon(trayOffIcon)
+		tray.SetTemplateIcon(trayOffIcon)
 	} else {
 		tray.SetLabel("WireGuide")
 		// Windows also needs an explicit SetIcon at init or Wails falls

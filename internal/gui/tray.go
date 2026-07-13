@@ -19,19 +19,21 @@ import (
 	"golang.org/x/image/draw"
 )
 
-// Tray icon variants. We always use SetIcon (non-template) to avoid a
-// Wails v3 bug where SetTemplateIcon sets isTemplateIcon=true on the
-// macosSystemTray struct, and the subsequent SetIcon never clears it —
-// causing all future icons to be rendered monochrome by macOS.
-//
-// One icon per state. We use white-W icons unconditionally — macOS menu
-// bar vibrancy makes white icons read correctly on both light and dark
-// system themes (matching Apple's own Wi-Fi/battery/clock indicators).
-// The previous design had separate dark-mode variants but assigned the
-// same white-W to both, so we collapsed it to one.
+// Tray icon variants. On macOS both states are TEMPLATE icons
+// (SetTemplateIcon): macOS uses only the alpha channel as a mask and
+// tints the glyph itself for the current menu-bar appearance, so the
+// icon stays legible on light AND dark menu bars (issue #18 — the
+// previous plain white-W was invisible on a light menu bar; vibrancy
+// only auto-adapts template images, not regular ones). The old code
+// avoided SetTemplateIcon because Wails v3 never clears the sticky
+// isTemplateIcon flag once set — that bug only bites when MIXING
+// template and coloured icons; with every macOS state template, the
+// sticky flag is the desired steady state. The trade-off: the badge
+// renders monochrome (template = mask), so connected is "W + dot" and
+// disconnected is a bare W, rather than a green dot.
 var (
-	trayOnIcon  []byte // white W + green dot
-	trayOffIcon []byte // white W, no dot
+	trayOnIcon  []byte // W + dot badge (template: colour irrelevant, alpha is the mask)
+	trayOffIcon []byte // W, no badge
 
 	// Windows-only variants rendered from the full app icon (rounded
 	// red tile + white W) so the system tray actually shows something
@@ -54,9 +56,11 @@ var (
 func SetTrayIconPNG(b []byte) { customTrayIconPNG = b }
 
 func init() {
-	white := color.NRGBA{255, 255, 255, 255}
-	trayOnIcon = buildTrayOnIcon(white)
-	trayOffIcon = buildTrayOffIcon(white)
+	// Template rendering ignores colour — black keeps the PNGs readable
+	// when inspected and matches AppKit's template-image convention.
+	black := color.NRGBA{0, 0, 0, 255}
+	trayOnIcon = buildTrayOnIcon(black)
+	trayOffIcon = buildTrayOffIcon(black)
 }
 
 // buildWindowsTrayIcons renders the rounded-red app icon at tray size
@@ -195,9 +199,6 @@ func drawGreenBadge(img *image.NRGBA) {
 	}
 }
 
-// buildTrayOnIcon composites a W glyph (in wColor) with a green dot badge at
-// the bottom-left. Returns a non-template PNG so the green dot keeps its colour.
-// wColor should be black for light menu bars, white for dark menu bars.
 // trimAndSquare finds the bounding box of non-transparent pixels, crops,
 // then centers in a square canvas (max of width/height). Wails forces
 // the tray icon to a thickness×thickness square, so providing a square
@@ -235,6 +236,9 @@ func trimAndSquare(src image.Image) *image.NRGBA {
 	return dst
 }
 
+// buildTrayOnIcon composites a W glyph (in wColor) with a solid dot badge
+// at the bottom-left — the "connected" state. Rendered colour is irrelevant
+// on macOS (used as a template mask); only the alpha channel matters.
 func buildTrayOnIcon(wColor color.NRGBA) []byte {
 	base, err := png.Decode(bytes.NewReader(icons.SystrayMacTemplate))
 	if err != nil {
@@ -283,8 +287,7 @@ func buildTrayOnIcon(wColor color.NRGBA) []byte {
 }
 
 // buildTrayOffIcon renders the W glyph in wColor with no badge — the
-// disconnected-state equivalent of the template icon, but as a plain
-// (non-template) PNG so we never need SetTemplateIcon.
+// disconnected state.
 func buildTrayOffIcon(wColor color.NRGBA) []byte {
 	base, err := png.Decode(bytes.NewReader(icons.SystrayMacTemplate))
 	if err != nil {
@@ -343,12 +346,9 @@ type trayManager struct {
 	activeTunnels map[string]bool // cached from status events
 	hasHandshake  map[string]bool // per-tunnel handshake status
 	rebuildTimer  *time.Timer     // debounce timer for rebuildMenu
-	// rebuildMu serialises rebuildMenu calls. The OnClick path needs to
-	// know the rebuild has actually completed before it calls OpenMenu so
-	// the menu can't open with stale items — a mutex is the simplest way
-	// to make it block until it's that path's turn. Status-driven rebuilds
-	// queue behind it harmlessly; rebuilds are sub-ms so the queue never
-	// grows past one or two entries in practice.
+	// rebuildMu serialises rebuildMenu calls so two concurrent rebuilds
+	// can't interleave their ListTunnelsLocal snapshot and SetMenu —
+	// rebuilds are sub-ms so queued callers never wait meaningfully.
 	rebuildMu sync.Mutex
 	// quitting flips to true the moment Quit is clicked. Both the
 	// debounce AfterFunc and the rebuildMenu body short-circuit when
@@ -367,38 +367,26 @@ func newTrayManager(app *application.App, win *application.WebviewWindow, tray *
 	}
 }
 
-// initialBuild draws the menu once at startup, then registers an OnClick
-// handler that rebuilds the menu before every open. The reactive
-// status-driven rebuild (via setIconState) keeps the menu warm between
-// events so opening it is instantaneous; this OnClick path guarantees the
-// menu is fresh even when state changed in the small window between the
-// last status event and the click. Without it, users occasionally saw a
-// stale connection glyph for ~1s after a fast disconnect/connect cycle.
+// initialBuild draws the menu once at startup. No OnClick handler is
+// registered — with no custom click handler, Wails lets AppKit run its
+// native status-item menu tracking (the pre-click event monitor attaches
+// the cached menu before the mouse-down is processed). The previous
+// design intercepted the click and called OpenMenu, which synthesizes a
+// fake NSEvent mouseDown — an unsupported trick that needed two clicks
+// on some systems and stopped opening the menu at all on macOS 26
+// (Tahoe reworked NSStatusItem internals). Menu freshness is covered by
+// the status-driven scheduleRebuild path, and each item's OnClick reads
+// live state at click time, so a ≤1s-stale glyph is the worst case.
 func (t *trayManager) initialBuild() {
 	t.rebuildMenu()
-	t.tray.OnClick(func() {
-		// Run rebuild in a goroutine: OnClick fires on the AppKit main
-		// thread, and rebuildMenu calls SetMenu which itself dispatches
-		// to the main thread via Wails's InvokeSync — calling SetMenu
-		// from main during an InvokeSync would deadlock.
-		go func() {
-			t.rebuildMenu()
-			t.tray.OpenMenu()
-		}()
-	})
 }
 
 // setIconState swaps the tray ICON (not a text label) based on connection
 // state, and updates the tooltip. Called from the status event stream, so
 // it must stay O(1) — no IPC, no disk I/O.
 //
-//   disconnected → Wails's default template W (monochrome, auto-inverts)
-//   connected    → coloured W with a green dot badge (non-template)
-//
-// Previously we used SetLabel("●") next to the template icon, but the user
-// wanted the dot as a badge on the glyph itself, not as a neighbouring
-// character. Two separate icon assets is the only way to achieve that on
-// macOS's menu bar — template icons can't carry colour.
+//   disconnected → template W (monochrome, auto-adapts to menu-bar theme)
+//   connected    → template W with a dot badge
 func (t *trayManager) setIconState(activeNames []string, handshakeMap map[string]bool) {
 	newSet := make(map[string]bool, len(activeNames))
 	for _, n := range activeNames {
@@ -437,17 +425,19 @@ func (t *trayManager) setIconState(activeNames []string, handshakeMap map[string
 			// background and isn't framed by a white square.
 			onIcon, offIcon = trayOnIconWindows, trayOffIconWindows
 		}
+		// macOS: template icons so the system tints the glyph for the
+		// current menu-bar appearance. Windows: regular coloured icons.
+		setIcon := t.tray.SetIcon
+		if runtime.GOOS == "darwin" {
+			setIcon = t.tray.SetTemplateIcon
+		}
 		if anyConnected {
-			t.tray.SetIcon(onIcon)
+			setIcon(onIcon)
 			tooltip := "WireGuide — " + strings.Join(activeNames, ", ")
 			t.tray.SetTooltip(tooltip)
 		} else {
-			// macOS keeps the off-state white-W template (looks correct
-			// under menu-bar vibrancy); Windows now also gets a real
-			// icon for the disconnected state instead of an unset
-			// placeholder.
 			if runtime.GOOS == "darwin" || (runtime.GOOS == "windows" && len(offIcon) > 0) {
-				t.tray.SetIcon(offIcon)
+				setIcon(offIcon)
 			}
 			t.tray.SetTooltip("WireGuide")
 		}
