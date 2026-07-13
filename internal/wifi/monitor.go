@@ -2,6 +2,7 @@ package wifi
 
 import (
 	"log/slog"
+	"runtime"
 	"sync"
 	"time"
 )
@@ -147,6 +148,16 @@ func (m *Monitor) ReportExternalSSID(ssid string) {
 }
 
 func (m *Monitor) poll() {
+	// On macOS the root helper cannot read the SSID — Location Services is
+	// scoped to the GUI .app bundle, so CurrentSSID() returns "". Polling it
+	// would overwrite the authoritative GUI-reported SSID (via
+	// ReportExternalSSID) with "" on every 5s tick, silently breaking SSID
+	// automation rules seconds after they start matching. On darwin the GUI
+	// report is therefore the ONLY SSID source; just idle until Stop.
+	if runtime.GOOS == "darwin" {
+		<-m.stopCh
+		return
+	}
 	m.mu.Lock()
 	m.lastSSID = CurrentSSID()
 	m.mu.Unlock()

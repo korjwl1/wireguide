@@ -168,6 +168,13 @@ func (h *Helper) automationConnect(name, reason, ssid string) {
 	slog.Info("automation: rule connect", "tunnel", name, "reason", reason, "ssid", ssid)
 	h.connectMu.Lock()
 	err = h.doConnectHeld(cfg)
+	if err == nil {
+		// Same firewall follow-up a manual connect does — otherwise a
+		// headless automation connect gets no DNS protection and, if the
+		// kill switch is already on, its endpoints are never permitted so
+		// the tunnel can't pass traffic (issue #12).
+		h.applyPostConnectFirewall(cfg)
+	}
 	h.connectMu.Unlock()
 	if err != nil {
 		slog.Warn("automation connect failed", "tunnel", name, "error", err)
@@ -193,7 +200,28 @@ func (h *Helper) disconnectAutoManaged(name string) {
 	if h.monitor != nil {
 		h.monitor.CancelRetryFor(name)
 	}
-	_ = h.manager.DisconnectTunnel(name)
+	// Snapshot the interface name before teardown so we can strip it from
+	// the kill-switch filter set afterwards, exactly as handleDisconnect
+	// does. Without this a rule-driven disconnect leaves a dead tunnel's
+	// LUID permitted in the WFP filters (issue #12).
+	iface := ""
+	if h.firewall.IsKillSwitchEnabled() {
+		for _, st := range h.manager.AllStatuses() {
+			if st != nil && st.TunnelName == name && st.InterfaceName != "" {
+				iface = st.InterfaceName
+				break
+			}
+		}
+	}
+	if err := h.manager.DisconnectTunnel(name); err != nil {
+		slog.Warn("automation disconnect failed", "tunnel", name, "error", err)
+	}
+	if iface != "" {
+		if err := h.firewall.RemoveKillSwitchTunnel(iface); err != nil {
+			slog.Warn("RemoveKillSwitchTunnel after automation disconnect failed",
+				"interface", iface, "error", err)
+		}
+	}
 	h.mu.Lock()
 	delete(h.activeCfgs, name)
 	h.mu.Unlock()

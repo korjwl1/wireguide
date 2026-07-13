@@ -138,6 +138,67 @@ func TestEvaluate_InvalidSubnetIgnored(t *testing.T) {
 	}
 }
 
+// none_match is unconditional AT ITS POSITION: dragged to the top it
+// overrides everything below (issue #12, was previously always held to
+// the end regardless of order).
+func TestEvaluate_NoneMatchHonoursPosition(t *testing.T) {
+	rules := []Rule{
+		{When: Condition{Type: CondNoneMatch}, Do: ActionDisconnect}, // top → unconditional
+		{When: Condition{Type: CondSSID, SSID: "home"}, Do: ActionConnect},
+	}
+	// Even on "home", the top else wins.
+	if got := Evaluate(rules, NetworkContext{SSID: "home"}); got != StateDisconnect {
+		t.Errorf("else at top should override: want Disconnect, got %v", got)
+	}
+	// Moving the concrete rule above the else restores first-match-wins.
+	rules[0], rules[1] = rules[1], rules[0]
+	if got := Evaluate(rules, NetworkContext{SSID: "home"}); got != StateConnect {
+		t.Errorf("concrete above else: want Connect, got %v", got)
+	}
+}
+
+// An unknown/empty action fails closed (rule skipped), it does not
+// default to connect (issue #12).
+func TestEvaluate_UnknownActionSkipped(t *testing.T) {
+	rules := []Rule{
+		{When: Condition{Type: CondSSID, SSID: "home"}, Do: Action("bogus")},
+		{When: Condition{Type: CondNoneMatch}, Do: ActionDisconnect},
+	}
+	if got := Evaluate(rules, NetworkContext{SSID: "home"}); got != StateDisconnect {
+		t.Errorf("unknown action must be skipped, not treated as connect: got %v", got)
+	}
+	// A lone invalid rule leaves the tunnel unmanaged.
+	if got := Evaluate(rules[:1], NetworkContext{SSID: "home"}); got != StateUnmanaged {
+		t.Errorf("lone invalid rule: want Unmanaged, got %v", got)
+	}
+}
+
+func TestValidateRule(t *testing.T) {
+	bad := []Rule{
+		{When: Condition{Type: CondSSID, SSID: ""}, Do: ActionConnect},
+		{When: Condition{Type: CondSubnet, Subnet: "not-a-cidr"}, Do: ActionConnect},
+		{When: Condition{Type: CondNetwork, GatewayMAC: "zz:zz"}, Do: ActionConnect},
+		{When: Condition{Type: CondSSID, SSID: "ok"}, Do: Action("nope")},
+		{When: Condition{Type: "weird"}, Do: ActionConnect},
+	}
+	for i, r := range bad {
+		if err := ValidateRule(r); err == nil {
+			t.Errorf("bad rule %d should fail validation: %+v", i, r)
+		}
+	}
+	good := []Rule{
+		{When: Condition{Type: CondSSID, SSID: "home"}, Do: ActionConnect},
+		{When: Condition{Type: CondSubnet, Subnet: "10.0.0.0/8"}, Do: ActionDisconnect},
+		{When: Condition{Type: CondNetwork, GatewayMAC: "B0-38-6C-54-8B-AB"}, Do: ActionConnect},
+		{When: Condition{Type: CondNoneMatch}, Do: ActionConnect},
+	}
+	for i, r := range good {
+		if err := ValidateRule(r); err != nil {
+			t.Errorf("good rule %d should pass: %+v: %v", i, r, err)
+		}
+	}
+}
+
 func TestMigrateFromLegacy(t *testing.T) {
 	legacy := &Rules{
 		TrustedSSIDs: []string{"corp-wifi"},

@@ -236,6 +236,19 @@ func (h *Helper) handleConnect(params json.RawMessage) (interface{}, error) {
 		return nil, err
 	}
 
+	h.applyPostConnectFirewall(req.Config)
+	return ipc.Empty{}, nil
+}
+
+// applyPostConnectFirewall runs the firewall follow-up that must happen
+// after a tunnel comes up, shared by manual (handleConnect) and
+// automation (automationConnect) connects. Extracting it fixes a real
+// gap: the automation engine called doConnectHeld directly, so a tunnel
+// brought up by a rule while no GUI was running got NEITHER of these —
+// and, worst case, could not pass traffic at all because an
+// already-enabled kill switch never learned its endpoints (issue #12).
+// Best-effort: logs and continues on error, exactly like manual connect.
+func (h *Helper) applyPostConnectFirewall(cfg *domain.WireGuardConfig) {
 	// Windows-only: auto-enable DNS protection on full-tunnel.
 	//
 	// Why Windows-specific: Windows' resolver does "smart multi-homed
@@ -250,10 +263,10 @@ func (h *Helper) handleConnect(params json.RawMessage) (interface{}, error) {
 	// the query out the tunnel. Auto-enabling there would override
 	// the user's explicit Settings.DNSProtection=false choice (the
 	// v0.2.0 behaviour), so we leave non-Windows platforms alone.
-	if runtime.GOOS == "windows" && req.Config.IsFullTunnel() && len(req.Config.Interface.DNS) > 0 {
+	if runtime.GOOS == "windows" && cfg.IsFullTunnel() && len(cfg.Interface.DNS) > 0 {
 		status := h.manager.Status()
 		if status != nil && status.InterfaceName != "" {
-			if err := h.firewall.EnableDNSProtection(status.InterfaceName, req.Config.Interface.DNS); err != nil {
+			if err := h.firewall.EnableDNSProtection(status.InterfaceName, cfg.Interface.DNS); err != nil {
 				slog.Warn("auto-DNS protection failed (full-tunnel)", "error", err)
 			}
 		}
@@ -279,8 +292,6 @@ func (h *Helper) handleConnect(params json.RawMessage) (interface{}, error) {
 			}
 		}
 	}
-
-	return ipc.Empty{}, nil
 }
 
 func (h *Helper) handleDisconnect(params json.RawMessage) (interface{}, error) {

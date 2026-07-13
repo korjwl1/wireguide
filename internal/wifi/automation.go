@@ -1,6 +1,7 @@
 package wifi
 
 import (
+	"fmt"
 	"net"
 	"sort"
 	"strings"
@@ -90,11 +91,16 @@ const (
 // Evaluate decides the desired state for a single tunnel given the
 // current network context. Semantics:
 //
-//   - Rules are examined in order. The FIRST rule whose concrete
-//     condition (ssid or subnet) matches wins, and its action is the
-//     result.
-//   - none_match rules are held aside; if NO concrete condition in the
-//     list matched, the first none_match rule's action applies.
+//   - Rules are examined in order and the FIRST matching, well-formed
+//     rule wins — uniformly, priority == position (issue #12). This is
+//     what the editor's "top rule wins, drag to reorder" promises.
+//   - none_match ("else") is an unconditional match at its own position,
+//     so it acts as a fallback when placed last and as an unconditional
+//     override if dragged to the top — no special end-of-list handling.
+//   - A rule with a malformed condition (bad CIDR/MAC, empty SSID) or an
+//     unknown action never fires; it is skipped rather than defaulting to
+//     connect. So an invalid rule fails closed (leaves the tunnel alone),
+//     it doesn't silently connect.
 //   - If nothing matches, the tunnel is Unmanaged (untouched).
 //
 // This lets the canonical workflow — "disconnect on the office network,
@@ -104,36 +110,80 @@ const (
 //	{when: subnet=10/8,      do: disconnect}
 //	{when: none_match,       do: connect}
 func Evaluate(rules []Rule, ctx NetworkContext) DesiredState {
-	var noneMatchAction *Action
 	for i := range rules {
 		r := rules[i]
-		switch r.When.Type {
-		case CondNoneMatch:
-			if noneMatchAction == nil {
-				a := r.Do
-				noneMatchAction = &a
-			}
-		case CondSSID, CondSubnet, CondNetwork:
-			if conditionMatches(r.When, ctx) {
-				return actionToState(r.Do)
-			}
+		state, ok := actionState(r.Do)
+		if !ok {
+			continue // unknown action → rule can't fire
 		}
-	}
-	if noneMatchAction != nil {
-		return actionToState(*noneMatchAction)
+		if r.When.Validate() != nil {
+			continue // malformed condition → rule can't fire
+		}
+		if ruleMatches(r.When, ctx) {
+			return state
+		}
 	}
 	return StateUnmanaged
 }
 
-func actionToState(a Action) DesiredState {
-	if a == ActionDisconnect {
-		return StateDisconnect
+// actionState maps an action to its desired state, reporting ok=false for
+// an unknown/empty action so callers can skip the rule instead of
+// treating anything-but-disconnect as connect.
+func actionState(a Action) (DesiredState, bool) {
+	switch a {
+	case ActionConnect:
+		return StateConnect, true
+	case ActionDisconnect:
+		return StateDisconnect, true
 	}
-	return StateConnect
+	return StateUnmanaged, false
 }
 
-// conditionMatches reports whether a concrete (ssid/subnet) condition
-// matches the context. none_match is handled by the caller.
+// ruleMatches reports whether a (pre-validated) condition matches the
+// context. none_match is unconditional at its position.
+func ruleMatches(c Condition, ctx NetworkContext) bool {
+	if c.Type == CondNoneMatch {
+		return true
+	}
+	return conditionMatches(c, ctx)
+}
+
+// Validate reports whether the condition is well-formed. A malformed
+// condition can never match, so save paths reject it (issue #12) and
+// Evaluate skips it.
+func (c Condition) Validate() error {
+	switch c.Type {
+	case CondSSID:
+		if strings.TrimSpace(c.SSID) == "" {
+			return fmt.Errorf("ssid condition requires a non-empty SSID")
+		}
+	case CondSubnet:
+		if _, _, err := net.ParseCIDR(strings.TrimSpace(c.Subnet)); err != nil {
+			return fmt.Errorf("invalid subnet %q (want CIDR like 192.168.0.0/24)", c.Subnet)
+		}
+	case CondNetwork:
+		if canonicalMAC(c.GatewayMAC) == "" {
+			return fmt.Errorf("invalid gateway MAC %q (want 12 hex digits)", c.GatewayMAC)
+		}
+	case CondNoneMatch:
+		// always valid
+	default:
+		return fmt.Errorf("unknown condition type %q", c.Type)
+	}
+	return nil
+}
+
+// ValidateRule checks a rule's action and condition. Used by the CLI and
+// helper to reject bad rules on save rather than silently no-op'ing them.
+func ValidateRule(r Rule) error {
+	if _, ok := actionState(r.Do); !ok {
+		return fmt.Errorf("unknown action %q (want connect or disconnect)", r.Do)
+	}
+	return r.When.Validate()
+}
+
+// conditionMatches reports whether a concrete (ssid/subnet/network)
+// condition matches the context. none_match is handled by ruleMatches.
 func conditionMatches(c Condition, ctx NetworkContext) bool {
 	switch c.Type {
 	case CondSSID:
