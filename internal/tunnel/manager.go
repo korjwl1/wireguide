@@ -231,23 +231,35 @@ func (m *Manager) ConnectWithContext(ctx context.Context, cfg *domain.WireGuardC
 	engine, err := m.connectPhases(ctx, cfg, netMgr)
 
 	// --- Phase 3: commit final state under the lock ---
+	//
+	// NOTE: this phase manages the lock EXPLICITLY (no `defer Unlock`) so
+	// the connect/Disconnect-race cleanup below can release it during the
+	// slow network teardown. Per the Manager.mu contract (see the struct
+	// doc) the lock must never be held across RemoveRoutes/RestoreDNS/
+	// Cleanup/engine.Close — those shell out (networksetup is seconds on
+	// macOS) and would stall Status/AllStatuses, freezing the 1 Hz event
+	// loop and the GUI. Every return path below unlocks exactly once.
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	entry = m.getOrCreateEntry(name) // re-fetch under lock
 	if err != nil {
 		// Phases failed — roll back to disconnected. connectPhases has
 		// already cleaned up its partial network state via its internal
 		// rollback helper.
 		m.removeEntry(name)
+		m.mu.Unlock()
 		return err
 	}
 	// Re-validate state: a Disconnect may have landed while we were outside
 	// the lock. If so, discard the engine we just created.
 	if entry.state != domain.StateConnecting {
-		// A Disconnect landed while we were outside the lock.
-		// Clean up the network state that connectPhases just installed.
+		// A Disconnect landed while we were outside the lock. Snapshot
+		// what teardown needs, then RELEASE the lock before the slow
+		// network operations so concurrent Status calls don't block.
 		ifaceName := engine.InterfaceName()
-		if err := netMgr.RemoveRoutes(ifaceName, nil, cfg.IsFullTunnel()); err != nil {
+		fullTunnel := cfg.IsFullTunnel()
+		m.mu.Unlock()
+
+		if err := netMgr.RemoveRoutes(ifaceName, nil, fullTunnel); err != nil {
 			slog.Warn("connect race: RemoveRoutes failed", "iface", ifaceName, "error", err)
 		}
 		if err := netMgr.RestoreDNS(ifaceName); err != nil {
@@ -263,7 +275,11 @@ func (m *Manager) ConnectWithContext(ctx context.Context, cfg *domain.WireGuardC
 		if err := ClearActiveState(m.dataDir, name); err != nil {
 			slog.Warn("connect race: ClearActiveState failed", "tunnel", name, "error", err)
 		}
+
+		// Re-acquire only to mutate the entry map.
+		m.mu.Lock()
 		m.removeEntry(name)
+		m.mu.Unlock()
 		return newTunnelError(ErrStateCorrupt, "connect aborted: state changed during setup", nil)
 	}
 	entry.engine = engine
@@ -308,6 +324,7 @@ func (m *Manager) ConnectWithContext(ctx context.Context, cfg *domain.WireGuardC
 		entry.socketBindInitialV6 = engine.SocketPinV6
 		startSocketBindMonitor(sbCtx, engine.bind, ifaceName, engine.SocketPinV4, engine.SocketPinV6)
 	}
+	m.mu.Unlock()
 	return nil
 }
 
