@@ -137,6 +137,17 @@ type CriticalErrorPayload struct {
 	Detail string `json:"detail"`
 }
 
+// SettingsChangedPayload carries a single applied setting so a running
+// GUI can reflect a change made through another client (the CLI). Only
+// the field for the changed setting is non-nil.
+type SettingsChangedPayload struct {
+	KillSwitch    *bool   `json:"kill_switch,omitempty"`
+	DNSProtection *bool   `json:"dns_protection,omitempty"`
+	HealthCheck   *bool   `json:"health_check,omitempty"`
+	PinInterface  *bool   `json:"pin_interface,omitempty"`
+	LogLevel      *string `json:"log_level,omitempty"`
+}
+
 // AutomationPreviewResponse is the read-only result of Automation.Preview:
 // the network context the helper currently sees plus each rule-bearing
 // tunnel's evaluated decision. No connect/disconnect is performed.

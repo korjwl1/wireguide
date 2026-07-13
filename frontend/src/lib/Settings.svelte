@@ -1,5 +1,6 @@
 <script>
   import { onDestroy, onMount } from 'svelte';
+  import { Events } from '@wailsio/runtime';
   import { t, setLanguage, getLanguage, detectLanguage } from '../i18n/index.js';
   import { applyTheme } from '../stores/theme.js';
   import { connectionStatus, tunnels } from '../stores/tunnels.js';
@@ -313,8 +314,22 @@
     scheduleSave();
   }
 
+  // Reflect settings applied by another client (the CLI) live, so the
+  // toggle doesn't sit stale while the helper actually changed state.
+  let settingsChangedUnsub = null;
+  function onSettingsChanged(event) {
+    const p = event?.data || {};
+    if (p.kill_switch != null) settings.kill_switch = p.kill_switch;
+    if (p.dns_protection != null) settings.dns_protection = p.dns_protection;
+    if (p.health_check != null) settings.health_check = p.health_check;
+    if (p.pin_interface != null) settings.pin_interface = p.pin_interface;
+    if (p.log_level != null) settings.log_level = p.log_level;
+    settings = settings; // trigger reactivity
+  }
+
   onDestroy(() => {
     window.removeEventListener('keydown', onKeyDown);
+    if (settingsChangedUnsub) settingsChangedUnsub();
     if (saveTimer) {
       clearTimeout(saveTimer);
       save();
@@ -351,6 +366,7 @@
   // window-level keydown listener that called save() on stale state.
   onMount(() => {
     window.addEventListener('keydown', onKeyDown);
+    settingsChangedUnsub = Events.On('settings_changed', onSettingsChanged);
     // 60 s tick so the "Last checked Nm ago" line keeps current while
     // the Settings modal is open. Cleanup is in onDestroy above.
     nowTimer = setInterval(() => { nowTick = Date.now(); }, 60000);

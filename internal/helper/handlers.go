@@ -47,6 +47,7 @@ func (h *Helper) handleSetLogLevel(params json.RawMessage) (interface{}, error) 
 	lvl := parseLevel(req.Level)
 	h.logLevel.Set(lvl)
 	slog.Info("log level changed", "level", req.Level)
+	h.server.Broadcast(ipc.EventSettingsChanged, ipc.SettingsChangedPayload{LogLevel: &req.Level})
 	return ipc.Empty{}, nil
 }
 
@@ -441,6 +442,7 @@ func (h *Helper) handleSetKillSwitch(params json.RawMessage) (interface{}, error
 			return nil, err
 		}
 	}
+	h.server.Broadcast(ipc.EventSettingsChanged, ipc.SettingsChangedPayload{KillSwitch: &req.Enabled})
 	return ipc.Empty{}, nil
 }
 
@@ -475,6 +477,7 @@ func (h *Helper) handleSetDNSProtection(params json.RawMessage) (interface{}, er
 			return nil, err
 		}
 	}
+	h.server.Broadcast(ipc.EventSettingsChanged, ipc.SettingsChangedPayload{DNSProtection: &req.Enabled})
 	return ipc.Empty{}, nil
 }
 
@@ -490,6 +493,7 @@ func (h *Helper) handleSetHealthCheck(params json.RawMessage) (interface{}, erro
 		return nil, fmt.Errorf("reconnect monitor not initialised")
 	}
 	h.monitor.SetHealthCheck(req.Enabled)
+	h.server.Broadcast(ipc.EventSettingsChanged, ipc.SettingsChangedPayload{HealthCheck: &req.Enabled})
 	return ipc.Empty{}, nil
 }
 
@@ -501,6 +505,7 @@ func (h *Helper) handleSetPinInterface(params json.RawMessage) (interface{}, err
 	if err := h.manager.SetPinInterface(req.Enabled); err != nil {
 		return nil, err
 	}
+	h.server.Broadcast(ipc.EventSettingsChanged, ipc.SettingsChangedPayload{PinInterface: &req.Enabled})
 	return ipc.Empty{}, nil
 }
 

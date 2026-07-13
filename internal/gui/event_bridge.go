@@ -163,6 +163,15 @@ func (b *eventBridge) handleEvent(method string, params json.RawMessage) {
 		} else {
 			b.app.Event.Emit("auto_connected", payload)
 		}
+	case ipc.EventSettingsChanged:
+		// A setting was applied through another client (the CLI). Forward
+		// the changed value so the Settings UI updates its toggle live.
+		var payload ipc.SettingsChangedPayload
+		if err := json.Unmarshal(params, &payload); err != nil {
+			slog.Debug("event bridge: unmarshal settings_changed failed", "error", err)
+		} else {
+			b.app.Event.Emit("settings_changed", payload)
+		}
 	case ipc.EventCriticalError:
 		// A helper background goroutine has died permanently. Surface to
 		// the frontend so the user knows tunnel state may stop updating

@@ -49,6 +49,7 @@ func init() {
 	application.RegisterEvent[HelperEvent]("helper")
 	application.RegisterEvent[struct{}]("helper_reset")
 	application.RegisterEvent[update.UpdateInfo]("update-available")
+	application.RegisterEvent[ipc.SettingsChangedPayload]("settings_changed")
 }
 
 // Run starts the GUI process. Blocks until the Wails app exits.
