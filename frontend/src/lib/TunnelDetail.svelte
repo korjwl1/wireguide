@@ -4,100 +4,20 @@
   import { t } from '../i18n/index.js';
   import { errText } from './errors.js';
   import { createEventDispatcher, tick, onDestroy } from 'svelte';
-  import SSIDPermissionBanner from './SSIDPermissionBanner.svelte';
   import AutomationEditor from './AutomationEditor.svelte';
 
   export let TunnelService;
   const dispatch = createEventDispatcher();
 
-  // Automation rule editor (issue #12) — supersedes the legacy per-tunnel
-  // Wi-Fi auto-connect modal below (kept unreachable pending removal).
+  // Automation rule editor (issue #12) — replaces the old per-tunnel
+  // Wi-Fi auto-connect UI, which is now handled by the general engine.
   let showAutomation = false;
 
   let detail = null;
   let loading = false;
   let error = '';
 
-  // Per-tunnel Wi-Fi auto-connect rules. Loaded from Settings.WifiRules.PerTunnel
-  // for the currently-selected tunnel; mutations here SaveSettings the
-  // entire object back. Global trusted SSIDs live in Settings → Wi-Fi 규칙.
-  let wifiSsids = [];
-  let newWifiSsid = '';
-  let showWifiModal = false;
-  let wifiAddInput = null;
-  let knownSSIDs = [];
-  let currentSSID = '';
-  let suggestionsOpen = false;
-  let suggestionFocusIndex = -1;
-
-  $: filteredSuggestions = (() => {
-    const q = (newWifiSsid || '').trim().toLowerCase();
-    const list = candidateSsidSuggestions.filter(s =>
-      !q || s.toLowerCase().includes(q)
-    );
-    return list.slice(0, 10);
-  })();
-
-  function pickSuggestion(ssid) {
-    addSsid(ssid);
-    newWifiSsid = '';
-    suggestionsOpen = false;
-    suggestionFocusIndex = -1;
-    // Don't refocus — leave focus on whatever the user clicked. The
-    // dropdown will reopen on the next explicit click in the input.
-  }
-
-  function onSuggestionInputKeydown(e) {
-    if (e.key === 'Enter') {
-      e.preventDefault();
-      if (suggestionFocusIndex >= 0 && filteredSuggestions[suggestionFocusIndex]) {
-        pickSuggestion(filteredSuggestions[suggestionFocusIndex]);
-      } else {
-        addManualSsid();
-      }
-    } else if (e.key === 'ArrowDown') {
-      e.preventDefault();
-      if (filteredSuggestions.length > 0) {
-        suggestionsOpen = true;
-        suggestionFocusIndex = (suggestionFocusIndex + 1) % filteredSuggestions.length;
-      }
-    } else if (e.key === 'ArrowUp') {
-      e.preventDefault();
-      if (filteredSuggestions.length > 0) {
-        suggestionsOpen = true;
-        suggestionFocusIndex = suggestionFocusIndex <= 0
-          ? filteredSuggestions.length - 1
-          : suggestionFocusIndex - 1;
-      }
-    } else if (e.key === 'Escape') {
-      if (suggestionsOpen) {
-        e.stopPropagation();
-        suggestionsOpen = false;
-        suggestionFocusIndex = -1;
-      }
-    }
-  }
-
-  // candidateSsidSuggestions feeds the <datalist> autocomplete:
-  // current SSID first, then OS-saved networks. Already-added SSIDs
-  // are filtered out so the dropdown only offers actionable options.
-  $: candidateSsidSuggestions = (() => {
-    const seen = new Set(wifiSsids || []);
-    const list = [];
-    if (currentSSID && !seen.has(currentSSID)) {
-      list.push(currentSSID);
-      seen.add(currentSSID);
-    }
-    for (const s of (knownSSIDs || [])) {
-      if (!seen.has(s)) {
-        list.push(s);
-        seen.add(s);
-      }
-    }
-    return list;
-  })();
-
-  // Track the last name we issued loadDetail/loadWifiRules for. The
+  // Track the last name we issued loadDetail for. The
   // selectedTunnel store emits a fresh object reference on every
   // status change (refreshTunnels and the per-tick is_connected
   // diff both call .set/.update), which without this gate would
@@ -132,7 +52,6 @@
     latencyTargetSaved = latencyTargetValue;
     latencyTargetError = '';
     loadDetail($selectedTunnel.name);
-    loadWifiRules($selectedTunnel.name);
   }
 
   // Per-tunnel notes. Populated from TunnelInfo.notes in the store, edited
@@ -286,80 +205,6 @@
     }
   });
 
-  async function loadWifiRules(name) {
-    try {
-      const s = await TunnelService.GetSettings();
-      const perTunnel = s?.wifi_rules?.per_tunnel || {};
-      wifiSsids = perTunnel[name]?.auto_connect_ssids || [];
-    } catch (e) {
-      wifiSsids = [];
-      console.error('loadWifiRules:', e);
-    }
-  }
-
-  async function saveWifiSsidsForTunnel(name, ssids) {
-    try {
-      const s = await TunnelService.GetSettings();
-      const rules = s?.wifi_rules || { trusted_ssids: [], per_tunnel: {} };
-      rules.per_tunnel = rules.per_tunnel || {};
-      if (ssids.length === 0) {
-        delete rules.per_tunnel[name];
-      } else {
-        rules.per_tunnel[name] = { auto_connect_ssids: ssids };
-      }
-      await TunnelService.SaveSettings({ ...s, wifi_rules: rules });
-    } catch (e) {
-      // Surface to the user — silently failing here meant the
-      // checkbox state in the modal got out of sync with what's on
-      // disk and the rule didn't fire on next SSID change.
-      error = `Wi-Fi rule save failed: ${errText(e)}`;
-      console.error('save wifi rule:', e);
-    }
-  }
-
-  function addSsid(ssid) {
-    const v = (ssid || '').trim();
-    if (!v || !$selectedTunnel) return;
-    if (wifiSsids.includes(v)) return;
-    wifiSsids = [...wifiSsids, v];
-    saveWifiSsidsForTunnel($selectedTunnel.name, wifiSsids);
-  }
-
-  function addManualSsid() {
-    if (!newWifiSsid.trim()) return;
-    addSsid(newWifiSsid);
-    newWifiSsid = '';
-    // Refocus so the user can chain-add multiple networks without
-    // moving the mouse back to the input.
-    wifiAddInput?.focus();
-  }
-
-  function removeWifiSsid(ssid) {
-    if (!$selectedTunnel) return;
-    wifiSsids = wifiSsids.filter(s => s !== ssid);
-    saveWifiSsidsForTunnel($selectedTunnel.name, wifiSsids);
-  }
-
-  async function openWifiModal() {
-    showWifiModal = true;
-    try {
-      const r = await TunnelService.GetKnownSSIDs();
-      knownSSIDs = r?.known || [];
-      currentSSID = r?.current || '';
-    } catch (e) {
-      knownSSIDs = [];
-      currentSSID = '';
-    }
-    // Intentionally do NOT auto-focus the input. Auto-focus would
-    // synthesize a focus event that pops the dropdown open before
-    // the user has interacted, which feels noisy. The dropdown
-    // appears only after a click/keyboard focus.
-  }
-
-  function closeWifiModal() {
-    showWifiModal = false;
-  }
-
   // Single source of truth for "is this tunnel currently active?" —
   // combine the selected-tunnel flag with the live connection status so the
   // UI can't show a stale "connected" chip briefly after disconnect.
@@ -463,8 +308,7 @@
   // Global ESC handler — closes whichever modal is open.
   function handleKeydown(e) {
     if (e.key !== 'Escape') return;
-    if (showWifiModal) closeWifiModal();
-    else if (showDeleteConfirm) cancelDelete();
+    if (showDeleteConfirm) cancelDelete();
     else if (renaming) cancelRename();
   }
   if (typeof window !== 'undefined') {
@@ -754,7 +598,7 @@
         <Icon name="share" size={15} strokeWidth={1.75} />
         <span>{$t('tunnel.export')}</span>
       </button>
-      <button class="btn-icon-action wifi-btn" on:click={() => showAutomation = true}>
+      <button class="btn-icon-action" on:click={() => showAutomation = true}>
         <Icon name="wifi" size={15} strokeWidth={1.75} />
         <span>{$t('automation.title')}</span>
       </button>
@@ -767,86 +611,6 @@
 </div>
 
 <AutomationEditor {TunnelService} tunnelName={$selectedTunnel?.name || ''} bind:open={showAutomation} />
-
-{#if showWifiModal && $selectedTunnel}
-  <div class="confirm-backdrop" on:click={closeWifiModal}>
-    <div class="confirm-dialog wifi-dialog" on:click|stopPropagation role="dialog" aria-modal="true" aria-label={$t('tunnel.wifi_auto_connect')}>
-      <div class="dialog-header">
-        <div class="dialog-icon-tile">
-          <Icon name="wifi" size={18} strokeWidth={2} />
-        </div>
-        <div class="dialog-header-text">
-          <h3>{$t('tunnel.wifi_auto_connect')}</h3>
-          <p class="dialog-sub">{$selectedTunnel.name}</p>
-        </div>
-      </div>
-      <p class="dialog-hint">{$t('tunnel.wifi_auto_connect_hint')}</p>
-
-      <SSIDPermissionBanner {TunnelService} />
-
-      <div class="wifi-add-row">
-        <div class="wifi-combo">
-          <input
-            bind:this={wifiAddInput}
-            type="text"
-            role="combobox"
-            aria-expanded={suggestionsOpen}
-            aria-autocomplete="list"
-            autocomplete="off"
-            placeholder={$t('tunnel.wifi_combo_placeholder')}
-            bind:value={newWifiSsid}
-            on:click={() => { suggestionsOpen = true; }}
-            on:focus={() => { suggestionsOpen = true; }}
-            on:blur={() => { setTimeout(() => { suggestionsOpen = false; suggestionFocusIndex = -1; }, 120); }}
-            on:input={() => { suggestionsOpen = true; suggestionFocusIndex = -1; }}
-            on:keydown={onSuggestionInputKeydown} />
-          {#if suggestionsOpen && filteredSuggestions.length > 0}
-            <ul class="wifi-combo-dropdown" role="listbox">
-              {#each filteredSuggestions as ssid, i}
-                <li
-                  class="wifi-combo-option"
-                  class:focused={i === suggestionFocusIndex}
-                  role="option"
-                  aria-selected={i === suggestionFocusIndex}
-                  on:mousedown|preventDefault={() => pickSuggestion(ssid)}>
-                  <span class="wifi-combo-name">{ssid}</span>
-                  {#if ssid === currentSSID}
-                    <span class="wifi-current-badge">{$t('tunnel.wifi_current')}</span>
-                  {/if}
-                </li>
-              {/each}
-            </ul>
-          {/if}
-        </div>
-        <button class="dialog-btn dialog-btn-primary" on:click={addManualSsid} disabled={!newWifiSsid.trim()}>{$t('wifi_rules.add')}</button>
-      </div>
-
-      <div class="wifi-list-block">
-        {#if wifiSsids.length === 0}
-          <div class="wifi-empty-row">{$t('tunnel.wifi_empty')}</div>
-        {:else}
-          <ul class="wifi-list-rows">
-            {#each wifiSsids as ssid}
-              <li class="wifi-row">
-                <span class="wifi-row-name">{ssid}</span>
-                {#if ssid === currentSSID}
-                  <span class="wifi-current-badge">{$t('tunnel.wifi_current')}</span>
-                {/if}
-                <button class="wifi-row-remove" on:click={() => removeWifiSsid(ssid)} aria-label="remove {ssid}" title={$t('confirm.no') || 'Remove'}>
-                  <Icon name="x" size={12} strokeWidth={2} />
-                </button>
-              </li>
-            {/each}
-          </ul>
-        {/if}
-      </div>
-
-      <div class="confirm-footer">
-        <button class="dialog-btn dialog-btn-ghost" on:click={closeWifiModal}>{$t('confirm.close')}</button>
-      </div>
-    </div>
-  </div>
-{/if}
 
 {#if showDeleteConfirm}
   <div class="confirm-backdrop" on:click={cancelDelete}>
@@ -869,163 +633,6 @@
 {/if}
 
 <style>
-  /* ---------- Wi-Fi auto-connect badge + modal ---------- */
-  .wifi-count {
-    position: absolute;
-    top: 6px;
-    right: 6px;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    min-width: 16px;
-    height: 16px;
-    padding: 0 5px;
-    border-radius: 8px;
-    background: var(--accent);
-    color: #fff;
-    font-size: 10px;
-    font-weight: 700;
-    line-height: 1;
-  }
-  .wifi-dialog {
-    width: 640px;
-    max-width: 90vw;
-    /* Let combobox dropdown extend past dialog edge */
-    overflow: visible;
-  }
-  .wifi-list-block {
-    border: 0.5px solid var(--border);
-    border-radius: 10px;
-    background: var(--bg-card);
-    margin-bottom: 12px;
-    height: 160px;
-    overflow-y: scroll;
-  }
-  .wifi-list-block::-webkit-scrollbar { width: 8px; }
-  .wifi-list-block::-webkit-scrollbar-track { background: transparent; }
-  .wifi-list-block::-webkit-scrollbar-thumb {
-    background-color: color-mix(in srgb, var(--text-muted) 40%, transparent);
-    border-radius: 4px;
-    border: 2px solid transparent;
-    background-clip: content-box;
-  }
-  .wifi-list-block::-webkit-scrollbar-thumb:hover { background-color: var(--text-muted); }
-  .wifi-empty-row {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    height: 100%;
-    font: 11px/15px var(--font-sans);
-    color: var(--text-muted);
-    font-style: italic;
-  }
-  .wifi-list-rows {
-    list-style: none;
-    margin: 0;
-    padding: 0;
-  }
-  .wifi-row {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 9px 14px;
-    border-bottom: 0.5px solid var(--border);
-    font: 13px/18px var(--font-sans);
-    color: var(--text-primary);
-    min-height: 36px;
-  }
-  .wifi-row:last-child { border-bottom: none; }
-  .wifi-row-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .wifi-row-remove {
-    background: transparent;
-    border: 0;
-    color: var(--text-muted);
-    cursor: pointer;
-    padding: 4px 8px;
-    border-radius: 6px;
-    min-width: 24px;
-    min-height: 24px;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-  }
-  .wifi-row-remove:hover {
-    background: color-mix(in srgb, var(--red) 14%, transparent);
-    color: var(--red);
-  }
-  .wifi-current-badge {
-    font: 700 10px/1 var(--font-sans);
-    color: var(--green);
-    padding: 3px 8px;
-    border-radius: 999px;
-    background: color-mix(in srgb, var(--green) 16%, transparent);
-    letter-spacing: 0.02em;
-    text-transform: uppercase;
-  }
-  .wifi-add-row {
-    display: flex;
-    gap: 8px;
-    align-items: stretch;
-    margin-bottom: 12px;
-  }
-  .wifi-combo {
-    flex: 1;
-    position: relative;
-  }
-  .wifi-combo input {
-    width: 100%;
-    height: 32px;
-    padding: 0 12px;
-    background: var(--bg-card);
-    border: 0.5px solid var(--border);
-    border-radius: 8px;
-    color: var(--text-primary);
-    font: 13px/18px var(--font-sans);
-    outline: none;
-    box-sizing: border-box;
-  }
-  @media (prefers-reduced-motion: no-preference) {
-    .wifi-combo input { transition: border-color 140ms ease, box-shadow 140ms ease, background 140ms ease; }
-  }
-  .wifi-combo input:focus-visible {
-    border-color: var(--accent);
-    box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent);
-    background: var(--bg-primary);
-  }
-  .wifi-combo-dropdown {
-    list-style: none;
-    margin: 4px 0 0;
-    padding: 4px;
-    position: absolute;
-    top: 100%;
-    left: 0;
-    right: 0;
-    background: var(--bg-card);
-    border: 0.5px solid var(--border);
-    border-radius: 10px;
-    box-shadow: var(--shadow-md);
-    max-height: 220px;
-    overflow-y: auto;
-    z-index: 500;
-  }
-  .wifi-combo-option {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 7px 10px;
-    border-radius: 6px;
-    cursor: pointer;
-    color: var(--text-primary);
-    font: 13px/18px var(--font-sans);
-    min-height: 30px;
-  }
-  .wifi-combo-option:hover,
-  .wifi-combo-option.focused {
-    background: color-mix(in srgb, var(--accent) 14%, transparent);
-    color: var(--accent);
-  }
-  .wifi-combo-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-
   /* ---------- Layout ---------- */
   .detail-panel {
     flex: 1;
@@ -1666,19 +1273,6 @@
     font: 700 15px/20px var(--font-sans);
     letter-spacing: -0.01em;
   }
-  .dialog-sub {
-    margin: 1px 0 0;
-    font: 500 12px/16px var(--font-sans);
-    color: var(--text-muted);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  .dialog-hint {
-    margin: 0 0 14px;
-    font: 12px/17px var(--font-sans);
-    color: var(--text-muted);
-  }
   .dialog-message {
     margin: 0 0 18px;
     font: 13px/19px var(--font-sans);
@@ -1715,24 +1309,6 @@
     }
   }
   .dialog-btn:disabled { opacity: 0.4; cursor: not-allowed; }
-  .dialog-btn-primary {
-    background: var(--accent);
-    color: #fff;
-    box-shadow:
-      0 1px 3px color-mix(in srgb, var(--accent) 26%, transparent),
-      0 1px 2px rgba(0,0,0,0.08);
-  }
-  .dialog-btn-primary:hover:not(:disabled) {
-    background: color-mix(in srgb, #fff 8%, var(--accent));
-    transform: translateY(-1px);
-    box-shadow:
-      0 4px 10px color-mix(in srgb, var(--accent) 30%, transparent),
-      0 1px 2px rgba(0,0,0,0.10);
-  }
-  .dialog-btn-primary:active:not(:disabled) {
-    background: color-mix(in srgb, #000 8%, var(--accent));
-    transform: translateY(0);
-  }
 
   .dialog-btn-danger {
     background: var(--red);
