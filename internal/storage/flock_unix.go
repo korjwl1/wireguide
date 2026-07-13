@@ -9,4 +9,4 @@ import "golang.org/x/sys/unix"
 // and the `wireguide ctl` CLI both write it). An in-process mutex alone
 // can't do this — they're separate processes.
 func flockExclusive(fd int) error { return unix.Flock(fd, unix.LOCK_EX) }
-func flockUnlock(fd int) error     { return unix.Flock(fd, unix.LOCK_UN) }
+func flockUnlock(fd int) error    { return unix.Flock(fd, unix.LOCK_UN) }

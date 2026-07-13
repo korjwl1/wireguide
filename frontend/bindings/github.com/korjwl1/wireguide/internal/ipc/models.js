@@ -63,3 +63,64 @@ export class LogEntry {
         return new LogEntry(/** @type {Partial<LogEntry>} */($$parsedSource));
     }
 }
+
+/**
+ * SettingsChangedPayload carries a single applied setting so a running
+ * GUI can reflect a change made through another client (the CLI). Only
+ * the field for the changed setting is non-nil.
+ */
+export class SettingsChangedPayload {
+    /**
+     * Creates a new SettingsChangedPayload instance.
+     * @param {Partial<SettingsChangedPayload>} [$$source = {}] - The source object to create the SettingsChangedPayload.
+     */
+    constructor($$source = {}) {
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {boolean | null | undefined}
+             */
+            this["kill_switch"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {boolean | null | undefined}
+             */
+            this["dns_protection"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {boolean | null | undefined}
+             */
+            this["health_check"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {boolean | null | undefined}
+             */
+            this["pin_interface"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {string | null | undefined}
+             */
+            this["log_level"] = undefined;
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new SettingsChangedPayload instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {SettingsChangedPayload}
+     */
+    static createFrom($$source = {}) {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new SettingsChangedPayload(/** @type {Partial<SettingsChangedPayload>} */($$parsedSource));
+    }
+}

@@ -21,12 +21,15 @@ import type * as update$0 from "../../../../korjwl1/wireguide/internal/update/mo
 declare module "@wailsio/runtime" {
     namespace Events {
         interface CustomEvents {
+            "config_changed": {};
             "files-dropped": { [_ in string]?: any };
             "helper": gui$0.HelperEvent;
             "helper_reset": {};
             "log": ipc$0.LogEntry;
             "reconnect": gui$0.ReconnectEvent;
+            "settings_changed": ipc$0.SettingsChangedPayload;
             "status": domain$0.ConnectionStatus;
+            "tunnels_changed": {};
             "update-available": update$0.UpdateInfo;
         }
     }
