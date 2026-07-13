@@ -1,6 +1,7 @@
 package update
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
@@ -331,6 +332,120 @@ func TestDownloadUpdate_ChecksumMismatch(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "checksum mismatch") {
 		t.Errorf("expected 'checksum mismatch' in error, got: %v", err)
+	}
+}
+
+// TestDownloadUpdate_SignedHashIsAuthoritative pins the fix for the
+// check/download TOCTOU: an attacker with repo write access (no signing
+// key) serves a tampered SHA256SUMS at check time — so info.ExpectedHash
+// matches the malicious binary — then restores the GENUINE signed
+// SHA256SUMS before the user clicks install. The signature over the
+// fresh copy verifies, but the hash extracted FROM that signed copy
+// must be the one the binary is compared against, so the install must
+// fail. Before the fix the binary was compared against the stale
+// check-time hash and both checks passed.
+func TestDownloadUpdate_SignedHashIsAuthoritative(t *testing.T) {
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	bodySize := minAssetSize + 1024
+	malicious := make([]byte, bodySize)
+	for i := range malicious {
+		malicious[i] = byte(i % 251)
+	}
+	maliciousHash := sha256.Sum256(malicious)
+
+	// The signed SHA256SUMS carries the GENUINE asset's hash, which the
+	// malicious body does not match.
+	genuineHash := strings.Repeat("ab", 32)
+	sums := []byte(genuineHash + "  asset.dmg\n")
+	sig := ed25519.Sign(priv, sums)
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/asset.dmg", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Length", fmt.Sprintf("%d", len(malicious)))
+		w.Write(malicious)
+	})
+	mux.HandleFunc("/SHA256SUMS", func(w http.ResponseWriter, r *http.Request) { w.Write(sums) })
+	mux.HandleFunc("/SHA256SUMS.sig", func(w http.ResponseWriter, r *http.Request) { w.Write(sig) })
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	restore := withTestPublicKey(t, hex.EncodeToString(pub))
+	defer restore()
+
+	info := &UpdateInfo{
+		DownloadURL: srv.URL + "/asset.dmg",
+		ChecksumURL: srv.URL + "/SHA256SUMS",
+		AssetName:   "asset.dmg",
+		AssetSize:   int64(bodySize),
+		// Attacker-controlled check-time hash: matches the malicious body.
+		ExpectedHash: hex.EncodeToString(maliciousHash[:]),
+	}
+
+	_, err = DownloadUpdate(info)
+	if err == nil {
+		t.Fatal("expected install to be rejected: binary matches the check-time hash but not the signed SHA256SUMS")
+	}
+	if !strings.Contains(err.Error(), "checksum mismatch") {
+		t.Errorf("expected 'checksum mismatch' against the signed hash, got: %v", err)
+	}
+	if info.SignatureVerified && info.HashVerified {
+		t.Error("verification flags must not both be set for a rejected download")
+	}
+}
+
+// TestDownloadUpdate_SignedHappyPath: with a signing key active, the
+// hash from the signed SHA256SUMS verifies the binary end-to-end and
+// both flags are set — even when the check-time ExpectedHash is absent.
+func TestDownloadUpdate_SignedHappyPath(t *testing.T) {
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	bodySize := minAssetSize + 1024
+	body := make([]byte, bodySize)
+	for i := range body {
+		body[i] = byte(i % 256)
+	}
+	h := sha256.Sum256(body)
+	sums := []byte(hex.EncodeToString(h[:]) + "  asset.dmg\n")
+	sig := ed25519.Sign(priv, sums)
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/asset.dmg", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Length", fmt.Sprintf("%d", len(body)))
+		w.Write(body)
+	})
+	mux.HandleFunc("/SHA256SUMS", func(w http.ResponseWriter, r *http.Request) { w.Write(sums) })
+	mux.HandleFunc("/SHA256SUMS.sig", func(w http.ResponseWriter, r *http.Request) { w.Write(sig) })
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	restore := withTestPublicKey(t, hex.EncodeToString(pub))
+	defer restore()
+
+	info := &UpdateInfo{
+		DownloadURL: srv.URL + "/asset.dmg",
+		ChecksumURL: srv.URL + "/SHA256SUMS",
+		AssetName:   "asset.dmg",
+		AssetSize:   int64(bodySize),
+		// No check-time hash: the signed SHA256SUMS alone must carry it.
+	}
+
+	path, err := DownloadUpdate(info)
+	if err != nil {
+		t.Fatalf("DownloadUpdate failed: %v", err)
+	}
+	if !info.HashVerified || !info.SignatureVerified {
+		t.Errorf("expected both HashVerified and SignatureVerified, got %v/%v",
+			info.HashVerified, info.SignatureVerified)
+	}
+	if err := removeIfExists(path); err != nil {
+		t.Logf("cleanup warning: %v", err)
 	}
 }
 
@@ -842,8 +957,14 @@ func TestVerifyChecksumSignature_HappyPath(t *testing.T) {
 	orig := withTestPublicKey(t, hex.EncodeToString(pub))
 	defer orig()
 
-	if err := verifyChecksumSignature(srv.URL+"/SHA256SUMS", srv.Client()); err != nil {
+	got, err := verifyChecksumSignature(srv.URL+"/SHA256SUMS", srv.Client())
+	if err != nil {
 		t.Fatalf("expected verification to pass, got %v", err)
+	}
+	// The returned bytes are the trust anchor for hash extraction —
+	// they must be exactly what the signature covered.
+	if !bytes.Equal(got, sums) {
+		t.Fatalf("verified bytes differ from served SHA256SUMS: %q vs %q", got, sums)
 	}
 }
 
@@ -869,7 +990,7 @@ func TestVerifyChecksumSignature_TamperedSums(t *testing.T) {
 	orig := withTestPublicKey(t, hex.EncodeToString(pub))
 	defer orig()
 
-	if err := verifyChecksumSignature(srv.URL+"/SHA256SUMS", srv.Client()); err == nil {
+	if _, err := verifyChecksumSignature(srv.URL+"/SHA256SUMS", srv.Client()); err == nil {
 		t.Fatal("expected tampered SHA256SUMS to fail verification")
 	}
 }

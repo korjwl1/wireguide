@@ -15,10 +15,17 @@ import (
 
 // Install runs the OS-specific installer for the downloaded update.
 // The caller must pass the UpdateInfo whose HashVerified field was set by
-// DownloadUpdate. Install refuses to proceed if the hash was not verified.
+// DownloadUpdate. Install refuses to proceed if the hash was not verified,
+// and — in builds that require signed updates — if the Ed25519 signature
+// was not verified. The latter re-check matters because Install execs the
+// file: it must enforce the same policy as DownloadUpdate rather than
+// trust that every (future) caller went through it.
 func Install(filePath string, info *UpdateInfo) error {
 	if info == nil || !info.HashVerified {
 		return fmt.Errorf("refusing to install: checksum was not verified")
+	}
+	if requireSignedUpdates && !info.SignatureVerified {
+		return fmt.Errorf("refusing to install: signature was not verified (this build requires signed updates)")
 	}
 	switch runtime.GOOS {
 	case "darwin":

@@ -494,30 +494,37 @@ func DownloadUpdate(info *UpdateInfo) (string, error) {
 		return "", fmt.Errorf("downloaded %d bytes but expected %d — possible truncation or tampering", written, info.AssetSize)
 	}
 
-	// Checksum verification is mandatory — refuse to install without it.
-	if info.ExpectedHash == "" {
-		os.Remove(destPath)
-		return "", fmt.Errorf("refusing to install update: no checksum available for verification")
-	}
-
-	actual := hex.EncodeToString(hasher.Sum(nil))
-	if !strings.EqualFold(actual, info.ExpectedHash) {
-		os.Remove(destPath)
-		return "", fmt.Errorf("checksum mismatch: expected %s, got %s", info.ExpectedHash, actual)
-	}
-	info.HashVerified = true
-
-	// Ed25519 signature verification — defends against a compromised
-	// GitHub account replacing both the asset AND its SHA256SUMS
-	// entry. The private key signs SHA256SUMS once per release; one
-	// .sig covers every asset transitively because each asset's hash
-	// is in the file.
+	// Determine the authoritative expected hash. When a signing key is
+	// embedded, the hash MUST come from the signature-verified
+	// SHA256SUMS fetched now: info.ExpectedHash was fetched
+	// unauthenticated at check time, and check and download are separate
+	// requests minutes-to-hours apart — a repo-write attacker (the exact
+	// threat the Ed25519 layer exists for) could serve a tampered
+	// SHA256SUMS at check time and restore the genuine signed pair at
+	// download time. Verifying the signature over the fresh copy while
+	// comparing the binary against the stale hash would pass both
+	// checks; extract-then-verify must operate on one atomic blob.
+	expectedHash := info.ExpectedHash
+	signatureChecked := false
 	if activePublicKey() != "" {
-		if err := verifyChecksumSignature(info.ChecksumURL, client); err != nil {
+		sums, err := verifyChecksumSignature(info.ChecksumURL, client)
+		if err != nil {
 			os.Remove(destPath)
 			return "", fmt.Errorf("signature verification: %w", err)
 		}
-		info.SignatureVerified = true
+		verifiedHash := parseExpectedHash(sums, info.AssetName)
+		if verifiedHash == "" {
+			os.Remove(destPath)
+			return "", fmt.Errorf("asset %q not listed in the signed SHA256SUMS — refusing to install", info.AssetName)
+		}
+		if expectedHash != "" && !strings.EqualFold(expectedHash, verifiedHash) {
+			// Not fatal — the signed hash is authoritative — but a
+			// mismatch with the check-time fetch is worth a trace.
+			slog.Warn("check-time checksum differs from signed SHA256SUMS; trusting the signed value",
+				"asset", info.AssetName)
+		}
+		expectedHash = verifiedHash
+		signatureChecked = true
 	} else if requireSignedUpdates {
 		// Release builds REFUSE to install without a signature. Defends
 		// against a compromised GitHub repo write token swapping both
@@ -530,6 +537,20 @@ func DownloadUpdate(info *UpdateInfo) (string, error) {
 		slog.Warn("signature verification skipped: no public key embedded; falling back to SHA256-only authentication " +
 			"(dev build — release builds require a signed checksum)")
 	}
+
+	// Checksum verification is mandatory — refuse to install without it.
+	if expectedHash == "" {
+		os.Remove(destPath)
+		return "", fmt.Errorf("refusing to install update: no checksum available for verification")
+	}
+
+	actual := hex.EncodeToString(hasher.Sum(nil))
+	if !strings.EqualFold(actual, expectedHash) {
+		os.Remove(destPath)
+		return "", fmt.Errorf("checksum mismatch: expected %s, got %s", expectedHash, actual)
+	}
+	info.HashVerified = true
+	info.SignatureVerified = signatureChecked
 
 	return destPath, nil
 }
@@ -555,44 +576,54 @@ func activePublicKey() string {
 }
 
 // verifyChecksumSignature downloads the SHA256SUMS file and its .sig
-// sibling, then verifies the signature against the embedded public
-// key. We re-download SHA256SUMS (instead of reusing fetchExpectedHash's
-// fetch) so this function is self-contained and easy to test without
-// threading bytes through the rest of DownloadUpdate.
-func verifyChecksumSignature(checksumURL string, client *http.Client) error {
+// sibling, verifies the signature against the embedded public key, and
+// returns the VERIFIED SHA256SUMS bytes. Callers must treat the returned
+// bytes as the only trusted source of asset hashes: a hash fetched at
+// check time (info.ExpectedHash) is unauthenticated and may have been
+// swapped between check and download — verifying a signature over a
+// fresh copy without also taking the hash FROM that copy would let a
+// repo-write attacker pass both checks with a malicious binary (serve
+// tampered SHA256SUMS at check time, restore the genuine signed pair at
+// download time).
+func verifyChecksumSignature(checksumURL string, client *http.Client) ([]byte, error) {
 	pubHex := activePublicKey()
 	if pubHex == "" {
-		// Caller already gated; defensive double-check.
-		return nil
+		// Caller already gated; defensive double-check. Return an error
+		// (not success) so no caller can mistake unverified bytes for
+		// verified ones.
+		return nil, fmt.Errorf("no signing public key configured")
 	}
 	if checksumURL == "" {
-		return fmt.Errorf("no SHA256SUMS URL on this release")
+		return nil, fmt.Errorf("no SHA256SUMS URL on this release")
 	}
 	pk, err := hex.DecodeString(pubHex)
 	if err != nil {
-		return fmt.Errorf("malformed embedded public key: %w", err)
+		return nil, fmt.Errorf("malformed embedded public key: %w", err)
 	}
 	if len(pk) != ed25519.PublicKeySize {
-		return fmt.Errorf("embedded public key size: got %d, want %d", len(pk), ed25519.PublicKeySize)
+		return nil, fmt.Errorf("embedded public key size: got %d, want %d", len(pk), ed25519.PublicKeySize)
 	}
 
 	sumsBody, err := fetchSmall(checksumURL, client)
 	if err != nil {
-		return fmt.Errorf("download SHA256SUMS: %w", err)
+		return nil, fmt.Errorf("download SHA256SUMS: %w", err)
 	}
 	// Build the .sig URL via url.Parse so a release-asset URL with
 	// a query string (CDN-redirected, signed Cloudflare URLs, etc.)
 	// gets ".sig" appended to the *path* and not after the query.
 	sigURL, err := appendSigSuffix(checksumURL)
 	if err != nil {
-		return fmt.Errorf("compute .sig URL: %w", err)
+		return nil, fmt.Errorf("compute .sig URL: %w", err)
 	}
 	sigBody, err := fetchSmall(sigURL, client)
 	if err != nil {
-		return fmt.Errorf("download SHA256SUMS.sig: %w", err)
+		return nil, fmt.Errorf("download SHA256SUMS.sig: %w", err)
 	}
 
-	return verifyEd25519(sumsBody, sigBody, pk)
+	if err := verifyEd25519(sumsBody, sigBody, pk); err != nil {
+		return nil, err
+	}
+	return sumsBody, nil
 }
 
 // appendSigSuffix appends ".sig" to the URL's path, preserving any
@@ -727,6 +758,14 @@ func fetchExpectedHash(ctx context.Context, checksumURL, assetName string, clien
 	if err != nil {
 		return ""
 	}
+	return parseExpectedHash(body, assetName)
+}
+
+// parseExpectedHash extracts the hash for assetName from SHA256SUMS-style
+// content. Factored out of fetchExpectedHash so DownloadUpdate can run the
+// same parser over the SIGNATURE-VERIFIED bytes — the authoritative source —
+// instead of a separately-fetched copy. Returns "" when no line matches.
+func parseExpectedHash(body []byte, assetName string) string {
 	for _, line := range strings.Split(string(body), "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" || strings.HasPrefix(line, "#") {
