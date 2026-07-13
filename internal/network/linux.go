@@ -135,6 +135,16 @@ func (m *LinuxManager) AddRoutes(ifaceName string, allowedIPs []string, fullTunn
 	m.tableSet = true
 	explicitTable := strings.TrimSpace(tableCfg)
 	useExplicitTable := explicitTable != "" && !strings.EqualFold(explicitTable, "auto")
+	if !useExplicitTable {
+		// The routes below go to the MAIN table (no table arg), but
+		// resolveTableAndFwMark stored the resolved auto table (e.g.
+		// 51820) in m.table — RemoveRoutes would then delete from a
+		// table the routes were never added to, silently leaking them
+		// on disconnect/reconfigure. Record main (0) as where these
+		// split routes actually live, matching what crash recovery
+		// derives from the raw "auto"/"" config string.
+		m.table = 0
+	}
 
 	for _, cidr := range allowedIPs {
 		// Skip /0 entries in split-tunnel — they should have been caught
