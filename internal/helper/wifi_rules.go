@@ -9,6 +9,7 @@ import (
 
 	"github.com/korjwl1/wireguide/internal/ipc"
 	"github.com/korjwl1/wireguide/internal/storage"
+	"github.com/korjwl1/wireguide/internal/wifi"
 )
 
 // loadUserSettings reads the user's settings.json directly. Reading
@@ -35,137 +36,94 @@ func (h *Helper) loadUserSettings() (*storage.Settings, error) {
 	return s, nil
 }
 
-// handleSSIDChange evaluates the user's wifi rules against newSSID
-// and triggers the matching connect/disconnect actions. This runs
-// entirely inside the helper, so the rules keep firing whether or
-// not a GUI is alive.
-//
-// Auto-management semantics:
-//
-//   - A trusted SSID disconnects every active tunnel and clears the
-//     auto-managed map.
-//   - A matched SSID auto-connects that tunnel and records it in the
-//     auto-managed map. Tunnels in the map that no longer match the
-//     current SSID get auto-disconnected.
-//   - A no-rule SSID disconnects only auto-managed tunnels —
-//     manually-connected tunnels are never touched.
-//
-// The map lives only in memory; on helper restart the user starts
-// fresh, which is the intuitive "I rebooted, anything still up was
-// connected by me" behavior.
+// handleSSIDChange is one trigger for Automation re-evaluation: the
+// Wi-Fi monitor fires it on every SSID transition. The actual decision
+// logic lives in reevaluateAutomation so the network-change and poll
+// triggers share it.
 func (h *Helper) handleSSIDChange(oldSSID, newSSID string) {
-	if newSSID == "" {
-		// Wi-Fi off (or unknown). Network change detection will
-		// handle reconnect on the new interface; we don't want to
-		// thrash tunnels here.
-		return
-	}
+	h.reevaluateAutomation("ssid-change")
+}
+
+// reevaluateAutomation drives every tunnel that has Automation rules
+// toward its desired state for the current network context (SSID +
+// physical-interface subnets). This runs entirely inside the helper, so
+// rules keep firing whether or not a GUI is alive.
+//
+// Semantics (issue #12): a rule can connect OR disconnect its tunnel
+// regardless of how the tunnel was brought up — unlike the legacy path
+// which only touched helper-auto-connected tunnels. A tunnel with NO
+// rules is never touched. reevalMu serialises evaluations so the slow
+// connect/disconnect calls from two overlapping triggers can't race.
+func (h *Helper) reevaluateAutomation(reason string) {
+	h.reevalMu.Lock()
+	defer h.reevalMu.Unlock()
+
 	settings, err := h.loadUserSettings()
 	if err != nil {
-		slog.Debug("wifi rule eval: cannot load settings", "error", err)
+		slog.Debug("automation: cannot load settings", "error", err)
 		return
 	}
-	rules := &settings.WifiRules
-	action, tunnelName := rules.Action(newSSID)
+	settings.EnsureAutomation()
+	auto := settings.Automation
+	if auto == nil || len(auto.PerTunnel) == 0 {
+		return
+	}
 
-	// Snapshot the auto-managed map under the lock, then operate
-	// without holding it (manager calls can take seconds on slow
-	// reconnects).
+	ssid := ""
+	if h.wifiMon != nil {
+		ssid = h.wifiMon.LastSSID()
+	}
+	ctx := wifi.NetworkContext{
+		SSID:        ssid,
+		PhysicalIPs: wifi.PhysicalInterfaceIPs(),
+	}
+
+	active := make(map[string]bool)
+	for _, n := range h.manager.ActiveTunnels() {
+		active[n] = true
+	}
+
+	for _, name := range auto.TunnelNames() {
+		state := wifi.Evaluate(auto.PerTunnel[name], ctx)
+		switch state {
+		case wifi.StateConnect:
+			if !active[name] {
+				h.automationConnect(name, reason, ssid)
+			}
+		case wifi.StateDisconnect:
+			if active[name] {
+				slog.Info("automation: rule disconnect", "tunnel", name, "reason", reason, "ssid", ssid)
+				h.disconnectAutoManaged(name)
+			}
+		}
+	}
+}
+
+// automationConnect brings up a tunnel a rule matched and records it in
+// the auto-managed map. Caller holds reevalMu.
+func (h *Helper) automationConnect(name, reason, ssid string) {
+	if h.userTunnelStore == nil {
+		slog.Warn("automation: tunnel store unavailable, cannot connect", "tunnel", name)
+		return
+	}
+	cfg, err := h.userTunnelStore.Load(name)
+	if err != nil {
+		slog.Warn("automation: cannot load tunnel config", "tunnel", name, "error", err)
+		return
+	}
+	slog.Info("automation: rule connect", "tunnel", name, "reason", reason, "ssid", ssid)
+	h.connectMu.Lock()
+	err = h.doConnectHeld(cfg)
+	h.connectMu.Unlock()
+	if err != nil {
+		slog.Warn("automation connect failed", "tunnel", name, "error", err)
+		return
+	}
 	h.wifiMu.Lock()
-	autoSnapshot := make(map[string]string, len(h.autoConnectedBy))
-	for k, v := range h.autoConnectedBy {
-		autoSnapshot[k] = v
-	}
+	h.autoConnectedBy[name] = ssid
 	h.wifiMu.Unlock()
-
-	switch action {
-	case "disconnect":
-		// Trusted SSID: only tear down tunnels that the helper auto-
-		// connected. Disconnecting everything (including manually-
-		// connected tunnels) was a privacy/UX surprise — a user who
-		// manually started a personal tunnel and walked into the
-		// office shouldn't have it killed by a "trusted networks"
-		// rule meant for "I don't need ANY auto-VPN here."
-		for name := range autoSnapshot {
-			slog.Info("wifi rule: trusted SSID, disconnecting auto-managed",
-				"ssid", newSSID, "tunnel", name)
-			h.disconnectAutoManaged(name)
-		}
-
-	case "connect":
-		// Disconnect every other auto-managed tunnel — switching
-		// SSID means the previous auto-connect zone is gone.
-		for name := range autoSnapshot {
-			if name == tunnelName {
-				continue
-			}
-			slog.Info("wifi rule: leaving SSID, disconnecting auto-managed",
-				"tunnel", name, "old_ssid", autoSnapshot[name], "new_ssid", newSSID)
-			h.disconnectAutoManaged(name)
-		}
-		// Connect the matched tunnel if it isn't already up.
-		alreadyUp := false
-		for _, n := range h.manager.ActiveTunnels() {
-			if n == tunnelName {
-				alreadyUp = true
-				break
-			}
-		}
-		if alreadyUp {
-			// Tunnel is already up. We must NOT silently mark it as
-			// auto-managed here, because that would adopt manually-
-			// connected tunnels into the auto-managed set and cause
-			// them to get disconnected the next time the user roams
-			// to a no-rule SSID. Only tunnels that were actually
-			// brought up by THIS function get an autoConnectedBy
-			// entry — manual connects stay manual.
-			//
-			// We do, however, refresh the SSID slot if this tunnel
-			// is *already* in autoConnectedBy (it was auto-connected
-			// for the previous SSID; now the same rule still
-			// applies for the current SSID).
-			h.wifiMu.Lock()
-			if _, owned := h.autoConnectedBy[tunnelName]; owned {
-				h.autoConnectedBy[tunnelName] = newSSID
-			}
-			h.wifiMu.Unlock()
-			return
-		}
-		if h.userTunnelStore == nil {
-			slog.Warn("wifi rule: tunnel store unavailable, cannot connect",
-				"tunnel", tunnelName)
-			return
-		}
-		cfg, err := h.userTunnelStore.Load(tunnelName)
-		if err != nil {
-			slog.Warn("wifi rule: cannot load tunnel config",
-				"tunnel", tunnelName, "error", err)
-			return
-		}
-		slog.Info("wifi rule: matched SSID, connecting",
-			"ssid", newSSID, "tunnel", tunnelName)
-		h.connectMu.Lock()
-		err = h.doConnectHeld(cfg)
-		h.connectMu.Unlock()
-		if err != nil {
-			slog.Warn("wifi rule connect failed", "tunnel", tunnelName, "error", err)
-			return
-		}
-		h.wifiMu.Lock()
-		h.autoConnectedBy[tunnelName] = newSSID
-		h.wifiMu.Unlock()
-		// Notify GUI so it runs the same post-connect refresh (refreshTunnels +
-		// refreshStatus) as after a manual connect click.
-		h.server.Broadcast(ipc.EventAutoConnect, ipc.AutoConnectPayload{TunnelName: tunnelName})
-
-	case "none":
-		// New SSID has no rule. Tear down only auto-managed tunnels.
-		for name := range autoSnapshot {
-			slog.Info("wifi rule: SSID no longer in auto-connect list, disconnecting",
-				"tunnel", name, "previous_ssid", autoSnapshot[name], "new_ssid", newSSID)
-			h.disconnectAutoManaged(name)
-		}
-	}
+	// Notify GUI so it runs the same post-connect refresh as a manual connect.
+	h.server.Broadcast(ipc.EventAutoConnect, ipc.AutoConnectPayload{TunnelName: name})
 }
 
 // disconnectAutoManaged tears down a tunnel that the wifi-rule

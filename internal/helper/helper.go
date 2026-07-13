@@ -27,6 +27,7 @@ import (
 	"math/rand"
 	"os"
 	"path/filepath"
+	"runtime"
 	"runtime/debug"
 	"sync"
 	"time"
@@ -34,6 +35,7 @@ import (
 	"github.com/korjwl1/wireguide/internal/domain"
 	"github.com/korjwl1/wireguide/internal/firewall"
 	"github.com/korjwl1/wireguide/internal/ipc"
+	"github.com/korjwl1/wireguide/internal/network"
 	"github.com/korjwl1/wireguide/internal/reconnect"
 	"github.com/korjwl1/wireguide/internal/storage"
 	"github.com/korjwl1/wireguide/internal/tunnel"
@@ -157,6 +159,12 @@ type Helper struct {
 	// connected ones and only touch the former.
 	wifiMu          sync.Mutex
 	autoConnectedBy map[string]string
+
+	// reevalMu serialises Automation re-evaluations. The three triggers
+	// (SSID change, network change, poll) can fire concurrently; the
+	// lock ensures only one evaluation drives connect/disconnect at a
+	// time so they don't race on the same tunnel.
+	reevalMu sync.Mutex
 
 	// userTunnelStore reads .conf files from the user's home dir
 	// (derived from the uid passed at launch). Needed so wifi rules
@@ -304,13 +312,49 @@ func Run(addr string, ownerUID int, dataDir string) error {
 			return
 		default:
 		}
-		ssid := wifi.CurrentSSID()
+		// Use the helper's known SSID (reported by the GUI on macOS 14+,
+		// polled elsewhere) rather than a direct read. Skip only when the
+		// network is entirely unknown — acting on an unknown SSID would
+		// let none_match rules disconnect a freshly crash-recovered
+		// tunnel before we know what network we're on. Subnet-only rules
+		// still get their first evaluation from the network-change / poll
+		// trigger below.
+		ssid := ""
+		if h.wifiMon != nil {
+			ssid = h.wifiMon.LastSSID()
+		}
 		if ssid == "" {
 			return
 		}
 		slog.Info("startup rule re-evaluation", "ssid", ssid)
-		h.handleSSIDChange("", ssid)
+		h.reevaluateAutomation("startup")
 	})
+
+	// Hybrid subnet-rule trigger. Subnet-based Automation conditions must
+	// re-evaluate when the physical network changes even if the SSID
+	// doesn't (Ethernet plug/unplug, DHCP subnet change):
+	//   - macOS: subscribe to the existing route-change monitor — instant,
+	//     event-driven, ~zero added cost (no-op on other platforms).
+	//   - Windows/Linux: a 30s poll as the universal safety net, since
+	//     they have no process-wide network-change monitor yet.
+	// SSID-based rules keep firing instantly via the Wi-Fi monitor above.
+	network.SubscribeNetworkChange("automation", func() {
+		h.reevaluateAutomation("network-change")
+	})
+	if runtime.GOOS != "darwin" {
+		h.goSafe("automationPoll", func() {
+			ticker := time.NewTicker(30 * time.Second)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-h.done:
+					return
+				case <-ticker.C:
+					h.reevaluateAutomation("poll")
+				}
+			}
+		})
+	}
 
 	// Top-level panic recovery for the Serve loop itself. If Accept or any
 	// per-conn handler panics unrecovered, we at least want a stack trace.
@@ -620,6 +664,7 @@ func (h *Helper) cleanup() {
 		if h.wifiMon != nil {
 			h.wifiMon.Stop()
 		}
+		network.UnsubscribeNetworkChange("automation")
 		h.monitor.Stop()
 		// Tear down tunnels BEFORE removing kill-switch / pf rules.
 		// Doing it the other way around — flushing pf first — leaves

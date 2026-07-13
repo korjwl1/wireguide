@@ -34,6 +34,17 @@ func NewMonitor(onChanged SSIDChangedFunc) *Monitor {
 	}
 }
 
+// LastSSID returns the most recently observed SSID (from either polling
+// or a GUI ReportExternalSSID). Empty when Wi-Fi is off/unknown. This is
+// the authoritative "current SSID" the helper should use — on macOS 14+
+// the helper can't read the SSID itself, so only the reported value here
+// is reliable.
+func (m *Monitor) LastSSID() string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.lastSSID
+}
+
 // Start begins monitoring WiFi SSID changes. Safe to call multiple times;
 // subsequent calls are no-ops while the monitor is already running.
 //

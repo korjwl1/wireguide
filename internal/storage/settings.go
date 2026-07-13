@@ -37,10 +37,31 @@ type Settings struct {
 	// silence the failed-check log noise.
 	AutoUpdateCheck *bool `json:"auto_update_check,omitempty"`
 
-	// WifiRules holds the SSID-based auto-connect / auto-disconnect
-	// policy. Per-tunnel auto-connect SSIDs are managed in TunnelDetail;
-	// trusted SSIDs (global disconnect on join) are managed in Settings.
+	// WifiRules holds the LEGACY SSID-based auto-connect / auto-disconnect
+	// policy. Retained for migration; superseded by Automation. Once
+	// Automation is populated it is the source of truth and WifiRules is
+	// no longer consulted by the rule engine.
 	WifiRules wifi.Rules `json:"wifi_rules"`
+
+	// Automation is the per-tunnel condition→action rule model (issue
+	// #12). A nil pointer means "not yet migrated from WifiRules";
+	// EnsureAutomation() populates it once from the legacy rules. A
+	// non-nil (possibly empty) value means the user is on the new model.
+	Automation *wifi.Automation `json:"automation,omitempty"`
+}
+
+// EnsureAutomation lazily migrates the legacy WifiRules into the
+// Automation model the first time it's needed, so existing users keep
+// their auto-connect/disconnect behaviour after the model change. It's a
+// no-op once Automation is non-nil (the user is already on the new
+// model), so it never overwrites edited rules. Callers that want the
+// migration persisted must Save afterwards; the rule engine can call it
+// on each load without persisting (it's deterministic and cheap).
+func (s *Settings) EnsureAutomation() {
+	if s.Automation != nil {
+		return
+	}
+	s.Automation = wifi.MigrateFromLegacy(&s.WifiRules)
 }
 
 // DefaultSettings returns settings with sensible defaults.

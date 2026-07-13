@@ -205,6 +205,14 @@ func MigrateFromLegacy(legacy *Rules) *Automation {
 			})
 		}
 		rules = append(rules, connectRules...)
+		// Preserve the legacy "disconnect when you leave the auto-connect
+		// zone" behaviour: on any network that matches none of this
+		// tunnel's SSIDs, the tunnel comes down. Placed last so concrete
+		// connect/disconnect rules win.
+		rules = append(rules, Rule{
+			When: Condition{Type: CondNoneMatch},
+			Do:   ActionDisconnect,
+		})
 		out.PerTunnel[name] = rules
 	}
 	return out
