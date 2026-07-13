@@ -127,6 +127,12 @@ func (s *SettingsStore) Save(settings *Settings) error {
 	if err != nil {
 		return err
 	}
+	// Ensure the config directory exists before writing (matches history's
+	// saveLocked). Without this, os.CreateTemp fails when EnsureDirs hasn't
+	// run or the directory was removed out from under us.
+	if err := os.MkdirAll(filepath.Dir(s.path), 0700); err != nil {
+		return err
+	}
 	tmpFile, err := os.CreateTemp(filepath.Dir(s.path), ".wireguide-*.tmp")
 	if err != nil {
 		return err
