@@ -477,22 +477,6 @@ export function ReconcileHistoryFromStatus(activeNames, rxByTunnel, txByTunnel, 
 }
 
 /**
- * RecordCurrentNetwork remembers the network the machine is on right now
- * in the known-networks registry (keyed by gateway MAC) and returns the
- * full registry, newest first. Called by the Automation editor on open
- * and by the GUI as it roams, so the "this network" condition can offer a
- * pick-list of networks the user has visited — including ones they aren't
- * currently on. No-op (returns the existing list) when no gateway MAC is
- * available.
- * @returns {$CancellablePromise<storage$0.KnownNetwork[]>}
- */
-export function RecordCurrentNetwork() {
-    return $Call.ByID(966333653).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType25($result);
-    }));
-}
-
-/**
  * RenameTunnel changes a tunnel's name. Rejects rename of the connected
  * tunnel since the interface name is derived from it.
  * 
@@ -519,7 +503,7 @@ export function RenameTunnel(oldName, newName) {
  */
 export function RunDNSLeakTest() {
     return $Call.ByID(2469114850).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType27($result);
+        return $$createType25($result);
     }));
 }
 
@@ -713,7 +697,5 @@ const $$createType20 = $Create.Nullable($$createType19);
 const $$createType21 = $models.ZipImportResult.createFrom;
 const $$createType22 = $Create.Array($$createType21);
 const $$createType23 = $Create.Array($$createType19);
-const $$createType24 = storage$0.KnownNetwork.createFrom;
-const $$createType25 = $Create.Array($$createType24);
-const $$createType26 = $models.DNSLeakResult.createFrom;
-const $$createType27 = $Create.Nullable($$createType26);
+const $$createType24 = $models.DNSLeakResult.createFrom;
+const $$createType25 = $Create.Nullable($$createType24);

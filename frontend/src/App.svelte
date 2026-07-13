@@ -100,10 +100,6 @@
 
     await initialLoad(TunnelService);
     subscribeToEvents();
-    // Remember the network we launched on (covers Ethernet, which fires
-    // no wifi_ssid event) so the Automation "this network" pick-list has
-    // it available.
-    TunnelService.RecordCurrentNetwork().catch(() => {});
     // Refresh status once on launch — the helper's eventLoop only
     // BROADCASTS on diff, so a fresh GUI subscriber connecting to a
     // long-running helper would otherwise see no status events
@@ -191,10 +187,6 @@
       if (new_ssid) {
         showToast(`Wi-Fi: ${new_ssid}`);
       }
-      // Passively remember the network we just joined so the Automation
-      // editor's "this network" pick-list accumulates as the user roams,
-      // not only when they open the editor.
-      TunnelService.RecordCurrentNetwork().catch(() => {});
     });
 
     // Helper auto-connected a tunnel via Wi-Fi rules.

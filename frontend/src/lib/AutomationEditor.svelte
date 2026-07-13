@@ -19,7 +19,8 @@
   let loadedFor = '';
   let knownSSIDs = [];
   let currentSSID = '';
-  let knownNetworks = []; // [{gateway_mac, label, last_seen_unix}] newest-first
+  let currentSubnets = [];      // autocomplete suggestions for the subnet field
+  let currentGatewayMAC = '';   // autocomplete suggestion for the MAC field
   let saveError = '';
 
   // Reload whenever the modal opens for a (possibly different) tunnel.
@@ -38,8 +39,8 @@
         when: {
           type: r.when?.type || 'network',
           ssid: r.when?.ssid || '',
+          subnet: r.when?.subnet || '',
           gateway_mac: r.when?.gateway_mac || '',
-          label: r.when?.label || '',
         },
         do: r.do || 'connect',
       }));
@@ -53,68 +54,36 @@
       currentSSID = r?.current || '';
     } catch (_) {}
     try {
-      // Records the network we're on now AND returns the full registry,
-      // so the "this network" pick-list includes networks visited before.
-      knownNetworks = (await TunnelService.RecordCurrentNetwork()) || [];
-    } catch (_) { knownNetworks = []; }
+      currentSubnets = (await TunnelService.GetCurrentSubnets()) || [];
+    } catch (_) { currentSubnets = []; }
+    try {
+      currentGatewayMAC = (await TunnelService.GetCurrentNetwork())?.gateway_mac || '';
+    } catch (_) { currentGatewayMAC = ''; }
   }
 
   function addRule() {
-    // Default to a "this network" rule pre-filled with the current
-    // network if we have one (the common case), else empty.
-    const cur = knownNetworks[0];
-    rules = [...rules, {
-      when: { type: 'network', ssid: '', gateway_mac: cur?.gateway_mac || '', label: cur?.label || '' },
-      do: 'connect',
-    }];
+    rules = [...rules, { when: { type: 'network', ssid: '', subnet: '', gateway_mac: '' }, do: 'connect' }];
     save();
   }
 
-  // Resolve a typed/selected network label to its gateway MAC from the
-  // registry. Only overwrites the MAC when the label exactly matches a
-  // known network (i.e. the user picked one) — so renaming a selected
-  // network afterwards keeps its MAC.
-  function onNetLabelChange(rule) {
-    const hit = knownNetworks.find(n => n.label && n.label.toLowerCase() === (rule.when.label || '').toLowerCase());
-    if (hit) rule.when.gateway_mac = hit.gateway_mac;
-    rules = rules;
-    save();
-  }
-
-  // Capture the network the machine is on right now (adds it to the
-  // registry) and select it for this rule.
-  async function useCurrentNetwork(rule) {
-    try {
-      knownNetworks = (await TunnelService.RecordCurrentNetwork()) || knownNetworks;
-      const cur = knownNetworks[0];
-      const n = await TunnelService.GetCurrentNetwork();
-      if (n?.gateway_mac) {
-        rule.when.gateway_mac = n.gateway_mac;
-        rule.when.label = n.label || cur?.label || '';
-      }
-      rules = rules;
-      save();
-    } catch (e) {
-      console.error('useCurrentNetwork:', e);
-    }
-  }
   function removeRule(i) {
     rules = rules.filter((_, idx) => idx !== i);
     save();
   }
 
-  // Drop rules whose condition has no value (an empty ssid/subnet would
-  // never match and just clutters the set) before persisting.
+  // Drop rules whose condition has no value before persisting.
   function cleaned() {
     return rules.filter(r => {
       if (r.when.type === 'none_match') return true;
       if (r.when.type === 'ssid') return r.when.ssid.trim() !== '';
-      if (r.when.type === 'network') return (r.when.gateway_mac || '').trim() !== '';
+      if (r.when.type === 'subnet') return r.when.subnet.trim() !== '';
+      if (r.when.type === 'network') return r.when.gateway_mac.trim() !== '';
       return false;
     }).map(r => {
       let when;
       if (r.when.type === 'ssid') when = { type: 'ssid', ssid: r.when.ssid.trim() };
-      else if (r.when.type === 'network') when = { type: 'network', gateway_mac: r.when.gateway_mac.trim(), label: r.when.label };
+      else if (r.when.type === 'subnet') when = { type: 'subnet', subnet: r.when.subnet.trim() };
+      else if (r.when.type === 'network') when = { type: 'network', gateway_mac: r.when.gateway_mac.trim().toLowerCase() };
       else when = { type: 'none_match' };
       return { when, do: r.do };
     });
@@ -180,17 +149,24 @@
               <span class="am-when">{$t('automation.when')}</span>
               <select class="am-type" bind:value={rule.when.type} on:change={save} aria-label={$t('automation.condition')}>
                 <option value="network">{$t('automation.cond_network')}</option>
+                <option value="subnet">{$t('automation.cond_subnet')}</option>
                 <option value="ssid">{$t('automation.cond_ssid')}</option>
                 <option value="none_match">{$t('automation.cond_none')}</option>
               </select>
               {#if rule.when.type === 'network'}
                 <input
                   class="am-val"
-                  list="am-net-list"
-                  placeholder={$t('automation.net_placeholder')}
-                  bind:value={rule.when.label}
-                  on:change={() => onNetLabelChange(rule)} />
-                <button class="am-usecurrent" on:click={() => useCurrentNetwork(rule)}>{$t('automation.use_current')}</button>
+                  list="am-mac-list"
+                  placeholder={currentGatewayMAC || $t('automation.mac_placeholder')}
+                  bind:value={rule.when.gateway_mac}
+                  on:input={save} on:change={save} />
+              {:else if rule.when.type === 'subnet'}
+                <input
+                  class="am-val"
+                  list="am-subnet-list"
+                  placeholder={currentSubnets[0] || '192.168.0.0/24'}
+                  bind:value={rule.when.subnet}
+                  on:input={save} on:change={save} />
               {:else if rule.when.type === 'ssid'}
                 <input
                   class="am-val"
@@ -210,8 +186,11 @@
       <datalist id="am-ssid-list">
         {#each knownSSIDs as s}<option value={s}></option>{/each}
       </datalist>
-      <datalist id="am-net-list">
-        {#each knownNetworks as n}<option value={n.label}></option>{/each}
+      <datalist id="am-subnet-list">
+        {#each currentSubnets as sn}<option value={sn}></option>{/each}
+      </datalist>
+      <datalist id="am-mac-list">
+        {#if currentGatewayMAC}<option value={currentGatewayMAC}></option>{/if}
       </datalist>
 
       {#if saveError}<div class="am-error">{saveError}</div>{/if}

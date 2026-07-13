@@ -5,7 +5,6 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 
 	"github.com/korjwl1/wireguide/internal/wifi"
@@ -49,46 +48,6 @@ type Settings struct {
 	// EnsureAutomation() populates it once from the legacy rules. A
 	// non-nil (possibly empty) value means the user is on the new model.
 	Automation *wifi.Automation `json:"automation,omitempty"`
-
-	// KnownNetworks is the registry of networks the machine has been on,
-	// keyed by default-gateway MAC. It lets the Automation editor offer a
-	// "this network" condition as a pick-list (including networks the user
-	// isn't currently on) instead of only capturing the current one.
-	KnownNetworks []KnownNetwork `json:"known_networks,omitempty"`
-}
-
-// KnownNetwork is one remembered network fingerprint.
-type KnownNetwork struct {
-	GatewayMAC   string `json:"gateway_mac"`
-	Label        string `json:"label"`          // editable display name (defaults to the subnet)
-	LastSeenUnix int64  `json:"last_seen_unix"` // for recency ordering / pruning
-}
-
-// RecordKnownNetwork upserts a network into KnownNetworks keyed by
-// gateway MAC. An existing entry keeps its user-edited label; only the
-// last-seen timestamp (and a label if it had none) is refreshed. No-op
-// when mac is empty. Returns whether the registry changed.
-func (s *Settings) RecordKnownNetwork(mac, defaultLabel string, nowUnix int64) bool {
-	if mac == "" {
-		return false
-	}
-	for i := range s.KnownNetworks {
-		if strings.EqualFold(s.KnownNetworks[i].GatewayMAC, mac) {
-			changed := s.KnownNetworks[i].LastSeenUnix != nowUnix
-			s.KnownNetworks[i].LastSeenUnix = nowUnix
-			if s.KnownNetworks[i].Label == "" && defaultLabel != "" {
-				s.KnownNetworks[i].Label = defaultLabel
-				changed = true
-			}
-			return changed
-		}
-	}
-	s.KnownNetworks = append(s.KnownNetworks, KnownNetwork{
-		GatewayMAC:   mac,
-		Label:        defaultLabel,
-		LastSeenUnix: nowUnix,
-	})
-	return true
 }
 
 // EnsureAutomation lazily migrates the legacy WifiRules into the

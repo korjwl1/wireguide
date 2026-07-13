@@ -14,53 +14,6 @@ import * as wifi$0 from "../wifi/models.js";
 import * as time$0 from "../../../../../time/models.js";
 
 /**
- * KnownNetwork is one remembered network fingerprint.
- */
-export class KnownNetwork {
-    /**
-     * Creates a new KnownNetwork instance.
-     * @param {Partial<KnownNetwork>} [$$source = {}] - The source object to create the KnownNetwork.
-     */
-    constructor($$source = {}) {
-        if (!("gateway_mac" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["gateway_mac"] = "";
-        }
-        if (!("label" in $$source)) {
-            /**
-             * editable display name (defaults to the subnet)
-             * @member
-             * @type {string}
-             */
-            this["label"] = "";
-        }
-        if (!("last_seen_unix" in $$source)) {
-            /**
-             * for recency ordering / pruning
-             * @member
-             * @type {number}
-             */
-            this["last_seen_unix"] = 0;
-        }
-
-        Object.assign(this, $$source);
-    }
-
-    /**
-     * Creates a new KnownNetwork instance from a string or object.
-     * @param {any} [$$source = {}]
-     * @returns {KnownNetwork}
-     */
-    static createFrom($$source = {}) {
-        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
-        return new KnownNetwork(/** @type {Partial<KnownNetwork>} */($$parsedSource));
-    }
-}
-
-/**
  * Session is one VPN session record. EndTime is a pointer so a still-active
  * session (no end yet) can be distinguished from a completed session that
  * happens to have ended at time.Time{} — the previous flat-struct design
@@ -284,17 +237,6 @@ export class Settings {
              */
             this["automation"] = undefined;
         }
-        if (/** @type {any} */(false)) {
-            /**
-             * KnownNetworks is the registry of networks the machine has been on,
-             * keyed by default-gateway MAC. It lets the Automation editor offer a
-             * "this network" condition as a pick-list (including networks the user
-             * isn't currently on) instead of only capturing the current one.
-             * @member
-             * @type {KnownNetwork[] | undefined}
-             */
-            this["known_networks"] = undefined;
-        }
 
         Object.assign(this, $$source);
     }
@@ -307,16 +249,12 @@ export class Settings {
     static createFrom($$source = {}) {
         const $$createField13_0 = $$createType0;
         const $$createField14_0 = $$createType2;
-        const $$createField15_0 = $$createType4;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("wifi_rules" in $$parsedSource) {
             $$parsedSource["wifi_rules"] = $$createField13_0($$parsedSource["wifi_rules"]);
         }
         if ("automation" in $$parsedSource) {
             $$parsedSource["automation"] = $$createField14_0($$parsedSource["automation"]);
-        }
-        if ("known_networks" in $$parsedSource) {
-            $$parsedSource["known_networks"] = $$createField15_0($$parsedSource["known_networks"]);
         }
         return new Settings(/** @type {Partial<Settings>} */($$parsedSource));
     }
@@ -326,5 +264,3 @@ export class Settings {
 const $$createType0 = wifi$0.Rules.createFrom;
 const $$createType1 = wifi$0.Automation.createFrom;
 const $$createType2 = $Create.Nullable($$createType1);
-const $$createType3 = KnownNetwork.createFrom;
-const $$createType4 = $Create.Array($$createType3);

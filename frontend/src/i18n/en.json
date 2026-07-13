@@ -314,7 +314,7 @@
   },
   "automation": {
     "title": "Automation",
-    "hint": "Rules run top to bottom; the first matching condition wins. \"This network\" identifies a specific router by fingerprint (works on Wi-Fi and Ethernet, tells apart networks that share a subnet). Pick a network you've been on, or click \"Use current\" while on it. Add separate rules to connect and to disconnect.",
+    "hint": "Rules run top to bottom; the first matching condition wins. Pick a condition and type its value, or use the suggestion for the network you're on. \"This network\" matches a specific router by its gateway MAC (precise; tells apart networks that share a subnet); \"subnet\" matches an IP range. Add separate rules to connect and to disconnect.",
     "empty": "No rules — this tunnel is never auto-managed. Add a rule below.",
     "add_rule": "Add rule",
     "action": "Action",
@@ -332,6 +332,7 @@
     "use_current": "Use current",
     "net_captured": "this network",
     "net_not_set": "click \"Use current\" while on the network",
-    "net_placeholder": "pick a network or click \"Use current\""
+    "net_placeholder": "pick a network or click \"Use current\"",
+    "mac_placeholder": "gateway MAC (e.g. b0:38:6c:54:8b:ab)"
   }
 }

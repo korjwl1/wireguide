@@ -66,36 +66,6 @@ func (s *TunnelService) GetCurrentNetwork() CurrentNetwork {
 	}
 }
 
-// RecordCurrentNetwork remembers the network the machine is on right now
-// in the known-networks registry (keyed by gateway MAC) and returns the
-// full registry, newest first. Called by the Automation editor on open
-// and by the GUI as it roams, so the "this network" condition can offer a
-// pick-list of networks the user has visited — including ones they aren't
-// currently on. No-op (returns the existing list) when no gateway MAC is
-// available.
-func (s *TunnelService) RecordCurrentNetwork() ([]storage.KnownNetwork, error) {
-	cur := s.GetCurrentNetwork()
-	settings, err := s.settingsStore.Load()
-	if err != nil {
-		return nil, err
-	}
-	if cur.GatewayMAC != "" {
-		if settings.RecordKnownNetwork(cur.GatewayMAC, cur.Label, time.Now().Unix()) {
-			if err := s.settingsStore.Save(settings); err != nil {
-				return nil, err
-			}
-		}
-	}
-	nets := append([]storage.KnownNetwork(nil), settings.KnownNetworks...)
-	// Newest first (simple insertion sort — the list is tiny).
-	for i := 1; i < len(nets); i++ {
-		for j := i; j > 0 && nets[j].LastSeenUnix > nets[j-1].LastSeenUnix; j-- {
-			nets[j], nets[j-1] = nets[j-1], nets[j]
-		}
-	}
-	return nets, nil
-}
-
 // CheckSSIDPermission reports whether the process can read the current SSID.
 // Used by the frontend to prompt the user for Location Services access before
 // Wi-Fi auto-connect rules can fire.
