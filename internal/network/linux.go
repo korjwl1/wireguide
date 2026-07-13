@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"syscall"
@@ -29,6 +30,11 @@ const dnsStateFile = "original-dns.json"
 // LinuxManager implements NetworkManager for Linux using netlink/ip commands.
 type LinuxManager struct {
 	origDNS []string
+	// origDNSCaptured latches once the real pre-VPN /etc/resolv.conf has
+	// been snapshotted, so a second SetDNS (reconnect, network-change
+	// re-apply) doesn't overwrite the saved original with WireGuide's own
+	// nameservers and leave RestoreDNS unable to recover the real DNS.
+	origDNSCaptured bool
 	// dataDir is the persistent state directory (e.g. /var/lib/wireguide).
 	// If empty, DNS state persistence is skipped (graceful degradation).
 	dataDir string
@@ -505,10 +511,17 @@ func (m *LinuxManager) SetDNS(ifaceName string, servers []string) error {
 	for _, s := range servers {
 		if net.ParseIP(s) != nil {
 			dnsIPs = append(dnsIPs, s)
-		} else {
-			// Treat non-IP entries as search domains
-			searchDomains = append(searchDomains, s)
+			continue
 		}
+		// Non-IP entries are search domains. Validate before use: these
+		// strings are written verbatim into resolv.conf / resolvconf
+		// stdin, so an entry containing a newline (e.g.
+		// "foo\nnameserver 6.6.6.6") would inject a rogue nameserver.
+		if !isValidSearchDomain(s) {
+			slog.Warn("skipping invalid DNS search domain", "value", s)
+			continue
+		}
+		searchDomains = append(searchDomains, s)
 	}
 
 	// Try systemd-resolved first
@@ -532,11 +545,16 @@ func (m *LinuxManager) SetDNS(ifaceName string, servers []string) error {
 		return fmt.Errorf("/etc/resolv.conf is a symlink; install resolvectl or resolvconf for DNS management")
 	}
 
-	origData, _ := os.ReadFile("/etc/resolv.conf")
-	m.origDNS = strings.Split(strings.TrimSpace(string(origData)), "\n")
-
-	// M8: Persist original DNS to disk for crash recovery
-	m.persistOrigDNS()
+	// Capture the original resolv.conf only once. A second SetDNS without
+	// an intervening RestoreDNS (reconnect, network-change re-apply) would
+	// otherwise save WireGuide's own nameservers as the "original".
+	if !m.origDNSCaptured {
+		origData, _ := os.ReadFile("/etc/resolv.conf")
+		m.origDNS = strings.Split(strings.TrimSpace(string(origData)), "\n")
+		m.origDNSCaptured = true
+		// M8: Persist original DNS to disk for crash recovery
+		m.persistOrigDNS()
+	}
 
 	var lines []string
 	for _, s := range dnsIPs {
@@ -740,7 +758,18 @@ func (m *LinuxManager) RestoreDNS(ifaceName string) error {
 		}
 	}
 	m.clearPersistedDNS()
+	// Allow the next SetDNS to capture a fresh original snapshot.
+	m.origDNS = nil
+	m.origDNSCaptured = false
 	return nil
+}
+
+// searchDomainRegex matches an RFC 1035 hostname/domain. Anchored, so any
+// embedded whitespace or newline (the injection vector) fails the match.
+var searchDomainRegex = regexp.MustCompile(`^[a-zA-Z0-9]([a-zA-Z0-9-]{0,62}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,62}[a-zA-Z0-9])?)*$`)
+
+func isValidSearchDomain(s string) bool {
+	return len(s) <= 253 && searchDomainRegex.MatchString(s)
 }
 
 // writeResolvConf atomically rewrites /etc/resolv.conf. Used only as a fallback
