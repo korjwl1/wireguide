@@ -94,6 +94,49 @@ func home() string {
 	return h
 }
 
+// atomicWriteFile writes data to path via a temp file + rename in the
+// same directory, so a crash / ENOSPC / concurrent invocation can never
+// leave a truncated file — important because for AGENTS.md we're
+// rewriting a file that holds the USER's own agent instructions. Any
+// existing mode is preserved; new files use perm.
+func atomicWriteFile(path string, data []byte, perm os.FileMode) error {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	if fi, err := os.Stat(path); err == nil {
+		perm = fi.Mode().Perm()
+	}
+	tmp, err := os.CreateTemp(dir, ".wireguide-skill-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		os.Remove(tmpPath)
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		os.Remove(tmpPath)
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmpPath)
+		return err
+	}
+	if err := os.Chmod(tmpPath, perm); err != nil {
+		os.Remove(tmpPath)
+		return err
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		os.Remove(tmpPath)
+		return err
+	}
+	return nil
+}
+
 func binOrDir(bin string, dirs ...string) func() bool {
 	return func() bool {
 		if _, err := exec.LookPath(bin); err == nil {
@@ -116,7 +159,7 @@ func writeClaudeSkill() (string, error) {
 		return "", err
 	}
 	path := filepath.Join(dir, "SKILL.md")
-	if err := os.WriteFile(path, []byte(skillFrontmatter+skillBody), 0o644); err != nil {
+	if err := atomicWriteFile(path, []byte(skillFrontmatter+skillBody), 0o644); err != nil {
 		return "", err
 	}
 	return path, nil
@@ -148,7 +191,7 @@ func mergeAgentsFile(path string) (string, error) {
 		}
 		content += block
 	}
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+	if err := atomicWriteFile(path, []byte(content), 0o644); err != nil {
 		return "", err
 	}
 	return path, nil
@@ -183,6 +226,12 @@ func skillTargets() []skillTarget {
 // agents. By default it installs into every detected agent; `--target
 // a,b` restricts to (and forces) the named ones.
 func cmdInstallSkills(args []string) int {
+	// Every target path is rooted at the home directory; bail clearly if we
+	// can't resolve it rather than silently writing to relative paths.
+	if h, err := os.UserHomeDir(); err != nil || h == "" {
+		fmt.Fprintln(os.Stderr, "install-skills: cannot determine your home directory:", err)
+		return 1
+	}
 	var only map[string]bool
 	for i := 0; i < len(args); i++ {
 		switch {

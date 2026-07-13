@@ -143,6 +143,13 @@ func tunnelStore() (*storage.TunnelStore, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Create the data dirs if the CLI is the first thing to run on a fresh
+	// install (before the GUI has ever launched) — otherwise `import`'s
+	// atomic write into a nonexistent tunnels dir fails with ENOENT
+	// (issue #10).
+	if err := paths.EnsureDirs(); err != nil {
+		return nil, err
+	}
 	return storage.NewTunnelStore(paths.TunnelsDir), nil
 }
 
@@ -388,6 +395,9 @@ func settingsStore() (*storage.SettingsStore, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := paths.EnsureDirs(); err != nil {
+		return nil, err
+	}
 	return storage.NewSettingsStore(paths.ConfigDir), nil
 }
 
@@ -587,17 +597,32 @@ func cmdDelete(args []string) int {
 	}
 	name := args[0]
 	// Disconnect first if it's active, so we don't delete a live tunnel's
-	// config out from under the helper.
+	// config out from under the helper. If it IS active and the disconnect
+	// fails, abort rather than orphaning a running tunnel with no config
+	// (issue #10).
 	if c, err := dialHelper(); err == nil {
 		var active ipc.ActiveTunnelsResponse
-		if c.Call(ipc.MethodActiveTunnels, nil, &active) == nil {
-			for _, n := range active.Names {
-				if n == name {
-					ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-					_ = c.CallWithContext(ctx, ipc.MethodDisconnect, ipc.DisconnectRequest{TunnelName: name}, nil)
-					cancel()
-					break
-				}
+		if err := c.Call(ipc.MethodActiveTunnels, nil, &active); err != nil {
+			c.Close()
+			fmt.Fprintf(os.Stderr, "delete: can't verify whether %q is active: %v\n", name, err)
+			return 1
+		}
+		isActive := false
+		for _, n := range active.Names {
+			if n == name {
+				isActive = true
+				break
+			}
+		}
+		if isActive {
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			err := c.CallWithContext(ctx, ipc.MethodDisconnect, ipc.DisconnectRequest{TunnelName: name}, nil)
+			cancel()
+			if err != nil {
+				c.Close()
+				fmt.Fprintf(os.Stderr, "delete: %q is connected and could not be disconnected: %v\n", name, err)
+				fmt.Fprintln(os.Stderr, "refusing to delete a live tunnel's config; disconnect it and retry.")
+				return 1
 			}
 		}
 		c.Close()
@@ -645,18 +670,26 @@ func cmdSet(args []string) int {
 		return 1
 	}
 
-	// applyIPC runs a helper call best-effort — the setting is already
-	// persisted, so a missing helper just means "applies on next launch".
-	applyIPC := func(method string, params interface{}) {
+	// applyIPC persists-then-applies: the setting is already saved to
+	// config.json, so a helper that isn't running just means "applies on
+	// next launch" (exit 0 — nothing is live to be wrong). But if the
+	// helper IS running and the live apply fails, we return nonzero: the
+	// value is on disk yet NOT actually in effect, and a script that just
+	// ran `set killswitch on` must not believe traffic is being blocked
+	// when it isn't (issue #10).
+	liveRC := 0
+	applyIPC := func(method string, params interface{}) int {
 		c, derr := dialHelper()
 		if derr != nil {
 			fmt.Println("(helper not running — saved; will take effect when the app starts)")
-			return
+			return 0
 		}
 		defer c.Close()
 		if err := c.Call(method, params, nil); err != nil {
-			fmt.Fprintln(os.Stderr, "warning: saved but live apply failed:", err)
+			fmt.Fprintln(os.Stderr, "error: saved to config but live apply failed:", err)
+			return 1
 		}
+		return 0
 	}
 
 	switch setting {
@@ -671,7 +704,7 @@ func cmdSet(args []string) int {
 			fmt.Fprintln(os.Stderr, "set:", err)
 			return 1
 		}
-		applyIPC(ipc.MethodSetKillSwitch, ipc.KillSwitchRequest{Enabled: v})
+		liveRC = applyIPC(ipc.MethodSetKillSwitch, ipc.KillSwitchRequest{Enabled: v})
 	case "dns-protection", "dnsprotection", "dns_protection":
 		v, ok := parseOnOff(value)
 		if !ok {
@@ -694,7 +727,7 @@ func cmdSet(args []string) int {
 				}
 			}
 		}
-		applyIPC(ipc.MethodSetDNSProtection, ipc.DNSProtectionRequest{Enabled: v, DNSServers: servers})
+		liveRC = applyIPC(ipc.MethodSetDNSProtection, ipc.DNSProtectionRequest{Enabled: v, DNSServers: servers})
 	case "healthcheck", "health-check", "health_check":
 		v, ok := parseOnOff(value)
 		if !ok {
@@ -706,7 +739,7 @@ func cmdSet(args []string) int {
 			fmt.Fprintln(os.Stderr, "set:", err)
 			return 1
 		}
-		applyIPC(ipc.MethodSetHealthCheck, ipc.SetHealthCheckRequest{Enabled: v})
+		liveRC = applyIPC(ipc.MethodSetHealthCheck, ipc.SetHealthCheckRequest{Enabled: v})
 	case "pin-interface", "pininterface", "pin_interface":
 		v, ok := parseOnOff(value)
 		if !ok {
@@ -718,7 +751,7 @@ func cmdSet(args []string) int {
 			fmt.Fprintln(os.Stderr, "set:", err)
 			return 1
 		}
-		applyIPC(ipc.MethodSetPinInterface, ipc.SetPinInterfaceRequest{Enabled: v})
+		liveRC = applyIPC(ipc.MethodSetPinInterface, ipc.SetPinInterfaceRequest{Enabled: v})
 	case "loglevel", "log-level", "log_level":
 		lvl := strings.ToLower(value)
 		switch lvl {
@@ -732,10 +765,15 @@ func cmdSet(args []string) int {
 			fmt.Fprintln(os.Stderr, "set:", err)
 			return 1
 		}
-		applyIPC(ipc.MethodSetLogLevel, ipc.SetLogLevelRequest{Level: lvl})
+		liveRC = applyIPC(ipc.MethodSetLogLevel, ipc.SetLogLevelRequest{Level: lvl})
 	default:
 		fmt.Fprintf(os.Stderr, "unknown setting %q (killswitch, dns-protection, healthcheck, pin-interface, loglevel)\n", setting)
 		return 2
+	}
+	if liveRC != 0 {
+		// Persisted, but the running helper rejected the live apply — the
+		// value is NOT in effect right now. Exit nonzero so scripts notice.
+		return liveRC
 	}
 	fmt.Printf("%s = %s\n", setting, value)
 	return 0
