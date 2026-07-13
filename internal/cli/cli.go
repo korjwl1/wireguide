@@ -49,6 +49,8 @@ func Run(args []string) int {
 		return cmdDisconnect(rest)
 	case "import":
 		return cmdImport(rest)
+	case "automation":
+		return cmdAutomation(rest)
 	default:
 		fmt.Fprintf(os.Stderr, "unknown command %q\n\n", cmd)
 		usage(os.Stderr)
@@ -65,6 +67,7 @@ Usage:
   wireguide ctl connect <name>         connect a tunnel
   wireguide ctl disconnect [name]      disconnect one tunnel (or all)
   wireguide ctl import <file> [name]   import a .conf (name defaults to filename)
+  wireguide ctl automation             show what the automation engine decides now
 
 The WireGuide app (or its helper) must be running.
 `)
@@ -263,6 +266,38 @@ func cmdImport(args []string) int {
 		return 1
 	}
 	fmt.Printf("imported %s\n", name)
+	return 0
+}
+
+func cmdAutomation(_ []string) int {
+	c, err := dialHelper()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	defer c.Close()
+	var resp ipc.AutomationPreviewResponse
+	if err := c.Call(ipc.MethodAutomationPreview, nil, &resp); err != nil {
+		fmt.Fprintln(os.Stderr, "automation:", err)
+		return 1
+	}
+	ssid := resp.SSID
+	if ssid == "" {
+		ssid = "(none)"
+	}
+	fmt.Printf("network context: ssid=%s  physical-ips=%v\n", ssid, resp.PhysicalIPs)
+	if len(resp.Tunnels) == 0 {
+		fmt.Println("no tunnels have automation rules")
+		return 0
+	}
+	for _, tdec := range resp.Tunnels {
+		state := "down"
+		if tdec.Active {
+			state = "up"
+		}
+		fmt.Printf("  %-28s rules=%d  currently=%s  decision=%s\n",
+			tdec.Name, tdec.RuleCount, state, tdec.Decision)
+	}
 	return 0
 }
 

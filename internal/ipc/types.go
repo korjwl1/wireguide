@@ -137,3 +137,20 @@ type CriticalErrorPayload struct {
 	Detail string `json:"detail"`
 }
 
+// AutomationPreviewResponse is the read-only result of Automation.Preview:
+// the network context the helper currently sees plus each rule-bearing
+// tunnel's evaluated decision. No connect/disconnect is performed.
+type AutomationPreviewResponse struct {
+	SSID        string                     `json:"ssid"`
+	PhysicalIPs []string                   `json:"physical_ips"`
+	Tunnels     []AutomationTunnelDecision `json:"tunnels"`
+}
+
+// AutomationTunnelDecision is one tunnel's evaluated desired state.
+type AutomationTunnelDecision struct {
+	Name      string `json:"name"`
+	RuleCount int    `json:"rule_count"`
+	Decision  string `json:"decision"` // "connect" | "disconnect" | "unmanaged"
+	Active    bool   `json:"active"`
+}
+

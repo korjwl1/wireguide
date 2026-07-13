@@ -99,6 +99,58 @@ func (h *Helper) reevaluateAutomation(reason string) {
 	}
 }
 
+// handleAutomationPreview is a read-only dry-run of the Automation
+// engine: it reports the current network context and each rule-bearing
+// tunnel's evaluated decision, without connecting or disconnecting
+// anything. Backs `wireguide ctl automation` and answers "why did this
+// tunnel (dis)connect?".
+func (h *Helper) handleAutomationPreview(_ json.RawMessage) (interface{}, error) {
+	settings, err := h.loadUserSettings()
+	if err != nil {
+		return nil, err
+	}
+	settings.EnsureAutomation()
+	auto := settings.Automation
+
+	ssid := ""
+	if h.wifiMon != nil {
+		ssid = h.wifiMon.LastSSID()
+	}
+	physIPs := wifi.PhysicalInterfaceIPs()
+	ctx := wifi.NetworkContext{SSID: ssid, PhysicalIPs: physIPs}
+
+	ipStrs := make([]string, 0, len(physIPs))
+	for _, ip := range physIPs {
+		ipStrs = append(ipStrs, ip.String())
+	}
+
+	active := make(map[string]bool)
+	for _, n := range h.manager.ActiveTunnels() {
+		active[n] = true
+	}
+
+	resp := ipc.AutomationPreviewResponse{SSID: ssid, PhysicalIPs: ipStrs}
+	if auto != nil {
+		for _, name := range auto.TunnelNames() {
+			rules := auto.PerTunnel[name]
+			decision := "unmanaged"
+			switch wifi.Evaluate(rules, ctx) {
+			case wifi.StateConnect:
+				decision = "connect"
+			case wifi.StateDisconnect:
+				decision = "disconnect"
+			}
+			resp.Tunnels = append(resp.Tunnels, ipc.AutomationTunnelDecision{
+				Name:      name,
+				RuleCount: len(rules),
+				Decision:  decision,
+				Active:    active[name],
+			})
+		}
+	}
+	return resp, nil
+}
+
 // automationConnect brings up a tunnel a rule matched and records it in
 // the auto-managed map. Caller holds reevalMu.
 func (h *Helper) automationConnect(name, reason, ssid string) {

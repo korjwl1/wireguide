@@ -36,6 +36,7 @@ func (h *Helper) registerHandlers() {
 	h.server.Handle(ipc.MethodSetHealthCheck, h.handleSetHealthCheck)
 	h.server.Handle(ipc.MethodSetPinInterface, h.handleSetPinInterface)
 	h.server.Handle(ipc.MethodReportSSID, h.handleReportSSID)
+	h.server.Handle(ipc.MethodAutomationPreview, h.handleAutomationPreview)
 }
 
 func (h *Helper) handleSetLogLevel(params json.RawMessage) (interface{}, error) {

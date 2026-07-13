@@ -106,6 +106,10 @@ const (
 	MethodSetHealthCheck   = "Monitor.SetHealthCheck"
 	MethodSetPinInterface  = "Network.SetPinInterface"
 	MethodReportSSID       = "Wifi.ReportSSID"
+	// MethodAutomationPreview is a read-only dry-run: it evaluates the
+	// current Automation rules against the current network context and
+	// returns each tunnel's decision WITHOUT connecting/disconnecting.
+	MethodAutomationPreview = "Automation.Preview"
 )
 
 // Event names (server → client notifications)
