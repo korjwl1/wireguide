@@ -334,6 +334,11 @@ jobs:
 
             app "WireGuide.app"
 
+            # Symlink the CLI onto PATH (Homebrew's bin), so users get a
+            # global \`wireguide ctl ...\` after \`brew install\` instead of
+            # the in-bundle \`/Applications/WireGuide.app/Contents/MacOS/wireguide\`.
+            binary "#{appdir}/WireGuide.app/Contents/MacOS/wireguide"
+
             # auto_updates true tells \`brew upgrade\` to defer to the
             # app's own update mechanism, which prevents brew + the
             # in-app scheduler from racing to upgrade the same install

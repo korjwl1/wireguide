@@ -104,6 +104,15 @@ Section
     CreateShortcut "$SMPROGRAMS\${INFO_PRODUCTNAME}.lnk" "$INSTDIR\${PRODUCT_EXECUTABLE}"
     CreateShortCut "$DESKTOP\${INFO_PRODUCTNAME}.lnk" "$INSTDIR\${PRODUCT_EXECUTABLE}"
 
+    # Put the install dir on the system PATH so `wireguide ctl ...` is
+    # callable from any terminal (the same binary is the GUI and the CLI).
+    # Done via PowerShell/.NET rather than raw NSIS registry edits: .NET
+    # reads and writes the full PATH value (NSIS's ReadRegStr truncates at
+    # 1024 chars and would corrupt a long PATH), skips if already present,
+    # and broadcasts WM_SETTINGCHANGE so new shells pick it up. $$x is an
+    # escaped literal `$x` for PowerShell; $INSTDIR is expanded by NSIS.
+    nsExec::ExecToLog `powershell -NoProfile -ExecutionPolicy Bypass -Command "$$p=[Environment]::GetEnvironmentVariable('Path','Machine'); if(($$p -split ';') -notcontains '$INSTDIR'){[Environment]::SetEnvironmentVariable('Path',$$p.TrimEnd(';')+';$INSTDIR','Machine')}"`
+
     !insertmacro wails.associateFiles
     !insertmacro wails.associateCustomProtocols
     
@@ -114,6 +123,9 @@ Section "uninstall"
     !insertmacro wails.setShellContext
 
     RMDir /r "$AppData\${PRODUCT_EXECUTABLE}" # Remove the WebView2 DataPath
+
+    # Remove the install dir from the system PATH (mirror of the install step).
+    nsExec::ExecToLog `powershell -NoProfile -ExecutionPolicy Bypass -Command "$$p=[Environment]::GetEnvironmentVariable('Path','Machine'); $$n=(($$p -split ';') | Where-Object { $$_ -ne '$INSTDIR' }) -join ';'; [Environment]::SetEnvironmentVariable('Path',$$n,'Machine')"`
 
     RMDir /r $INSTDIR
 
