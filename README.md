@@ -63,9 +63,10 @@ That means most of WireGuide runs silently in the background.
 ### What the user sees
 
 - Drag-and-drop `.conf` import (also QR and ZIP)
-- A list of tunnels, each with one big toggle
+- A list of tunnels, each with one big toggle (sortable, resizable, optional compact mode)
 - A tray icon that shows whether you're connected
-- Optional: connect when you join the office Wi-Fi, disconnect when you leave
+- Per-tunnel **Automation** — connect or disconnect a tunnel automatically based on which network you're on (by Wi-Fi SSID, subnet, or the router's MAC address; rules are ordered by priority and drag-reorderable)
+- A **command-line interface** (`wireguide ctl …`) for scripting — see below
 
 ### What runs silently underneath
 
@@ -141,6 +142,39 @@ go install github.com/wailsapp/wails/v3/cmd/wails3@latest
 task build
 ./bin/wireguide
 ```
+
+---
+
+## Command line
+
+WireGuide ships a small CLI, `wireguide ctl`, for scripting and automation. Like
+`tailscale`/`tailscaled`, it talks to the already-running (already-elevated)
+helper over the local socket — so unlike `wg-quick` it needs no per-command
+`sudo`, works the same on macOS/Windows/Linux, and shares the GUI's tunnel store.
+
+```
+wireguide ctl status                    # connection status
+wireguide ctl list                      # list tunnels (● = connected)
+wireguide ctl connect <name>            # connect a tunnel
+wireguide ctl disconnect [name]         # disconnect one (or all)
+wireguide ctl import <file> [name]      # import a .conf
+wireguide ctl rename <old> <new>
+wireguide ctl delete <name>
+
+# Automation — per-tunnel connect/disconnect rules (top rule wins on conflict):
+wireguide ctl automation                # what the engine decides right now
+wireguide ctl automation rules <name>   # list a tunnel's rules
+wireguide ctl automation add <name> <connect|disconnect> <cond>
+    #   cond = ssid:<wifi>  subnet:<CIDR>  mac:<gateway-MAC>  else
+wireguide ctl automation rm <name> <n>
+
+# e.g. turn the work VPN off on the office network, on everywhere else:
+wireguide ctl automation add work disconnect mac:b0:38:6c:54:8b:ab
+wireguide ctl automation add work connect else
+```
+
+Connect/disconnect/status need the app (or its helper) running; list, import,
+rename, delete and automation edits work directly against the local files.
 
 ---
 

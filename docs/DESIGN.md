@@ -189,58 +189,93 @@ block drop in all
 
 **Why anchor-only**: previous approach saved main pf rules via `pfctl -sr` and re-loaded with anchor reference. This broke on macOS Tahoe because `pfctl -sr` outputs `scrub-anchor` directives that cause syntax errors when fed back to `pfctl -f`.
 
-## Wi-Fi Auto-Connect
+## Automation (per-tunnel connect/disconnect rules, issue #12)
 
-### Architecture
+### Model
 
-Wi-Fi auto-connect rules are evaluated **entirely inside the helper process**. This means rules fire whether or not a GUI is alive.
+Each tunnel owns an ordered list of `condition → action` rules
+(`internal/wifi/automation.go`). A condition is one of:
+
+- `ssid` — the current Wi-Fi SSID equals a value
+- `subnet` — a physical-interface IP is inside a CIDR
+- `network` — the default gateway's MAC equals a value (a precise,
+  medium-agnostic network fingerprint that disambiguates two networks
+  sharing a subnet like `192.168.0.0/24`; MACs compare by bare hex, so
+  separator/case don't matter)
+- `none_match` — the fallback ("otherwise")
+
+The action is `connect` or `disconnect`. `Evaluate` walks the rules top to
+bottom: the **first** matching concrete condition wins; if none match, the
+first `none_match` rule applies; else the tunnel is left untouched. **Order
+is priority** (drag-reorderable in the GUI). A rule disconnects a tunnel
+**regardless of how it was brought up** — but a tunnel with *no* rules is
+never auto-touched. Legacy `Settings.WifiRules` (SSID-only auto-connect +
+global trusted list) is migrated once into this model by
+`Settings.EnsureAutomation`.
+
+### Evaluation triggers (helper-side)
+
+Rules are evaluated **entirely inside the helper** (`reevaluateAutomation`
+in `internal/helper/wifi_rules.go`), so they fire whether or not a GUI is
+alive. `reevalMu` serialises evaluations. Triggers:
 
 ```
-macOS CoreWLAN (GUI process)
-  │
-  │  Wifi.ReportSSID (IPC)
-  ▼
-Helper.handleReportSSID
-  └─ handleSSIDChange(oldSSID, newSSID)
-       ├─ load settings.WifiRules
-       ├─ rules.Action(newSSID) → "connect" / "disconnect" / "none"
-       ├─ [connect] doConnectHeld(cfg)   ← same function as manual connect
-       │    └─ Broadcast(event.auto_connect, {TunnelName})
-       └─ [disconnect] DisconnectTunnel(name)
+current network context = { SSID, physical IPs, gateway MAC }
+  ├─ SSID change      → wifiMon (CoreWLAN via GUI on macOS 14+) — instant
+  ├─ network change   → macOS: the shared `route -n monitor` subscription
+  │                     (SubscribeNetworkChange) — instant, ~zero added cost
+  └─ poll (30s)       → Windows/Linux fallback (no process-wide monitor yet)
+
+for each tunnel with rules:
+  Evaluate(rules, ctx) → StateConnect  → doConnectHeld (same as manual)
+                         StateDisconnect → disconnectAutoManaged
+                         StateUnmanaged  → leave as-is
 ```
+
+The gateway MAC is read unprivileged and locale-independently:
+`route -n get default` + `arp` on macOS, `/proc/net/{route,arp}` on Linux,
+`GetBestRoute`+`SendARP` on Windows.
 
 ### macOS 14+ Location Services Workaround
 
-On macOS 14+, `CoreWLAN` requires the app to appear in **System Settings → Privacy → Location Services** before it can read the current SSID. Because the helper runs as a root `LaunchDaemon` (not inside the app bundle), it cannot obtain this permission directly.
+On macOS 14+, `CoreWLAN` requires the app to appear in **System Settings →
+Privacy → Location Services** before it can read the current SSID. The
+helper runs as a root `LaunchDaemon` (outside the app bundle) so it can't
+obtain that permission; the GUI polls SSID via `CoreWLAN` and forwards
+changes over the `Wifi.ReportSSID` IPC method (`Monitor.LastSSID` is the
+helper's authoritative current SSID).
 
-**Workaround**: the GUI polls SSID via `CoreWLAN` (it does have Location permission) and forwards every SSID change to the helper via the `Wifi.ReportSSID` IPC method. The helper calls `handleSSIDChange` in response.
+### Authoring
 
-### Auto-Managed vs Manual Tunnels
-
-The helper tracks which tunnels it auto-connected in `autoConnectedBy map[string]string` (tunnel name → SSID that triggered it), protected by `wifiMu`. This distinction matters for teardown:
-
-| Scenario | Action |
-|----------|--------|
-| New SSID has an auto-connect rule | Connect matched tunnel, disconnect all other *auto-managed* tunnels |
-| New SSID is trusted | Disconnect *auto-managed* tunnels only (manually-connected tunnels untouched) |
-| New SSID has no rule | Disconnect *auto-managed* tunnels only |
-| Tunnel already up when rule fires | Update SSID tracking if already auto-managed; never adopt a manually-connected tunnel |
-
-Manual tunnels — started via the Connect button or tray — are **never torn down** by Wi-Fi rule evaluation.
+Rules are edited in the GUI (tunnel detail → **Automation**: condition/
+action rows, self-entry with current-value autocomplete, drag-to-reorder,
+inline MAC/CIDR validation) or from the CLI (`wireguide ctl automation
+add/rm/rules`, and `wireguide ctl automation` for a read-only preview of
+the current decision). Both edit `Settings.Automation` in `config.json`,
+which the helper rereads on every evaluation — no restart needed.
 
 ### Post-Connect Refresh
 
-After `doConnectHeld` succeeds, the helper broadcasts `event.auto_connect`. The GUI handles this event by calling `applyFirewallSettings()` — the same function called after a manual connect — which re-applies kill switch and DNS protection if enabled. The 1Hz `event.status` broadcast (which always includes `active_tunnels`) drives the UI state update.
+After a rule connects a tunnel the helper broadcasts `event.auto_connect`;
+the GUI runs `applyFirewallSettings()` (same as a manual connect) to
+re-apply kill switch / DNS protection, and the 1 Hz `event.status`
+broadcast drives the UI state update.
 
 ### Lock Ordering
 
-Three locks are involved:
+The helper's locks:
 
-- `connectMu` — serializes connect/disconnect operations (held outermost)
+- `reevalMu` — serialises whole Automation re-evaluations so the three
+  triggers (SSID change, network change, poll) can't drive connect/
+  disconnect concurrently. Held around an evaluation, which internally
+  takes the locks below.
+- `connectMu` — serializes connect/disconnect operations
 - `mu` — protects `activeCfgs` and other manager state
 - `wifiMu` — protects `autoConnectedBy`
 
-Rule: always acquire in the order `connectMu → mu → wifiMu`. Never hold a lower-priority lock when acquiring a higher one.
+Rule: within an evaluation, always acquire in the order
+`connectMu → mu → wifiMu`. Never hold a lower-priority lock when acquiring
+a higher one.
 
 ## Reconnect
 
