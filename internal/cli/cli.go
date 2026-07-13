@@ -65,6 +65,8 @@ func Run(args []string) int {
 		return cmdDNSLeak(rest)
 	case "routes":
 		return cmdRoutes(rest)
+	case "install-skills":
+		return cmdInstallSkills(rest)
 	default:
 		fmt.Fprintf(os.Stderr, "unknown command %q\n\n", cmd)
 		usage(os.Stderr)
@@ -101,6 +103,11 @@ Settings & diagnostics:
   wireguide ctl set loglevel <debug|info|warn|error>
   wireguide ctl dnsleak                        check whether DNS leaks outside the tunnel
   wireguide ctl routes                         show the OS routing table
+
+Coding agents:
+  wireguide ctl install-skills [--target claude,codex,opencode,hermes]
+                                          teach coding agents how to use 'wireguide ctl'
+                                          (installs into every detected agent by default)
 
 Examples:
   wireguide ctl automation add work disconnect mac:b0:38:6c:54:8b:ab
