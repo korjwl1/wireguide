@@ -311,5 +311,21 @@
     "no_trusted": "No trusted networks added.",
     "add": "Add",
     "ssid_placeholder": "Network name (SSID)"
+  },
+  "automation": {
+    "title": "Automation",
+    "hint": "Rules run top to bottom; the first matching condition wins. Add separate rules to connect and to disconnect on different networks.",
+    "empty": "No rules — this tunnel is never auto-managed. Add a rule below.",
+    "add_rule": "Add rule",
+    "action": "Action",
+    "condition": "Condition",
+    "when": "when",
+    "connect": "Connect",
+    "disconnect": "Disconnect",
+    "cond_ssid": "on Wi-Fi network",
+    "cond_subnet": "on subnet",
+    "cond_none": "otherwise",
+    "cond_none_desc": "no other rule matched",
+    "ssid_placeholder": "Wi-Fi name"
   }
 }

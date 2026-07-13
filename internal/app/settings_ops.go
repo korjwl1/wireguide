@@ -74,7 +74,19 @@ func getGUILogLevelSetter() func(string) {
 // --- Settings (all local, no IPC) ---
 
 func (s *TunnelService) GetSettings() (*storage.Settings, error) {
-	return s.settingsStore.Load()
+	settings, err := s.settingsStore.Load()
+	if err != nil {
+		return nil, err
+	}
+	// Always hand the frontend a populated Automation model so the rule
+	// editor can read/edit it directly — EnsureAutomation lazily migrates
+	// the legacy WifiRules the first time (in memory; persisted only when
+	// the user saves). Without this the UI would see a null automation for
+	// legacy users and couldn't show their migrated rules.
+	if settings != nil {
+		settings.EnsureAutomation()
+	}
+	return settings, nil
 }
 
 // SaveSettings persists the settings file AND applies any side effects:

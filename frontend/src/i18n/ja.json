@@ -311,5 +311,21 @@
     "no_trusted": "信頼するネットワークが追加されていません。",
     "add": "追加",
     "ssid_placeholder": "ネットワーク名 (SSID)"
+  },
+  "automation": {
+    "title": "オートメーション",
+    "hint": "ルールは上から順に評価され、最初に一致した条件が適用されます。ネットワークごとに接続/切断のルールを個別に追加できます。",
+    "empty": "ルールなし — このトンネルは自動管理されません。下にルールを追加してください。",
+    "add_rule": "ルールを追加",
+    "action": "アクション",
+    "condition": "条件",
+    "when": "条件:",
+    "connect": "接続",
+    "disconnect": "切断",
+    "cond_ssid": "このWi-Fiで",
+    "cond_subnet": "このサブネットで",
+    "cond_none": "それ以外",
+    "cond_none_desc": "他のルールに一致しないとき",
+    "ssid_placeholder": "Wi-Fi名"
   }
 }

@@ -311,5 +311,21 @@
     "no_trusted": "추가된 신뢰 네트워크가 없습니다.",
     "add": "추가",
     "ssid_placeholder": "네트워크 이름 (SSID)"
+  },
+  "automation": {
+    "title": "자동화",
+    "hint": "규칙은 위에서 아래로 평가되며 먼저 맞는 조건이 적용됩니다. 네트워크별로 연결/해제 규칙을 각각 추가하세요.",
+    "empty": "규칙 없음 — 이 터널은 자동으로 관리되지 않습니다. 아래에서 규칙을 추가하세요.",
+    "add_rule": "규칙 추가",
+    "action": "동작",
+    "condition": "조건",
+    "when": "조건:",
+    "connect": "연결",
+    "disconnect": "해제",
+    "cond_ssid": "이 Wi-Fi에서",
+    "cond_subnet": "이 서브넷에서",
+    "cond_none": "그 외",
+    "cond_none_desc": "다른 규칙이 안 맞을 때",
+    "ssid_placeholder": "Wi-Fi 이름"
   }
 }

@@ -5,9 +5,14 @@
   import { errText } from './errors.js';
   import { createEventDispatcher, tick, onDestroy } from 'svelte';
   import SSIDPermissionBanner from './SSIDPermissionBanner.svelte';
+  import AutomationEditor from './AutomationEditor.svelte';
 
   export let TunnelService;
   const dispatch = createEventDispatcher();
+
+  // Automation rule editor (issue #12) — supersedes the legacy per-tunnel
+  // Wi-Fi auto-connect modal below (kept unreachable pending removal).
+  let showAutomation = false;
 
   let detail = null;
   let loading = false;
@@ -749,12 +754,9 @@
         <Icon name="share" size={15} strokeWidth={1.75} />
         <span>{$t('tunnel.export')}</span>
       </button>
-      <button class="btn-icon-action wifi-btn" on:click={openWifiModal}>
+      <button class="btn-icon-action wifi-btn" on:click={() => showAutomation = true}>
         <Icon name="wifi" size={15} strokeWidth={1.75} />
-        <span>{$t('tunnel.wifi_auto_connect')}</span>
-        {#if wifiSsids.length > 0}
-          <span class="wifi-count">{wifiSsids.length}</span>
-        {/if}
+        <span>{$t('automation.title')}</span>
       </button>
       <button class="btn-icon-action btn-icon-danger" on:click={askDelete}>
         <Icon name="trash-2" size={15} strokeWidth={1.75} />
@@ -763,6 +765,8 @@
     </div>
   {/if}
 </div>
+
+<AutomationEditor {TunnelService} tunnelName={$selectedTunnel?.name || ''} bind:open={showAutomation} />
 
 {#if showWifiModal && $selectedTunnel}
   <div class="confirm-backdrop" on:click={closeWifiModal}>
