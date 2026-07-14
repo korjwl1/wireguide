@@ -159,6 +159,14 @@ type Helper struct {
 	// connected ones and only touch the former.
 	wifiMu          sync.Mutex
 	autoConnectedBy map[string]string
+	// ssidStampGW is the gateway MAC observed when the GUI last reported
+	// the SSID. macOS only: the root helper can't read the SSID itself, so
+	// if the GUI exits and the machine then moves networks, the reported
+	// SSID goes stale with nothing to refresh it. A different CURRENT
+	// gateway MAC than this stamp proves the network changed since the
+	// report, so evaluation treats the SSID as unknown rather than acting
+	// on the old network's name. Guarded by wifiMu.
+	ssidStampGW string
 
 	// reevalMu serialises Automation re-evaluations. The three triggers
 	// (SSID change, network change, poll) can fire concurrently; the

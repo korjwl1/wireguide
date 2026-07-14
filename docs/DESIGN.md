@@ -189,6 +189,20 @@ block drop in all
 
 **Why anchor-only**: previous approach saved main pf rules via `pfctl -sr` and re-loaded with anchor reference. This broke on macOS Tahoe because `pfctl -sr` outputs `scrub-anchor` directives that cause syntax errors when fed back to `pfctl -f`.
 
+### Lifecycle: applied at connect time, not at boot
+
+The kill switch is a **connect-path state transition**, deliberately NOT
+restored when the helper (re)starts. With `kill_switch: true` in
+config.json, a reboot leaves the firewall open until the first tunnel
+comes up — at which point the connect path (GUI `applyFirewallSettings`,
+or helper-side `applyPostConnectFirewall` for automation connects)
+re-enables it. Auto-applying at boot would block ALL traffic on a machine
+with no tunnel up, which is "always-on VPN" semantics — a separate,
+opt-in feature if ever wanted, not a restore. (Other persisted
+helper-side settings — health check, pin-interface, log level — ARE
+restored at helper startup, because they only change behaviour while
+tunnels are up.)
+
 ## Automation (per-tunnel connect/disconnect rules, issue #12)
 
 ### Model

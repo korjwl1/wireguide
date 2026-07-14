@@ -257,6 +257,11 @@ func recoverHelper(clients *ipc.ClientHolder, bridge *eventBridge, dataDir strin
 	}
 	clients.Set(newClient)
 	bridge.Resubscribe()
+	// The restarted helper has no SSID (macOS: only the GUI can read it,
+	// and the reporter is change-driven) — push the current one so SSID
+	// automation rules resume immediately instead of after the next
+	// Wi-Fi transition.
+	ResendSSIDToHelper(clients)
 	return true
 }
 

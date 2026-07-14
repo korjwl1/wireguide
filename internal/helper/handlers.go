@@ -14,6 +14,7 @@ import (
 	"github.com/korjwl1/wireguide/internal/domain"
 	"github.com/korjwl1/wireguide/internal/ipc"
 	"github.com/korjwl1/wireguide/internal/update"
+	"github.com/korjwl1/wireguide/internal/wifi"
 )
 
 // registerHandlers binds every RPC method to a Helper method. Splitting the
@@ -535,6 +536,13 @@ func (h *Helper) handleReportSSID(params json.RawMessage) (interface{}, error) {
 		// instead of silently swallowing every SSID update.
 		return nil, fmt.Errorf("wifi monitor not initialised")
 	}
+	// Stamp the gateway BEFORE ReportExternalSSID: its onChanged callback
+	// re-evaluates automation synchronously, and the staleness check must
+	// see the fresh stamp or it would invalidate the SSID we're delivering.
+	gw := wifi.GatewayMAC()
+	h.wifiMu.Lock()
+	h.ssidStampGW = gw
+	h.wifiMu.Unlock()
 	h.wifiMon.ReportExternalSSID(req.SSID)
 	return ipc.Empty{}, nil
 }

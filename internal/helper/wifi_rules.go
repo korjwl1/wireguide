@@ -36,6 +36,42 @@ func (h *Helper) loadUserSettings() (*storage.Settings, error) {
 	return s, nil
 }
 
+// currentNetworkContext builds the NetworkContext automation rules are
+// evaluated against — the single source for both the live engine
+// (reevaluateAutomation) and the read-only preview, so `wireguide ctl
+// automation` always shows exactly what the engine would act on.
+//
+// SSID staleness: on macOS the SSID only arrives via GUI reports (the
+// root helper can't read it). If the GUI has exited and the machine then
+// moved networks, that value is stale. A gateway MAC different from the
+// one stamped at report time proves the network changed since the report,
+// so the SSID is treated as unknown — SSID rules stop matching rather
+// than misfiring on the old network's name, while subnet/MAC rules keep
+// working off fresh data. An empty stamp (no report yet, or gateway
+// unknown at report time) never invalidates.
+func (h *Helper) currentNetworkContext() wifi.NetworkContext {
+	ssid := ""
+	if h.wifiMon != nil {
+		ssid = h.wifiMon.LastSSID()
+	}
+	gw := wifi.GatewayMAC()
+	if ssid != "" && gw != "" {
+		h.wifiMu.Lock()
+		stamp := h.ssidStampGW
+		h.wifiMu.Unlock()
+		if stamp != "" && stamp != gw {
+			slog.Debug("SSID considered stale: gateway changed since GUI report",
+				"ssid", ssid, "stamped_gw", stamp, "current_gw", gw)
+			ssid = ""
+		}
+	}
+	return wifi.NetworkContext{
+		SSID:        ssid,
+		PhysicalIPs: wifi.PhysicalInterfaceIPs(),
+		GatewayMAC:  gw,
+	}
+}
+
 // handleSSIDChange is one trigger for Automation re-evaluation: the
 // Wi-Fi monitor fires it on every SSID transition. The actual decision
 // logic lives in reevaluateAutomation so the network-change and poll
@@ -69,15 +105,7 @@ func (h *Helper) reevaluateAutomation(reason string) {
 		return
 	}
 
-	ssid := ""
-	if h.wifiMon != nil {
-		ssid = h.wifiMon.LastSSID()
-	}
-	ctx := wifi.NetworkContext{
-		SSID:        ssid,
-		PhysicalIPs: wifi.PhysicalInterfaceIPs(),
-		GatewayMAC:  wifi.GatewayMAC(),
-	}
+	ctx := h.currentNetworkContext()
 
 	active := make(map[string]bool)
 	for _, n := range h.manager.ActiveTunnels() {
@@ -89,11 +117,11 @@ func (h *Helper) reevaluateAutomation(reason string) {
 		switch state {
 		case wifi.StateConnect:
 			if !active[name] {
-				h.automationConnect(name, reason, ssid)
+				h.automationConnect(name, reason, ctx.SSID)
 			}
 		case wifi.StateDisconnect:
 			if active[name] {
-				slog.Info("automation: rule disconnect", "tunnel", name, "reason", reason, "ssid", ssid)
+				slog.Info("automation: rule disconnect", "tunnel", name, "reason", reason, "ssid", ctx.SSID)
 				h.disconnectAutoManaged(name)
 			}
 		}
@@ -113,16 +141,10 @@ func (h *Helper) handleAutomationPreview(_ json.RawMessage) (interface{}, error)
 	settings.EnsureAutomation()
 	auto := settings.Automation
 
-	ssid := ""
-	if h.wifiMon != nil {
-		ssid = h.wifiMon.LastSSID()
-	}
-	physIPs := wifi.PhysicalInterfaceIPs()
-	gwMAC := wifi.GatewayMAC()
-	ctx := wifi.NetworkContext{SSID: ssid, PhysicalIPs: physIPs, GatewayMAC: gwMAC}
+	ctx := h.currentNetworkContext()
 
-	ipStrs := make([]string, 0, len(physIPs))
-	for _, ip := range physIPs {
+	ipStrs := make([]string, 0, len(ctx.PhysicalIPs))
+	for _, ip := range ctx.PhysicalIPs {
 		ipStrs = append(ipStrs, ip.String())
 	}
 
@@ -131,7 +153,7 @@ func (h *Helper) handleAutomationPreview(_ json.RawMessage) (interface{}, error)
 		active[n] = true
 	}
 
-	resp := ipc.AutomationPreviewResponse{SSID: ssid, PhysicalIPs: ipStrs, GatewayMAC: gwMAC}
+	resp := ipc.AutomationPreviewResponse{SSID: ctx.SSID, PhysicalIPs: ipStrs, GatewayMAC: ctx.GatewayMAC}
 	if auto != nil {
 		for _, name := range auto.TunnelNames() {
 			rules := auto.PerTunnel[name]
