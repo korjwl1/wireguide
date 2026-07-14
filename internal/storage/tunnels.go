@@ -89,26 +89,6 @@ func (s *TunnelStore) Save(cfg *config.WireGuardConfig) error {
 	return nil
 }
 
-// AddedUnix returns the tunnel's date-added as a Unix timestamp: the
-// stamped creation time when known, else the .conf mtime as a fallback
-// for tunnels created before creation-time stamping existed. Used for the
-// list's date-added sort (issue #17).
-func (s *TunnelStore) AddedUnix(name string) int64 {
-	if err := ValidateTunnelName(name); err != nil {
-		return 0
-	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	if meta, err := s.loadMetaLocked(name); err == nil && meta.CreatedUnix > 0 {
-		return meta.CreatedUnix
-	}
-	fi, err := os.Stat(s.path(name))
-	if err != nil {
-		return 0
-	}
-	return fi.ModTime().Unix()
-}
-
 // Load reads a tunnel config from disk by name.
 func (s *TunnelStore) Load(name string) (*config.WireGuardConfig, error) {
 	if err := ValidateTunnelName(name); err != nil {
@@ -343,8 +323,10 @@ func (s *TunnelStore) exists(name string) bool {
 }
 
 // ModTimeUnix returns the .conf file's modification time as a Unix
-// timestamp — used as the tunnel's "date added" for sorting. Returns 0
-// when the file can't be stat'd.
+// timestamp. Only a FALLBACK for the date-added sort, for tunnels created
+// before TunnelMeta.CreatedUnix stamping existed (issue #17) — an edit
+// rewrites the .conf and moves this, so it must not be the primary
+// source. Returns 0 when the file can't be stat'd.
 func (s *TunnelStore) ModTimeUnix(name string) int64 {
 	if err := ValidateTunnelName(name); err != nil {
 		return 0

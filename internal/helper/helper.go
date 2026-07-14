@@ -287,6 +287,33 @@ func Run(addr string, ownerUID int, dataDir string) error {
 	})
 	h.wifiMon.Start()
 
+	// Restore persisted helper-side settings so a helper restart (crash,
+	// LaunchDaemon KeepAlive, reboot, upgrade) doesn't silently drop what
+	// the user enabled. The GUI only pushes these when the user TOGGLES
+	// them in Settings (plus log level once at GUI startup), so without
+	// this a freshly-restarted headless helper ran with defaults — health
+	// check off, pin-interface off, log level Info — regardless of
+	// config.json. Kill switch / DNS protection are deliberately NOT
+	// auto-applied here: they are firewall state transitions tied to the
+	// connect path (see applyPostConnectFirewall); enabling them at boot
+	// with no tunnel up would block all traffic, which is a product
+	// decision, not a restore.
+	if settings, err := h.loadUserSettings(); err == nil {
+		h.monitor.SetHealthCheck(settings.HealthCheck)
+		if settings.PinInterface {
+			if err := h.manager.SetPinInterface(true); err != nil {
+				slog.Warn("restore pin-interface failed", "error", err)
+			}
+		}
+		if settings.LogLevel != "" {
+			h.logLevel.Set(parseLevel(settings.LogLevel))
+		}
+		slog.Info("restored persisted helper settings",
+			"health_check", settings.HealthCheck,
+			"pin_interface", settings.PinInterface,
+			"log_level", settings.LogLevel)
+	}
+
 	// Re-evaluate rules once on startup. The autoConnectedBy map is
 	// in-memory only, so a helper crash + LaunchDaemon restart loses
 	// the "this tunnel was rule-managed" markers. Without this synthetic

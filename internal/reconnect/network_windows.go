@@ -33,11 +33,10 @@ import (
 // zero (one GetIpForwardTable2 syscall per second; <1ms on a typical
 // machine).
 
-// vpnAdapterAliases lists adapter aliases that this app may install on
-// Windows. Currently we always use "WireGuide" (see internal/tunnel/
-// engine.go), but listing it here keeps the assumption discoverable for
-// future maintainers and trivially extends to per-tunnel adapter names.
-var vpnAdapterAliases = []string{"WireGuide"}
+// vpnAdapterAliases aliases network.VPNAdapterAliases — the single
+// source of truth for which adapter names are ours (and thus excluded
+// from underlay-route detection).
+var vpnAdapterAliases = network.VPNAdapterAliases
 
 const (
 	// networkPollIntervalWindows mirrors darwin's networkPollInterval —

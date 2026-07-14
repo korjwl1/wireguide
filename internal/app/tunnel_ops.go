@@ -43,12 +43,22 @@ func (s *TunnelService) ListTunnelsLocal() ([]TunnelInfo, error) {
 			notes = meta.Notes
 			latencyProbeTarget = meta.LatencyProbeTarget
 		}
+		// Date-added: the stamped creation time (survives edits, issue #17);
+		// mtime fallback only for tunnels created before stamping existed.
+		// meta is already loaded — no second sidecar read.
+		created := int64(0)
+		if meta != nil {
+			created = meta.CreatedUnix
+		}
+		if created == 0 {
+			created = s.tunnelStore.ModTimeUnix(name)
+		}
 		result = append(result, TunnelInfo{
 			Name:               name,
 			Endpoint:           endpoint,
 			Notes:              notes,
 			LatencyProbeTarget: latencyProbeTarget,
-			CreatedAtUnix:      s.tunnelStore.AddedUnix(name),
+			CreatedAtUnix:      created,
 			LastUsedUnix:       lastUsed[name],
 		})
 	}
@@ -144,13 +154,23 @@ func (s *TunnelService) ListTunnels() ([]TunnelInfo, error) {
 			notes = meta.Notes
 			latencyProbeTarget = meta.LatencyProbeTarget
 		}
+		// Date-added: the stamped creation time (survives edits, issue #17);
+		// mtime fallback only for tunnels created before stamping existed.
+		// meta is already loaded — no second sidecar read.
+		created := int64(0)
+		if meta != nil {
+			created = meta.CreatedUnix
+		}
+		if created == 0 {
+			created = s.tunnelStore.ModTimeUnix(name)
+		}
 		result = append(result, TunnelInfo{
 			Name:               name,
 			IsConnected:        name == active.Value,
 			Endpoint:           endpoint,
 			Notes:              notes,
 			LatencyProbeTarget: latencyProbeTarget,
-			CreatedAtUnix:      s.tunnelStore.AddedUnix(name),
+			CreatedAtUnix:      created,
 			LastUsedUnix:       lastUsed[name],
 		})
 	}

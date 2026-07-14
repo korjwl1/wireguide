@@ -228,4 +228,9 @@ func (h *Helper) disconnectAutoManaged(name string) {
 	h.wifiMu.Lock()
 	delete(h.autoConnectedBy, name)
 	h.wifiMu.Unlock()
+	// Prune the latency cache exactly as handleDisconnect does — otherwise
+	// the status broadcast keeps reporting the dead tunnel's last RTT.
+	h.latencyMu.Lock()
+	delete(h.latencyByTunnel, name)
+	h.latencyMu.Unlock()
 }

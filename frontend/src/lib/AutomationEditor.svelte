@@ -34,11 +34,14 @@
   }
 
   async function load(name) {
+    // Claim the load BEFORE the first await: the reactive statement keys
+    // on loadedFor, and awaiting first would leave a window where any
+    // state change re-runs it and double-invokes load for the same name.
+    loadedFor = name;
+    const gen = ++loadGen;
     // Persist any pending edit for the tunnel we're leaving BEFORE we
     // overwrite `rules`, so switching tunnels never drops the last change.
     await flush();
-    const gen = ++loadGen;
-    loadedFor = name;
     saveError = '';
     try {
       const s = await TunnelService.GetSettings();

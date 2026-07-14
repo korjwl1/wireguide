@@ -16,12 +16,6 @@ var (
 	procSendARP = modIphlpapi.NewProc("SendARP")
 )
 
-// vpnAdapterAliases are the interface friendly-names to exclude when
-// resolving the underlay gateway, so a full tunnel doesn't hide the
-// physical network. WireGuide's adapter is "WireGuide" (see
-// reconnect/network_windows.go, which uses the same constant).
-var vpnAdapterAliases = []string{"WireGuide"}
-
 // GatewayMAC returns the lower-cased MAC of the IPv4 default gateway — a
 // precise, medium-agnostic fingerprint of the physical network. "" when
 // it can't be determined.
@@ -35,7 +29,7 @@ var vpnAdapterAliases = []string{"WireGuide"}
 // the tunnel connected, flapping any `mac:` automation rule. Both steps
 // are unprivileged and locale-independent.
 func GatewayMAC() string {
-	gw := network.UnderlayDefaultGatewayV4(vpnAdapterAliases)
+	gw := network.UnderlayDefaultGatewayV4(network.VPNAdapterAliases)
 	if gw == "" {
 		return ""
 	}

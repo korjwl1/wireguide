@@ -362,6 +362,14 @@ func BestNonExcludedDefaultRouteLUIDv4(excludedAliases []string) uint64 {
 	return r.InterfaceLuid
 }
 
+// VPNAdapterAliases lists the interface friendly-names this app may
+// install on Windows — the adapters that must be EXCLUDED when looking
+// for the physical underlay (default-route owner, gateway MAC). Single
+// source of truth for the reconnect detector and the wifi gateway
+// fingerprint; currently always "WireGuide" (see internal/tunnel/
+// engine.go) but trivially extends to per-tunnel adapter names.
+var VPNAdapterAliases = []string{"WireGuide"}
+
 // UnderlayDefaultGatewayV4 returns the dotted-quad IPv4 next-hop
 // (gateway) of the lowest-metric default route that is NOT on one of the
 // excluded (VPN) adapters, or "" if there is none.

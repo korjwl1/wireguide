@@ -388,7 +388,7 @@ func TestRenameAndDeleteTunnelRules(t *testing.T) {
 	}
 }
 
-func TestAddedUnixStableAcrossEdits(t *testing.T) {
+func TestCreatedUnixStampedOnceAcrossEdits(t *testing.T) {
 	dir := t.TempDir()
 	st := NewTunnelStore(dir)
 	cfg := testConfig()
@@ -396,17 +396,19 @@ func TestAddedUnixStableAcrossEdits(t *testing.T) {
 	if err := st.Save(cfg); err != nil {
 		t.Fatalf("save: %v", err)
 	}
-	created := st.AddedUnix("added-test")
-	if created <= 0 {
-		t.Fatalf("AddedUnix should be stamped on create, got %d", created)
+	meta, err := st.LoadMeta("added-test")
+	if err != nil || meta.CreatedUnix <= 0 {
+		t.Fatalf("CreatedUnix should be stamped on create, got %+v err=%v", meta, err)
 	}
+	created := meta.CreatedUnix
 	// Edit the tunnel (rewrites the .conf, bumping its mtime); the stamped
-	// date-added must NOT move.
+	// creation time must NOT move.
 	cfg.Interface.DNS = []string{"9.9.9.9"}
 	if err := st.Save(cfg); err != nil {
 		t.Fatalf("re-save: %v", err)
 	}
-	if got := st.AddedUnix("added-test"); got != created {
-		t.Errorf("AddedUnix changed after edit: was %d, now %d", created, got)
+	meta, _ = st.LoadMeta("added-test")
+	if meta.CreatedUnix != created {
+		t.Errorf("CreatedUnix changed after edit: was %d, now %d", created, meta.CreatedUnix)
 	}
 }
