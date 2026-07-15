@@ -22,6 +22,11 @@ tasks:
           DEV: '{{.DEV}}'
           OUTPUT: '{{.OUTPUT}}'
           EXTRA_TAGS: '{{.EXTRA_TAGS}}'
+          # go-task does not propagate CLI vars through nested task calls,
+          # so the release CI's SIGN_PUBKEY (Ed25519 update key) must be
+          # forwarded explicitly or the built binary ships keyless and
+          # refuses every auto-update. Empty in dev builds.
+          SIGN_PUBKEY: '{{.SIGN_PUBKEY}}'
     vars:
       DEFAULT_OUTPUT: '{{.BIN_DIR}}/{{.APP_NAME}}'
       OUTPUT: '{{ .OUTPUT | default .DEFAULT_OUTPUT }}'
@@ -127,6 +132,12 @@ tasks:
     summary: Packages the application into a `.app` bundle
     deps:
       - task: build
+        vars:
+          # Forward the release update-signing key down every hop — go-task
+          # does not auto-propagate CLI vars into nested task calls.
+          SIGN_PUBKEY: '{{.SIGN_PUBKEY}}'
+          ARCH: '{{.ARCH}}'
+          DEV: '{{.DEV}}'
     cmds:
       - task: create:app:bundle
 

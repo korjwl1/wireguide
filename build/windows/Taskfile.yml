@@ -29,6 +29,7 @@ tasks:
           ARCH: '{{.ARCH}}'
           DEV: '{{.DEV}}'
           EXTRA_TAGS: '{{.EXTRA_TAGS}}'
+          SIGN_PUBKEY: '{{.SIGN_PUBKEY}}'
     vars:
       # Default to CGO_ENABLED=0 if not explicitly set
       CGO_ENABLED: '{{.CGO_ENABLED | default "0"}}'
@@ -109,6 +110,13 @@ tasks:
     summary: Packages the application
     cmds:
       - task: '{{if eq (.FORMAT | default "nsis") "msix"}}create:msix:package{{else}}create:nsis:installer{{end}}'
+        vars:
+          # go-task doesn't propagate CLI vars into nested tasks — forward
+          # the release update-signing key down every hop or the built .exe
+          # ships keyless and refuses auto-updates.
+          SIGN_PUBKEY: '{{.SIGN_PUBKEY}}'
+          ARCH: '{{.ARCH}}'
+          DEV: '{{.DEV}}'
     vars:
       FORMAT: '{{.FORMAT | default "nsis"}}'
 
@@ -143,6 +151,10 @@ tasks:
     dir: build/windows/nsis
     deps:
       - task: build
+        vars:
+          SIGN_PUBKEY: '{{.SIGN_PUBKEY}}'
+          ARCH: '{{.ARCH}}'
+          DEV: '{{.DEV}}'
     cmds:
       # Create the Microsoft WebView2 bootstrapper if it doesn't exist
       - wails3 generate webview2bootstrapper -dir "{{.ROOT_DIR}}/build/windows/nsis"

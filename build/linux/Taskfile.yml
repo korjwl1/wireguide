@@ -27,6 +27,11 @@ tasks:
           DEV: '{{.DEV}}'
           OUTPUT: '{{.OUTPUT}}'
           EXTRA_TAGS: '{{.EXTRA_TAGS}}'
+          # Forward the release signing key (go-task doesn't auto-propagate
+          # CLI vars into nested tasks). Linux isn't in the release pipeline
+          # today, but keep parity so a future linux release can't ship a
+          # keyless, non-updatable binary.
+          SIGN_PUBKEY: '{{.SIGN_PUBKEY}}'
     vars:
       DEFAULT_OUTPUT: '{{.BIN_DIR}}/{{.APP_NAME}}'
       OUTPUT: '{{ .OUTPUT | default .DEFAULT_OUTPUT }}'
