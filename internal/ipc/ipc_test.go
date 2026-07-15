@@ -122,7 +122,10 @@ func TestMethodNotFound(t *testing.T) {
 
 	time.Sleep(100 * time.Millisecond)
 
-	client, _ := NewClient(addr)
+	client, err := NewClient(addr)
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
 	defer client.Close()
 
 	err = client.Call("Does.NotExist", nil, nil)
