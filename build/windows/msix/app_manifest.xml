@@ -10,7 +10,7 @@
   <Identity
     Name="com.korjwl1.wireguide"
     Publisher="CN=korjwl1"
-    Version="0.3.1.0"
+    Version="0.4.0.0"
     ProcessorArchitecture="x64" />
   
   <Properties>

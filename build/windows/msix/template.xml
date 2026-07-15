@@ -17,7 +17,7 @@
         PackageDisplayName="WireGuide"
         PublisherName="CN=korjwl1"
         PublisherDisplayName="korjwl1"
-        Version="0.3.1.0"
+        Version="0.4.0.0"
         PackageDescription="Cross-platform WireGuard VPN desktop client">
         <Capabilities>
             <Capability Name="runFullTrust" />
