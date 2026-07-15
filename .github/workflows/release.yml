@@ -12,6 +12,14 @@ on:
 permissions:
   contents: write  # needed by softprops/action-gh-release to upload assets
 
+env:
+  # Hex Ed25519 PUBLIC key baked into every release binary (via
+  # Taskfile SIGN_PUBKEY → -ldflags -X internal/update.expectedPublicKey).
+  # The matching private seed lives in the UPDATE_SIGNING_KEY secret and
+  # signs SHA256SUMS in the release job; the sign step verifies the pair
+  # actually match before publishing. Rotation: docs/release.md.
+  UPDATE_SIGNING_PUBKEY: ea2dda6d25dbcbbb9a4b16077c7138fa343a0775a3e718a333c0fbae31bded36
+
 jobs:
   build-macos:
     name: macOS arm64
@@ -41,7 +49,7 @@ jobs:
       - name: Build .app bundle (ad-hoc signed)
         # darwin:package does: build:native → create:app:bundle →
         # codesign:adhoc.
-        run: wails3 task darwin:package ARCH=arm64
+        run: wails3 task darwin:package ARCH=arm64 SIGN_PUBKEY=${{ env.UPDATE_SIGNING_PUBKEY }}
 
       - name: Archive .app
         # ditto preserves macOS metadata (extended attributes, symlinks,
@@ -110,7 +118,7 @@ jobs:
       - name: Build .exe + NSIS installer
         # Our Windows binary is pure-syscall (no cgo) so CGO_ENABLED=0
         # is correct. vendor:wintun pulls the pinned wintun.dll into bin/.
-        run: wails3 task windows:package ARCH=${{ matrix.arch }}
+        run: wails3 task windows:package ARCH=${{ matrix.arch }} SIGN_PUBKEY=${{ env.UPDATE_SIGNING_PUBKEY }}
 
       - name: Rename installer to canonical asset name
         shell: bash
@@ -236,13 +244,37 @@ jobs:
 
       - name: Generate SHA256SUMS
         # Matches the format internal/update/checker.go expects (GNU
-        # coreutils two-space layout). The checker's signature path
-        # also looks for SHA256SUMS.sig next to this file — skipped
-        # for now because we have no signing key wired up in CI yet.
+        # coreutils two-space layout). Signed below — the checker
+        # downloads SHA256SUMS.sig from next to this file.
         run: |
           cd artifacts
           sha256sum * > SHA256SUMS
           cat SHA256SUMS
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+
+      - name: Sign SHA256SUMS (Ed25519)
+        # HARD failure when the key is missing or mismatched — every
+        # binary built above has UPDATE_SIGNING_PUBKEY baked in with
+        # `-tags production`, so publishing without a valid .sig would
+        # strand those clients: their updater REFUSES releases it can't
+        # verify. Better no release than an unverifiable one.
+        env:
+          UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
+        run: |
+          if [ -z "$UPDATE_SIGNING_KEY" ]; then
+            echo "::error::UPDATE_SIGNING_KEY secret is not set. The binaries just built embed UPDATE_SIGNING_PUBKEY and will refuse unsigned updates — set the secret (docs/release.md) before releasing."
+            exit 1
+          fi
+          derived=$(go run ./tools/updatesign pub)
+          if [ "$derived" != "$UPDATE_SIGNING_PUBKEY" ]; then
+            echo "::error::UPDATE_SIGNING_KEY does not match UPDATE_SIGNING_PUBKEY in this workflow (secret derives $derived). A mismatched pair would ship binaries that reject our own releases. Fix the secret or the env value."
+            exit 1
+          fi
+          go run ./tools/updatesign sign -in artifacts/SHA256SUMS -sig artifacts/SHA256SUMS.sig
+          go run ./tools/updatesign verify -pub "$UPDATE_SIGNING_PUBKEY" -in artifacts/SHA256SUMS -sig artifacts/SHA256SUMS.sig
 
       - name: Generate release notes with git-cliff
         # GitHub's built-in generate_release_notes only enumerates merged

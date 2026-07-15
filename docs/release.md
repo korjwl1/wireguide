@@ -3,129 +3,93 @@
 The auto-update verifier in `internal/update/checker.go` defends
 against a compromised GitHub account by verifying an Ed25519
 signature over `SHA256SUMS` with a public key embedded in the binary
-at compile time. The matching private key never touches CI or
-GitHub — it lives in the maintainer's macOS Keychain.
+at compile time:
 
-This doc walks through:
+- **Public key** — hex, injected at build time via
+  `-ldflags "-X github.com/korjwl1/wireguide/internal/update.expectedPublicKey=<hex>"`.
+  Release CI passes it as the `SIGN_PUBKEY` task variable (see
+  `UPDATE_SIGNING_PUBKEY` in `.github/workflows/release.yml`); the
+  platform Taskfiles fold it into `BUILD_FLAGS` alongside
+  `-tags production`, which turns enforcement ON
+  (`internal/update/require_signed_release.go`).
+- **Private key** — a 32-byte Ed25519 seed, hex-encoded, stored in the
+  `UPDATE_SIGNING_KEY` GitHub Actions secret. The release workflow
+  signs `SHA256SUMS` → `SHA256SUMS.sig` (raw 64-byte signature) and
+  publishes it next to `SHA256SUMS`. A pre-publish check derives the
+  public key from the secret and fails the release if it doesn't match
+  `UPDATE_SIGNING_PUBKEY` — a mismatched pair would ship binaries that
+  reject our own releases.
+- **Maintainer backup** — the same seed lives at
+  `~/.wireguide/release-signing.key` (mode 0600) on the release
+  machine. **Back this file up somewhere safe** (password manager /
+  offline). If both the secret and the backup are lost, the key cannot
+  be recovered — rotate (§3).
 
-1. Generating the keypair (one-time)
-2. Signing each release
-3. Rotating the key
-
----
-
-## 1. Generate the keypair
-
-Run once, on the trusted release machine. The private key is stored
-in the macOS Keychain so it isn't on disk in plaintext.
-
-```bash
-# Generate keypair, print public key (hex), seed-only private key
-# stays in Keychain.
-go run ./cmd/wgsign-init
-```
-
-The tool (a thin wrapper around `crypto/ed25519`) does:
-
-1. Calls `ed25519.GenerateKey(crypto/rand)`.
-2. Stores the 64-byte private key (raw) in Keychain under service
-   `wireguide-release-key`, account `default`.
-3. Prints the 32-byte public key as 64 hex characters.
-
-Paste the printed hex into `internal/update/checker.go`:
-
-```go
-const expectedPublicKey = "0123456789abcdef..."
-```
-
-Commit + tag this with the release that ships the first signed
-build. Older binaries with `expectedPublicKey == ""` skip
-verification and rely on SHA256 alone (degraded mode).
-
-> **DO NOT** put the private key anywhere else — not in `~/.ssh`, not
-> in 1Password export, not in a CI secret. Keychain only.
-> If your laptop dies, you can't recover; rotate the key (§3).
-
----
-
-## 2. Sign a release
-
-After GitHub Actions (or your local release script) builds the
-artifacts and writes `SHA256SUMS` next to them:
+Everything is driven by `tools/updatesign` (stdlib-only; its
+sign/verify pair matches the client verifier exactly):
 
 ```bash
-# In the release working directory (where SHA256SUMS exists)
-go run ./cmd/wgsign sign SHA256SUMS
+go run ./tools/updatesign gen -out <seed-file>   # new key; prints PUBLIC hex, never the seed
+go run ./tools/updatesign pub                    # seed from $UPDATE_SIGNING_KEY (or -key <file>); prints public hex
+go run ./tools/updatesign sign -in SHA256SUMS    # writes SHA256SUMS.sig
+go run ./tools/updatesign verify -pub <hex> -in SHA256SUMS
 ```
-
-This:
-
-1. Reads `SHA256SUMS` from disk.
-2. Pulls the private key out of Keychain.
-3. Calls `ed25519.Sign(priv, sumsBytes)` (64-byte signature, raw).
-4. Writes the signature to `SHA256SUMS.sig` next to `SHA256SUMS`.
-
-Upload **all of**:
-
-- the asset(s) (`.dmg` / `.zip` / etc.)
-- `SHA256SUMS`
-- `SHA256SUMS.sig`
-
-to the GitHub Release. The verifier expects `SHA256SUMS.sig` at the
-same URL prefix as `SHA256SUMS`.
 
 ---
 
-## 3. Rotate the key
+## 1. One-time setup (already done)
 
-You need to rotate when:
+```bash
+go run ./tools/updatesign gen -out ~/.wireguide/release-signing.key
+#  → prints the public key; paste into UPDATE_SIGNING_PUBKEY in release.yml
+gh secret set UPDATE_SIGNING_KEY < ~/.wireguide/release-signing.key
+```
 
-- the release machine is lost or compromised
-- the private key is suspected leaked
-- on a long cadence (e.g. every 2 years) as hygiene
+Older binaries built with `expectedPublicKey == ""` (all releases up
+to and including v0.3.1, and every dev build) skip verification and
+rely on SHA256 alone — they are unaffected by any of this.
 
-Rotation procedure:
+## 2. Signing a release
 
-1. Generate a NEW keypair (§1) on a clean machine.
-2. Replace `expectedPublicKey` in `checker.go` with the new public
-   key. Bump the app version.
-3. Cut a release. **This release MUST be signed with the OLD key**
-   if old binaries are still in the wild — those clients verify
-   against the old embedded pubkey, so the SHA256SUMS.sig of the
-   new release must still be old-key-signed.
-4. After enough users have updated past the cutover, you can stop
-   signing with the old key. Future releases sign with new only.
+Nothing manual: the tag-triggered workflow bakes the public key into
+every platform build, then signs `SHA256SUMS` in the `release` job and
+attaches `SHA256SUMS.sig` to the GitHub Release. The step **fails the
+whole release** if the secret is missing or mismatched, because the
+just-built binaries would otherwise refuse all future auto-updates.
 
-Trade-off: there's no "trust transition" mechanism (no signed key
-manifest). Users who skip the cutover release entirely will be
-stuck — they verify against the old pubkey but new releases are
-signed with the new key. Keep the cutover release available
-indefinitely.
+## 3. Rotating the key
 
-If keys are NEVER signed at all (initial state), `expectedPublicKey
-== ""` and the verifier just warns in the log and proceeds with
-SHA256-only authentication. That's acceptable for the early
-0.1.x line; flip the constant the moment you cut a signed release.
+Rotate when the key may have leaked (GitHub org compromise, laptop
+loss if the backup was on it) or on long-cadence hygiene:
+
+1. `go run ./tools/updatesign gen -out <new-seed-file>` on a clean machine.
+2. Update `UPDATE_SIGNING_PUBKEY` in `release.yml` with the new public
+   key and `gh secret set UPDATE_SIGNING_KEY < <new-seed-file>`.
+3. Cut the cutover release. **Its `SHA256SUMS.sig` must verify for the
+   binaries already in the wild**, which check the OLD public key — so
+   sign that one release manually with the old key
+   (`go run ./tools/updatesign sign -key <old-seed-file> ...`, replace
+   the workflow-produced .sig on the Release) or temporarily keep the
+   old pair in CI for it.
+4. Once users have crossed the cutover, new releases are new-key only.
+   Keep the cutover release downloadable indefinitely — clients that
+   skip it verify new releases against the old key and must go through
+   it (or reinstall manually).
+
+There is deliberately no signed key-transition manifest — the fleet is
+small and the manual cutover above is simpler to reason about.
 
 ---
 
 ## Implementation pointers
 
 - Verifier: `internal/update/checker.go` — `verifyChecksumSignature`
-- Tests: `internal/update/checker_test.go` —
-  `TestVerifyEd25519_*` and `TestVerifyChecksumSignature_*`
-- Signing tool (TODO): `cmd/wgsign/`
-- Init tool (TODO): `cmd/wgsign-init/`
-
-The signing tools are not in the tree yet — they're trivial
-wrappers around `crypto/ed25519` plus the `security` CLI for
-Keychain access:
-
-```bash
-# Roughly what wgsign sign does:
-priv=$(security find-generic-password -s wireguide-release-key -a default -w | xxd -r -p)
-echo "$priv" | ... | ed25519 sign SHA256SUMS > SHA256SUMS.sig
-```
-
-When you cut the first signed release, write `cmd/wgsign{,-init}/main.go`
-and update this section.
+  (raw 64-byte `.sig`, hex pubkey, signature over the exact
+  `SHA256SUMS` bytes); enforcement gate in
+  `internal/update/require_signed_release.go` (`-tags production`).
+- Signer/keygen: `tools/updatesign/main.go`
+- CI wiring: `.github/workflows/release.yml` (`UPDATE_SIGNING_PUBKEY`
+  env, `SIGN_PUBKEY` task var, "Sign SHA256SUMS" step) and the
+  `BUILD_FLAGS` vars in `build/{darwin,windows,linux}/Taskfile.yml`.
+- Tests: `internal/update/checker_test.go` — `TestVerifyEd25519_*`,
+  `TestVerifyChecksumSignature_*`
