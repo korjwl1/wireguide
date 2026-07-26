@@ -55,6 +55,26 @@ func Dial(addr string) (net.Conn, error) {
 	return conn, nil
 }
 
+// allowSelfOwnedPipes additionally accepts a pipe owned by the current
+// user. It is set only by this package's tests, which create their own
+// listener in-process: an unelevated test binary owns its objects as the
+// user SID, so every dial would otherwise be rejected. Unexported and
+// false in every non-test build, so production always requires SY/BA.
+//
+// An elevated process owns its objects as BA (measured), which is why the
+// helper's real pipe passes the production check.
+var allowSelfOwnedPipes bool
+
+// ownedByCurrentUser reports whether sid is this process's user SID.
+func ownedByCurrentUser(sid *windows.SID) bool {
+	tok := windows.GetCurrentProcessToken()
+	u, err := tok.GetTokenUser()
+	if err != nil {
+		return false
+	}
+	return windows.EqualSid(sid, u.User.Sid)
+}
+
 // verifyPipeOwner checks that the named pipe is owned by Local System (SY)
 // or Built-in Administrators (BA). This prevents a malicious process from
 // creating a pipe with the same name before the legitimate helper starts.
@@ -94,6 +114,10 @@ func verifyPipeOwner(conn net.Conn) error {
 
 	if (localSystem != nil && windows.EqualSid(owner, localSystem)) ||
 		(builtinAdmins != nil && windows.EqualSid(owner, builtinAdmins)) {
+		return nil
+	}
+
+	if allowSelfOwnedPipes && ownedByCurrentUser(owner) {
 		return nil
 	}
 
