@@ -18,6 +18,12 @@
   export let open = false;
 
   let rules = [];
+  // Local-only row identity for the {#each} key; never persisted
+  // (persistSet() rebuilds plain objects). Monotonic and never reset, so
+  // keys stay unique across loads. Note this does NOT preserve DOM across
+  // a genuine reload (load() mints fresh ids) — focus survival comes from
+  // diskDiffers suppressing self-write reloads, not from the keying.
+  let ruleId = 0;
   let loadedFor = '';
   let knownSSIDs = [];
   let currentSSID = '';
@@ -48,15 +54,25 @@
       if (gen !== loadGen) return; // a newer load superseded this one
       const per = s?.automation?.per_tunnel_rules || {};
       // Deep-copy so edits don't mutate the fetched object before save.
-      rules = (per[name] || []).map(r => ({
-        when: {
-          type: r.when?.type || 'network',
-          ssid: r.when?.ssid || '',
-          subnet: r.when?.subnet || '',
-          gateway_mac: r.when?.gateway_mac || '',
-        },
-        do: r.do || 'connect',
-      }));
+      rules = (per[name] || []).map(r => {
+        const row = {
+          _id: ++ruleId,
+          when: {
+            type: r.when?.type || 'network',
+            ssid: r.when?.ssid || '',
+            subnet: r.when?.subnet || '',
+            gateway_mac: r.when?.gateway_mac || '',
+            // Not editable here; carried through the round-trip so a GUI
+            // save never strips a label another writer attached.
+            label: r.when?.label || '',
+          },
+          do: r.do || 'connect',
+        };
+        // Seed the last-committed form so an existing rule that turns
+        // incomplete mid-edit keeps its on-disk value (see persistSet).
+        row._committed = cleanedRule(row);
+        return row;
+      });
     } catch (e) {
       if (gen === loadGen) rules = [];
       console.error('automation load:', e);
@@ -82,8 +98,10 @@
   const MAX_RULES = 50;
   function addRule() {
     if (rules.length >= MAX_RULES) return;
-    rules = [...rules, { when: { type: 'network', ssid: '', subnet: '', gateway_mac: '' }, do: 'connect' }];
-    save();
+    // No save() here: a blank draft is not a configuration change — it
+    // becomes persistable on the first input that completes it. Saving
+    // now would also manufacture a self-write config_changed echo.
+    rules = [...rules, { _id: ++ruleId, when: { type: 'network', ssid: '', subnet: '', gateway_mac: '', label: '' }, do: 'connect' }];
   }
 
   function removeRule(i) {
@@ -170,22 +188,32 @@
   }
   afterUpdate(updateScroll);
 
-  // Drop rules whose condition has no value before persisting.
-  function cleaned() {
-    return rules.filter(r => {
-      if (r.when.type === 'none_match') return true;
-      if (r.when.type === 'ssid') return r.when.ssid.trim() !== '';
-      if (r.when.type === 'subnet') return r.when.subnet.trim() !== '';
-      if (r.when.type === 'network') return r.when.gateway_mac.trim() !== '';
-      return false;
-    }).map(r => {
-      let when;
-      if (r.when.type === 'ssid') when = { type: 'ssid', ssid: r.when.ssid.trim() };
-      else if (r.when.type === 'subnet') when = { type: 'subnet', subnet: r.when.subnet.trim() };
-      else if (r.when.type === 'network') when = { type: 'network', gateway_mac: macCanon(r.when.gateway_mac) };
-      else when = { type: 'none_match' };
-      return { when, do: r.do };
-    });
+  // cleanedRule returns the normalized persisted form of a row, or null
+  // while the row's condition is incomplete. persistSet() is what goes to
+  // disk: the latest complete form of every row (cached on r._committed).
+  // A row that turns incomplete mid-edit therefore keeps its last on-disk
+  // value instead of being transiently deleted (and lost on a crash); a
+  // never-completed draft contributes nothing. Rows leave the persisted
+  // set only via removeRule() or by abandoning a draft.
+  function cleanedRule(r) {
+    const t = r.when.type;
+    let when = null;
+    if (t === 'none_match') when = { type: 'none_match' };
+    else if (t === 'ssid' && r.when.ssid.trim() !== '') when = { type: 'ssid', ssid: r.when.ssid.trim() };
+    else if (t === 'subnet' && r.when.subnet.trim() !== '') when = { type: 'subnet', subnet: r.when.subnet.trim() };
+    else if (t === 'network' && r.when.gateway_mac.trim() !== '') when = { type: 'network', gateway_mac: macCanon(r.when.gateway_mac) };
+    if (!when) return null;
+    if (r.when.label) when.label = r.when.label;
+    return { when, do: r.do };
+  }
+  function persistSet() {
+    const out = [];
+    for (const r of rules) {
+      const c = cleanedRule(r);
+      if (c) r._committed = c;
+      if (r._committed) out.push(r._committed);
+    }
+    return out;
   }
 
   // Debounced, snapshot-based save. The pending snapshot binds the rules
@@ -199,7 +227,7 @@
   let saveChain = Promise.resolve();
 
   function save() {
-    pending = { name: tunnelName, rules: cleaned() };
+    pending = { name: tunnelName, rules: persistSet() };
     if (saveTimer) clearTimeout(saveTimer);
     saveTimer = setTimeout(runSave, 300);
   }
@@ -213,15 +241,12 @@
   async function persist(snap) {
     saveError = '';
     try {
-      const s = await TunnelService.GetSettings();
-      const automation = s?.automation || { per_tunnel_rules: {} };
-      automation.per_tunnel_rules = automation.per_tunnel_rules || {};
-      if (snap.rules.length === 0) {
-        delete automation.per_tunnel_rules[snap.name];
-      } else {
-        automation.per_tunnel_rules[snap.name] = snap.rules;
-      }
-      await TunnelService.SaveSettings({ ...s, automation });
+      // Scoped, cross-process-atomic update of just this tunnel's rules.
+      // The old GetSettings → whole-object SaveSettings pair had a lost-
+      // update race: a CLI SettingsStore.Update landing between the two
+      // IPC calls was clobbered by our stale snapshot of every setting.
+      // An empty set removes the tunnel's entry (same semantics as before).
+      await TunnelService.SaveAutomationRules(snap.name, snap.rules);
     } catch (e) {
       saveError = errText(e);
       console.error('automation save:', e);
@@ -243,19 +268,67 @@
 
   // Live-reflect an external edit to config.json (e.g. `wireguide ctl
   // automation ...`, or another window) while the editor is open — the
-  // file is the single source of truth, so we reload rather than sitting
-  // on a stale in-memory copy that our next save would write back over.
-  // Skip while the user has an unsaved local edit pending (saveTimer set):
-  // that debounced save lands last and wins, and its own write re-fires
-  // config_changed, so we reload the settled value right after. This is
-  // the standard "watch the file, last write wins" model (git config,
-  // editor settings.json) — no save button, no lock dialogs.
+  // file is the single source of truth for COMPLETE rules, so a genuine
+  // external change reloads rather than sitting on a stale in-memory copy
+  // that our next save would write back over.
+  //
+  // But the watcher also fires for this editor's OWN persist(): draft rows
+  // (incomplete condition) exist only in the UI — persistSet() keeps them
+  // off disk — so a blind reload here erased the row the user was about to
+  // fill in, ~1 s after adding it (issue #27). The saveTimer guard alone
+  // can't prevent that: the 300 ms debounce has long cleared by the time
+  // the ≤1 s mtime poll delivers the event. So reload only when disk
+  // actually disagrees with what we'd persist right now — a self-write
+  // compares equal and is ignored; a real external edit differs and reloads.
+  //
+  // normRule puts a disk rule and a persistSet() rule through the SAME
+  // normalization (load()'s type fallback, MAC canonicalization), so e.g.
+  // a dash-separated MAC written by `wireguide ctl` never reads as a
+  // difference from our colon form and forces a spurious reload.
+  function normRule(d) {
+    return {
+      do: d?.do || 'connect',
+      type: d?.when?.type || 'network',
+      ssid: (d?.when?.ssid || '').trim(),
+      subnet: (d?.when?.subnet || '').trim(),
+      mac: macCanon(d?.when?.gateway_mac || ''),
+      label: d?.when?.label || '',
+    };
+  }
+  function diskDiffers(disk) {
+    const local = persistSet();
+    if (disk.length !== local.length) return true;
+    // Positional compare is intentional: order is rule priority.
+    return disk.some((d, i) => {
+      const a = normRule(d), b = normRule(local[i]);
+      return a.do !== b.do || a.type !== b.type || a.ssid !== b.ssid ||
+        a.subnet !== b.subnet || a.mac !== b.mac || a.label !== b.label;
+    });
+  }
   let cfgChangedUnsub = null;
   onMount(() => {
-    cfgChangedUnsub = Events.On('config_changed', () => {
-      if (open && tunnelName && saveTimer === null) {
-        load(tunnelName);
+    cfgChangedUnsub = Events.On('config_changed', async () => {
+      // Capture the tunnel so a switch mid-await can't compare or load
+      // across tunnels; busy() bundles every reason to leave the user's
+      // local state alone (closed, switched, typing, save queued, or a
+      // live drag reorder that hasn't been saved yet).
+      const name = tunnelName;
+      const busy = () =>
+        !open || tunnelName !== name || saveTimer !== null || pending || dragIndex !== null;
+      if (!name || busy()) return;
+      try {
+        await saveChain; // let an in-flight persist settle before comparing
+        const s = await TunnelService.GetSettings();
+        if (busy()) return; // state moved while we awaited
+        const disk = (s?.automation?.per_tunnel_rules || {})[name] || [];
+        if (!diskDiffers(disk)) return;
+      } catch (e) {
+        // Can't tell what's on disk — keep the user's in-progress state
+        // rather than risk wiping it with a reload that would also fail.
+        console.error('automation config_changed check:', e);
+        return;
       }
+      load(name);
     });
   });
   onDestroy(() => {
@@ -286,7 +359,7 @@
         {#if rules.length === 0}
           <div class="am-empty">{$t('automation.empty')}</div>
         {:else}
-          {#each rules as rule, i (rule)}
+          {#each rules as rule, i (rule._id)}
             <div class="am-rule" class:am-dragging={dragIndex === i}
               on:dragover={(e) => onRowDragOver(e, i)}
               on:dragend={onDragEnd}>

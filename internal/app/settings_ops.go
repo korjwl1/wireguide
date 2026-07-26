@@ -171,6 +171,31 @@ func (s *TunnelService) SaveSettings(settings *storage.Settings) error {
 	return nil
 }
 
+// SaveAutomationRules atomically replaces one tunnel's Automation rules.
+// It goes through SettingsStore.Update — the cross-process locked
+// read-modify-write — instead of a whole-object SaveSettings, so a
+// concurrent `wireguide ctl` edit to any other tunnel or field can never
+// be clobbered by a stale GUI snapshot (issue #27 review follow-up).
+// An empty rules slice removes the tunnel's entry entirely. The helper
+// re-reads settings from disk on every evaluation, so no push is needed.
+func (s *TunnelService) SaveAutomationRules(tunnel string, rules []wifi.Rule) error {
+	if tunnel == "" {
+		return fmt.Errorf("automation: empty tunnel name")
+	}
+	return s.settingsStore.Update(func(st *storage.Settings) error {
+		st.EnsureAutomation()
+		if len(rules) == 0 {
+			delete(st.Automation.PerTunnel, tunnel)
+			return nil
+		}
+		if st.Automation.PerTunnel == nil {
+			st.Automation.PerTunnel = map[string][]wifi.Rule{}
+		}
+		st.Automation.PerTunnel[tunnel] = rules
+		return nil
+	})
+}
+
 // SetLogLevel updates both the GUI's and the helper's slog level
 // immediately. Exposed as a Wails method so the Settings view can call
 // it without waiting for a full SaveSettings round trip.
