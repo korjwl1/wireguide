@@ -527,6 +527,22 @@ export function RunUpdate(info) {
 }
 
 /**
+ * SaveAutomationRules atomically replaces one tunnel's Automation rules.
+ * It goes through SettingsStore.Update — the cross-process locked
+ * read-modify-write — instead of a whole-object SaveSettings, so a
+ * concurrent `wireguide ctl` edit to any other tunnel or field can never
+ * be clobbered by a stale GUI snapshot (issue #27 review follow-up).
+ * An empty rules slice removes the tunnel's entry entirely. The helper
+ * re-reads settings from disk on every evaluation, so no push is needed.
+ * @param {string} tunnel
+ * @param {wifi$0.Rule[]} rules
+ * @returns {$CancellablePromise<void>}
+ */
+export function SaveAutomationRules(tunnel, rules) {
+    return $Call.ByID(657403010, tunnel, rules);
+}
+
+/**
  * SaveSettings persists the settings file AND applies any side effects:
  * currently, pushing the new log level to both the GUI's slog handler and
  * the helper's slog handler. Without those side effects a user lowering the
