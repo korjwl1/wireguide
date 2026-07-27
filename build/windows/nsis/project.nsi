@@ -91,6 +91,15 @@ FunctionEnd
 Section
     !insertmacro wails.setShellContext
 
+    # The GUI tray app and the elevated helper are the same exe, and Windows
+    # locks running images — without this, an in-place upgrade dies with
+    # "Error opening file for writing: wireguide.exe". The installer runs
+    # elevated, so taskkill reaches the SYSTEM-level helper too. Exit code is
+    # ignored: 128 just means nothing was running.
+    nsExec::ExecToLog `taskkill /F /IM "${PRODUCT_EXECUTABLE}"`
+    Pop $0
+    Sleep 500
+
     !insertmacro wails.webview2runtime
 
     SetOutPath $INSTDIR
@@ -131,8 +140,14 @@ Section
     !insertmacro wails.writeUninstaller
 SectionEnd
 
-Section "uninstall" 
+Section "uninstall"
     !insertmacro wails.setShellContext
+
+    # Same as install: both the tray app and the helper hold the exe image
+    # open, so RMDir /r would silently leave wireguide.exe behind.
+    nsExec::ExecToLog `taskkill /F /IM "${PRODUCT_EXECUTABLE}"`
+    Pop $0
+    Sleep 500
 
     RMDir /r "$AppData\${PRODUCT_EXECUTABLE}" # Remove the WebView2 DataPath
 
