@@ -4,10 +4,12 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"os"
 	"os/exec"
 	"regexp"
 	"runtime"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/korjwl1/wireguide/internal/sysexec"
@@ -64,6 +66,11 @@ func PingEndpointContext(ctx context.Context, endpoint string) *PingResult {
 		cmd = exec.CommandContext(ctx, "ping", "-n", "3", "-w", "3000", ip)
 	default:
 		cmd = exec.CommandContext(ctx, "ping", "-c", "3", "-W", "3", ip)
+		// Force canonical output so the parsers below aren't at the mercy
+		// of the user's locale. No Windows equivalent: ping.exe follows
+		// the system MUI language regardless of environment (see the
+		// locale-agnostic parsing below, which is the real fix there).
+		cmd.Env = append(os.Environ(), "LC_ALL=C", "LANG=C")
 	}
 	sysexec.Hide(cmd)
 
@@ -100,8 +107,15 @@ func PingEndpointContext(ctx context.Context, endpoint string) *PingResult {
 var (
 	reUnixPingAvg    = regexp.MustCompile(`= [\d.]+/([\d.]+)/`)
 	reWindowsPingAvg = regexp.MustCompile(`Average = (\d+)ms`)
-	// Matches individual round-trip times: "time=12.3 ms" or "time<1ms"
-	reIndividualRTT = regexp.MustCompile(`time[=<]([\d.]+)\s*ms`)
+	// Matches a round-trip time by its ASCII skeleton only — "=33ms",
+	// "<1ms", "=32.3 ms" — with no dependency on the label before it.
+	// Console-less ping.exe (CREATE_NO_WINDOW, i.e. every helper probe)
+	// emits the system MUI language, so on non-English Windows the label
+	// is localized AND arrives as raw ANSI bytes ("시간=33ms" in CP949);
+	// only the ASCII "=33ms" part is stable. An English-only "time=..."
+	// prefix is what made every probe fall through to the wall-clock
+	// estimate (~687ms for a 32ms link — issue #32).
+	reAnyRTT = regexp.MustCompile(`[=<]\s*([\d.]+)\s*ms`)
 )
 
 func parsePingLatency(output string) float64 {
@@ -122,13 +136,22 @@ func parsePingLatency(output string) float64 {
 	return 0
 }
 
-// parseIndividualPingTimes extracts per-reply round-trip times (e.g.
-// "time=12.3 ms") from ping output and returns their average, or 0 if
-// none were found.
+// parseIndividualPingTimes extracts per-reply round-trip times from ping
+// output in any locale and returns their average, or 0 if none were found.
+// Reply lines are identified by their "TTL=" token, which ping keeps as
+// ASCII in every language; when no line carries one (IPv6 replies have no
+// TTL) it falls back to averaging every "...ms" value in the output —
+// that then includes the min/max/avg summary, which averages to the same
+// place.
 func parseIndividualPingTimes(output string) float64 {
-	matches := reIndividualRTT.FindAllStringSubmatch(output, -1)
+	var matches [][]string
+	for _, line := range strings.Split(output, "\n") {
+		if strings.Contains(strings.ToUpper(line), "TTL=") {
+			matches = append(matches, reAnyRTT.FindAllStringSubmatch(line, -1)...)
+		}
+	}
 	if len(matches) == 0 {
-		return 0
+		matches = reAnyRTT.FindAllStringSubmatch(output, -1)
 	}
 	var total float64
 	count := 0
