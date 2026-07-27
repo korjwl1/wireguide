@@ -226,6 +226,14 @@ func Run(assetsHandler http.Handler, dataDir string) error {
 		if runtime.GOOS == "windows" && len(trayOffIconWindows) > 0 {
 			tray.SetIcon(trayOffIconWindows)
 		}
+		// Windows convention: left-click on a tray icon is the primary
+		// action — show the main window (WireGuard-for-Windows, Discord,
+		// Slack all behave this way); the menu stays on right-click.
+		// Registered only here: on macOS any click opens the NSStatusItem
+		// menu natively, and an OnClick handler would fight it.
+		if runtime.GOOS == "windows" {
+			tray.OnClick(showDock)
+		}
 	}
 	tray.SetTooltip("WireGuide")
 

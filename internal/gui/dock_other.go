@@ -6,5 +6,23 @@ import "github.com/wailsapp/wails/v3/pkg/application"
 
 var dockWindow *application.WebviewWindow
 
-func showDock() {}
+// showDock brings back the main window after close-to-tray. Unlike macOS
+// there is no dock icon / activation policy to juggle (and no async retry
+// dance) — un-minimise + Show + Focus on the window is the whole job.
+// Restore comes first: Show() alone does not un-minimise on Windows, so a
+// window hidden while minimised would otherwise reappear only in the
+// taskbar, still collapsed.
+func showDock() {
+	if dockWindow == nil {
+		return
+	}
+	if dockWindow.IsMinimised() {
+		dockWindow.Restore()
+	}
+	dockWindow.Show()
+	dockWindow.Focus()
+}
+
+// hideDock only exists to hide the macOS dock icon — the window itself is
+// already hidden by the WindowClosing hook, so there is nothing to do here.
 func hideDock() {}

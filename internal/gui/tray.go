@@ -642,9 +642,15 @@ func (t *trayManager) rebuildMenu() {
 		t.tray.Destroy()
 		t.app.Quit()
 	})
-	if created {
+	if created || runtime.GOOS == "windows" {
+		// Windows must go through SetMenu on EVERY rebuild: the tray popup
+		// is a separate PopupMenu that only SetMenu reconstructs, while
+		// Menu.Update() refreshes a window-menu impl the popup never reads —
+		// so refilled items (connection glyphs) stayed invisible forever.
 		t.tray.SetMenu(m) // runs m.Update() and caches the NSMenu
 	} else {
-		m.Update() // in-place refresh of the same NSMenu — live even while open
+		// macOS: in-place refresh of the same NSMenu — live even while
+		// open, and repeated SetMenu there leaked the replaced NSMenu.
+		m.Update()
 	}
 }
