@@ -107,6 +107,17 @@ func (h *Helper) goSafe(name string, fn func()) {
 // tolerate a normal GUI restart.
 const shutdownGrace = 10 * time.Second
 
+// startupGrace is the window a freshly-started helper waits for its FIRST
+// GUI connection before terminating itself. Covers the orphan case where
+// the spawning GUI died while the UAC/authorization prompt was still
+// pending — consent then launches a helper no GUI will ever connect to
+// (Windows login autostart: UAC shows, GUI times out and exits, helper
+// lingers in Task Manager with no tray). Much longer than shutdownGrace
+// because a legitimate first connect can be delayed by boot-time disk
+// contention or a user who answers the prompt slowly, and the arming
+// happens before crash recovery has restored any tunnel.
+const startupGrace = 60 * time.Second
+
 // Helper holds the helper process state.
 type Helper struct {
 	server   *ipc.Server
@@ -269,6 +280,11 @@ func Run(addr string, ownerUID int, dataDir string) error {
 	if !isDaemon() {
 		h.server.OnConnect(h.cancelShutdownTimer)
 		h.server.OnDisconnect(h.startShutdownTimer)
+		// Arm the startup grace window now: a helper that never receives
+		// a GUI connection must not run forever (see startupGrace). The
+		// first OnConnect cancels it; the fire-time active-tunnel check
+		// keeps a crash-recovered tunnel alive even with no GUI.
+		h.armShutdownTimer(startupGrace, "startup, no GUI connected yet")
 	} else {
 		slog.Info("running as LaunchDaemon — shutdown grace disabled")
 	}
@@ -488,25 +504,33 @@ func (h *Helper) onReconnectState(state reconnect.State) {
 // wg-quick's monitor_daemon. The timer only applies when there is no active
 // tunnel (i.e., the user disconnected and then closed the GUI).
 func (h *Helper) startShutdownTimer() {
+	h.armShutdownTimer(shutdownGrace, "GUI disconnected")
+}
+
+// armShutdownTimer is the shared countdown behind startShutdownTimer (GUI
+// disconnect) and the startup grace window (never-connected helper). The
+// active-tunnel guard applies to both: an active tunnel always keeps the
+// helper alive.
+func (h *Helper) armShutdownTimer(grace time.Duration, reason string) {
 	active := ""
 	if h.manager != nil {
 		active = h.manager.ActiveTunnel()
 	}
 
 	if active != "" {
-		slog.Info("GUI disconnected but tunnel is active — helper stays alive (wg-quick semantics)",
-			"active_tunnel", active)
+		slog.Info("tunnel is active — helper stays alive (wg-quick semantics)",
+			"reason", reason, "active_tunnel", active)
 		return
 	}
 
-	slog.Info("GUI disconnected, no active tunnel — starting shutdown grace window",
-		"grace", shutdownGrace)
+	slog.Info("no active tunnel — starting shutdown grace window",
+		"reason", reason, "grace", grace)
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if h.shutdownTimer != nil {
 		h.shutdownTimer.Stop()
 	}
-	h.shutdownTimer = time.AfterFunc(shutdownGrace, func() {
+	h.shutdownTimer = time.AfterFunc(grace, func() {
 		// Double-check at fire time: a tunnel may have been activated between
 		// timer start and fire (e.g., reconnect monitor brought it back up).
 		if t := h.manager.ActiveTunnel(); t != "" {

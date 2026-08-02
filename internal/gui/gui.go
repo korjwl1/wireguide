@@ -12,9 +12,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"os/exec"
 	"runtime"
-	"strings"
 	"sync"
 	"time"
 
@@ -107,10 +105,12 @@ func Run(assetsHandler http.Handler, dataDir string) error {
 		}
 		slog.Warn("helper connection failed", "attempt", attempt+1, "error", err)
 		if attempt < 2 {
-			// Show retry dialog via osascript (Wails app isn't running yet)
-			retryCmd := `display dialog "WireGuide needs its helper service to manage VPN connections.\n\nPlease grant administrator access when prompted." buttons {"Quit", "Retry"} default button "Retry" with title "WireGuide" with icon caution`
-			out, retryErr := exec.Command("osascript", "-e", retryCmd).Output()
-			if retryErr != nil || strings.Contains(string(out), "Quit") {
+			// Native per-OS retry dialog (retry_prompt_*.go) — the Wails
+			// app isn't running yet, so Wails dialogs are unavailable.
+			// On retry, ensureHelper first probes for an already-running
+			// helper, so a UAC prompt the user answered while this dialog
+			// was up connects instantly instead of re-prompting.
+			if !askHelperRetry() {
 				return fmt.Errorf("helper setup cancelled by user")
 			}
 			continue
