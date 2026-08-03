@@ -114,9 +114,14 @@
 
     /* ============ Non-color tokens (shared across themes) ============ */
 
-    /* Typography: macOS system font stack — SF Pro Text/Display auto-selected */
+    /* Native UI font stack. Keep each platform's normal system face while
+     * giving Linux an explicit metric-compatible choice and Korean glyphs.
+     * A bare sans-serif fallback resolved to DejaVu Sans on Raspberry Pi OS,
+     * whose button baselines sit visibly high compared with SF/Segoe UI. */
     --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display",
-                 "Helvetica Neue", Helvetica, Arial, sans-serif;
+                 "Segoe UI", "Apple SD Gothic Neo", "Malgun Gothic",
+                 "Cantarell", "Noto Sans", "Noto Sans CJK KR", "Helvetica Neue", Helvetica,
+                 Arial, "Liberation Sans", sans-serif;
     --font-mono: ui-monospace, "SF Mono", Menlo, Monaco, "Cascadia Mono",
                  Consolas, monospace;
 

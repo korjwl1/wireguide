@@ -1,0 +1,80 @@
+name: Linux CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test-build-package:
+    name: Ubuntu amd64
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.12'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20.19.2'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev
+
+      - name: Install pinned build tools
+        run: |
+          go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-alpha.74
+          go install github.com/go-task/task/v3/cmd/task@v3.45.4
+          echo "$HOME/go/bin" >> "$GITHUB_PATH"
+
+      # main.go embeds frontend/dist, so the frontend must exist before any
+      # command that loads the root Go package (test, vet, or bindings).
+      - name: Build frontend
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+
+      - name: Test and vet
+        run: |
+          go test -race ./...
+          go vet ./...
+
+      - name: Build native Linux binary
+        run: task linux:build ARCH=amd64
+
+      - name: Check runtime linking
+        run: |
+          file bin/wireguide
+          if ldd bin/wireguide | grep -q 'not found'; then
+            ldd bin/wireguide
+            exit 1
+          fi
+
+      - name: Build and inspect DEB
+        env:
+          GOARCH: amd64
+          GIT_COMMITTER_NAME: WireGuide CI
+          GIT_COMMITTER_EMAIL: noreply@example.com
+        run: |
+          wails3 tool package -name wireguide -format deb -config ./build/linux/nfpm/nfpm.yaml -out ./bin
+          dpkg-deb --info bin/wireguide.deb
+          dpkg-deb --contents bin/wireguide.deb
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-amd64-ci
+          path: |
+            bin/wireguide
+            bin/wireguide.deb
+          if-no-files-found: error
+          retention-days: 7

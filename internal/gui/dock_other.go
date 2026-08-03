@@ -2,7 +2,11 @@
 
 package gui
 
-import "github.com/wailsapp/wails/v3/pkg/application"
+import (
+	"runtime"
+
+	"github.com/wailsapp/wails/v3/pkg/application"
+)
 
 var dockWindow *application.WebviewWindow
 
@@ -20,6 +24,12 @@ func showDock() {
 		dockWindow.Restore()
 	}
 	dockWindow.Show()
+	if runtime.GOOS == "linux" {
+		// labwc/XWayland may drop server-side decorations when a GTK window is
+		// hidden and mapped again. Reasserting the decorated state after Show
+		// refreshes the WM hint and restores the title bar.
+		dockWindow.SetFrameless(false)
+	}
 	dockWindow.Focus()
 }
 

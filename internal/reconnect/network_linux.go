@@ -3,29 +3,31 @@
 package reconnect
 
 import (
+	"bufio"
+	"fmt"
+	"io"
 	"log/slog"
+	"os"
+	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 
 	"golang.org/x/sys/unix"
 )
 
-// linuxNetworkChangeDetector subscribes to the kernel's RTNETLINK multicast
-// groups for route, address, and link transitions on the underlying
-// interfaces. When a relevant event fires we coalesce a burst into a single
-// notification on ChangeChan (500ms debounce). The reconnect monitor then
-// triggers a per-tunnel reconnect, instead of waiting up to 40s for the
-// generic sleep/wake heuristic to notice.
-//
-// We DO NOT use NetworkManager DBus here — that would tie us to NM, which
-// not every distro ships (Alpine/Arch headless). Raw netlink works on any
-// kernel with CONFIG_RTNETLINK (i.e. every modern Linux).
+// linuxNetworkChangeDetector uses RTNETLINK only as a wake-up source. A
+// notification is emitted only when the actual non-tunnel default route
+// changes. Address and link chatter is common on Linux (NetworkManager,
+// mDNS, IPv6 temporary addresses, and our own TUN setup all generate it), so
+// treating every netlink message as an upstream change causes reconnect loops.
 type linuxNetworkChangeDetector struct {
-	mu      sync.Mutex
-	fd      int
-	stopCh  chan struct{}
-	changeCh chan struct{}
-	running bool
+	mu           sync.Mutex
+	fd           int
+	stopCh       chan struct{}
+	changeCh     chan struct{}
+	running      bool
+	lastSnapshot string
 }
 
 func NewNetworkChangeDetector() NetworkChangeDetector {
@@ -40,6 +42,7 @@ func (d *linuxNetworkChangeDetector) Start() {
 	}
 	d.stopCh = make(chan struct{})
 	d.changeCh = make(chan struct{}, 1)
+	d.lastSnapshot = defaultRouteSnapshot()
 	d.running = true
 	d.mu.Unlock()
 
@@ -69,7 +72,7 @@ func (d *linuxNetworkChangeDetector) Start() {
 	d.fd = fd
 	d.mu.Unlock()
 	go d.readLoop()
-	slog.Info("netlink network-change detector started")
+	slog.Info("netlink network-change detector started", "default_route", d.lastSnapshot)
 }
 
 func (d *linuxNetworkChangeDetector) Stop() {
@@ -89,33 +92,36 @@ func (d *linuxNetworkChangeDetector) Stop() {
 		close(stop)
 	}
 	if fd != 0 {
-		// Shutdown unblocks the recvfrom in readLoop.
 		_ = unix.Shutdown(fd, unix.SHUT_RDWR)
 		_ = unix.Close(fd)
 	}
 }
 
-func (d *linuxNetworkChangeDetector) ChangeChan() <-chan struct{} {
-	return d.changeCh
+func (d *linuxNetworkChangeDetector) ChangeChan() <-chan struct{} { return d.changeCh }
+
+func (d *linuxNetworkChangeDetector) checkDefaultRoute() {
+	now := defaultRouteSnapshot()
+	d.mu.Lock()
+	previous := d.lastSnapshot
+	if now == previous {
+		d.mu.Unlock()
+		return
+	}
+	d.lastSnapshot = now
+	d.mu.Unlock()
+
+	slog.Info("network primary upstream changed", "previous", previous, "now", now)
+	select {
+	case d.changeCh <- struct{}{}:
+	default:
+	}
 }
 
-// readLoop drains netlink messages. Every message we receive that isn't a
-// trivial NLMSG_DONE/NLMSG_ERROR is treated as "topology changed" — we don't
-// try to filter by message type because any of our subscribed groups
-// firing implies a route/address/link change worth re-checking.
-//
-// Error handling per man netlink(7):
-//   - EINTR / EAGAIN / EWOULDBLOCK: transient; keep going.
-//   - ENOBUFS: kernel ran out of receive buffer and dropped messages —
-//     we may have missed an RTM event. Fire a single "force" signal so
-//     the reconnect monitor re-evaluates, then continue reading.
-//   - Anything else (EBADF on shutdown, etc.): exit cleanly.
 func (d *linuxNetworkChangeDetector) readLoop() {
 	buf := make([]byte, 8192)
 	for {
 		d.mu.Lock()
-		running := d.running
-		fd := d.fd
+		running, fd := d.running, d.fd
 		d.mu.Unlock()
 		if !running {
 			return
@@ -123,18 +129,13 @@ func (d *linuxNetworkChangeDetector) readLoop() {
 		n, _, err := unix.Recvfrom(fd, buf, 0)
 		if err != nil {
 			switch err {
-			// EAGAIN == EWOULDBLOCK on Linux; listing one is enough.
 			case syscall.EINTR, syscall.EAGAIN:
 				continue
 			case syscall.ENOBUFS:
-				slog.Warn("netlink ENOBUFS — kernel dropped messages, forcing reconnect check")
-				select {
-				case d.changeCh <- struct{}{}:
-				default:
-				}
+				slog.Warn("netlink ENOBUFS; rechecking the default route")
+				d.checkDefaultRoute()
 				continue
 			}
-			// EBADF / ENOTCONN are expected during shutdown.
 			d.mu.Lock()
 			stillRunning := d.running
 			d.mu.Unlock()
@@ -143,22 +144,93 @@ func (d *linuxNetworkChangeDetector) readLoop() {
 			}
 			return
 		}
-		if n <= 0 {
-			continue
-		}
-		// Signal the debouncer non-blockingly.
-		select {
-		case d.changeCh <- struct{}{}:
-		default:
-			// Coalesce: a notification is already pending.
+		if n > 0 {
+			d.checkDefaultRoute()
 		}
 	}
 }
 
-// Note on coalescing: the readLoop sends directly to changeCh (cap 1)
-// non-blockingly. If multiple RTM messages arrive in quick succession
-// only the first one is delivered until a consumer drains the channel —
-// the cap-1 buffer already implements "edge-triggered, single pending
-// notification" coalescing. The reconnect monitor downstream runs each
-// reconnect under its own backoff, so a separate debouncer goroutine
-// inside this detector adds no value.
+func defaultRouteSnapshot() string {
+	v4, err4 := os.Open("/proc/net/route")
+	if err4 == nil {
+		defer v4.Close()
+	}
+	v6, err6 := os.Open("/proc/net/ipv6_route")
+	if err6 == nil {
+		defer v6.Close()
+	}
+	return routeSnapshot(v4, v6, func(iface string) bool {
+		if iface == "lo" {
+			return true
+		}
+		_, err := os.Stat("/sys/class/net/" + iface + "/tun_flags")
+		return err == nil
+	})
+}
+
+type defaultRoute struct {
+	iface   string
+	gateway string
+	metric  uint64
+}
+
+func routeSnapshot(v4, v6 io.Reader, isTunnel func(string) bool) string {
+	parts := make([]string, 0, 2)
+	if route, ok := bestIPv4Default(v4, isTunnel); ok {
+		parts = append(parts, fmt.Sprintf("v4:%s:%s:%d", route.iface, route.gateway, route.metric))
+	}
+	if route, ok := bestIPv6Default(v6, isTunnel); ok {
+		parts = append(parts, fmt.Sprintf("v6:%s:%s:%d", route.iface, route.gateway, route.metric))
+	}
+	return strings.Join(parts, "|")
+}
+
+func bestIPv4Default(r io.Reader, isTunnel func(string) bool) (defaultRoute, bool) {
+	var best defaultRoute
+	found := false
+	if r == nil {
+		return best, false
+	}
+	s := bufio.NewScanner(r)
+	for s.Scan() {
+		f := strings.Fields(s.Text())
+		if len(f) < 8 || f[1] != "00000000" || f[7] != "00000000" || isTunnel(f[0]) {
+			continue
+		}
+		flags, err1 := strconv.ParseUint(f[3], 16, 64)
+		metric, err2 := strconv.ParseUint(f[6], 10, 64)
+		if err1 != nil || err2 != nil || flags&unix.RTF_UP == 0 {
+			continue
+		}
+		candidate := defaultRoute{iface: f[0], gateway: f[2], metric: metric}
+		if !found || candidate.metric < best.metric {
+			best, found = candidate, true
+		}
+	}
+	return best, found
+}
+
+func bestIPv6Default(r io.Reader, isTunnel func(string) bool) (defaultRoute, bool) {
+	var best defaultRoute
+	found := false
+	if r == nil {
+		return best, false
+	}
+	s := bufio.NewScanner(r)
+	for s.Scan() {
+		f := strings.Fields(s.Text())
+		if len(f) < 10 || f[0] != strings.Repeat("0", 32) || f[1] != "00" || f[2] != strings.Repeat("0", 32) || f[3] != "00" || isTunnel(f[9]) {
+			continue
+		}
+		metric, err := strconv.ParseUint(f[5], 16, 64)
+		flags, flagsErr := strconv.ParseUint(f[8], 16, 64)
+		if err != nil || flagsErr != nil || flags&unix.RTF_UP == 0 {
+			continue
+		}
+		candidate := defaultRoute{iface: f[9], gateway: f[4], metric: metric}
+		if !found || candidate.metric < best.metric {
+			best, found = candidate, true
+		}
+	}
+	return best, found
+}
