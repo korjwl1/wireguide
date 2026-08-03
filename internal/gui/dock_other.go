@@ -23,13 +23,16 @@ func showDock() {
 	if dockWindow.IsMinimised() {
 		dockWindow.Restore()
 	}
-	dockWindow.Show()
 	if runtime.GOOS == "linux" {
-		// labwc/XWayland may drop server-side decorations when a GTK window is
-		// hidden and mapped again. Reasserting the decorated state after Show
-		// refreshes the WM hint and restores the title bar.
+		// labwc/XWayland may forget server-side decorations when a hidden GTK
+		// window is mapped again. Merely setting decorated=true is ineffective
+		// because GTK already caches that value and sends no new WM hint. Toggle
+		// it while the window is hidden so the next map is unambiguously
+		// decorated, without exposing an intermediate frameless frame.
+		dockWindow.SetFrameless(true)
 		dockWindow.SetFrameless(false)
 	}
+	dockWindow.Show()
 	dockWindow.Focus()
 }
 
