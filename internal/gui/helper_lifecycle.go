@@ -24,8 +24,10 @@ func ensureHelper(ctx context.Context, dataDir string) (*ipc.Client, error) {
 	forceReinstall := false
 	args := elevate.Args{
 		SocketPath: addr,
-		SocketUID:  os.Getuid(),
-		DataDir:    dataDir,
+		// -1 on Windows — the SID below is the owner identity there.
+		SocketUID: os.Getuid(),
+		SocketSID: elevate.CurrentUserSID(),
+		DataDir:   dataDir,
 	}
 
 	// Try an existing helper first (survives GUI restarts).

@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 )
 
@@ -15,6 +16,11 @@ type Args struct {
 	SocketPath string
 	// SocketUID is the UID to chown the socket to (Unix only). On Windows, 0.
 	SocketUID int
+	// SocketSID is the spawning user's Windows SID (S-1-5-21-…). The
+	// helper scopes the pipe ACL and per-connection peer checks to it,
+	// replacing the every-interactive-user IU grant (issue #20). Empty
+	// on Unix and on Windows builds that fail to read the token.
+	SocketSID string
 	// DataDir for crash recovery state
 	DataDir string
 	// ForceReinstall skips the "already running" socket check and
@@ -42,8 +48,19 @@ func ValidateArgs(a Args) error {
 	if err := validateSpawnPath("DataDir", a.DataDir); err != nil {
 		return err
 	}
+	if a.SocketSID != "" && !sidPattern.MatchString(a.SocketSID) {
+		// The SID travels through a PowerShell argument list and is later
+		// interpolated into a pipe security descriptor — refuse anything
+		// that isn't a plain S-1-… SID string.
+		return fmt.Errorf("SocketSID is not a valid SID string: %q", a.SocketSID)
+	}
 	return nil
 }
+
+// sidPattern matches SDDL SID strings like S-1-5-21-…-1001. Windows also
+// accepts two-letter aliases (BA, SY) in SDDL, but we only ever pass full
+// numeric SIDs read from the process token.
+var sidPattern = regexp.MustCompile(`^S-1-\d+(-\d+)+$`)
 
 // validateSpawnPath rejects paths that:
 //   - are not absolute (relative paths could resolve unpredictably under
