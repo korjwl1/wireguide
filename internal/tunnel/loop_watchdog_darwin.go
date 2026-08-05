@@ -35,11 +35,42 @@ package tunnel
 //   - 3 × 5 s = 15 s sustained: defeats bursty downloads and brief
 //     speed-tests, trips on the steady-state loop signature.
 
+/*
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <sys/sysctl.h>
+#include <net/if.h>
+#include <net/if_var.h>
+#include <net/if_mib.h>
+
+// iface_octets fetches the 64-bit interface byte counters via the IFMIB
+// sysctl — the same source netstat prints. Two approaches that look right
+// are wrong (both verified empirically against netstat on live traffic):
+//   - NET_RT_IFLIST2's if_msghdr2.ifm_data.ifi_ibytes WRAPS AT 32 BITS on
+//     modern macOS even though the field is declared u_int64_t; only the
+//     IFMIB ifmd_data carries true 64-bit counters.
+//   - Reading pack(4) structs through cgo's generated Go types misreads
+//     fields — cgo lays them out with natural alignment. So the struct
+//     access stays here in C, compiled by clang against the real headers.
+static int iface_octets(int ifindex, unsigned long long *ibytes, unsigned long long *obytes) {
+	struct ifmibdata md;
+	size_t len = sizeof(md);
+	int mib[6] = {CTL_NET, PF_LINK, NETLINK_GENERIC, IFMIB_IFDATA, ifindex, IFDATA_GENERAL};
+	if (sysctl(mib, 6, &md, &len, NULL, 0) != 0) {
+		return 0;
+	}
+	*ibytes = md.ifmd_data.ifi_ibytes;
+	*obytes = md.ifmd_data.ifi_obytes;
+	return 1;
+}
+*/
+import "C"
 import (
 	"bufio"
 	"bytes"
 	"context"
 	"log/slog"
+	"net"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -156,12 +187,42 @@ func maxU64(a, b uint64) uint64 {
 }
 
 // readInterfaceOctets reads the kernel's input/output byte counters for
-// the named interface via `netstat -ibnI <iface>`. The first data row is
-// the AF_LINK (aggregate) entry whose Ibytes/Obytes are the totals
-// across all address families on the interface — the per-address-family
-// rows that follow carry the same totals (they're aliases of the link
-// entry, not partitions), so taking the first data row is correct and
-// avoids double-counting on multihomed interfaces.
+// the named interface. Primary path is a NET_RT_IFLIST2 sysctl — a plain
+// syscall, matching the Windows watchdog's GetIfEntry2 approach — because
+// the previous `netstat -ibnI` implementation fork/exec'd a subprocess
+// every 5 s for the life of every full-tunnel connection (~17k spawns/day,
+// keeping laptops out of deep idle). netstat is kept as a fallback should
+// the sysctl ever fail.
+func readInterfaceOctets(ifaceName string) (uint64, uint64, bool) {
+	if in, out, ok := readInterfaceOctetsSysctl(ifaceName); ok {
+		return in, out, ok
+	}
+	return readInterfaceOctetsNetstat(ifaceName)
+}
+
+// readInterfaceOctetsSysctl queries NET_RT_IFLIST2 filtered by interface
+// index and reads if_data64.ifi_ibytes/ifi_obytes from the RTM_IFINFO2
+// message. The buffer walk and struct access live in the cgo preamble's
+// iface_octets — see the comment there for why the C side must do it.
+func readInterfaceOctetsSysctl(ifaceName string) (uint64, uint64, bool) {
+	ifi, err := net.InterfaceByName(ifaceName)
+	if err != nil {
+		return 0, 0, false
+	}
+	var ibytes, obytes C.ulonglong
+	if C.iface_octets(C.int(ifi.Index), &ibytes, &obytes) == 0 {
+		return 0, 0, false
+	}
+	return uint64(ibytes), uint64(obytes), true
+}
+
+// readInterfaceOctetsNetstat is the subprocess fallback: `netstat -ibnI
+// <iface>`. The first data row is the AF_LINK (aggregate) entry whose
+// Ibytes/Obytes are the totals across all address families on the
+// interface — the per-address-family rows that follow carry the same
+// totals (they're aliases of the link entry, not partitions), so taking
+// the first data row is correct and avoids double-counting on multihomed
+// interfaces.
 //
 // Column positions are resolved from the header row dynamically rather
 // than hardcoded. Apple has shipped layout-different netstat versions
@@ -172,7 +233,7 @@ func maxU64(a, b uint64) uint64 {
 // LC_ALL=C forces English headers ("Ibytes"/"Obytes") on non-English
 // macOS installs, mirroring what the rest of the darwin network code
 // does for its netstat parsers.
-func readInterfaceOctets(ifaceName string) (uint64, uint64, bool) {
+func readInterfaceOctetsNetstat(ifaceName string) (uint64, uint64, bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), netstatCmdTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "netstat", "-ibnI", ifaceName)

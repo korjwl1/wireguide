@@ -64,20 +64,17 @@ func (m *Monitor) Start() {
 	}
 	m.running = true
 	m.stopCh = make(chan struct{})
-	m.wg.Add(1)
 	m.mu.Unlock()
-	go func() {
-		defer m.wg.Done()
-		m.poll()
-	}()
 
-	// Linux-only: wake the poller immediately on NetworkManager
+	// Event watchers start BEFORE the poll goroutine so the poll cadence
+	// can depend on whether one attached.
+	// Linux: wake the poller immediately on NetworkManager
 	// DeviceStateChanged so users see SSID transitions react in <1s instead
-	// of waiting for the 5s tick. No-op on non-Linux.
-	stopDBus := startLinuxDBusWatcher(func() { m.checkNow() })
-	// Windows-only: Wlanapi notifications for instant SSID react. No-op on
+	// of waiting for the poll tick. No-op on non-Linux.
+	stopDBus, dbusAttached := startLinuxDBusWatcher(func() { m.checkNow() })
+	// Windows: Wlanapi notifications for instant SSID react. No-op on
 	// other platforms.
-	stopWlan := startWindowsWlanWatcher(func() { m.checkNow() })
+	stopWlan, wlanAttached := startWindowsWlanWatcher(func() { m.checkNow() })
 	m.stopDBusWatcher = func() {
 		if stopDBus != nil {
 			stopDBus()
@@ -87,7 +84,27 @@ func (m *Monitor) Start() {
 		}
 	}
 
-	slog.Info("WiFi monitor started (polling)")
+	// With an event-driven watcher attached the poll is only a safety net
+	// for missed signals, so it can run slowly. Without one (no
+	// NetworkManager, no wlanapi) it is the sole SSID source and keeps the
+	// 5 s cadence. On Linux the fast path matters doubly: CurrentSSID()
+	// shells out to nmcli, so a 5 s poll alongside a working DBus watcher
+	// burned ~17k subprocess spawns a day for nothing.
+	interval := 5 * time.Second
+	eventDriven := dbusAttached || wlanAttached
+	if eventDriven {
+		interval = 60 * time.Second
+	}
+
+	m.mu.Lock()
+	m.wg.Add(1)
+	m.mu.Unlock()
+	go func() {
+		defer m.wg.Done()
+		m.poll(interval)
+	}()
+
+	slog.Info("WiFi monitor started", "event_driven", eventDriven, "poll_interval", interval)
 }
 
 // checkNow forces an immediate SSID re-read outside the 5s tick. Used by the
@@ -147,7 +164,7 @@ func (m *Monitor) ReportExternalSSID(ssid string) {
 	}
 }
 
-func (m *Monitor) poll() {
+func (m *Monitor) poll(interval time.Duration) {
 	// On macOS the root helper cannot read the SSID — Location Services is
 	// scoped to the GUI .app bundle, so CurrentSSID() returns "". Polling it
 	// would overwrite the authoritative GUI-reported SSID (via
@@ -161,7 +178,7 @@ func (m *Monitor) poll() {
 	m.mu.Lock()
 	m.lastSSID = CurrentSSID()
 	m.mu.Unlock()
-	ticker := time.NewTicker(5 * time.Second)
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
 	for {

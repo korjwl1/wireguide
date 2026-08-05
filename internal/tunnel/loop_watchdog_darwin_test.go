@@ -2,7 +2,10 @@
 
 package tunnel
 
-import "testing"
+import (
+	"net"
+	"testing"
+)
 
 func TestParseNetstatIB(t *testing.T) {
 	tests := []struct {
@@ -93,5 +96,37 @@ utun4      1380  <Link#27>                            -       -          -      
 				t.Errorf("out: got %d, want %d", gotOut, tc.wantOut)
 			}
 		})
+	}
+}
+
+// TestReadInterfaceOctetsSysctlMatchesNetstat cross-checks the primary
+// sysctl reader against the netstat fallback on a live interface. The
+// counters advance between the two reads, so equality is asserted within
+// a tolerance rather than exactly.
+func TestReadInterfaceOctetsSysctlMatchesNetstat(t *testing.T) {
+	const iface = "en0"
+	if _, err := net.InterfaceByName(iface); err != nil {
+		t.Skipf("no %s on this machine: %v", iface, err)
+	}
+	sIn, sOut, sOK := readInterfaceOctetsSysctl(iface)
+	nIn, nOut, nOK := readInterfaceOctetsNetstat(iface)
+	if !sOK {
+		t.Fatal("sysctl reader failed on a live interface")
+	}
+	if !nOK {
+		t.Skip("netstat fallback unavailable; cannot cross-check")
+	}
+	const tolerance = 16 << 20 // 16 MiB of traffic between the two reads
+	diff := func(a, b uint64) uint64 {
+		if a > b {
+			return a - b
+		}
+		return b - a
+	}
+	if diff(sIn, nIn) > tolerance {
+		t.Errorf("ibytes: sysctl=%d netstat=%d differ by more than %d", sIn, nIn, tolerance)
+	}
+	if diff(sOut, nOut) > tolerance {
+		t.Errorf("obytes: sysctl=%d netstat=%d differ by more than %d", sOut, nOut, tolerance)
 	}
 }
