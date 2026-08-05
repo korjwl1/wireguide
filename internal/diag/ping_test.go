@@ -80,3 +80,21 @@ func TestParseIndividualPingTimes_Empty(t *testing.T) {
 		t.Errorf("got %.3f, want 0", got)
 	}
 }
+
+// Router-sourced "Destination host unreachable" replies carry no RTT token,
+// yet ping.exe can exit 0 for them. Both parsers must return 0 so Ping
+// reports unreachable instead of fabricating a latency (issue #32).
+func TestParsers_DestinationHostUnreachable(t *testing.T) {
+	out := "Pinging 10.0.0.7 with 32 bytes of data:\r\n" +
+		"Reply from 192.168.1.1: Destination host unreachable.\r\n" +
+		"Reply from 192.168.1.1: Destination host unreachable.\r\n" +
+		"Reply from 192.168.1.1: Destination host unreachable.\r\n" +
+		"Ping statistics for 10.0.0.7:\r\n" +
+		"    Packets: Sent = 3, Received = 3, Lost = 0 (0% loss),\r\n"
+	if got := parsePingLatency(out); got != 0 {
+		t.Errorf("parsePingLatency: got %.3f, want 0", got)
+	}
+	if got := parseIndividualPingTimes(out); got != 0 {
+		t.Errorf("parseIndividualPingTimes: got %.3f, want 0", got)
+	}
+}
