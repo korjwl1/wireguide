@@ -64,8 +64,14 @@ func PingEndpointContext(ctx context.Context, endpoint string) *PingResult {
 	switch runtime.GOOS {
 	case "windows":
 		cmd = exec.CommandContext(ctx, "ping", "-n", "3", "-w", "3000", ip)
+	case "darwin":
+		// -W is per-reply wait in MILLISECONDS on macOS (BSD ping),
+		// unlike Linux where it's seconds. "-W 3" silently meant 3ms.
+		cmd = exec.CommandContext(ctx, "ping", "-c", "3", "-W", "3000", ip)
 	default:
 		cmd = exec.CommandContext(ctx, "ping", "-c", "3", "-W", "3", ip)
+	}
+	if runtime.GOOS != "windows" {
 		// Force canonical output so the parsers below aren't at the mercy
 		// of the user's locale. No Windows equivalent: ping.exe follows
 		// the system MUI language regardless of environment (see the

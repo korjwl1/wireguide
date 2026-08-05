@@ -84,7 +84,7 @@ type Manager struct {
 	// the original DHCP defaults rather than the per-netMgr savedDNS,
 	// which for a non-first tunnel would have been the previous tunnel's
 	// already-applied DNS. Guarded by m.mu.
-	globalPreModDNS map[string][]string
+	globalPreModDNS *network.DNSSnapshot
 
 	// endpointProtector is the optional always-on loop protection hook
 	// (Windows full-tunnel only). Set by the helper after construction

@@ -253,10 +253,10 @@ func (m *Manager) connectPhases(ctx context.Context, cfg *domain.WireGuardConfig
 	// would already include this tunnel's overrides, so we
 	// deliberately ignore them via CapturePreModDNS's first-write-
 	// wins guard.
-	var preModDNS map[string][]string
+	var preMod network.DNSSnapshot
 	if provider, ok := netMgr.(network.DNSSnapshotProvider); ok {
-		preModDNS = provider.SavedDNSSnapshot()
-		m.CapturePreModDNS(preModDNS)
+		preMod = provider.SavedDNSSnapshot()
+		m.CapturePreModDNS(preMod)
 	}
 
 	if err := SaveActiveState(m.dataDir, &ActiveTunnelState{
@@ -266,7 +266,8 @@ func (m *Manager) connectPhases(ctx context.Context, cfg *domain.WireGuardConfig
 		FullTunnel:    fullTunnel,
 		Table:         cfg.Interface.Table,
 		FwMark:        cfg.Interface.FwMark,
-		PreModDNS:     preModDNS,
+		PreModDNS:     preMod.Servers,
+		PreModSearch:  preMod.Search,
 	}); err != nil {
 		slog.Warn("failed to persist crash recovery state", "error", err)
 	}
@@ -354,7 +355,7 @@ func (m *Manager) disconnectPhases(cfg *domain.WireGuardConfig, engine *Engine, 
 			// would still hold the previous tunnel's DNS overrides.
 			// Cleanup's internal RestoreDNS becomes a no-op because
 			// RestoreDNSFromSnapshot clears dnsActive.
-			if pre := m.PreModDNSSnapshot(); pre != nil {
+			if pre, captured := m.PreModDNSSnapshot(); captured {
 				if r, ok := netMgr.(network.DNSStateRestorer); ok {
 					if err := r.RestoreDNSFromSnapshot(pre); err != nil {
 						slog.Warn("RestoreDNSFromSnapshot failed; falling back to per-netMgr restore", "error", err)
