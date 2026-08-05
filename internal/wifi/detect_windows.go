@@ -15,12 +15,12 @@ import (
 // notifications and invokes onChange on every transition. Returns a stop
 // function. Falls back to no-op (returns nil stop) when wlanapi.dll is
 // unavailable (server SKUs without WLAN service, headless containers).
-func startWindowsWlanWatcher(onChange func()) (stop func()) {
+func startWindowsWlanWatcher(onChange func()) (stop func(), attached bool) {
 	noop := func() {}
 
 	if err := wlanLazyOpenHandle(); err != nil {
 		slog.Debug("wifi: wlanapi.dll OpenHandle failed", "error", err)
-		return noop
+		return noop, false
 	}
 
 	cb := syscall.NewCallback(func(notif uintptr, _ uintptr) uintptr {
@@ -43,7 +43,7 @@ func startWindowsWlanWatcher(onChange func()) (stop func()) {
 	)
 	if ret != 0 {
 		slog.Debug("wifi: WlanRegisterNotification failed", "status", ret)
-		return noop
+		return noop, false
 	}
 	slog.Info("wifi: Wlanapi notification subscribed")
 
@@ -62,7 +62,7 @@ func startWindowsWlanWatcher(onChange func()) (stop func()) {
 				uintptr(unsafe.Pointer(&prev)),
 			)
 		})
-	}
+	}, true
 }
 
 var (

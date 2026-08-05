@@ -18,14 +18,16 @@ import (
 //   - config.json → "config_changed" (settings incl. automation rules)
 //   - the tunnels dir listing → "tunnels_changed" (import / delete / rename)
 //
-// A 1 s mtime/listing poll is used (fsnotify isn't a dependency); the
-// latency is imperceptible for these and the cost is a couple of stat
-// calls per second. Reacting to the GUI's own writes is harmless — the
-// frontend re-reads and re-applies the same values idempotently.
+// A 3 s mtime/listing poll is used (fsnotify isn't a dependency); the
+// latency is imperceptible for catching CLI-side edits, and it runs for
+// the whole GUI lifetime including while hidden in the tray — 1 s bought
+// nothing but 3× the stat+readdir churn. Reacting to the GUI's own
+// writes is harmless — the frontend re-reads and re-applies the same
+// values idempotently.
 func startConfigWatcher(app *application.App, configPath, tunnelsDir string, done <-chan struct{}, wg *sync.WaitGroup) {
 	go func() {
 		defer wg.Done()
-		ticker := time.NewTicker(1 * time.Second)
+		ticker := time.NewTicker(3 * time.Second)
 		defer ticker.Stop()
 
 		fileMtime := func(p string) time.Time {
