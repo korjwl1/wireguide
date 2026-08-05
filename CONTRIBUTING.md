@@ -8,14 +8,14 @@ Thanks for your interest in contributing!
 
 - Go 1.25+
 - Node.js 20+
-- [Wails v3](https://v3alpha.wails.io/) (`go install github.com/wailsapp/wails/v3/cmd/wails3@latest`)
+- [Wails v3](https://v3alpha.wails.io/) (`go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-alpha.74`)
 - macOS with Apple Silicon (for now)
 
 ### Build & Run
 
 ```bash
 # Install frontend dependencies
-cd frontend && npm install && cd ..
+cd frontend && npm ci && cd ..
 
 # Development mode (hot reload)
 task dev

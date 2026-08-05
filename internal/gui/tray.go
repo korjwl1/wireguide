@@ -485,10 +485,9 @@ func (t *trayManager) setIconState(activeNames []string, handshakeMap map[string
 
 	if activeChanged {
 		onIcon, offIcon := t.macIcons()
-		if runtime.GOOS == "windows" && len(trayOnIconWindows) > 0 {
-			// Use the rounded-red app-icon variants on Windows so the
-			// tray icon actually stands out against a light system-tray
-			// background and isn't framed by a white square.
+		if (runtime.GOOS == "windows" || runtime.GOOS == "linux") && len(trayOnIconWindows) > 0 {
+			// Use the rounded-red app-icon variants on Windows and Linux so
+			// the tray icon stands out against light system-tray backgrounds.
 			onIcon, offIcon = trayOnIconWindows, trayOffIconWindows
 		}
 		if anyConnected {
@@ -496,7 +495,7 @@ func (t *trayManager) setIconState(activeNames []string, handshakeMap map[string
 			tooltip := "WireGuide — " + strings.Join(activeNames, ", ")
 			t.tray.SetTooltip(tooltip)
 		} else {
-			if runtime.GOOS == "darwin" || (runtime.GOOS == "windows" && len(offIcon) > 0) {
+			if runtime.GOOS == "darwin" || ((runtime.GOOS == "windows" || runtime.GOOS == "linux") && len(offIcon) > 0) {
 				t.tray.SetIcon(offIcon)
 			}
 			t.tray.SetTooltip("WireGuide")

@@ -136,8 +136,8 @@ installer registers the helper service and shortcut.
 
 ```bash
 brew install go node
-go install github.com/go-task/task/v3/cmd/task@latest
-go install github.com/wailsapp/wails/v3/cmd/wails3@latest
+go install github.com/go-task/task/v3/cmd/task@v3.45.4
+go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-alpha.74
 
 task build
 ./bin/wireguide

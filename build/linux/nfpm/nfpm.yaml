@@ -24,20 +24,35 @@ contents:
   - src: "./build/linux/wireguide.desktop"
     dst: "/usr/share/applications/wireguide.desktop"
 
-# Default dependencies for Debian 12/Ubuntu 22.04+ with WebKit 4.1
+# Wails v3 alpha.74 uses GTK3 and the WebKitGTK 4.1 API on Linux.
 depends:
   - libgtk-3-0
   - libwebkit2gtk-4.1-0
+  - libayatana-appindicator3-1
+  - iproute2
+  - nftables
+  - pkexec | policykit-1
+
+# NetworkManager supplies SSID detection and immediate Wi-Fi change events,
+# while resolvconf avoids the guarded /etc/resolv.conf fallback on systems
+# that do not run systemd-resolved. Noto supplies Korean UI glyphs and stable
+# cross-platform text metrics. The core client can still operate without these,
+# so keep them as recommendations rather than hard dependencies.
+recommends:
+  - network-manager
+  - resolvconf
+  - fonts-noto-core
+  - fonts-noto-cjk
 
 # Distribution-specific overrides for different package formats and WebKit versions
 overrides:
-  # RPM packages for RHEL/CentOS/AlmaLinux/Rocky Linux (WebKit 4.0)
+  # RPM package names used by current Fedora/RHEL-family distributions.
   rpm:
     depends:
       - gtk3
       - webkit2gtk4.1
   
-  # Arch Linux packages (WebKit 4.1)  
+  # Arch Linux package names.
   archlinux:
     depends:
       - gtk3

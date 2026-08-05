@@ -2,7 +2,11 @@
 
 package gui
 
-import "github.com/wailsapp/wails/v3/pkg/application"
+import (
+	"runtime"
+
+	"github.com/wailsapp/wails/v3/pkg/application"
+)
 
 var dockWindow *application.WebviewWindow
 
@@ -18,6 +22,15 @@ func showDock() {
 	}
 	if dockWindow.IsMinimised() {
 		dockWindow.Restore()
+	}
+	if runtime.GOOS == "linux" {
+		// labwc/XWayland may forget server-side decorations when a hidden GTK
+		// window is mapped again. Merely setting decorated=true is ineffective
+		// because GTK already caches that value and sends no new WM hint. Toggle
+		// it while the window is hidden so the next map is unambiguously
+		// decorated, without exposing an intermediate frameless frame.
+		dockWindow.SetFrameless(true)
+		dockWindow.SetFrameless(false)
 	}
 	dockWindow.Show()
 	dockWindow.Focus()

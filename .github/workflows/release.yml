@@ -34,16 +34,16 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.25'
+          go-version: '1.25.12'
 
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '20.19.2'
 
       - name: Install wails3 + task
         run: |
-          go install github.com/wailsapp/wails/v3/cmd/wails3@latest
-          go install github.com/go-task/task/v3/cmd/task@latest
+          go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-alpha.74
+          go install github.com/go-task/task/v3/cmd/task@v3.45.4
           echo "$HOME/go/bin" >> "$GITHUB_PATH"
 
       - name: Build .app bundle (ad-hoc signed)
@@ -87,17 +87,17 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.25'
+          go-version: '1.25.12'
 
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '20.19.2'
 
       - name: Install wails3 + task
         shell: pwsh
         run: |
-          go install github.com/wailsapp/wails/v3/cmd/wails3@latest
-          go install github.com/go-task/task/v3/cmd/task@latest
+          go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-alpha.74
+          go install github.com/go-task/task/v3/cmd/task@v3.45.4
           # Append, don't overwrite — PATH already has system entries.
           "$env:USERPROFILE\go\bin" | Out-File -FilePath $env:GITHUB_PATH -Append
 
@@ -253,7 +253,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.25'
+          go-version: '1.25.12'
 
       - name: Sign SHA256SUMS (Ed25519)
         # HARD failure when the key is missing or mismatched — every
