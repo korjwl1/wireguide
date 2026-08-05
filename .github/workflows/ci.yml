@@ -1,16 +1,19 @@
-name: Linux CI
+name: CI
 
+# PR-only by design: pushing to a branch (including main via a merged PR)
+# must never rebuild or retest on its own — releases are cut exclusively
+# by v* tags (release.yml), and the repo owner was explicit that a bare
+# push should not light up CI. workflow_dispatch covers manual runs.
 on:
-  push:
-    branches: [main]
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
-  test-build-package:
-    name: Ubuntu amd64
+  linux:
+    name: Linux (test + package)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -78,3 +81,62 @@ jobs:
             bin/wireguide.deb
           if-no-files-found: error
           retention-days: 7
+
+  macos:
+    name: macOS (test)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.12'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20.19.2'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Build frontend
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+
+      - name: Test and vet
+        run: |
+          go test -race ./...
+          go vet ./...
+
+  windows:
+    name: Windows (test)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.12'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20.19.2'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Build frontend
+        working-directory: frontend
+        shell: pwsh
+        run: |
+          npm ci
+          npm run build
+
+      # No -race on Windows: the race detector needs cgo + a C toolchain,
+      # and the runner's mingw setup is not something we want this suite
+      # to depend on. The Linux job's -race pass covers the shared code.
+      - name: Test and vet
+        shell: pwsh
+        run: |
+          go test ./...
+          go vet ./...
