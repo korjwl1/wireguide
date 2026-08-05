@@ -71,14 +71,6 @@ func ClearActiveState(dataDir string, tunnelName string) error {
 	return nil
 }
 
-// ClearAllActiveStates removes all per-tunnel state files.
-func ClearAllActiveStates(dataDir string) error {
-	dir := filepath.Join(dataDir, tunnelStatesDir)
-	if err := os.RemoveAll(dir); err != nil && !os.IsNotExist(err) {
-		return err
-	}
-	return nil
-}
 
 // LoadActiveState reads all active tunnel states from the tunnel-states
 // directory. Falls back to the legacy single-file format for migration.
@@ -235,8 +227,8 @@ func RecoverFromCrash(dataDir string, fw FirewallCleaner) []string {
 
 	// Clear ONLY the state files whose recovery fully succeeded.
 	// States that hit any error stay on disk so the next boot has
-	// another chance — silently dropping them via ClearAllActiveStates
-	// stranded the bug for users.
+	// another chance — silently dropping them all at once stranded
+	// the bug for users.
 	for _, name := range fullySucceeded {
 		ClearActiveState(dataDir, name)
 	}

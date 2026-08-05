@@ -25,7 +25,7 @@ import (
 const (
 	githubRepo     = "korjwl1/wireguide"
 	apiEndpoint    = "https://api.github.com/repos/" + githubRepo + "/releases/latest"
-	currentVersion = "0.4.2"
+	currentVersion = "0.4.2-dev1"
 
 	// minAssetSize is the minimum acceptable size for a release asset.
 	// A macOS .dmg/.zip containing WireGuide.app is always well over 1 MB;
@@ -236,16 +236,6 @@ func parseReleaseBody(ctx context.Context, resp *http.Response, client *http.Cli
 		ChecksumURL:  checksumURL,
 		ExpectedHash: expectedHash,
 	}, nil
-}
-
-// BrewUpgradeCommand returns the shell command a Homebrew user should
-// run to upgrade WireGuide. Returned as a string (not executed) so the
-// UI can show it next to a Copy button — the cross-platform-app
-// convention is that the user runs the package-manager command, not the
-// app itself. See research-update-patterns notes (Tailscale, OrbStack)
-// for context.
-func BrewUpgradeCommand() string {
-	return "brew upgrade --cask wireguide"
 }
 
 // Release represents a GitHub release.

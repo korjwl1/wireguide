@@ -6,13 +6,6 @@ import (
 	"runtime"
 )
 
-// atomicRename moves src to dst. On modern Go (1.21+), os.Rename uses
-// MoveFileEx with MOVEFILE_REPLACE_EXISTING on Windows, so it handles
-// overwriting the destination atomically on all platforms.
-func atomicRename(src, dst string) error {
-	return os.Rename(src, dst)
-}
-
 // atomicRenameDurable renames src→dst and then fsyncs the containing
 // directory so the rename's directory entry survives a power loss. The
 // per-file fsync in the writers makes the CONTENT durable, but the

@@ -1,7 +1,10 @@
 // Package ipc provides JSON-RPC 2.0 IPC between GUI and helper processes.
 package ipc
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"fmt"
+)
 
 // Protocol version uses simple major.minor semver:
 //   - MAJOR bumps when fields are RENAMED or REMOVED, or a method's
@@ -21,7 +24,9 @@ const (
 
 // ProtocolVersion is the canonical "major.minor" string used in
 // PingResponse.Version. Mismatched majors abort the handshake.
-var ProtocolVersion = "1.0"
+// Derived from the constants above so bumping them cannot silently
+// leave the wire string behind.
+var ProtocolVersion = fmt.Sprintf("%d.%d", ProtocolMajor, ProtocolMinor)
 
 // MajorVersionMatches reports whether two "major.minor" version strings
 // share the same MAJOR. A missing dot is treated as MAJOR-only

@@ -145,22 +145,26 @@
     latencyTargetSaveTimer = setTimeout(saveLatencyTarget, 600);
   }
 
-  function autoLatencyTarget() {
-    if (!detail) return { label: $selectedTunnel?.endpoint || '—', fallback: true };
-    for (const peer of detail.Peers || []) {
+  // Takes its inputs as parameters (not via closure) so the `$:` below
+  // actually re-runs: the compiler only tracks dependencies referenced in
+  // the reactive statement itself, and a dep-less statement runs exactly
+  // once — which froze this on the first tunnel's endpoint forever.
+  function autoLatencyTarget(det, sel) {
+    if (!det) return { label: sel?.endpoint || '—', fallback: true };
+    for (const peer of det.Peers || []) {
       for (const allowed of peer.AllowedIPs || []) {
         if (allowed.endsWith('/32')) return { label: allowed.slice(0, -3), fallback: false };
         if (allowed.endsWith('/128')) return { label: allowed.slice(0, -4), fallback: false };
       }
     }
-    const fullTunnel = (detail.Peers || []).some(peer =>
+    const fullTunnel = (det.Peers || []).some(peer =>
       (peer.AllowedIPs || []).some(ip => ip === '0.0.0.0/0' || ip === '::/0')
     );
     if (fullTunnel) return { label: '8.8.8.8', fallback: false };
-    return { label: $selectedTunnel?.endpoint || '—', fallback: true };
+    return { label: sel?.endpoint || '—', fallback: true };
   }
 
-  $: autoLatency = autoLatencyTarget();
+  $: autoLatency = autoLatencyTarget(detail, $selectedTunnel);
   $: latencyTargetDisplay = latencyTargetSaved
     ? latencyTargetSaved
     : `${$t('tunnel.latency_target_placeholder')}: ${autoLatency.fallback ? $t('tunnel.endpoint') : autoLatency.label}`;

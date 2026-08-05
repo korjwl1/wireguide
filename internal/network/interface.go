@@ -78,10 +78,3 @@ type RoutingStateRestorer interface {
 type PreCloseCleaner interface {
 	PreCloseAdapterCleanup(ifaceName string)
 }
-
-// OriginalNetworkState captures the pre-tunnel network state for restoration.
-type OriginalNetworkState struct {
-	DNSServers []string `json:"dns_servers"`
-	DefaultGW  string   `json:"default_gateway"`
-	DefaultIf  string   `json:"default_interface"`
-}
