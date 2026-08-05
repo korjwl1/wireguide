@@ -901,6 +901,20 @@ func (m *DarwinManager) SetDNS(ifaceName string, entries []string) error {
 	// Push the new DNS to every service in parallel.
 	m.applyDNSToServices(entries, services)
 
+	// Commit state BEFORE verification: once applyDNSToServices ran, the
+	// system carries our overrides, and every restore path (Cleanup →
+	// RestoreDNS, crash-recovery SavedDNSSnapshot) keys off dnsActive.
+	// Returning a verification error with dnsActive still false left the
+	// user stuck on tunnel DNS that nothing would ever remove (issue #34
+	// gap: connect rollback no-op'd on !dnsActive).
+	m.mu.Lock()
+	// Defensive copy — callers today build a fresh slice but a future
+	// caller passing cfg.Interface.DNS directly would let reapply() (via
+	// append-and-grow on the slice header) silently read live config.
+	m.lastDNS = append([]string(nil), entries...)
+	m.dnsActive = true
+	m.mu.Unlock()
+
 	// Verify DNS actually took effect on at least one service. macOS can
 	// silently fail to apply DNS settings (e.g. permission issues, MDM
 	// profiles overriding). Without this check the user thinks VPN DNS
@@ -917,14 +931,6 @@ func (m *DarwinManager) SetDNS(ifaceName string, entries []string) error {
 	// Without this users can keep hitting stale resolutions for several
 	// minutes — wg-quick does this at the end of its set_dns.
 	flushDNSCache()
-
-	m.mu.Lock()
-	// Defensive copy — callers today build a fresh slice but a future
-	// caller passing cfg.Interface.DNS directly would let reapply() (via
-	// append-and-grow on the slice header) silently read live config.
-	m.lastDNS = append([]string(nil), entries...)
-	m.dnsActive = true
-	m.mu.Unlock()
 	return nil
 }
 
@@ -1276,21 +1282,26 @@ func (m *DarwinManager) RestoreDNS(ifaceName string) error {
 	return nil
 }
 
-// SavedDNSSnapshot returns the current per-service DNS snapshot for
-// persistence to the crash recovery journal. Thread-safe.
-func (m *DarwinManager) SavedDNSSnapshot() map[string][]string {
+// SavedDNSSnapshot returns the current per-service DNS snapshot (servers
+// AND search domains) for persistence to the crash recovery journal.
+// Thread-safe.
+func (m *DarwinManager) SavedDNSSnapshot() DNSSnapshot {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if !m.dnsActive || len(m.savedDNS) == 0 {
-		return nil
+		return DNSSnapshot{}
 	}
-	snapshot := make(map[string][]string, len(m.savedDNS))
+	snap := DNSSnapshot{
+		Servers: make(map[string][]string, len(m.savedDNS)),
+		Search:  make(map[string][]string, len(m.savedSearch)),
+	}
 	for svc, dns := range m.savedDNS {
-		cp := make([]string, len(dns))
-		copy(cp, dns)
-		snapshot[svc] = cp
+		snap.Servers[svc] = append([]string(nil), dns...)
 	}
-	return snapshot
+	for svc, search := range m.savedSearch {
+		snap.Search[svc] = append([]string(nil), search...)
+	}
+	return snap
 }
 
 // RestoreDNSFromSnapshot restores DNS from a persisted pre-modification
@@ -1302,28 +1313,72 @@ func (m *DarwinManager) SavedDNSSnapshot() map[string][]string {
 //
 // Side effect: clears in-memory dnsActive/savedDNS so a subsequent
 // Cleanup() doesn't re-fire RestoreDNS over our manual restore.
-func (m *DarwinManager) RestoreDNSFromSnapshot(preModDNS map[string][]string) error {
+//
+// The restore is COMPLETE (issue #34): it writes both servers and search
+// domains, and it iterates the union of the snapshot's services, this
+// manager's own saved maps, and every service live right now — so a
+// service that appeared mid-session (Ethernet plugged in, iPhone USB) and
+// received tunnel DNS from a reapply is cleaned too. Per-service fallback
+// order: global pre-VPN snapshot → this manager's captured original
+// (covers mid-session services the global snapshot predates) → "Empty".
+func (m *DarwinManager) RestoreDNSFromSnapshot(snap DNSSnapshot) error {
 	m.mu.Lock()
+	savedDNS := m.savedDNS
+	savedSearch := m.savedSearch
 	m.dnsActive = false
 	m.savedDNS = make(map[string][]string)
 	m.savedSearch = make(map[string][]string)
 	m.lastDNS = nil
 	m.mu.Unlock()
 
+	svcSet := make(map[string]struct{})
+	for svc := range snap.Servers {
+		svcSet[svc] = struct{}{}
+	}
+	for svc := range snap.Search {
+		svcSet[svc] = struct{}{}
+	}
+	for svc := range savedDNS {
+		svcSet[svc] = struct{}{}
+	}
+	for svc := range savedSearch {
+		svcSet[svc] = struct{}{}
+	}
+	for _, svc := range getAllNetworkServices() {
+		svcSet[svc] = struct{}{}
+	}
+
 	var wg sync.WaitGroup
-	for svc, orig := range preModDNS {
-		svc, orig := svc, orig
+	for svc := range svcSet {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if len(orig) == 0 {
+			servers, ok := snap.Servers[svc]
+			if !ok {
+				servers = savedDNS[svc]
+			}
+			if len(servers) > 0 {
+				args := append([]string{"-setdnsservers", svc}, servers...)
+				if err := run("networksetup", args...); err != nil {
+					slog.Warn("RestoreDNSFromSnapshot: setting DNS failed", "service", svc, "error", err)
+				}
+			} else {
 				if err := run("networksetup", "-setdnsservers", svc, "Empty"); err != nil {
 					slog.Warn("RestoreDNSFromSnapshot: clearing DNS failed", "service", svc, "error", err)
 				}
-			} else {
-				args := append([]string{"-setdnsservers", svc}, orig...)
+			}
+			search, ok := snap.Search[svc]
+			if !ok {
+				search = savedSearch[svc]
+			}
+			if len(search) > 0 {
+				args := append([]string{"-setsearchdomains", svc}, search...)
 				if err := run("networksetup", args...); err != nil {
-					slog.Warn("RestoreDNSFromSnapshot: setting DNS failed", "service", svc, "error", err)
+					slog.Warn("RestoreDNSFromSnapshot: setting search domains failed", "service", svc, "error", err)
+				}
+			} else {
+				if err := run("networksetup", "-setsearchdomains", svc, "Empty"); err != nil {
+					slog.Warn("RestoreDNSFromSnapshot: clearing search domains failed", "service", svc, "error", err)
 				}
 			}
 		}()
@@ -1370,7 +1425,9 @@ func (m *DarwinManager) Cleanup(ifaceName string) error {
 
 // --- helpers ---
 
-func run(name string, args ...string) error {
+// run is a var so DNS-restore tests can intercept networksetup writes
+// instead of mutating the host's real network services.
+var run = func(name string, args ...string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), cmdTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, name, args...)

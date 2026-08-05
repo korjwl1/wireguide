@@ -1,6 +1,11 @@
 package tunnel
 
-import "github.com/korjwl1/wireguide/internal/domain"
+import (
+	"log/slog"
+
+	"github.com/korjwl1/wireguide/internal/domain"
+	"github.com/korjwl1/wireguide/internal/network"
+)
 
 // AllDNSServers returns the union of DNS servers from all connected tunnels'
 // configs. Used to re-apply the combined DNS when a tunnel connects or
@@ -21,36 +26,30 @@ func (m *Manager) AllDNSServers() []string {
 // after A, B's savedDNS is A's DNS — so when B disconnects last via
 // netMgr_B.Cleanup the user's system would get restored to A's DNS
 // instead of the original DHCP defaults.
-func (m *Manager) CapturePreModDNS(snapshot map[string][]string) {
+func (m *Manager) CapturePreModDNS(snapshot network.DNSSnapshot) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.globalPreModDNS != nil || len(snapshot) == 0 {
+	if m.globalPreModDNS != nil || snapshot.Empty() {
 		return
 	}
-	cp := make(map[string][]string, len(snapshot))
-	for k, v := range snapshot {
-		c := make([]string, len(v))
-		copy(c, v)
-		cp[k] = c
+	m.globalPreModDNS = &network.DNSSnapshot{
+		Servers: copyServiceMap(snapshot.Servers),
+		Search:  copyServiceMap(snapshot.Search),
 	}
-	m.globalPreModDNS = cp
 }
 
-// PreModDNSSnapshot returns a copy of the captured pre-VPN DNS, or nil
-// if nothing has been captured yet.
-func (m *Manager) PreModDNSSnapshot() map[string][]string {
+// PreModDNSSnapshot returns a copy of the captured pre-VPN DNS state and
+// whether anything has been captured yet.
+func (m *Manager) PreModDNSSnapshot() (network.DNSSnapshot, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.globalPreModDNS == nil {
-		return nil
+		return network.DNSSnapshot{}, false
 	}
-	cp := make(map[string][]string, len(m.globalPreModDNS))
-	for k, v := range m.globalPreModDNS {
-		c := make([]string, len(v))
-		copy(c, v)
-		cp[k] = c
-	}
-	return cp
+	return network.DNSSnapshot{
+		Servers: copyServiceMap(m.globalPreModDNS.Servers),
+		Search:  copyServiceMap(m.globalPreModDNS.Search),
+	}, true
 }
 
 // ClearPreModDNS drops the captured snapshot once the last tunnel has
@@ -59,6 +58,46 @@ func (m *Manager) ClearPreModDNS() {
 	m.mu.Lock()
 	m.globalPreModDNS = nil
 	m.mu.Unlock()
+}
+
+// RestoreDNSBestEffort restores the pre-VPN DNS state using the global
+// snapshot and any live tunnel's network manager. Used by ForceShutdown,
+// which exits without tunnel teardown: the utun devices die with the
+// process but networksetup overrides persist in SystemConfiguration
+// (issue #34 gap 4) — without this a helper upgrade while connected left
+// tunnel DNS behind until crash recovery ran.
+func (m *Manager) RestoreDNSBestEffort() {
+	pre, captured := m.PreModDNSSnapshot()
+	if !captured {
+		return
+	}
+	m.mu.Lock()
+	var restorer network.DNSStateRestorer
+	for _, e := range m.tunnels {
+		if r, ok := e.netMgr.(network.DNSStateRestorer); ok {
+			restorer = r
+			break
+		}
+	}
+	m.mu.Unlock()
+	if restorer == nil {
+		return
+	}
+	if err := restorer.RestoreDNSFromSnapshot(pre); err != nil {
+		slog.Warn("RestoreDNSBestEffort failed", "error", err)
+	}
+	m.ClearPreModDNS()
+}
+
+func copyServiceMap(in map[string][]string) map[string][]string {
+	if in == nil {
+		return nil
+	}
+	out := make(map[string][]string, len(in))
+	for k, v := range in {
+		out[k] = append([]string(nil), v...)
+	}
+	return out
 }
 
 // allDNSServersLocked is AllDNSServers without the lock — for callers

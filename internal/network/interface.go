@@ -45,19 +45,33 @@ type NetworkManager interface {
 	Cleanup(ifaceName string) error
 }
 
+// DNSSnapshot carries the pre-VPN per-service DNS state needed for a
+// COMPLETE restore. Search domains must ride along with servers: the
+// previous servers-only snapshot meant the restore path left
+// `networksetup -setsearchdomains` overrides behind forever (issue #34).
+type DNSSnapshot struct {
+	Servers map[string][]string `json:"servers,omitempty"`
+	Search  map[string][]string `json:"search,omitempty"`
+}
+
+// Empty reports whether the snapshot holds no state at all.
+func (s DNSSnapshot) Empty() bool {
+	return len(s.Servers) == 0 && len(s.Search) == 0
+}
+
 // DNSStateRestorer is an optional interface that allows restoring DNS
 // settings from a persisted pre-modification snapshot during crash recovery.
 // Unlike RestoreDNS (which needs in-memory state from the same process),
 // this uses the snapshot saved to disk, preserving custom user preferences.
 type DNSStateRestorer interface {
-	RestoreDNSFromSnapshot(preModDNS map[string][]string) error
+	RestoreDNSFromSnapshot(snap DNSSnapshot) error
 }
 
 // SavedDNSSnapshot returns the current in-memory DNS snapshot for
 // persistence to the crash recovery journal. Platform managers that
 // capture per-service DNS state should implement this.
 type DNSSnapshotProvider interface {
-	SavedDNSSnapshot() map[string][]string
+	SavedDNSSnapshot() DNSSnapshot
 }
 
 // RoutingStateRestorer is an optional interface that platform managers may

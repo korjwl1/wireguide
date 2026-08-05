@@ -29,11 +29,17 @@ type ActiveTunnelState struct {
 	FullTunnel    bool     `json:"full_tunnel"`
 	Table         string   `json:"table,omitempty"`
 	FwMark        string   `json:"fwmark,omitempty"`
-	// PreModDNS stores the original DNS settings per network service
+	// PreModDNS stores the original DNS servers per network service
 	// captured BEFORE any modification. Used for precise crash recovery
 	// instead of the blunt ResetDNSToSystemDefault which loses custom
 	// user preferences.
 	PreModDNS map[string][]string `json:"pre_mod_dns,omitempty"`
+	// PreModSearch stores the original search domains per network
+	// service. Absent in journals written before issue #34's fix; the
+	// restore then clears search domains to "Empty" (DHCP defaults),
+	// which is the correct behaviour for the common no-custom-domains
+	// setup and strictly better than leaking tunnel domains.
+	PreModSearch map[string][]string `json:"pre_mod_search,omitempty"`
 }
 
 // Legacy single-tunnel state file (kept for backward-compatible migration).
@@ -176,7 +182,8 @@ func RecoverFromCrash(dataDir string, fw FirewallCleaner) []string {
 		// clears everything to DHCP defaults (loses custom user preferences).
 		if len(state.PreModDNS) > 0 {
 			if restorer, mok := mgr.(network.DNSStateRestorer); mok {
-				if err := restorer.RestoreDNSFromSnapshot(state.PreModDNS); err != nil {
+				snap := network.DNSSnapshot{Servers: state.PreModDNS, Search: state.PreModSearch}
+				if err := restorer.RestoreDNSFromSnapshot(snap); err != nil {
 					slog.Warn("crash recovery: precise DNS restore failed, falling back to reset", "error", err)
 					if err := mgr.ResetDNSToSystemDefault(); err != nil {
 						ok = false

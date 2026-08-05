@@ -93,11 +93,18 @@ func (h *Helper) handleForceShutdown(params json.RawMessage) (interface{}, error
 			if err := h.firewall.Cleanup(); err != nil {
 				slog.Warn("ForceShutdown: firewall.Cleanup failed", "error", err)
 			}
+			// The utun devices die with this process, but networksetup DNS
+			// overrides persist in SystemConfiguration — restore them or a
+			// helper upgrade while connected leaves tunnel DNS behind
+			// (issue #34). Best-effort under the same deadline.
+			if h.manager != nil {
+				h.manager.RestoreDNSBestEffort()
+			}
 		}()
 		select {
 		case <-done:
-		case <-time.After(1 * time.Second):
-			slog.Warn("ForceShutdown: firewall.Cleanup timed out; exiting anyway")
+		case <-time.After(3 * time.Second):
+			slog.Warn("ForceShutdown: cleanup timed out; exiting anyway")
 		}
 		os.Exit(0)
 	}()
