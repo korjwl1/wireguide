@@ -32,6 +32,12 @@ import (
 // when the observer verifiably reports a light menu bar. We never call
 // SetTemplateIcon, so the Wails v3 sticky-isTemplateIcon bug (once set,
 // later SetIcon calls render monochrome) is never triggered.
+// appQuitting latches once the user picks Quit from the tray. Package-level
+// (unlike trayManager.quitting, which is per-instance) so the window-show
+// retry goroutines in the dock_* files can observe teardown without holding
+// a trayManager reference.
+var appQuitting atomic.Bool
+
 var (
 	trayOnIconDark   []byte // white W + green dot (dark menu bar)
 	trayOffIconDark  []byte // white W, no badge
@@ -631,6 +637,7 @@ func (t *trayManager) rebuildMenu() {
 		// see it and bail. Then stop the timer explicitly to prevent
 		// the goroutine from running at all in the common case.
 		t.quitting.Store(true)
+		appQuitting.Store(true)
 		t.mu.Lock()
 		if t.rebuildTimer != nil {
 			t.rebuildTimer.Stop()

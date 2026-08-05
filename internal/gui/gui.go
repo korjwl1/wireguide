@@ -235,11 +235,14 @@ func Run(assetsHandler http.Handler, dataDir string) error {
 		if (runtime.GOOS == "windows" || runtime.GOOS == "linux") && len(trayOffIconWindows) > 0 {
 			tray.SetIcon(trayOffIconWindows)
 		}
-		// Windows and Linux convention: left-click is the primary action
-		// and shows the main window; the context menu remains on right-click.
+		// Windows convention: left-click is the primary action and shows
+		// the main window; the context menu remains on right-click.
 		// Registered only here: on macOS any click opens the NSStatusItem
-		// menu natively, and an OnClick handler would fight it.
-		if runtime.GOOS == "windows" || runtime.GOOS == "linux" {
+		// menu natively, and an OnClick handler would fight it. On Linux,
+		// Wails' StatusNotifier fires the click handler for the dbusmenu
+		// "opened" event too, so registering it would raise the window on
+		// every right-click; Linux users get the "Show Window" menu item.
+		if runtime.GOOS == "windows" {
 			tray.OnClick(showDock)
 		}
 	}

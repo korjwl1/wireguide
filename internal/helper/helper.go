@@ -517,30 +517,52 @@ func (h *Helper) armShutdownTimer(grace time.Duration, reason string) {
 		active = h.manager.ActiveTunnel()
 	}
 
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
 	if active != "" {
 		slog.Info("tunnel is active — helper stays alive (wg-quick semantics)",
 			"reason", reason, "active_tunnel", active)
+		// A previously armed window (e.g. the startup grace) is obsolete
+		// now that a tunnel is up — stop it rather than leaving it to fire
+		// into a transient not-connected instant later.
+		if h.shutdownTimer != nil {
+			h.shutdownTimer.Stop()
+			h.shutdownTimer = nil
+		}
 		return
 	}
 
 	slog.Info("no active tunnel — starting shutdown grace window",
 		"reason", reason, "grace", grace)
-	h.mu.Lock()
-	defer h.mu.Unlock()
 	if h.shutdownTimer != nil {
 		h.shutdownTimer.Stop()
 	}
-	h.shutdownTimer = time.AfterFunc(grace, func() {
+	var t *time.Timer
+	t = time.AfterFunc(grace, func() {
+		// Timer.Stop() cannot cancel a callback that has already started,
+		// so re-check under the lock that we are still the current timer —
+		// otherwise a cancel racing with the fire still shuts the helper
+		// down right after a GUI attached.
+		h.mu.Lock()
+		current := h.shutdownTimer
+		h.mu.Unlock()
+		if current != t {
+			return
+		}
 		// Double-check at fire time: a tunnel may have been activated between
 		// timer start and fire (e.g., reconnect monitor brought it back up).
-		if t := h.manager.ActiveTunnel(); t != "" {
-			slog.Info("shutdown timer fired but tunnel is now active — aborting shutdown",
-				"active_tunnel", t)
-			return
+		if h.manager != nil {
+			if tn := h.manager.ActiveTunnel(); tn != "" {
+				slog.Info("shutdown timer fired but tunnel is now active — aborting shutdown",
+					"active_tunnel", tn)
+				return
+			}
 		}
 		slog.Info("no reconnect within grace window, shutting down")
 		h.shutdown()
 	})
+	h.shutdownTimer = t
 }
 
 // cancelShutdownTimer aborts a pending grace-window shutdown. Called when the

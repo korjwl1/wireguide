@@ -34,7 +34,12 @@ func showDock() {
 	go func() {
 		for i := 0; i < 10; i++ {
 			time.Sleep(200 * time.Millisecond)
-			if dockWindow == nil {
+			// dockWindow is assigned once and never cleared, so the nil
+			// check alone can't stop this loop during teardown. Show() on
+			// a destroyed Wails window RE-RUNS window creation, so a retry
+			// landing mid-quit would resurrect the window or deadlock in
+			// InvokeSync — bail out once quit has been initiated.
+			if dockWindow == nil || appQuitting.Load() {
 				return
 			}
 			dockWindow.Show()

@@ -40,7 +40,9 @@ func startSSIDReporter(clients *ipc.ClientHolder, done <-chan struct{}, wg *sync
 			// otherwise leave the helper SSID-less until the next roam —
 			// observed live as `ssid=(none)` right after a dev upgrade.
 			// Retry briefly until a real value appears.
+			wg.Add(1)
 			go func() {
+				defer wg.Done()
 				for _, d := range []time.Duration{2 * time.Second, 5 * time.Second, 15 * time.Second} {
 					select {
 					case <-done:
