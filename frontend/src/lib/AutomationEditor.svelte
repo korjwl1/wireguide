@@ -537,15 +537,6 @@
     border-color: var(--error-text, #ff453a);
     background: color-mix(in srgb, var(--error-text, #ff453a) 8%, var(--bg-primary));
   }
-  .am-val-network { flex: 1; min-width: 120px; display: inline-flex; align-items: baseline; gap: 6px; font: 400 12px var(--font-sans); color: var(--text-primary); }
-  .am-mac { font: 400 10px var(--font-mono); color: var(--text-muted); }
-  .am-usecurrent {
-    font: 500 11px var(--font-sans); color: var(--accent);
-    background: color-mix(in srgb, var(--accent) 10%, transparent);
-    border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
-    border-radius: 7px; padding: 4px 9px; cursor: pointer; flex-shrink: 0; white-space: nowrap;
-  }
-  .am-usecurrent:hover { background: color-mix(in srgb, var(--accent) 18%, transparent); }
   .am-remove { background: transparent; border: 0; color: var(--text-muted); cursor: pointer; padding: 4px; border-radius: 6px; flex-shrink: 0; }
   .am-remove:hover { background: color-mix(in srgb, var(--red, #ff3b30) 18%, transparent); color: var(--red, #ff3b30); }
   .am-add {

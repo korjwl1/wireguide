@@ -1,11 +1,9 @@
 {
   "app": {
-    "name": "WireGuide",
     "disconnected": "未接続",
     "connecting": "接続中…",
     "connected": "接続済み",
-    "no_handshake": "ハンドシェイクなし",
-    "error": "エラー"
+    "no_handshake": "ハンドシェイクなし"
   },
   "nav": {
     "tunnels": "トンネル",
@@ -63,21 +61,6 @@
     "rx": "ダウンロード",
     "tx": "アップロード",
     "latency": "遅延",
-    "wifi_auto_connect": "自動接続",
-    "wifi_auto_connect_hint": "これらのネットワークに接続するとこのトンネルが自動で起動します。",
-    "wifi_empty": "登録されたネットワークがありません。",
-    "wifi_added": "自動接続ネットワーク",
-    "wifi_known": "保存済みネットワーク",
-    "wifi_current": "現在",
-    "wifi_current_tooltip": "現在このネットワークに接続中です",
-    "wifi_manual": "リストにないネットワークを追加",
-    "wifi_manual_hint": "対象ネットワークの SSID を正確に入力してください。",
-    "wifi_no_known": "保存済み Wi-Fi ネットワークが見つかりませんでした。下から手動で入力してください。",
-    "wifi_pick_label": "このトンネルを自動で起動するネットワーク",
-    "wifi_combo_placeholder": "ネットワークを入力または選択…",
-    "kill_switch": "キルスイッチ",
-    "dns_protection": "DNS 保護",
-    "details": "詳細",
     "rename_hint": "ダブルクリックで名前変更",
     "notes": "メモ",
     "notes_placeholder": "エンドポイントの場所、認証情報のヒントなど自由メモ",
@@ -86,21 +69,8 @@
     "sort_added_old": "古い順"
   },
   "import": {
-    "title": "トンネルのインポート",
-    "drop_file": ".conf ファイルをここにドロップ",
-    "or": "または",
-    "select_file": "ファイルを選択",
-    "from_clipboard": "クリップボードから貼り付け",
-    "preview_title": "プレビュー",
-    "tunnel_name": "トンネル名",
-    "confirm": "インポート",
-    "cancel": "キャンセル",
-    "success": "トンネルをインポートしました",
-    "exists": "トンネル \"{name}\" はすでに存在します。上書きしますか?",
-    "overwrite": "上書き",
     "zip_result_title": "インポート結果",
     "zip_ok": "完了",
-    "zip_none": "zip 内に .conf ファイルが見つかりませんでした",
     "zip_summary": "{ok}件インポート、{fail}件失敗",
     "zip_summary_ok": "{ok}件インポート"
   },
@@ -108,16 +78,8 @@
     "title": "トンネル編集: {name}",
     "save": "保存",
     "cancel": "キャンセル",
-    "validation_error": "検証エラー",
     "name_placeholder": "トンネル名",
     "name_required": "トンネル名を入力してください"
-  },
-  "scripts": {
-    "warning_title": "スクリプト警告",
-    "warning_message": "この設定には実行されるシステムコマンドが含まれています:",
-    "allow": "許可",
-    "deny": "拒否",
-    "denied_note": "このトンネルではスクリプトは実行されません。"
   },
   "settings": {
     "title": "設定",
@@ -133,7 +95,6 @@
     "lang_auto": "自動",
     "close": "閉じる",
     "advanced": "詳細",
-    "wifi_rules": "Wi-Fi ルール",
     "log_level": "ログレベル",
     "log_level_debug": "デバッグ",
     "log_level_info": "情報",
@@ -150,13 +111,10 @@
     "about": "情報",
     "about_tagline": "デスクトップのための、親しみやすい WireGuard。",
     "about_desc": "WireGuard を中心に作られたオープンソースの VPN クライアント。設定ファイルをドロップすればすぐにつながります。漏えいしないキルスイッチ、抜け道のない DNS 保護、信頼するネットワークで自動的にトンネルを開く Wi-Fi ルール。コマンドラインも、テレメトリも、勧誘もありません。",
-    "about_source": "GitHub ソースコード",
     "about_releases": "リリースノート",
     "about_issues": "問題を報告",
     "about_license": "ライセンス (MIT)",
     "about_credits": "WireGuide®、Wails、Svelte で構築。",
-    "about_copyright": "© 2026 WireGuide. MIT ライセンスで公開。",
-    "about_check_update": "アップデートを確認",
     "about_made_by": "作者",
     "about_footer_copyright": "© 2026 WireGuide",
     "section_appearance": "外観",
@@ -174,40 +132,14 @@
     "delete_message": "\"{name}\" を削除しますか?",
     "yes": "削除",
     "no": "キャンセル",
-    "close": "閉じる",
     "disconnect_first": "先にトンネルを切断してください"
   },
-  "error": {
-    "connection_failed": "接続に失敗しました",
-    "network_error": "ネットワークエラー — インターネット接続を確認してください",
-    "key_mismatch": "鍵の不一致 — 設定を確認してください",
-    "permission_denied": "管理者権限が必要です",
-    "invalid_config": "無効な設定",
-    "file_read_error": "ファイルを読み込めません — ファイル権限を確認してください",
-    "empty_file": "空のファイルです"
-  },
-  "time": {
-    "seconds_ago": "{n}秒前",
-    "just_now": "今"
-  },
   "log": {
-    "title": "ログ",
     "clear": "クリア",
     "auto_scroll": "自動スクロール",
     "no_entries": "ログがありません",
     "filter_all": "すべて",
     "copy": "コピー"
-  },
-  "notify": {
-    "disconnected": "VPN 接続が切断されました",
-    "reconnecting": "{name} に再接続中…",
-    "reconnected": "{name} に再接続しました",
-    "kill_switch_active": "キルスイッチ有効 — インターネットをブロック中",
-    "error": "VPN エラー: {message}"
-  },
-  "daemon": {
-    "not_running": "WireGuide デーモンが実行されていません",
-    "install_hint": "デーモン起動: sudo wireguided"
   },
   "tools": {
     "tab_dns_leak": "DNS 漏洩テスト",
@@ -229,44 +161,9 @@
     "route_legend_vpn": "VPN ルート",
     "route_legend_direct": "直接ルート"
   },
-  "new_tunnel": {
-    "title": "新しいトンネル",
-    "mode_form": "フォーム",
-    "mode_text": "テキスト",
-    "section_interface": "インターフェース",
-    "name_label": "名前",
-    "name_placeholder": "my-tunnel",
-    "private_key_label": "秘密鍵",
-    "generate": "生成",
-    "address_label": "アドレス",
-    "dns_label": "DNS",
-    "mtu_label": "MTU",
-    "section_peer": "ピア",
-    "peer_public_key_label": "公開鍵",
-    "peer_psk_label": "事前共有鍵 (任意)",
-    "peer_endpoint_label": "エンドポイント",
-    "peer_allowed_ips_label": "許可 IP",
-    "peer_keepalive_label": "Persistent Keepalive",
-    "create": "作成",
-    "cancel": "キャンセル"
-  },
-  "keygen": {
-    "private_key": "秘密鍵",
-    "public_key": "公開鍵",
-    "generate": "新しい鍵ペアを生成",
-    "copy": "コピー"
-  },
-  "split_tunnel": {
-    "title": "スプリットトンネル",
-    "no_subnets": "サブネットが追加されていません",
-    "add": "追加",
-    "subnet_placeholder": "10.0.0.0/24"
-  },
   "stats": {
     "speed_graph": "速度グラフ",
-    "waiting": "データ待機中…",
-    "rx": "ダウンロード",
-    "tx": "アップロード"
+    "waiting": "データ待機中…"
   },
   "conflict": {
     "title": "ルーティング競合を検出",
@@ -287,11 +184,8 @@
     "vpn_warning": "更新中に VPN 接続が一時的に切断される場合があります。アプリは自動的に再起動します。",
     "proceed": "更新する",
     "cancel": "あとで",
-    "copy_command": "コピー",
-    "copied": "コピーしました",
     "check_now": "今すぐ確認",
     "checking": "確認中…",
-    "up_to_date": "最新バージョンです ({version})",
     "last_checked": "前回 {time}",
     "never_checked": "未確認",
     "first_check_scheduled": "まもなく初回確認…",
@@ -308,13 +202,6 @@
     "desc": "Wi-Fi 自動接続ルールが動作するには、現在のネットワーク名へのアクセスが必要です。System Settings → プライバシーとセキュリティ → 位置情報サービスで許可してください。",
     "open_settings": "設定を開く"
   },
-  "wifi_rules": {
-    "trusted_ssids": "信頼するネットワーク",
-    "trusted_hint": "これらのネットワークに接続すると、自動接続中のトンネルがすべて自動的に切断されます。",
-    "no_trusted": "信頼するネットワークが追加されていません。",
-    "add": "追加",
-    "ssid_placeholder": "ネットワーク名 (SSID)"
-  },
   "automation": {
     "title": "オートメーション",
     "hint": "ルールは上から順に評価され、最初に一致した条件が適用されます。条件を選んで値を入力するか、現在のネットワークの候補を使用してください。「このネットワーク」はゲートウェイMACで特定のルーターを正確に識別し（サブネットが重複しても区別）、「サブネット」はIP範囲で一致します。接続/切断のルールを個別に追加できます。",
@@ -330,12 +217,7 @@
     "cond_none": "それ以外",
     "cond_none_desc": "他のルールに一致しないとき",
     "ssid_placeholder": "Wi-Fi名",
-    "subnet_current": "現在のネットワーク",
     "cond_network": "このネットワークで",
-    "use_current": "現在を使用",
-    "net_captured": "このネットワーク",
-    "net_not_set": "対象ネットワークで「現在を使用」をクリック",
-    "net_placeholder": "ネットワークを選択、または「現在を使用」",
     "mac_placeholder": "ゲートウェイMAC (例: b0:38:6c:54:8b:ab)",
     "drag_hint": "ドラッグで並べ替え — 最上位の一致ルールが優先",
     "mac_invalid": "有効なMACアドレスではありません (例: b0:38:6c:54:8b:ab)",

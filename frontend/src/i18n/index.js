@@ -48,13 +48,5 @@ function translate(lang, key, params = {}) {
 // `svelte-i18n`), conceptually equivalent to Swift's `L.tr("key")`.
 export const t = derived(locale, ($locale) => (key, params) => translate($locale, key, params));
 
-// Non-reactive translator for plain-JS call sites (notifications, log
-// formatting, etc.) that aren't tied to the Svelte render tree. Reads
-// the current locale once per call. Do NOT use this inside `.svelte`
-// templates — use `$t(...)` there so re-renders happen on language change.
-export function tPlain(key, params = {}) {
-  return translate(get(locale), key, params);
-}
-
 // Initialize with detected language
 locale.set(detectLanguage());
