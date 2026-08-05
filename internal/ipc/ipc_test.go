@@ -29,7 +29,7 @@ func registerTestPing(s *Server) {
 
 func TestClientServerRPC(t *testing.T) {
 	addr := testSocketPath(t)
-	listener, err := Listen(addr, -1)
+	listener, err := Listen(addr, -1, "")
 	if err != nil {
 		t.Fatalf("Listen: %v", err)
 	}
@@ -65,7 +65,7 @@ func TestClientServerRPC(t *testing.T) {
 
 func TestEventBroadcast(t *testing.T) {
 	addr := testSocketPath(t)
-	listener, err := Listen(addr, -1)
+	listener, err := Listen(addr, -1, "")
 	if err != nil {
 		t.Fatalf("Listen: %v", err)
 	}
@@ -112,7 +112,7 @@ func TestEventBroadcast(t *testing.T) {
 
 func TestMethodNotFound(t *testing.T) {
 	addr := testSocketPath(t)
-	listener, err := Listen(addr, -1)
+	listener, err := Listen(addr, -1, "")
 	if err != nil {
 		t.Fatalf("Listen: %v", err)
 	}

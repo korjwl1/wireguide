@@ -198,9 +198,11 @@ type Helper struct {
 
 // Run starts the helper listening on addr. Blocks until shutdown.
 // ownerUID: UID to chown socket to (Unix only, use -1 on Windows).
+// ownerSID: spawning user's SID (Windows only, "" on Unix) — scopes the
+// pipe ACL and per-connection peer checks to that user (issue #20).
 // dataDir: persistent data dir for crash recovery state.
-func Run(addr string, ownerUID int, dataDir string) error {
-	listener, err := ipc.Listen(addr, ownerUID)
+func Run(addr string, ownerUID int, ownerSID, dataDir string) error {
+	listener, err := ipc.Listen(addr, ownerUID, ownerSID)
 	if err != nil {
 		return fmt.Errorf("listen %s: %w", addr, err)
 	}
@@ -215,7 +217,7 @@ func Run(addr string, ownerUID int, dataDir string) error {
 	manager.SetEndpointProtector(fw)
 
 	h := &Helper{
-		server:          ipc.NewServer(listener, ownerUID),
+		server:          ipc.NewServer(listener, ownerUID).WithOwnerSID(ownerSID),
 		manager:         manager,
 		firewall:        fw,
 		activeCfgs:      make(map[string]*domain.WireGuardConfig),

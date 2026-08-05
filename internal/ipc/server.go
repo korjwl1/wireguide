@@ -32,6 +32,9 @@ type Server struct {
 	listener net.Listener
 	handlers map[string]Handler
 	ownerUID int // expected peer UID on Unix (-1 to skip check)
+	// ownerSID is the expected peer user SID on Windows ("" to fall back
+	// to SDDL-only gating). Set via WithOwnerSID from helper.Run.
+	ownerSID string
 
 	mu           sync.Mutex
 	eventSubs    map[*subscriber]struct{} // active event subscribers
@@ -71,6 +74,14 @@ func NewServer(listener net.Listener, ownerUID ...int) *Server {
 		controlConns: make(map[net.Conn]struct{}),
 		connSlots:    make(chan struct{}, maxConcurrentConns),
 	}
+}
+
+// WithOwnerSID sets the expected peer user SID (Windows). Chainable so
+// helper.Run can construct the server in one expression. Call before
+// Serve — the field is read per-connection without a lock.
+func (s *Server) WithOwnerSID(sid string) *Server {
+	s.ownerSID = sid
+	return s
 }
 
 // Handle registers an RPC handler for the given method.
@@ -249,7 +260,7 @@ func (s *Server) handleConn(conn net.Conn) {
 	defer conn.Close()
 
 	// Verify the connecting process belongs to the expected owner.
-	if err := verifyPeerUID(conn, s.ownerUID); err != nil {
+	if err := verifyPeer(conn, s.ownerUID, s.ownerSID); err != nil {
 		slog.Warn("ipc: rejecting connection: peer credential check failed", "error", err)
 		return
 	}
