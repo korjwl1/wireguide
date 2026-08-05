@@ -3,96 +3,49 @@
 package wifi
 
 import (
-	"bufio"
-	"encoding/binary"
-	"net"
 	"os"
-	"strconv"
 	"strings"
 )
 
 // GatewayMAC returns the lower-cased MAC of the IPv4 default gateway,
 // read straight from /proc (no exec, locale-independent). "" when
-// unavailable.
+// unavailable. Route selection honours flags/metric/netmask and skips
+// tunnel and virtual interfaces; the ARP lookup is scoped to the route's
+// device and requires a completed entry (issue #22).
 func GatewayMAC() string {
-	gw := defaultGatewayIPLinux()
+	routeTable, err := os.ReadFile("/proc/net/route")
+	if err != nil {
+		return ""
+	}
+	gw, iface := bestDefaultRoute(routeTable, func(name string) bool {
+		return isTunnelIface(name) || isVirtualIface(name)
+	})
 	if gw == "" {
 		return ""
 	}
-	return arpMACForIP(gw)
-}
-
-// defaultGatewayIPLinux parses /proc/net/route for the default route
-// (destination 00000000) and returns its gateway as a dotted IPv4.
-func defaultGatewayIPLinux() string {
-	f, err := os.Open("/proc/net/route")
+	arpTable, err := os.ReadFile("/proc/net/arp")
 	if err != nil {
 		return ""
 	}
-	defer f.Close()
-	sc := bufio.NewScanner(f)
-	sc.Scan() // header
-	for sc.Scan() {
-		fields := strings.Fields(sc.Text())
-		if len(fields) < 3 {
-			continue
-		}
-		// fields: Iface Destination Gateway ...
-		if fields[1] != "00000000" {
-			continue
-		}
-		gwHex := fields[2]
-		v, err := strconv.ParseUint(gwHex, 16, 32)
-		if err != nil {
-			continue
-		}
-		// The value is little-endian in /proc.
-		ip := make(net.IP, 4)
-		binary.LittleEndian.PutUint32(ip, uint32(v))
-		if ip.IsUnspecified() {
-			continue
-		}
-		return ip.String()
-	}
-	return ""
+	return arpMACForIPOnIface(arpTable, gw, iface)
 }
 
-// arpMACForIP looks up ip in /proc/net/arp and returns its normalised MAC.
-func arpMACForIP(ip string) string {
-	f, err := os.Open("/proc/net/arp")
-	if err != nil {
-		return ""
+// isVirtualIface reports whether the named interface has no backing
+// hardware device. /sys/class/net/<if>/device is a symlink to the
+// PCI/USB/SDIO device and is absent for every bridge, veth, tun/tap,
+// bond and WireGuard interface — a single check that catches docker0,
+// virbr0, tailscale0, vmnet*, CNI bridges and the rest of the
+// name-denylist's blind spots. The tun_flags probe additionally catches
+// tun/tap devices, mirroring internal/reconnect's isTunnel.
+func isVirtualIface(name string) bool {
+	if name == "" || strings.ContainsAny(name, "/\\") {
+		return true
 	}
-	defer f.Close()
-	sc := bufio.NewScanner(f)
-	sc.Scan() // header
-	for sc.Scan() {
-		fields := strings.Fields(sc.Text())
-		// fields: IPaddress HWtype Flags HWaddress Mask Device
-		if len(fields) < 4 {
-			continue
-		}
-		if fields[0] != ip {
-			continue
-		}
-		mac := fields[3]
-		if mac == "00:00:00:00:00:00" {
-			return ""
-		}
-		return normalizeMAC(mac)
+	if _, err := os.Stat("/sys/class/net/" + name + "/tun_flags"); err == nil {
+		return true
 	}
-	return ""
-}
-
-// normalizeMAC lower-cases and zero-pads each octet so platforms that
-// drop leading zeros compare equal.
-func normalizeMAC(mac string) string {
-	parts := strings.Split(mac, ":")
-	for i, p := range parts {
-		if len(p) == 1 {
-			parts[i] = "0" + p
-		}
-		parts[i] = strings.ToLower(parts[i])
+	if _, err := os.Stat("/sys/class/net/" + name + "/device"); err == nil {
+		return false
 	}
-	return strings.Join(parts, ":")
+	return true
 }
