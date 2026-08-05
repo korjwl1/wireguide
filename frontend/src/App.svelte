@@ -920,7 +920,10 @@
   @media (prefers-reduced-motion: no-preference) {
     .drop-overlay { transition: opacity var(--dur-base) var(--ease-out); }
   }
-  :global(.file-drop-target-active) > .drop-overlay {
+  /* Descendant (not child >) combinator: Svelte 5 prunes child-combinator
+   * rules whose parent class it can't statically prove, and Wails adds
+   * .file-drop-target-active at runtime — a `>` here ships commented-out. */
+  :global(.file-drop-target-active) .drop-overlay {
     opacity: 1;
     visibility: visible;
     backdrop-filter: blur(10px) saturate(180%);
@@ -1451,107 +1454,4 @@
     color: var(--text-primary);
     font: var(--text-title-2);
   }
-  .modal label {
-    display: block;
-    margin: var(--space-3) 0 var(--space-1);
-    font: var(--text-subheadline);
-    color: var(--text-secondary);
-  }
-  .modal input[type="text"] {
-    width: 100%;
-    height: 24px;
-    padding: 0 var(--space-2);
-    background: var(--bg-input);
-    border: 0.5px solid var(--border);
-    border-radius: var(--radius-sm);
-    color: var(--text-primary);
-    font: var(--text-body);
-    box-sizing: border-box;
-    outline: none;
-  }
-  .modal input[type="text"]:focus {
-    border-color: var(--accent);
-    box-shadow: 0 0 0 3px var(--blue-tint);
-  }
-  .hint {
-    font: var(--text-footnote);
-    color: var(--text-secondary);
-    margin: 0 0 var(--space-3);
-  }
-  .btn-file-select {
-    width: 100%;
-    padding: var(--space-3);
-    background: var(--bg-card);
-    border: 1px dashed var(--border);
-    border-radius: var(--radius-sm);
-    color: var(--text-primary);
-    font: var(--text-body);
-    cursor: pointer;
-    margin-bottom: var(--space-2);
-  }
-  @media (prefers-reduced-motion: no-preference) {
-    .btn-file-select {
-      transition: background-color var(--dur-fast) var(--ease-out),
-                  border-color var(--dur-fast) var(--ease-out);
-    }
-  }
-  .btn-file-select:hover {
-    background: var(--bg-hover);
-    border-color: var(--accent);
-  }
-  .preview {
-    margin: var(--space-3) 0;
-    padding: var(--space-3);
-    background: var(--editor-bg);
-    border: 0.5px solid var(--editor-border);
-    border-radius: var(--radius-sm);
-    font: 10px/14px var(--font-mono);
-    color: var(--text-secondary);
-    max-height: 200px;
-    overflow-y: auto;
-    white-space: pre-wrap;
-  }
-  .errors {
-    margin: var(--space-2) 0;
-    padding: var(--space-2) var(--space-3);
-    background: var(--error-bg);
-    border: 0.5px solid var(--red);
-    border-radius: var(--radius-sm);
-  }
-  .errors p {
-    margin: var(--space-1) 0;
-    color: var(--error-text);
-    font: var(--text-body);
-  }
-  .modal-footer {
-    display: flex;
-    gap: var(--space-2);
-    justify-content: flex-end;
-    margin-top: var(--space-4);
-  }
-  .btn {
-    height: 28px;
-    padding: 0 var(--space-3);
-    border: 0;
-    border-radius: var(--radius-sm);
-    font: var(--text-headline);
-    cursor: pointer;
-    color: var(--text-primary);
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-  }
-  .btn:disabled { opacity: 0.45; cursor: not-allowed; }
-  .btn-connect {
-    background: var(--accent);
-    color: var(--text-inverse);
-  }
-  @media (prefers-reduced-motion: no-preference) {
-    .btn, .btn-connect {
-      transition: background-color var(--dur-fast) var(--ease-out),
-                  filter var(--dur-fast) var(--ease-out);
-    }
-  }
-  .btn-connect:hover:not(:disabled) { filter: brightness(1.08); }
-  .btn-connect:active:not(:disabled) { filter: brightness(0.94); }
 </style>

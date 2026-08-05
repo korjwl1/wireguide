@@ -65,6 +65,10 @@ export function startLogListener() {
     if (!e) return;
     logs.update((s) => {
       s.entries[s.head] = {
+        // Monotonic id — LogViewer keys its {#each} on this. Index keys
+        // break down once the ring wraps: every push shifts all rows by
+        // one, forcing Svelte to rewrite the whole list per log record.
+        id: s.version,
         time: e.time,
         level: (e.level || 'info').toLowerCase(),
         source: e.source || 'gui',
