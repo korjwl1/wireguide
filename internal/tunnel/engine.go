@@ -2,6 +2,7 @@ package tunnel
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
@@ -123,14 +124,11 @@ func NewEngine(cfg *config.WireGuardConfig) (*Engine, error) {
 
 	// Platform-specific TUN device name:
 	//  - macOS: "utun" — wireguard-go allocates utun0, utun1, etc.
-	//  - Linux: "wg" — wireguard-go creates wg0, wg1, etc. ("utun" is invalid on Linux)
-	//  - Windows: "WireGuide" — Windows expects a proper adapter name, not "utun"
-	tunName := "utun"
-	switch runtime.GOOS {
-	case "linux":
-		tunName = "wg"
-	case "windows":
-		tunName = "WireGuide"
+	//  - Linux/Windows: a stable name derived from the tunnel name. CreateTUN
+	//    treats its argument as an exact name on these platforms; a single
+	//    constant made every second simultaneous tunnel fail with EBUSY.
+	tunName := platformTUNName(runtime.GOOS, cfg.Name)
+	if runtime.GOOS == "windows" {
 		// Best-effort: close any leftover adapter from a previous helper
 		// crash before CreateTUN attempts to allocate the same name.
 		// No-op on non-Windows.
@@ -240,6 +238,25 @@ func NewEngine(cfg *config.WireGuardConfig) (*Engine, error) {
 
 	slog.Info("WireGuard device created (not yet up)", "interface", ifaceName)
 	return engine, nil
+}
+
+// platformTUNName returns a deterministic, collision-resistant adapter name.
+// Linux IFNAMSIZ allows 15 visible bytes, hence the 3-byte prefix plus twelve
+// hex digits. Hashing also keeps spaces and non-ASCII tunnel names away from
+// platform naming restrictions without leaking the user-visible name.
+func platformTUNName(goos, tunnelName string) string {
+	if goos == "darwin" {
+		return "utun"
+	}
+	sum := sha256.Sum256([]byte(tunnelName))
+	suffix := fmt.Sprintf("%x", sum[:6])
+	if goos == "linux" {
+		return "wg-" + suffix
+	}
+	if goos == "windows" {
+		return "WireGuide-" + suffix
+	}
+	return "wg-" + suffix
 }
 
 // Start transitions the WireGuard device into the running state by
@@ -404,7 +421,6 @@ func keyToHex(b64Key string) (string, error) {
 	}
 	return hex.EncodeToString(raw), nil
 }
-
 
 // newWireguardSlogLogger builds a wireguard-go logger that routes Errorf to
 // our structured log stream at Warn level, and Verbosef at Debug level.

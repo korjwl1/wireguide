@@ -181,14 +181,16 @@ func (m *Manager) ConnectWithContext(ctx context.Context, cfg *domain.WireGuardC
 
 	// --- Phase 1: claim the connecting slot under the lock ---
 	m.mu.Lock()
-	entry := m.getOrCreateEntry(name)
-	switch entry.state {
-	case domain.StateConnected:
-		m.mu.Unlock()
-		return newTunnelError(ErrAlreadyConnected, fmt.Sprintf("tunnel %q is already connected", name), nil)
-	case domain.StateConnecting, stateDisconnecting:
-		m.mu.Unlock()
-		return newTunnelError(ErrTransitionInProgress, fmt.Sprintf("tunnel %q: another transition is in progress", name), nil)
+	entry, entryExists := m.tunnels[name]
+	if entryExists {
+		switch entry.state {
+		case domain.StateConnected:
+			m.mu.Unlock()
+			return newTunnelError(ErrAlreadyConnected, fmt.Sprintf("tunnel %q is already connected", name), nil)
+		case domain.StateConnecting, stateDisconnecting:
+			m.mu.Unlock()
+			return newTunnelError(ErrTransitionInProgress, fmt.Sprintf("tunnel %q: another transition is in progress", name), nil)
+		}
 	}
 	// Reject if the new config is full-tunnel and any existing connected tunnel
 	// is also full-tunnel — two 0.0.0.0/0 routes conflict on the route table.
@@ -201,6 +203,12 @@ func (m *Manager) ConnectWithContext(ctx context.Context, cfg *domain.WireGuardC
 			}
 		}
 	}
+	// Do not create the slot until every preflight check has passed. Creating
+	// it before the full-tunnel conflict check left a disconnected ghost in
+	// AllStatuses()/`ctl status` whenever a second full tunnel was rejected.
+	if !entryExists {
+		entry = m.getOrCreateEntry(name)
+	}
 
 	// Stash the tunnel config early so Status() can show "connecting <name>"
 	// while the phases are running.
@@ -210,6 +218,9 @@ func (m *Manager) ConnectWithContext(ctx context.Context, cfg *domain.WireGuardC
 	// Create a per-tunnel NetworkManager so this tunnel's routes, DNS
 	// snapshot, and route monitor are independent of other tunnels.
 	netMgr := m.netMgrFactory()
+	if setter, ok := netMgr.(network.PersistentStateDirSetter); ok {
+		setter.SetPersistentStateDir(m.dataDir)
+	}
 	if m.pinInterface {
 		if dm, ok := netMgr.(interface{ SetPinInterface(bool) }); ok {
 			dm.SetPinInterface(true)

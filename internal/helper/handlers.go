@@ -185,6 +185,19 @@ func (h *Helper) handleRename(params json.RawMessage) (interface{}, error) {
 // monitor sees the config during Connect), then rolls back on failure.
 // Caller MUST hold h.connectMu.
 func (h *Helper) doConnectHeld(cfg *domain.WireGuardConfig) error {
+	// A firewall cannot permit a not-yet-created tunnel interface, and a
+	// pre-enabled base kill switch deliberately blocks DNS and WireGuard UDP.
+	// This applies equally to nftables, PF, and WFP (and is fatal before Engine
+	// creation when a peer endpoint is a hostname). Suspend it for the bounded
+	// Connect transaction, then rebuild the complete permit set from every
+	// active tunnel. A failed Connect restores the previous blockade too.
+	restoreKillSwitch := h.firewall.IsKillSwitchEnabled()
+	if restoreKillSwitch {
+		if err := h.firewall.DisableKillSwitch(); err != nil {
+			return fmt.Errorf("temporarily disable kill switch for connect: %w", err)
+		}
+	}
+
 	h.mu.Lock()
 	prevCfgs := h.copyActiveCfgs()
 	h.activeCfgs[cfg.Name] = cfg
@@ -197,7 +210,78 @@ func (h *Helper) doConnectHeld(cfg *domain.WireGuardConfig) error {
 			h.activeCfgs[cfg.Name] = prev
 		}
 		h.mu.Unlock()
+		if restoreKillSwitch {
+			if restoreErr := h.enableKillSwitchForActiveTunnels(); restoreErr != nil {
+				return fmt.Errorf("connect: %v; restore kill switch: %w", err, restoreErr)
+			}
+		}
 		return err
+	}
+
+	if restoreKillSwitch {
+		if err := h.enableKillSwitchForActiveTunnels(); err != nil {
+			// Do not report a successful connection while the user's requested
+			// blockade is absent. Roll the new tunnel back and make one last
+			// attempt to restore the pre-connect kill-switch state.
+			disconnectErr := h.manager.DisconnectTunnel(cfg.Name)
+			h.mu.Lock()
+			delete(h.activeCfgs, cfg.Name)
+			if prev, ok := prevCfgs[cfg.Name]; ok {
+				h.activeCfgs[cfg.Name] = prev
+			}
+			h.mu.Unlock()
+			restoreErr := h.enableKillSwitchForActiveTunnels()
+			return fmt.Errorf("restore kill switch after connect: %v (disconnect rollback: %v; blockade restore: %v)",
+				err, disconnectErr, restoreErr)
+		}
+	}
+	return nil
+}
+
+// enableKillSwitchForActiveTunnels atomically rebuilds the kill-switch model
+// from manager state. EnableKillSwitch installs the base set and the first
+// tunnel, then AddKillSwitchTunnel folds in every remaining interface. With no
+// active tunnel it intentionally installs the base blockade only.
+//
+// Caller MUST hold h.connectMu so Connect/Disconnect cannot invalidate the
+// status snapshot while the firewall rules are being rebuilt.
+func (h *Helper) enableKillSwitchForActiveTunnels() error {
+	type activeTunnel struct {
+		name          string
+		interfaceName string
+		addresses     []string
+	}
+	h.mu.Lock()
+	activeCfgs := h.copyActiveCfgs()
+	h.mu.Unlock()
+	var active []activeTunnel
+	for _, st := range h.manager.AllStatuses() {
+		if st == nil || st.InterfaceName == "" {
+			continue
+		}
+		var addresses []string
+		if cfg := activeCfgs[st.TunnelName]; cfg != nil {
+			addresses = append([]string(nil), cfg.Interface.Address...)
+		}
+		active = append(active, activeTunnel{name: st.TunnelName, interfaceName: st.InterfaceName, addresses: addresses})
+	}
+
+	if len(active) == 0 {
+		return h.firewall.EnableKillSwitch("", nil, nil)
+	}
+
+	// Endpoints are already resolved by Engine before routes are installed.
+	// Supplying the union to each tunnel is conservative and prevents a peer
+	// belonging to another simultaneously active tunnel from being fenced out.
+	endpoints := h.manager.ResolvedEndpoints()
+	if err := h.firewall.EnableKillSwitch(active[0].interfaceName, active[0].addresses, endpoints); err != nil {
+		return err
+	}
+	for _, tunnel := range active[1:] {
+		if err := h.firewall.AddKillSwitchTunnel(tunnel.interfaceName, tunnel.addresses, endpoints); err != nil {
+			_ = h.firewall.DisableKillSwitch()
+			return fmt.Errorf("add tunnel %q to kill switch: %w", tunnel.name, err)
+		}
 	}
 	return nil
 }
@@ -288,14 +372,14 @@ func (h *Helper) applyPostConnectFirewall(cfg *domain.WireGuardConfig) {
 	// because the only "permit tunnel" filter still references whatever
 	// LUID was current at Enable time.
 	if h.firewall.IsKillSwitchEnabled() {
-		status := h.manager.Status()
+		status := h.manager.StatusFor(cfg.Name)
 		ifaceName := ""
 		if status != nil {
 			ifaceName = status.InterfaceName
 		}
 		if ifaceName != "" {
 			eps := h.manager.ResolvedEndpoints()
-			if err := h.firewall.AddKillSwitchTunnel(ifaceName, eps); err != nil {
+			if err := h.firewall.AddKillSwitchTunnel(ifaceName, cfg.Interface.Address, eps); err != nil {
 				slog.Warn("AddKillSwitchTunnel after connect failed", "error", err)
 			}
 		}
@@ -420,6 +504,9 @@ func (h *Helper) handleActiveTunnels(params json.RawMessage) (interface{}, error
 }
 
 func (h *Helper) handleSetKillSwitch(params json.RawMessage) (interface{}, error) {
+	h.connectMu.Lock()
+	defer h.connectMu.Unlock()
+
 	var req ipc.KillSwitchRequest
 	if err := json.Unmarshal(params, &req); err != nil {
 		return nil, err
@@ -433,27 +520,7 @@ func (h *Helper) handleSetKillSwitch(params json.RawMessage) (interface{}, error
 		// "the kill switch is on the moment I flip the toggle" instead
 		// of the old "kill switch can only be enabled while connected"
 		// gate that surprised users into a half-state.
-		var (
-			ifaceName      string
-			endpoints      []string
-			ifaceAddresses []string
-		)
-		if status := h.manager.Status(); status != nil {
-			ifaceName = status.InterfaceName
-		}
-		if ifaceName != "" {
-			// Tunnel is up — bundle its permits into the initial install.
-			// Pre-resolved endpoints come from NewEngine; doing DNS now
-			// would either fail (kill switch is about to block) or loop
-			// back through the tunnel we're about to fence in.
-			endpoints = h.manager.ResolvedEndpoints()
-			h.mu.Lock()
-			for _, cfg := range h.activeCfgs {
-				ifaceAddresses = append(ifaceAddresses, cfg.Interface.Address...)
-			}
-			h.mu.Unlock()
-		}
-		if err := h.firewall.EnableKillSwitch(ifaceName, ifaceAddresses, endpoints); err != nil {
+		if err := h.enableKillSwitchForActiveTunnels(); err != nil {
 			return nil, err
 		}
 	} else {

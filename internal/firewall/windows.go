@@ -505,6 +505,9 @@ func (f *WindowsFirewall) installTunnelFiltersLocked(interfaceName string, endpo
 // transaction for callers (AddKillSwitchTunnel) that arrive after the
 // kill switch is already enabled. Caller MUST hold f.mu.
 func (f *WindowsFirewall) addTunnelFiltersLocked(interfaceName string, endpoints []string) error {
+	if len(f.tunnelFilterIDs[interfaceName]) > 0 {
+		return nil
+	}
 	if status := fwpmTransactionBegin0(f.sessionHandle); status != 0 {
 		return fmt.Errorf("FwpmTransactionBegin0(add-tunnel): 0x%x", status)
 	}
@@ -512,6 +515,7 @@ func (f *WindowsFirewall) addTunnelFiltersLocked(interfaceName string, endpoints
 	defer func() {
 		if !committed {
 			fwpmTransactionAbort0(f.sessionHandle)
+			delete(f.tunnelFilterIDs, interfaceName)
 		}
 	}()
 	if err := f.installTunnelFiltersLocked(interfaceName, endpoints); err != nil {
@@ -573,9 +577,8 @@ func (f *WindowsFirewall) addEndpointFilterLocked(ip net.IP) (uint64, error) {
 // AddKillSwitchTunnel installs Permit-tunnel + Permit-endpoint filters
 // for one tunnel into the active kill-switch filter set. No-op if the
 // kill switch isn't enabled. Safe to call multiple times for the same
-// name (it will add additional filters; RemoveKillSwitchTunnel removes
-// all of them).
-func (f *WindowsFirewall) AddKillSwitchTunnel(interfaceName string, endpoints []string) error {
+// name (an existing tracked set is left unchanged).
+func (f *WindowsFirewall) AddKillSwitchTunnel(interfaceName string, _ []string, endpoints []string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if !f.killSwitchEnabled {

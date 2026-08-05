@@ -202,6 +202,18 @@ type Helper struct {
 // pipe ACL and per-connection peer checks to that user (issue #20).
 // dataDir: persistent data dir for crash recovery state.
 func Run(addr string, ownerUID int, ownerSID, dataDir string) error {
+	// wireguard-go allocates sizeable per-Device transient buffer pools. With
+	// the runtime default GOGC=100, repeated connect/disconnect on a long-lived
+	// helper retained hundreds of MiB of reclaimable heap before GC caught up
+	// (30 cycles on linux/arm64: ~118 MiB -> ~283 MiB). GOGC=50 kept the same
+	// workload near ~100 MiB with a modest CPU increase (~2.14s -> ~2.34s),
+	// while GOGC=20 bought little more memory at a much higher CPU cost.
+	// Respect an explicit administrator-provided GOGC override.
+	if _, explicitlyConfigured := os.LookupEnv("GOGC"); !explicitlyConfigured {
+		previousGCPercent := debug.SetGCPercent(50)
+		defer debug.SetGCPercent(previousGCPercent)
+	}
+
 	listener, err := ipc.Listen(addr, ownerUID, ownerSID)
 	if err != nil {
 		return fmt.Errorf("listen %s: %w", addr, err)

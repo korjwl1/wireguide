@@ -368,6 +368,10 @@ func cmdImport(args []string) int {
 		fmt.Fprintln(os.Stderr, "import:", err)
 		return 1
 	}
+	if store.Exists(name) {
+		fmt.Fprintf(os.Stderr, "import: tunnel %q already exists (rename or delete it before importing)\n", name)
+		return 1
+	}
 	if _, err := store.ImportFromContent(name, string(data)); err != nil {
 		fmt.Fprintln(os.Stderr, "import:", err)
 		return 1

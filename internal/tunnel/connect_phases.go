@@ -29,6 +29,10 @@ func (m *Manager) connectPhases(ctx context.Context, cfg *domain.WireGuardConfig
 	// Compute fullTunnel early — needed by the rollback closure and later
 	// by AddRoutes. It only depends on cfg which is a parameter.
 	fullTunnel := cfg.IsFullTunnel()
+	var allAllowedIPs []string
+	for _, peer := range cfg.Peers {
+		allAllowedIPs = append(allAllowedIPs, peer.AllowedIPs...)
+	}
 
 	// 2. Engine
 	factory := m.engineFactory
@@ -46,7 +50,7 @@ func (m *Manager) connectPhases(ctx context.Context, cfg *domain.WireGuardConfig
 	// errors because we already have a primary failure to report.
 	rollback := func(primary error) error {
 		// Undo routes that may have been installed before the failure.
-		if err := netMgr.RemoveRoutes(ifaceName, nil, fullTunnel); err != nil {
+		if err := netMgr.RemoveRoutes(ifaceName, allAllowedIPs, fullTunnel); err != nil {
 			slog.Warn("rollback: RemoveRoutes failed", "error", err)
 		}
 		// Strip any endpoint loop protection filters we installed before
@@ -81,7 +85,6 @@ func (m *Manager) connectPhases(ctx context.Context, cfg *domain.WireGuardConfig
 	if err := checkCtx(); err != nil {
 		return nil, err
 	}
-
 	// 3. MTU — pass the user-configured value straight through. If it's 0
 	// (unset), the platform adapter does wg-quick's upstream-MTU-minus-80
 	// auto-detection. Do NOT default to 1420 here: that would shadow the
@@ -175,16 +178,16 @@ func (m *Manager) connectPhases(ctx context.Context, cfg *domain.WireGuardConfig
 	// itself, looping back to an endpoint that has no bypass yet. This is
 	// the chicken-and-egg that wg-quick sidesteps by resolving endpoints
 	// via the `wg` tool BEFORE touching the route table.
-	var allAllowedIPs []string
-	for _, peer := range cfg.Peers {
-		allAllowedIPs = append(allAllowedIPs, peer.AllowedIPs...)
-	}
 	endpointIPs := engine.ResolvedEndpointIPs()
 	if err := netMgr.AddRoutes(ifaceName, allAllowedIPs, fullTunnel, endpointIPs, cfg.Interface.Table, cfg.Interface.FwMark); err != nil {
 		return nil, rollback(newTunnelError(ErrNetwork, "adding routes", err))
 	}
 	if err := checkCtx(); err != nil {
 		return nil, err
+	}
+	var endpointRoutes []string
+	if provider, ok := netMgr.(network.EndpointRouteStateProvider); ok {
+		endpointRoutes = provider.InstalledEndpointRoutes()
 	}
 
 	// 7. DNS — fatal when DNS servers are explicitly configured (matching
@@ -226,12 +229,13 @@ func (m *Manager) connectPhases(ctx context.Context, cfg *domain.WireGuardConfig
 	// the per-service overrides to DHCP defaults). Empty PreModDNS
 	// triggers the fallback path in RecoverFromCrash.
 	if err := SaveActiveState(m.dataDir, &ActiveTunnelState{
-		TunnelName:    cfg.Name,
-		InterfaceName: ifaceName,
-		DNSServers:    cfg.Interface.DNS,
-		FullTunnel:    fullTunnel,
-		Table:         cfg.Interface.Table,
-		FwMark:        cfg.Interface.FwMark,
+		TunnelName:     cfg.Name,
+		InterfaceName:  ifaceName,
+		DNSServers:     cfg.Interface.DNS,
+		FullTunnel:     fullTunnel,
+		Table:          cfg.Interface.Table,
+		FwMark:         cfg.Interface.FwMark,
+		EndpointRoutes: endpointRoutes,
 	}); err != nil {
 		slog.Warn("failed to persist pre-DNS crash recovery state", "error", err)
 	}
@@ -260,14 +264,15 @@ func (m *Manager) connectPhases(ctx context.Context, cfg *domain.WireGuardConfig
 	}
 
 	if err := SaveActiveState(m.dataDir, &ActiveTunnelState{
-		TunnelName:    cfg.Name,
-		InterfaceName: ifaceName,
-		DNSServers:    cfg.Interface.DNS,
-		FullTunnel:    fullTunnel,
-		Table:         cfg.Interface.Table,
-		FwMark:        cfg.Interface.FwMark,
-		PreModDNS:     preMod.Servers,
-		PreModSearch:  preMod.Search,
+		TunnelName:     cfg.Name,
+		InterfaceName:  ifaceName,
+		DNSServers:     cfg.Interface.DNS,
+		FullTunnel:     fullTunnel,
+		Table:          cfg.Interface.Table,
+		FwMark:         cfg.Interface.FwMark,
+		EndpointRoutes: endpointRoutes,
+		PreModDNS:      preMod.Servers,
+		PreModSearch:   preMod.Search,
 	}); err != nil {
 		slog.Warn("failed to persist crash recovery state", "error", err)
 	}

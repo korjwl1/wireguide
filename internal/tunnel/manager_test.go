@@ -29,13 +29,15 @@ type mockNetworkManager struct {
 	cleanupErr       error
 
 	// Call tracking
-	mu           sync.Mutex
-	mtuCalls     int
-	addressCalls int
-	bringUpCalls int
-	routeCalls   int
-	dnsCalls     int
-	cleanupCalls int
+	mu            sync.Mutex
+	mtuCalls      int
+	addressCalls  int
+	bringUpCalls  int
+	routeCalls    int
+	dnsCalls      int
+	cleanupCalls  int
+	removedRoutes []string
+	persistentDir string
 }
 
 func (m *mockNetworkManager) AssignAddress(string, []string) error {
@@ -66,9 +68,10 @@ func (m *mockNetworkManager) AddRoutes(string, []string, bool, []string, string,
 	return m.addRoutesErr
 }
 
-func (m *mockNetworkManager) RemoveRoutes(string, []string, bool) error {
+func (m *mockNetworkManager) RemoveRoutes(_ string, allowedIPs []string, _ bool) error {
 	m.mu.Lock()
 	m.cleanupCalls++ // counts as cleanup-related
+	m.removedRoutes = append([]string(nil), allowedIPs...)
 	m.mu.Unlock()
 	return m.removeRoutesErr
 }
@@ -80,8 +83,13 @@ func (m *mockNetworkManager) SetDNS(string, []string) error {
 	return m.setDNSErr
 }
 
-func (m *mockNetworkManager) RestoreDNS(string) error      { return m.restoreDNSErr }
+func (m *mockNetworkManager) RestoreDNS(string) error        { return m.restoreDNSErr }
 func (m *mockNetworkManager) ResetDNSToSystemDefault() error { return nil }
+func (m *mockNetworkManager) SetPersistentStateDir(dir string) {
+	m.mu.Lock()
+	m.persistentDir = dir
+	m.mu.Unlock()
+}
 func (m *mockNetworkManager) Cleanup(string) error {
 	m.mu.Lock()
 	m.cleanupCalls++
@@ -154,9 +162,9 @@ func testConfig(name string) *domain.WireGuardConfig {
 		},
 		Peers: []domain.PeerConfig{
 			{
-				PublicKey:   "not-used-in-tests",
-				AllowedIPs:  []string{"10.0.0.0/24"},
-				Endpoint:    "1.2.3.4:51820",
+				PublicKey:  "not-used-in-tests",
+				AllowedIPs: []string{"10.0.0.0/24"},
+				Endpoint:   "1.2.3.4:51820",
 			},
 		},
 	}
@@ -271,6 +279,25 @@ func TestConnect_Success(t *testing.T) {
 	}
 	if tunnelConnectedAt(mgr, "vpn1").IsZero() {
 		t.Fatal("connectedAt should be set after Connect")
+	}
+	if net.persistentDir != dir {
+		t.Fatalf("platform manager persistent dir = %q, want %q", net.persistentDir, dir)
+	}
+}
+
+func TestPlatformTUNNameIsStableAndDistinct(t *testing.T) {
+	a := platformTUNName("linux", "vpn-a")
+	if a != platformTUNName("linux", "vpn-a") {
+		t.Fatal("same tunnel name produced different interface names")
+	}
+	if a == platformTUNName("linux", "vpn-b") {
+		t.Fatal("different tunnel names produced the same interface name")
+	}
+	if len(a) > 15 {
+		t.Fatalf("Linux interface name %q exceeds IFNAMSIZ", a)
+	}
+	if got := platformTUNName("darwin", "vpn-a"); got != "utun" {
+		t.Fatalf("darwin TUN name = %q, want utun", got)
 	}
 }
 
@@ -455,6 +482,9 @@ func TestConnect_DNSFailure_FatalWhenServersConfigured(t *testing.T) {
 
 	if tunnelState(mgr, "vpn1") != domain.StateDisconnected {
 		t.Fatalf("expected disconnected, got %s", tunnelState(mgr, "vpn1"))
+	}
+	if len(net.removedRoutes) != 1 || net.removedRoutes[0] != "10.0.0.0/24" {
+		t.Fatalf("rollback removed routes %v, want configured AllowedIPs", net.removedRoutes)
 	}
 }
 
@@ -1025,6 +1055,10 @@ func TestConnect_FullTunnelConflict(t *testing.T) {
 	// Second full-tunnel connect should be rejected.
 	err := mgr.Connect(testFullTunnelConfig("vpn-full-2"))
 	assertTunnelError(t, err, ErrFullTunnelConflict)
+	statuses := mgr.AllStatuses()
+	if len(statuses) != 1 || statuses[0].TunnelName != "vpn-full-1" {
+		t.Fatalf("rejected full tunnel left a ghost status: %+v", statuses)
+	}
 
 	// A split-tunnel should still be allowed alongside a full-tunnel.
 	if err := mgr.Connect(testConfig("vpn-split")); err != nil {

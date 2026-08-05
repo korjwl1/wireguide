@@ -82,6 +82,27 @@ type RoutingStateRestorer interface {
 	RestoreRoutingState(table, fwmark string)
 }
 
+// EndpointRouteStateProvider exposes only endpoint bypass/throw routes that
+// this manager actually installed. Persisting the exact owned set lets crash
+// recovery remove it without flushing unrelated routes from a user-selected
+// custom table.
+type EndpointRouteStateProvider interface {
+	InstalledEndpointRoutes() []string
+}
+
+// EndpointRouteStateRestorer restores the owned endpoint-route set from the
+// crash journal before RemoveRoutes runs in a fresh helper process.
+type EndpointRouteStateRestorer interface {
+	RestoreEndpointRoutes(routes []string)
+}
+
+// PersistentStateDirSetter lets platform managers persist recovery data next
+// to the tunnel journal. Linux uses it for the original resolv.conf snapshot;
+// other platforms do not need to implement it.
+type PersistentStateDirSetter interface {
+	SetPersistentStateDir(dataDir string)
+}
+
 // PreCloseCleaner is an optional interface for platform managers that need
 // to put the tunnel interface into a "harmless" state BEFORE the TUN
 // device is destroyed. On Windows the wintun adapter persists for several

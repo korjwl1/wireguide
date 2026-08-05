@@ -115,8 +115,10 @@ func (h *Helper) statusDTO() ipc.ConnectionStatus {
 		result.LatencyMs = lat
 	}
 
-	// Include lightweight per-tunnel info (name + state + handshake
-	// presence + latency) so the frontend can show correct badges.
+	// Include complete per-tunnel status. The same DTO backs both the
+	// frontend's selected-tunnel statistics and `ctl status --json`; copying
+	// only name/state/handshake silently zeroed interface, duration, traffic,
+	// and endpoint whenever more than one tunnel was active.
 	// Pre-allocate to avoid the latent-bug of `append` aliasing a
 	// slice on the manager-returned struct.
 	if len(allStats) > 1 {
@@ -125,11 +127,9 @@ func (h *Helper) statusDTO() ipc.ConnectionStatus {
 			if ts == nil {
 				continue
 			}
-			sub := domain.ConnectionStatus{
-				State:         ts.State,
-				TunnelName:    ts.TunnelName,
-				LastHandshake: ts.LastHandshake,
-			}
+			sub := *ts
+			sub.ActiveTunnels = nil
+			sub.Tunnels = nil
 			if lat, ok := latencies[ts.TunnelName]; ok {
 				sub.LatencyMs = lat
 			}

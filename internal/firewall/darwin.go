@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -74,16 +75,14 @@ type DarwinFirewall struct {
 	// DNS rules and DNS leaks despite dnsProtectionEnabled==true.
 	savedDNSInterface string
 	savedDNSServers   []string
-	// savedTunnelIface / savedTunnelEndpoints cache the most recent
-	// kill-switch tunnel parameters so AddKillSwitchTunnel /
-	// RemoveKillSwitchTunnel can rebuild the pf anchor without losing
-	// the active tunnel's permits when only one of (iface, dns) changes.
-	savedTunnelIface     string
-	savedTunnelEndpoints []string
+	// killSwitchTunnels is the complete interface -> endpoint permit model.
+	// PF anchor loads replace the prior ruleset, so every add/remove must
+	// render all survivors rather than only the most recently added utun.
+	killSwitchTunnels map[string][]string
 }
 
 func NewPlatformFirewall() FirewallManager {
-	return &DarwinFirewall{}
+	return &DarwinFirewall{killSwitchTunnels: make(map[string][]string)}
 }
 
 // buildKillSwitchRules renders the pf rule text loaded into the
@@ -93,33 +92,56 @@ func NewPlatformFirewall() FirewallManager {
 // DNS sub-anchor directive + catch-all block. That's the layout used
 // when the user toggles the kill switch on without an active tunnel.
 func buildKillSwitchRules(interfaceName string, endpoints []string) (string, error) {
+	tunnels := make(map[string][]string)
+	if interfaceName != "" {
+		tunnels[interfaceName] = endpoints
+	}
+	return buildKillSwitchRulesForTunnels(tunnels)
+}
+
+func buildKillSwitchRulesForTunnels(tunnels map[string][]string) (string, error) {
 	var rules strings.Builder
 	rules.WriteString("# WireGuide kill switch rules\n")
 	rules.WriteString("# Allow loopback\n")
 	rules.WriteString("pass quick on lo0 all\n")
 
-	for _, ep := range endpoints {
-		ip, port, _ := net.SplitHostPort(ep)
-		if ip == "" {
-			ip = ep
+	interfaces := make([]string, 0, len(tunnels))
+	for interfaceName := range tunnels {
+		if !validIfaceName.MatchString(interfaceName) {
+			return "", fmt.Errorf("invalid interface name %q", interfaceName)
 		}
-		if ip == "" {
-			continue
-		}
-		if net.ParseIP(ip) == nil {
-			return "", fmt.Errorf("invalid endpoint IP %q", ip)
-		}
-		if port != "" {
-			fmt.Fprintf(&rules, "pass out quick proto udp to %s port %s\n", ip, port)
-		} else {
-			fmt.Fprintf(&rules, "pass out quick proto udp to %s\n", ip)
+		interfaces = append(interfaces, interfaceName)
+	}
+	sort.Strings(interfaces)
+	seenEndpoints := make(map[string]struct{})
+	for _, interfaceName := range interfaces {
+		for _, ep := range tunnels[interfaceName] {
+			if _, seen := seenEndpoints[ep]; seen {
+				continue
+			}
+			seenEndpoints[ep] = struct{}{}
+			ip, port, _ := net.SplitHostPort(ep)
+			if ip == "" {
+				ip = ep
+			}
+			if ip == "" {
+				continue
+			}
+			if net.ParseIP(ip) == nil {
+				return "", fmt.Errorf("invalid endpoint IP %q", ip)
+			}
+			if port != "" {
+				fmt.Fprintf(&rules, "pass out quick proto udp to %s port %s\n", ip, port)
+			} else {
+				fmt.Fprintf(&rules, "pass out quick proto udp to %s\n", ip)
+			}
 		}
 	}
 
 	rules.WriteString("pass out quick proto udp from any port 68 to any port 67\n")
 	rules.WriteString("pass out quick proto udp from any port 546 to any port 547\n")
 
-	if interfaceName != "" {
+	for _, interfaceName := range interfaces {
 		fmt.Fprintf(&rules, "pass quick on %s all\n", interfaceName)
 	}
 
@@ -150,7 +172,11 @@ func (f *DarwinFirewall) EnableKillSwitch(interfaceName string, _ []string, endp
 		slog.Warn("loading /etc/pf.conf failed; anchor may not be evaluated", "error", err)
 	}
 
-	rules, err := buildKillSwitchRules(interfaceName, endpoints)
+	tunnels := make(map[string][]string)
+	if interfaceName != "" {
+		tunnels[interfaceName] = append([]string(nil), endpoints...)
+	}
+	rules, err := buildKillSwitchRulesForTunnels(tunnels)
 	if err != nil {
 		return err
 	}
@@ -175,8 +201,7 @@ func (f *DarwinFirewall) EnableKillSwitch(interfaceName string, _ []string, endp
 	f.mu.Lock()
 	f.pfWasEnabled = pfWas
 	f.killSwitchEnabled = true
-	f.savedTunnelIface = interfaceName
-	f.savedTunnelEndpoints = append([]string(nil), endpoints...)
+	f.killSwitchTunnels = tunnels
 	f.mu.Unlock()
 	slog.Info("kill switch enabled", "interface", interfaceName, "endpoints", len(endpoints))
 	return nil
@@ -220,14 +245,12 @@ func loadDNSSubAnchor(interfaceName string, dnsServers []string) error {
 	return loadAnchorRules(dnsAnchorName, dnsRules.String())
 }
 
-// AddKillSwitchTunnel folds a newly-connected tunnel's per-iface permit
-// + endpoint permits into the kill-switch anchor. On darwin we only
-// track one tunnel at a time in the anchor — the most-recently-added
-// one wins. Multi-tunnel kill-switch on darwin is not supported.
+// AddKillSwitchTunnel folds a newly-connected tunnel's per-iface permit and
+// endpoint permits into the complete kill-switch anchor.
 //
 // No-op when the kill switch isn't enabled (handleConnect should gate
 // on IsKillSwitchEnabled before calling, but be defensive).
-func (f *DarwinFirewall) AddKillSwitchTunnel(interfaceName string, endpoints []string) error {
+func (f *DarwinFirewall) AddKillSwitchTunnel(interfaceName string, _ []string, endpoints []string) error {
 	if interfaceName == "" {
 		return fmt.Errorf("AddKillSwitchTunnel: empty interface name")
 	}
@@ -240,9 +263,11 @@ func (f *DarwinFirewall) AddKillSwitchTunnel(interfaceName string, endpoints []s
 		f.mu.Unlock()
 		return nil
 	}
+	tunnels := cloneTunnelEndpoints(f.killSwitchTunnels)
+	tunnels[interfaceName] = append([]string(nil), endpoints...)
 	f.mu.Unlock()
 
-	rules, err := buildKillSwitchRules(interfaceName, endpoints)
+	rules, err := buildKillSwitchRulesForTunnels(tunnels)
 	if err != nil {
 		return err
 	}
@@ -252,33 +277,25 @@ func (f *DarwinFirewall) AddKillSwitchTunnel(interfaceName string, endpoints []s
 	f.reapplyDNSSubAnchorIfActive()
 
 	f.mu.Lock()
-	f.savedTunnelIface = interfaceName
-	f.savedTunnelEndpoints = append([]string(nil), endpoints...)
+	f.killSwitchTunnels = tunnels
 	f.mu.Unlock()
 	slog.Info("kill switch tunnel added", "interface", interfaceName, "endpoints", len(endpoints))
 	return nil
 }
 
 // RemoveKillSwitchTunnel rebuilds the anchor without the disconnected
-// tunnel's permits. Since darwin only stores one tunnel at a time, the
-// rebuild drops to base-only (loopback + DHCP + DNS sub-anchor +
-// catch-all block).
+// tunnel's permits while preserving every other active utun.
 func (f *DarwinFirewall) RemoveKillSwitchTunnel(interfaceName string) error {
 	f.mu.Lock()
 	if !f.killSwitchEnabled {
 		f.mu.Unlock()
 		return nil
 	}
-	saved := f.savedTunnelIface
+	tunnels := cloneTunnelEndpoints(f.killSwitchTunnels)
+	delete(tunnels, interfaceName)
 	f.mu.Unlock()
 
-	// If the disconnected tunnel isn't the one we have permits for,
-	// leave the anchor alone — another tunnel is still active.
-	if saved != "" && saved != interfaceName {
-		return nil
-	}
-
-	rules, err := buildKillSwitchRules("", nil)
+	rules, err := buildKillSwitchRulesForTunnels(tunnels)
 	if err != nil {
 		return err
 	}
@@ -288,11 +305,18 @@ func (f *DarwinFirewall) RemoveKillSwitchTunnel(interfaceName string) error {
 	f.reapplyDNSSubAnchorIfActive()
 
 	f.mu.Lock()
-	f.savedTunnelIface = ""
-	f.savedTunnelEndpoints = nil
+	f.killSwitchTunnels = tunnels
 	f.mu.Unlock()
 	slog.Info("kill switch tunnel removed", "interface", interfaceName)
 	return nil
+}
+
+func cloneTunnelEndpoints(src map[string][]string) map[string][]string {
+	dst := make(map[string][]string, len(src))
+	for interfaceName, endpoints := range src {
+		dst[interfaceName] = append([]string(nil), endpoints...)
+	}
+	return dst
 }
 
 // EnableEndpointProtection is a no-op on macOS — but NOT because the
@@ -375,8 +399,7 @@ func (f *DarwinFirewall) DisableKillSwitch() error {
 
 	f.mu.Lock()
 	f.killSwitchEnabled = false
-	f.savedTunnelIface = ""
-	f.savedTunnelEndpoints = nil
+	f.killSwitchTunnels = make(map[string][]string)
 	f.mu.Unlock()
 	slog.Info("kill switch disabled", "dns_reapplied", dnsReapplied)
 	return nil
@@ -531,8 +554,7 @@ func (f *DarwinFirewall) Cleanup() error {
 	}
 	f.dnsProtectionEnabled = false
 	f.killSwitchEnabled = false
-	f.savedTunnelIface = ""
-	f.savedTunnelEndpoints = nil
+	f.killSwitchTunnels = make(map[string][]string)
 	f.pfWasEnabled = false
 	f.mu.Unlock()
 
