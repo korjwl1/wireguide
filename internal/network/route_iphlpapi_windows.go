@@ -196,27 +196,6 @@ var ErrRouteAlreadyExists = fmt.Errorf("route already exists")
 // isn't in the table. Almost always benign during best-effort cleanup.
 var ErrRouteNotFound = fmt.Errorf("route not found")
 
-// VerifyIpForwardRoute reports whether a route matching the given
-// (dest, prefix, ifaceLuid) tuple is currently in the kernel route
-// table. Used by addFullTunnelRoutes as a post-install sanity check
-// when the install API returned success — defends against the rare
-// kernel-accepted-but-invalid race where the row exists in nsi but
-// the dataplane doesn't honor it yet (typical after a wintun adapter
-// has just been created and the BFE hasn't picked up the LUID).
-//
-// `verifyTimeout` and polling are the caller's responsibility; this
-// is a single point-in-time check.
-//
-// For verifying many routes in one go, prefer VerifyIpForwardRoutes:
-// it takes a single GetIpForwardTable2 snapshot instead of one per
-// route, which matters on machines with hundreds of routes (heavily
-// containerised hosts, multiple-VPN setups).
-func VerifyIpForwardRoute(ifaceLuid uint64, dest net.IP, prefixLen uint8) bool {
-	want := []routeKey{{ifaceLuid: ifaceLuid, dest: canonicalIP(dest), prefixLen: prefixLen}}
-	missing := VerifyIpForwardRoutes(want)
-	return len(missing) == 0
-}
-
 // routeKey is the tuple VerifyIpForwardRoutes matches on.
 type routeKey struct {
 	ifaceLuid uint64

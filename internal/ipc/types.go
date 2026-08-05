@@ -88,14 +88,6 @@ type ActiveTunnelsResponse struct {
 	Names []string `json:"names"`
 }
 
-// MultiStatusResponse carries status for every active tunnel plus an
-// aggregate state. The frontend can iterate Tunnels for per-tunnel detail
-// or use the top-level State for a single-tunnel-compatible view.
-type MultiStatusResponse struct {
-	State   domain.State        `json:"state"`
-	Tunnels []ConnectionStatus  `json:"tunnels"`
-}
-
 // BoolResponse wraps a single bool.
 type BoolResponse struct {
 	Value bool `json:"value"`

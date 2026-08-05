@@ -182,6 +182,14 @@ func (s *TunnelService) SaveAutomationRules(tunnel string, rules []wifi.Rule) er
 	if tunnel == "" {
 		return fmt.Errorf("automation: empty tunnel name")
 	}
+	// Reject malformed rules up front — the helper's evaluator silently
+	// no-ops on rules it can't interpret, so a bad save would otherwise
+	// look accepted while doing nothing.
+	for i, r := range rules {
+		if err := wifi.ValidateRule(r); err != nil {
+			return fmt.Errorf("automation: rule %d: %w", i+1, err)
+		}
+	}
 	return s.settingsStore.Update(func(st *storage.Settings) error {
 		st.EnsureAutomation()
 		if len(rules) == 0 {
