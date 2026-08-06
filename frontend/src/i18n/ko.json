@@ -85,6 +85,7 @@
     "title": "설정",
     "general": "일반",
     "auto_start": "시작 시 자동 실행",
+    "auto_start_hint": "기본값은 꺼짐입니다. WireGuide의 백그라운드 헬퍼는 앱이 열려 있는 동안에만 실행되며, 자동화 규칙도 그동안 적용됩니다. 로그인과 함께 WireGuide를 시작하려면 켜세요.",
     "theme": "테마",
     "theme_dark": "어두움",
     "theme_light": "밝음",

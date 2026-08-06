@@ -85,6 +85,7 @@
     "title": "Settings",
     "general": "General",
     "auto_start": "Launch at startup",
+    "auto_start_hint": "Off by default. WireGuide's background helper runs only while the app is open — automation rules apply during that time. Turn this on to have WireGuide start with your session.",
     "theme": "Theme",
     "theme_dark": "Dark",
     "theme_light": "Light",

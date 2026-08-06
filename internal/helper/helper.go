@@ -285,23 +285,24 @@ func Run(addr string, ownerUID int, ownerSID, dataDir string) error {
 	// Register RPC handlers
 	h.registerHandlers()
 
-	// Grace-window shutdown on GUI disconnect — only when NOT running as a
-	// LaunchDaemon. When the daemon plist has KeepAlive=true, launchd
-	// handles restarts; the helper should stay alive even when no GUI is
-	// connected (so the next GUI launch connects instantly without a
-	// password prompt). In osascript/dev mode, the helper still shuts down
-	// after the grace window to avoid orphan processes.
-	if !isDaemon() {
-		h.server.OnConnect(h.cancelShutdownTimer)
-		h.server.OnDisconnect(h.startShutdownTimer)
-		// Arm the startup grace window now: a helper that never receives
-		// a GUI connection must not run forever (see startupGrace). The
-		// first OnConnect cancels it; the fire-time active-tunnel check
-		// keeps a crash-recovered tunnel alive even with no GUI.
-		h.armShutdownTimer(startupGrace, "startup, no GUI connected yet")
-	} else {
-		slog.Info("running as LaunchDaemon — shutdown grace disabled")
-	}
+	// Grace-window shutdown on GUI disconnect. This applies to EVERY launch
+	// mode, LaunchDaemon included: a running GUI is the user's statement of
+	// intent that WireGuide should be active, so a helper with no GUI (and
+	// no active tunnel) has no reason to exist. The LaunchDaemon plist sets
+	// RunAtLoad=false precisely so the boot path never produces an
+	// invisible root helper; this guard is the runtime half of the same
+	// rule, covering the case where the GUI dies without a clean Shutdown.
+	//
+	// Users who want WireGuide up from boot enable auto_start, which
+	// installs the GUI LaunchAgent — the GUI then spawns the helper on the
+	// normal path.
+	h.server.OnConnect(h.cancelShutdownTimer)
+	h.server.OnDisconnect(h.startShutdownTimer)
+	// Arm the startup grace window now: a helper that never receives
+	// a GUI connection must not run forever (see startupGrace). The
+	// first OnConnect cancels it; the fire-time active-tunnel check
+	// keeps a crash-recovered tunnel alive even with no GUI.
+	h.armShutdownTimer(startupGrace, "startup, no GUI connected yet")
 
 	// Start event emitter (diff loop)
 	h.goSafe("eventLoop", h.eventLoop)
@@ -604,12 +605,6 @@ func (h *Helper) cancelShutdownTimer() {
 // the user expects when they click "Quit" in the tray.
 func (h *Helper) shutdown() {
 	h.server.Shutdown()
-}
-
-// isDaemon returns true when the helper was started by launchd (LaunchDaemon).
-// launchd always sets the process's parent PID to 1 (init/launchd).
-func isDaemon() bool {
-	return os.Getppid() == 1
 }
 
 // suspendFirewall saves the current firewall state and disables all firewall

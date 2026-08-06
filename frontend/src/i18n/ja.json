@@ -85,6 +85,7 @@
     "title": "設定",
     "general": "一般",
     "auto_start": "起動時に自動実行",
+    "auto_start_hint": "既定はオフです。WireGuide のバックグラウンドヘルパーはアプリが開いている間だけ動作し、自動化ルールもその間だけ適用されます。ログイン時に WireGuide を起動するにはオンにしてください。",
     "theme": "テーマ",
     "theme_dark": "ダーク",
     "theme_light": "ライト",

@@ -430,8 +430,11 @@
           <div class="settings-section">
             <h4 class="section-title">{$t('settings.section_startup')}</h4>
             <div class="settings-card">
-              <div class="setting-row">
-                <label class="setting-label" for="auto-start">{$t('settings.auto_start')}</label>
+              <div class="setting-row setting-row--toggle">
+                <div class="setting-info">
+                  <label class="setting-label" for="auto-start">{$t('settings.auto_start')}</label>
+                  <p class="setting-desc">{$t('settings.auto_start_hint')}</p>
+                </div>
                 <label class="toggle">
                   <input id="auto-start" type="checkbox" checked={settings.auto_start} on:change={onAutoStartChange} />
                   <span class="toggle-track"></span>
