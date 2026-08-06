@@ -124,19 +124,27 @@ func launchApp() error {
 	switch runtime.GOOS {
 	case "darwin":
 		// `open` returns as soon as the app is launched and does not tie
-		// the app's lifetime to ours. Prefer the bundle ID so an app
-		// installed anywhere (/Applications, ~/Applications, a dev
-		// build that's been run once) is found via LaunchServices.
-		if err := exec.Command("open", "-b", macBundleID).Run(); err == nil {
-			return nil
-		}
-		// Not registered with LaunchServices (common for a freshly built
-		// bundle that has never been opened) — fall back to the .app
-		// enclosing our own binary, then to the bare executable.
+		// the app's lifetime to ours.
+		//
+		// Our OWN bundle comes first, deliberately. `open -b` asks
+		// LaunchServices to resolve the bundle ID, and more than one
+		// WireGuide.app can claim it — a build tree alongside an
+		// installed copy in /Applications. LaunchServices then picks one
+		// we did not choose, and the app that starts can be a different
+		// version from the CLI that started it. That is not cosmetic:
+		// the two builds generate different LaunchDaemon plists, so each
+		// detects the other's plist as drift and reinstalls its own,
+		// prompting for an admin password every single launch.
 		if app := enclosingAppBundle(); app != "" {
 			if err := exec.Command("open", app).Run(); err == nil {
 				return nil
 			}
+		}
+		// Not inside a bundle — the CLI is a bare binary (e.g. installed
+		// to /usr/local/bin). Now the bundle ID is the right question to
+		// ask, since there is no "our own" app to prefer.
+		if err := exec.Command("open", "-b", macBundleID).Run(); err == nil {
+			return nil
 		}
 		return spawnSelfDetached()
 	default:
@@ -148,15 +156,34 @@ func launchApp() error {
 }
 
 // enclosingAppBundle returns the path of the .app bundle containing this
-// executable, or "" when we're not inside one (dev build, bare binary).
+// executable, or "" when we're not inside one (bare binary on $PATH).
+//
+// Symlinks are resolved first: a CLI reached through a symlink (Homebrew
+// linking into /usr/local/bin, a hand-made shortcut) reports the link's
+// path from os.Executable on some platforms, which would hide the bundle
+// the real binary lives in.
 func enclosingAppBundle() string {
 	exe, err := os.Executable()
 	if err != nil {
 		return ""
 	}
-	// …/WireGuide.app/Contents/MacOS/wireguide → …/WireGuide.app
+	if resolved, err := filepath.EvalSymlinks(exe); err == nil {
+		exe = resolved
+	}
+	return bundleFromExePath(exe)
+}
+
+// bundleFromExePath walks up from an executable path to the .app bundle
+// containing it, returning "" when there isn't one. Split out from
+// enclosingAppBundle so the path logic is testable without an os.Executable
+// that happens to sit in the right place.
+//
+// Bounded to three levels: a bundle's binary lives at exactly
+// Foo.app/Contents/MacOS/bin, and walking further would happily match an
+// unrelated ancestor (e.g. a checkout under ~/Projects/Thing.app/…).
+func bundleFromExePath(exe string) string {
 	dir := filepath.Dir(exe)
-	for i := 0; i < 3 && dir != "/" && dir != "."; i++ {
+	for i := 0; i < 3 && dir != "/" && dir != "." && dir != string(filepath.Separator); i++ {
 		if strings.HasSuffix(dir, ".app") {
 			return dir
 		}
