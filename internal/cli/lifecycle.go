@@ -19,11 +19,21 @@ import (
 // which beats guessing at /Applications.
 const macBundleID = "com.korjwl1.wireguide"
 
-// startTimeout bounds how long `ctl start` waits for the helper socket to
-// come up. Generous because the very first launch (or the first after the
-// GUI stopped the helper) shows a macOS admin-password dialog, and the
-// socket only appears once the user has typed it.
-const startTimeout = 2 * time.Minute
+// startTimeout bounds how long `ctl start` waits for the helper socket.
+//
+// Deliberately long. Any launch that finds no live helper shows a macOS
+// admin-password dialog, and the socket appears only once the user has
+// typed it — osascript gives that dialog no deadline of its own, so a
+// short timeout here does not cancel anything, it just makes the CLI lie.
+// At two minutes this reported failure and exited nonzero while the app
+// was still up and waiting; the user then typed the password, everything
+// worked, and a script had already taken the failure branch.
+const startTimeout = 10 * time.Minute
+
+// authHintAfter is how long to wait before mentioning that the password
+// prompt may be hidden. Auth dialogs open behind full-screen windows often
+// enough that a silent CLI looks hung rather than blocked on the user.
+const authHintAfter = 15 * time.Second
 
 // cmdStart launches the WireGuide app and waits until the helper is
 // reachable.
@@ -53,7 +63,9 @@ func cmdStart(_ []string) int {
 		fmt.Println("(macOS may ask for your administrator password to start the VPN helper)")
 	}
 
-	deadline := time.Now().Add(startTimeout)
+	start := time.Now()
+	deadline := start.Add(startTimeout)
+	hinted := false
 	for time.Now().Before(deadline) {
 		time.Sleep(500 * time.Millisecond)
 		if c, err := dialHelper(); err == nil {
@@ -61,9 +73,15 @@ func cmdStart(_ []string) int {
 			fmt.Println("WireGuide is running")
 			return 0
 		}
+		if !hinted && time.Since(start) > authHintAfter {
+			hinted = true
+			fmt.Println("still waiting — if you don't see the password prompt, check behind other windows.")
+		}
 	}
 	fmt.Fprintf(os.Stderr,
-		"start: the app was launched but its helper did not come up within %s\n", startTimeout)
+		"start: gave up after %s waiting for the helper to come up.\n", startTimeout)
+	fmt.Fprintln(os.Stderr,
+		"if the administrator password prompt is still open, answering it will finish the start; re-run 'wireguide ctl status' to check.")
 	return 1
 }
 
