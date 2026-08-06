@@ -24,6 +24,7 @@ func (h *Helper) registerHandlers() {
 	h.server.Handle(ipc.MethodPing, h.handlePing)
 	h.server.Handle(ipc.MethodShutdown, h.handleShutdown)
 	h.server.Handle(ipc.MethodForceShutdown, h.handleForceShutdown)
+	h.server.Handle(ipc.MethodRequestQuit, h.handleRequestQuit)
 	h.server.Handle(ipc.MethodSetLogLevel, h.handleSetLogLevel)
 	h.server.Handle(ipc.MethodConnect, h.handleConnect)
 	h.server.Handle(ipc.MethodDisconnect, h.handleDisconnect)
@@ -62,6 +63,36 @@ func (h *Helper) handleShutdown(params json.RawMessage) (interface{}, error) {
 		h.shutdown()
 	}()
 	return ipc.Empty{}, nil
+}
+
+// handleRequestQuit implements `wireguide ctl stop` — bring the whole app
+// down, GUI included.
+//
+// Two cases, because "stop" has to mean the same thing either way:
+//
+//   - A GUI is attached: broadcast EventQuit and let the GUI terminate
+//     itself. Its normal quit path disconnects tunnels and then stops us.
+//     We must NOT shut down directly here — the GUI's health monitor would
+//     see the helper vanish and respawn it, which on macOS means an admin
+//     password prompt seconds after the user asked everything to stop.
+//
+//   - No GUI attached (helper running solo): nothing will relay the quit,
+//     so shut ourselves down on the same grace-free path as MethodShutdown.
+//
+// Reports which branch ran so `ctl stop` can tell the user whether it
+// stopped an app or just a stray helper.
+func (h *Helper) handleRequestQuit(params json.RawMessage) (interface{}, error) {
+	if h.server.HasControlConn() {
+		slog.Info("quit requested via CLI — asking the GUI to terminate")
+		h.server.Broadcast(ipc.EventQuit, ipc.Empty{})
+		return ipc.RequestQuitResponse{NotifiedGUI: true}, nil
+	}
+	slog.Info("quit requested via CLI — no GUI attached, shutting the helper down")
+	go func() {
+		time.Sleep(100 * time.Millisecond) // let the response go out first
+		h.shutdown()
+	}()
+	return ipc.RequestQuitResponse{NotifiedGUI: false}, nil
 }
 
 // handleForceShutdown bypasses graceful teardown and exits as fast as

@@ -425,6 +425,32 @@ func (t *trayManager) startAppearanceWatch() {
 	})
 }
 
+// quitApp is the single, platform-independent app teardown: stop the tray
+// rebuild machinery, run doShutdown (which disconnects tunnels and stops the
+// helper), then terminate. It backs both the tray's Quit item and
+// `wireguide ctl stop`, which reaches it via the helper's EventQuit
+// broadcast — so both routes leave exactly the same state behind.
+//
+// Safe to call more than once: doShutdown is guarded by a sync.Once and the
+// quit flags are idempotent.
+func (t *trayManager) quitApp() {
+	// Latch the quit flag BEFORE Destroy so any in-flight debounce
+	// timer that fires between here and the AfterFunc cancel will
+	// see it and bail. Then stop the timer explicitly to prevent
+	// the goroutine from running at all in the common case.
+	t.quitting.Store(true)
+	appQuitting.Store(true)
+	t.mu.Lock()
+	if t.rebuildTimer != nil {
+		t.rebuildTimer.Stop()
+		t.rebuildTimer = nil
+	}
+	t.mu.Unlock()
+	t.doShutdown()
+	t.tray.Destroy()
+	t.app.Quit()
+}
+
 func newTrayManager(app *application.App, win *application.WebviewWindow, tray *application.SystemTray, svc *wgapp.TunnelService, doShutdown func()) *trayManager {
 	t := &trayManager{
 		app:        app,
@@ -632,21 +658,7 @@ func (t *trayManager) rebuildMenu() {
 	})
 	m.AddSeparator()
 	m.Add("Quit").OnClick(func(ctx *application.Context) {
-		// Latch the quit flag BEFORE Destroy so any in-flight debounce
-		// timer that fires between here and the AfterFunc cancel will
-		// see it and bail. Then stop the timer explicitly to prevent
-		// the goroutine from running at all in the common case.
-		t.quitting.Store(true)
-		appQuitting.Store(true)
-		t.mu.Lock()
-		if t.rebuildTimer != nil {
-			t.rebuildTimer.Stop()
-			t.rebuildTimer = nil
-		}
-		t.mu.Unlock()
-		t.doShutdown()
-		t.tray.Destroy()
-		t.app.Quit()
+		t.quitApp()
 	})
 	if created || runtime.GOOS == "windows" {
 		// Windows must go through SetMenu on EVERY rebuild: the tray popup

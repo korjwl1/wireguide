@@ -45,6 +45,10 @@ func Run(args []string) int {
 	case "help", "-h", "--help":
 		usage(os.Stdout)
 		return 0
+	case "start":
+		return cmdStart(rest)
+	case "stop":
+		return cmdStop(rest)
 	case "status":
 		return cmdStatus(rest)
 	case "list", "ls":
@@ -78,6 +82,10 @@ func Run(args []string) int {
 
 func usage(w io.Writer) {
 	fmt.Fprint(w, `wireguide ctl — control the WireGuide helper from the command line
+
+App:
+  wireguide ctl start                     launch WireGuide (app + helper) and wait
+  wireguide ctl stop                      quit WireGuide (app + helper)
 
 Tunnels:
   wireguide ctl status [--json]           show connection status
@@ -115,17 +123,24 @@ Examples:
   wireguide ctl automation add work disconnect mac:b0:38:6c:54:8b:ab
   wireguide ctl automation add work connect else
 
-The WireGuide app (or its helper) must be running for connect/disconnect/status;
+WireGuide must be running for connect/disconnect/status — start it with
+'wireguide ctl start' (or by opening the app). Nothing else starts it for you.
 list, import, rename, delete and automation edits work against local files.
 `)
 }
 
 // dialHelper connects to the running helper's IPC socket. The CLI does not
 // spawn/elevate a helper itself — it attaches to the one the app started, so
-// a plain `ctl` invocation never triggers an admin prompt.
+// a plain `ctl` invocation never triggers an admin prompt. Use `ctl start`
+// to bring the app up.
+//
+// The client is TRANSIENT: the helper must not mistake a CLI command for a
+// GUI attaching and detaching. Without that, every `ctl` invocation would
+// re-arm the helper's 10s "GUI disconnected" shutdown window — a status
+// query would cut the helper's life short. See ipc.Request.Transient.
 func dialHelper() (*ipc.Client, error) {
 	addr := ipc.DefaultSocketPath()
-	c, err := ipc.NewClient(addr)
+	c, err := ipc.NewTransientClient(addr)
 	if err != nil {
 		return nil, fmt.Errorf("cannot reach the WireGuide helper (is the app running?): %w", err)
 	}

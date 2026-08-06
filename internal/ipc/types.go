@@ -98,6 +98,13 @@ type StringResponse struct {
 	Value string `json:"value"`
 }
 
+// RequestQuitResponse is returned from Helper.RequestQuit. NotifiedGUI
+// distinguishes "the app is shutting down" from "there was no app, just a
+// stray helper, and it's now stopping" so `ctl stop` can say which.
+type RequestQuitResponse struct {
+	NotifiedGUI bool `json:"notified_gui"`
+}
+
 // WifiSSIDPayload is broadcast by the helper whenever the system's
 // active Wi-Fi SSID changes. The GUI evaluates Settings.WifiRules and
 // triggers Connect / Disconnect accordingly.

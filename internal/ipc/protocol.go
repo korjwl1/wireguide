@@ -17,9 +17,14 @@ import (
 //
 // The on-the-wire format is "major.minor" so this stays trivial to
 // compare in protocol_test.go.
+// Minor 1 added Request.Transient and Helper.RequestQuit / event.quit.
+// All three are additive: an older helper ignores the Transient field
+// (treating a CLI client as a control connection, i.e. the pre-1.1
+// behaviour) and answers RequestQuit with method-not-found, which the
+// CLI reports as "this helper is too old to stop from the CLI".
 const (
 	ProtocolMajor = 1
-	ProtocolMinor = 0
+	ProtocolMinor = 1
 )
 
 // ProtocolVersion is the canonical "major.minor" string used in
@@ -50,6 +55,19 @@ type Request struct {
 	ID      uint64          `json:"id,omitempty"` // 0 for notifications
 	Method  string          `json:"method"`
 	Params  json.RawMessage `json:"params,omitempty"`
+
+	// Transient marks a short-lived client (the `wireguide ctl` CLI) that
+	// must NOT be counted as a control connection. Control connections
+	// drive the helper's shutdown grace window: attaching cancels it and
+	// detaching re-arms it. A CLI command connects and exits within
+	// milliseconds, so without this flag every `ctl` invocation would
+	// re-arm the 10s "GUI disconnected" window and cut a GUI-less
+	// helper's remaining life down to 10 seconds — the CLI would be
+	// killing the very helper it just talked to.
+	//
+	// The GUI leaves this false: it is the connection whose presence
+	// legitimately means "the user wants WireGuide running".
+	Transient bool `json:"transient,omitempty"`
 }
 
 // Response is a JSON-RPC 2.0 response.
@@ -115,6 +133,15 @@ const (
 	// current Automation rules against the current network context and
 	// returns each tunnel's decision WITHOUT connecting/disconnecting.
 	MethodAutomationPreview = "Automation.Preview"
+	// MethodRequestQuit asks the helper to bring the WHOLE app down —
+	// this is `wireguide ctl stop`. It is deliberately NOT the same as
+	// MethodShutdown: shutting the helper down while the GUI is still
+	// running just makes the GUI's health monitor respawn it (and prompt
+	// for an admin password on macOS). Instead the helper broadcasts
+	// EventQuit so a connected GUI terminates itself, and the GUI's own
+	// shutdown path then stops the helper. With no GUI attached the
+	// helper simply shuts itself down.
+	MethodRequestQuit = "Helper.RequestQuit"
 )
 
 // Event names (server → client notifications)
@@ -124,6 +151,11 @@ const (
 	EventLog         = "event.log"
 	EventWifiSSID    = "event.wifi_ssid"
 	EventAutoConnect = "event.auto_connect"
+	// EventQuit tells a connected GUI to terminate — the cross-platform
+	// half of `wireguide ctl stop`. The GUI runs its normal quit path
+	// (which disconnects tunnels and stops the helper), so no per-OS
+	// "quit that application" mechanism is needed.
+	EventQuit = "event.quit"
 	// EventCriticalError signals that a background goroutine inside the
 	// helper has died permanently (e.g. exceeded goSafe restart budget).
 	// The GUI is expected to surface this via a banner/toast so the user

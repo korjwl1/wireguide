@@ -217,6 +217,17 @@ func (s *Server) HasSubscribers() bool {
 	return n > 0
 }
 
+// HasControlConn reports whether at least one control connection (i.e. a
+// GUI) is attached. Transient CLI clients are excluded by construction —
+// they never enter controlConns. Used by the RequestQuit handler to choose
+// between "ask the GUI to quit" and "just shut myself down".
+func (s *Server) HasControlConn() bool {
+	s.mu.Lock()
+	n := len(s.controlConns)
+	s.mu.Unlock()
+	return n > 0
+}
+
 // Broadcast sends an event notification to all subscribers.
 func (s *Server) Broadcast(method string, params interface{}) {
 	// Cheap pre-check: if nobody is subscribed, skip the JSON marshal
@@ -314,7 +325,11 @@ func (s *Server) handleConn(conn net.Conn) {
 			return // handleSubscribe takes over the connection
 		}
 
-		if !isControl {
+		// Transient clients (the `ctl` CLI) never become control
+		// connections: they connect, issue one command and exit, which
+		// would otherwise look like a GUI attaching and immediately
+		// detaching and would re-arm the shutdown grace window.
+		if !isControl && !req.Transient {
 			isControl = true
 			s.mu.Lock()
 			s.controlConns[conn] = struct{}{}
