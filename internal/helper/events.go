@@ -287,7 +287,15 @@ func (h *Helper) runOneLatencyProbe(t latencyTask) {
 	h.latencyMu.Lock()
 	h.latencyByTunnel[t.tunnelName] = latency
 	h.latencyMu.Unlock()
-	slog.Info("endpoint latency measured",
+	// Debug, not Info: this fires per connected tunnel every 30s, and
+	// launchd appends StandardOutPath forever with no rotation — at Info
+	// it was 95.7% of a 7.7 MB helper log (33,720 of 35,240 lines over
+	// four months). Nothing is lost by demoting it: the same value is
+	// already broadcast in the status event, rendered in the UI and
+	// readable via `ctl status`. The log level is runtime-mutable, so
+	// anyone debugging a latency problem can turn it back on live with
+	// `wireguide ctl set loglevel debug` (or the Settings UI).
+	slog.Debug("endpoint latency measured",
 		"tunnel", t.tunnelName, "target", measuredTarget,
 		"configured_target", t.latencyProbeTarget,
 		"via_tunnel", viaTunnel,
