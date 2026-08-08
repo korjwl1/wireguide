@@ -37,6 +37,7 @@ http_ok() { curl --connect-timeout 5 --max-time 12 --silent --fail https://www.g
 cleanup() {
   rc=$?
   trap - EXIT INT TERM
+  [[ -n "${keepalive_pid:-}" ]] && kill "$keepalive_pid" 2>/dev/null || true
   sudo -n "$recover" "$backup_resolv" "$helper_pidfile" "$recovery_log" || true
   sudo -n systemctl stop wireguide-network-recovery.timer wireguide-network-recovery.service 2>/dev/null || true
   if (( rc == 0 )); then
@@ -70,6 +71,31 @@ for _ in {1..100}; do [[ -S "$socket" ]] && break; sleep 0.1; done
 main_pid=$(sudo -n systemctl show -p MainPID --value wireguide-fulltest-helper.service)
 [[ "$main_pid" =~ ^[1-9][0-9]*$ ]]
 printf '%s\n' "$main_pid" >"$helper_pidfile"
+
+# The helper ties its lifetime to the GUI: with no GUI it self-exits after
+# the 60s startup grace, and ctl invocations are Transient so they neither
+# cancel nor re-arm it. This test has long windows where automation rules
+# have disconnected every tunnel, so hold ONE non-transient control
+# connection (a GUI stand-in) for the duration — otherwise the helper
+# vanishes mid-matrix exactly as the lifetime design intends.
+python3 - "$socket" <<'PYKEEPALIVE' &
+import json, socket, struct, sys, time
+s = socket.socket(socket.AF_UNIX)
+s.connect(sys.argv[1])
+body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "Helper.Ping"}).encode()
+s.sendall(struct.pack(">I", len(body)) + body)
+hdr = s.recv(4)
+if len(hdr) == 4:
+    n = struct.unpack(">I", hdr)[0]
+    while n > 0:
+        chunk = s.recv(min(n, 65536))
+        if not chunk:
+            break
+        n -= len(chunk)
+while True:
+    time.sleep(30)
+PYKEEPALIVE
+keepalive_pid=$!
 
 is_active() {
   cli status --json 2>>"$test_log" | python3 -c 'import json,sys; x=json.load(sys.stdin); raise SystemExit(0 if any(v["tunnel_name"]=="automation-audit" for v in x) else 1)'
