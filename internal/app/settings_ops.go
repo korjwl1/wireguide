@@ -397,9 +397,32 @@ func (s *TunnelService) RunUpdate(info *update.UpdateInfo) error {
 		// live: 0.3.1 pinned for three months of "Update Now" clicks). The
 		// flag forces the upgrade regardless of brew version or cask flags.
 		s.emitUpdateProgress("install")
-		slog.Info("update: running brew upgrade --cask --greedy wireguide")
-		cmd := exec.CommandContext(upCtx, brewBin, "upgrade", "--cask", "--greedy", "wireguide")
-		out, err := cmd.CombinedOutput()
+		runUpgrade := func() ([]byte, error) {
+			slog.Info("update: running brew upgrade --cask --greedy wireguide")
+			cmd := exec.CommandContext(upCtx, brewBin, "upgrade", "--cask", "--greedy", "wireguide")
+			// We already ran `brew update` above — suppress the implicit
+			// re-update brew would otherwise bolt onto upgrade.
+			cmd.Env = append(os.Environ(), "HOMEBREW_NO_AUTO_UPDATE=1")
+			return cmd.CombinedOutput()
+		}
+		out, err := runUpgrade()
+		if err != nil && strings.Contains(string(out), "untrusted tap") {
+			// Homebrew 6 gates third-party taps behind an explicit trust
+			// grant and refuses to LOAD the cask otherwise ("Refusing to
+			// load cask … from untrusted tap"). Interactive brew asks the
+			// user; our TTY-less subprocess just gets the error. Trusting
+			// our own tap here is legitimate self-service: the user
+			// installed this app from that tap and clicked "Update Now" —
+			// that is the consent the prompt exists to collect. Scoped to
+			// exactly our tap, never a blanket trust.
+			slog.Info("update: tap untrusted on this machine — trusting korjwl1/tap and retrying")
+			tCtx, tCancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer tCancel()
+			if tOut, tErr := exec.CommandContext(tCtx, brewBin, "trust", "korjwl1/tap").CombinedOutput(); tErr != nil {
+				return fmt.Errorf("brew trust korjwl1/tap failed: %w (%s)", tErr, string(tOut))
+			}
+			out, err = runUpgrade()
+		}
 		if err != nil {
 			return fmt.Errorf("brew upgrade failed: %w (%s)", err, string(out))
 		}
