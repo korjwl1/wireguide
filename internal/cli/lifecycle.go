@@ -1,0 +1,230 @@
+package cli
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
+	"strings"
+	"time"
+
+	"github.com/korjwl1/wireguide/internal/ipc"
+	"github.com/korjwl1/wireguide/internal/sysexec"
+)
+
+// macBundleID must match CFBundleIdentifier in build/darwin/Info.plist.
+// `open -b` uses it to find an installed WireGuide.app wherever it lives,
+// which beats guessing at /Applications.
+const macBundleID = "com.korjwl1.wireguide"
+
+// startTimeout bounds how long `ctl start` waits for the helper socket.
+//
+// Deliberately long. Any launch that finds no live helper shows a macOS
+// admin-password dialog, and the socket appears only once the user has
+// typed it — osascript gives that dialog no deadline of its own, so a
+// short timeout here does not cancel anything, it just makes the CLI lie.
+// At two minutes this reported failure and exited nonzero while the app
+// was still up and waiting; the user then typed the password, everything
+// worked, and a script had already taken the failure branch.
+const startTimeout = 10 * time.Minute
+
+// authHintAfter is how long to wait before mentioning that the password
+// prompt may be hidden. Auth dialogs open behind full-screen windows often
+// enough that a silent CLI looks hung rather than blocked on the user.
+const authHintAfter = 15 * time.Second
+
+// cmdStart launches the WireGuide app and waits until the helper is
+// reachable.
+//
+// Deliberately the ONLY command that starts anything. `connect`, `status`
+// and friends fail with "is the app running?" instead of silently starting
+// a VPN stack behind the user's back — the same contract the docker CLI has
+// with dockerd. Starting is an explicit act because on macOS it costs an
+// admin-password prompt, and because a running WireGuide is exactly what
+// the helper treats as consent to apply automation rules.
+func cmdStart(_ []string) int {
+	// Already up? Then this is a no-op, not an error — `ctl start` should
+	// be safe to put at the top of a script.
+	if c, err := dialHelper(); err == nil {
+		c.Close()
+		fmt.Println("WireGuide is already running")
+		return 0
+	}
+
+	if err := launchApp(); err != nil {
+		fmt.Fprintln(os.Stderr, "start:", err)
+		return 1
+	}
+
+	fmt.Println("starting WireGuide…")
+	if runtime.GOOS == "darwin" {
+		fmt.Println("(macOS may ask for your administrator password to start the VPN helper)")
+	}
+
+	start := time.Now()
+	deadline := start.Add(startTimeout)
+	hinted := false
+	for time.Now().Before(deadline) {
+		time.Sleep(500 * time.Millisecond)
+		if c, err := dialHelper(); err == nil {
+			c.Close()
+			fmt.Println("WireGuide is running")
+			return 0
+		}
+		if !hinted && time.Since(start) > authHintAfter {
+			hinted = true
+			fmt.Println("still waiting — if you don't see the password prompt, check behind other windows.")
+		}
+	}
+	fmt.Fprintf(os.Stderr,
+		"start: gave up after %s waiting for the helper to come up.\n", startTimeout)
+	fmt.Fprintln(os.Stderr,
+		"if the administrator password prompt is still open, answering it will finish the start; re-run 'wireguide ctl status' to check.")
+	return 1
+}
+
+// cmdStop asks the running app to quit — GUI and helper together.
+//
+// The request goes to the helper rather than to the GUI directly, because
+// the helper is the process the CLI can already reach on every platform.
+// It broadcasts EventQuit to the GUI (which then runs its own quit path and
+// stops the helper on the way out), or shuts itself down when no GUI is
+// attached. That keeps `stop` free of per-OS "terminate that application"
+// machinery.
+func cmdStop(_ []string) int {
+	c, err := dialHelper()
+	if err != nil {
+		// Nothing to stop is success: `ctl stop` states a desired end
+		// state, and we're already in it.
+		fmt.Println("WireGuide is not running")
+		return 0
+	}
+	defer c.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	var resp ipc.RequestQuitResponse
+	if err := c.CallWithContext(ctx, ipc.MethodRequestQuit, nil, &resp); err != nil {
+		fmt.Fprintln(os.Stderr, "stop:", err)
+		if strings.Contains(err.Error(), "method not found") {
+			fmt.Fprintln(os.Stderr,
+				"this helper predates 'ctl stop' — quit WireGuide from its tray icon, or restart the app once to upgrade the helper.")
+		}
+		return 1
+	}
+	if resp.NotifiedGUI {
+		fmt.Println("stopping WireGuide…")
+	} else {
+		fmt.Println("no app was running; stopped the leftover helper")
+	}
+
+	// Confirm it actually went away rather than reporting success on a
+	// request that was merely accepted.
+	deadline := time.Now().Add(20 * time.Second)
+	for time.Now().Before(deadline) {
+		time.Sleep(500 * time.Millisecond)
+		probe, perr := dialHelper()
+		if perr != nil {
+			fmt.Println("WireGuide stopped")
+			return 0
+		}
+		probe.Close()
+	}
+	fmt.Fprintln(os.Stderr, "stop: WireGuide did not shut down within 20s")
+	return 1
+}
+
+// launchApp starts the GUI, detached from this process so the CLI can exit
+// without taking the app with it.
+func launchApp() error {
+	switch runtime.GOOS {
+	case "darwin":
+		// `open` returns as soon as the app is launched and does not tie
+		// the app's lifetime to ours.
+		//
+		// Our OWN bundle comes first, deliberately. `open -b` asks
+		// LaunchServices to resolve the bundle ID, and more than one
+		// WireGuide.app can claim it — a build tree alongside an
+		// installed copy in /Applications. LaunchServices then picks one
+		// we did not choose, and the app that starts can be a different
+		// version from the CLI that started it. That is not cosmetic:
+		// the two builds generate different LaunchDaemon plists, so each
+		// detects the other's plist as drift and reinstalls its own,
+		// prompting for an admin password every single launch.
+		if app := enclosingAppBundle(); app != "" {
+			if err := exec.Command("open", app).Run(); err == nil {
+				return nil
+			}
+		}
+		// Not inside a bundle — the CLI is a bare binary (e.g. installed
+		// to /usr/local/bin). Now the bundle ID is the right question to
+		// ask, since there is no "our own" app to prefer.
+		if err := exec.Command("open", "-b", macBundleID).Run(); err == nil {
+			return nil
+		}
+		return spawnSelfDetached()
+	default:
+		// Linux and Windows: the GUI is this same binary invoked with no
+		// arguments (see main.go — only `ctl` routes into the CLI), so
+		// re-exec ourselves rather than hunting for a launcher.
+		return spawnSelfDetached()
+	}
+}
+
+// enclosingAppBundle returns the path of the .app bundle containing this
+// executable, or "" when we're not inside one (bare binary on $PATH).
+//
+// Symlinks are resolved first: a CLI reached through a symlink (Homebrew
+// linking into /usr/local/bin, a hand-made shortcut) reports the link's
+// path from os.Executable on some platforms, which would hide the bundle
+// the real binary lives in.
+func enclosingAppBundle() string {
+	exe, err := os.Executable()
+	if err != nil {
+		return ""
+	}
+	if resolved, err := filepath.EvalSymlinks(exe); err == nil {
+		exe = resolved
+	}
+	return bundleFromExePath(exe)
+}
+
+// bundleFromExePath walks up from an executable path to the .app bundle
+// containing it, returning "" when there isn't one. Split out from
+// enclosingAppBundle so the path logic is testable without an os.Executable
+// that happens to sit in the right place.
+//
+// Bounded to three levels: a bundle's binary lives at exactly
+// Foo.app/Contents/MacOS/bin, and walking further would happily match an
+// unrelated ancestor (e.g. a checkout under ~/Projects/Thing.app/…).
+func bundleFromExePath(exe string) string {
+	dir := filepath.Dir(exe)
+	for i := 0; i < 3 && dir != "/" && dir != "." && dir != string(filepath.Separator); i++ {
+		if strings.HasSuffix(dir, ".app") {
+			return dir
+		}
+		dir = filepath.Dir(dir)
+	}
+	return ""
+}
+
+// spawnSelfDetached re-executes this binary with no arguments (which starts
+// the GUI) and detaches it, so the app outlives the CLI process.
+func spawnSelfDetached() error {
+	exe, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("cannot locate the WireGuide executable: %w", err)
+	}
+	cmd := exec.Command(exe)
+	// Detach stdio: inheriting the terminal would keep the app tied to the
+	// shell and leak its logs into the user's session.
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = nil, nil, nil
+	sysexec.Detach(cmd)
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("cannot launch the WireGuide app: %w", err)
+	}
+	// Release the child so it isn't reaped when the CLI exits.
+	return cmd.Process.Release()
+}

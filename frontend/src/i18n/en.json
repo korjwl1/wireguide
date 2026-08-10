@@ -1,11 +1,9 @@
 {
   "app": {
-    "name": "WireGuide",
     "disconnected": "Disconnected",
     "connecting": "Connecting...",
     "connected": "Connected",
-    "no_handshake": "No Handshake",
-    "error": "Error"
+    "no_handshake": "No Handshake"
   },
   "nav": {
     "tunnels": "Tunnels",
@@ -63,21 +61,6 @@
     "rx": "Download",
     "tx": "Upload",
     "latency": "Latency",
-    "wifi_auto_connect": "Auto-Connect",
-    "wifi_auto_connect_hint": "This tunnel activates when you join one of these networks.",
-    "wifi_empty": "No networks added yet.",
-    "wifi_added": "Auto-connect networks",
-    "wifi_known": "Saved networks",
-    "wifi_current": "Current",
-    "wifi_current_tooltip": "You are connected to this network now",
-    "wifi_manual": "Add a network not listed above",
-    "wifi_manual_hint": "Type an SSID exactly as it appears on the network you want to match.",
-    "wifi_no_known": "No saved Wi-Fi networks were found. Use the manual input below.",
-    "wifi_pick_label": "Networks that should auto-connect this tunnel",
-    "wifi_combo_placeholder": "Type or pick a network…",
-    "kill_switch": "Kill Switch",
-    "dns_protection": "DNS Protection",
-    "details": "Details",
     "rename_hint": "Double-click to rename",
     "notes": "Notes",
     "notes_placeholder": "Freeform notes — endpoint location, credentials hint, etc.",
@@ -86,21 +69,8 @@
     "sort_added_old": "Oldest first"
   },
   "import": {
-    "title": "Import Tunnel",
-    "drop_file": "Drop .conf file here",
-    "or": "or",
-    "select_file": "Select File",
-    "from_clipboard": "Paste from Clipboard",
-    "preview_title": "Preview",
-    "tunnel_name": "Tunnel Name",
-    "confirm": "Import",
-    "cancel": "Cancel",
-    "success": "Tunnel imported successfully",
-    "exists": "Tunnel \"{name}\" already exists. Overwrite?",
-    "overwrite": "Overwrite",
     "zip_result_title": "Import Results",
     "zip_ok": "Done",
-    "zip_none": "No .conf files found in zip",
     "zip_summary": "{ok} imported, {fail} failed",
     "zip_summary_ok": "{ok} imported"
   },
@@ -108,21 +78,14 @@
     "title": "Edit Tunnel: {name}",
     "save": "Save",
     "cancel": "Cancel",
-    "validation_error": "Validation Error",
     "name_placeholder": "Tunnel name",
     "name_required": "Tunnel name is required"
-  },
-  "scripts": {
-    "warning_title": "Script Warning",
-    "warning_message": "This configuration contains system commands that will be executed:",
-    "allow": "Allow",
-    "deny": "Deny",
-    "denied_note": "Scripts will not be executed for this tunnel."
   },
   "settings": {
     "title": "Settings",
     "general": "General",
     "auto_start": "Launch at startup",
+    "auto_start_hint": "Off by default. WireGuide's background helper runs only while the app is open — automation rules apply during that time. Turn this on to have WireGuide start with your session.",
     "theme": "Theme",
     "theme_dark": "Dark",
     "theme_light": "Light",
@@ -133,7 +96,6 @@
     "lang_auto": "Auto",
     "close": "Close",
     "advanced": "Advanced",
-    "wifi_rules": "Wi-Fi Rules",
     "log_level": "Log Level",
     "log_level_debug": "Debug",
     "log_level_info": "Info",
@@ -150,13 +112,10 @@
     "about": "About",
     "about_tagline": "Friendly WireGuard for every desktop.",
     "about_desc": "An open-source VPN client built around WireGuard — drop a config and you're online. A kill switch that doesn't leak, DNS protection that doesn't dodge, and Wi-Fi rules that pick the right tunnel on networks you trust. No command line. No telemetry. No upsell.",
-    "about_source": "Source on GitHub",
     "about_releases": "Release notes",
     "about_issues": "Report an issue",
     "about_license": "License (MIT)",
     "about_credits": "Built with WireGuard®, Wails, and Svelte.",
-    "about_copyright": "© 2026 WireGuide. Released under the MIT License.",
-    "about_check_update": "Check for updates",
     "about_made_by": "Made by",
     "about_footer_copyright": "© 2026 WireGuide",
     "up_to_date": "You're on the latest version.",
@@ -174,40 +133,14 @@
     "delete_message": "Are you sure you want to delete \"{name}\"?",
     "yes": "Delete",
     "no": "Cancel",
-    "close": "Close",
     "disconnect_first": "Disconnect the tunnel first"
   },
-  "error": {
-    "connection_failed": "Connection failed",
-    "network_error": "Network error — check your internet connection",
-    "key_mismatch": "Key mismatch — verify your configuration",
-    "permission_denied": "Administrator privileges required",
-    "invalid_config": "Invalid configuration",
-    "file_read_error": "Cannot read file — check file permissions",
-    "empty_file": "Empty file"
-  },
-  "time": {
-    "seconds_ago": "{n}s ago",
-    "just_now": "just now"
-  },
   "log": {
-    "title": "Logs",
     "clear": "Clear",
     "copy": "Copy",
     "auto_scroll": "Auto-scroll",
     "no_entries": "No log entries",
     "filter_all": "All"
-  },
-  "notify": {
-    "disconnected": "VPN connection lost",
-    "reconnecting": "Reconnecting to {name}...",
-    "reconnected": "Reconnected to {name}",
-    "kill_switch_active": "Kill switch active — internet blocked",
-    "error": "VPN error: {message}"
-  },
-  "daemon": {
-    "not_running": "WireGuide daemon is not running",
-    "install_hint": "Start the daemon with: sudo wireguided"
   },
   "tools": {
     "tab_dns_leak": "DNS Leak Test",
@@ -229,44 +162,9 @@
     "route_legend_vpn": "VPN route",
     "route_legend_direct": "Direct route"
   },
-  "new_tunnel": {
-    "title": "New Tunnel",
-    "mode_form": "Form",
-    "mode_text": "Text",
-    "section_interface": "Interface",
-    "name_label": "Name",
-    "name_placeholder": "my-tunnel",
-    "private_key_label": "Private Key",
-    "generate": "Generate",
-    "address_label": "Address",
-    "dns_label": "DNS",
-    "mtu_label": "MTU",
-    "section_peer": "Peer",
-    "peer_public_key_label": "Public Key",
-    "peer_psk_label": "Preshared Key (optional)",
-    "peer_endpoint_label": "Endpoint",
-    "peer_allowed_ips_label": "Allowed IPs",
-    "peer_keepalive_label": "Persistent Keepalive",
-    "create": "Create",
-    "cancel": "Cancel"
-  },
-  "keygen": {
-    "private_key": "Private Key",
-    "public_key": "Public Key",
-    "generate": "Generate New Keypair",
-    "copy": "Copy"
-  },
-  "split_tunnel": {
-    "title": "Split Tunnel",
-    "no_subnets": "No subnets added",
-    "add": "Add",
-    "subnet_placeholder": "10.0.0.0/24"
-  },
   "stats": {
     "speed_graph": "Speed Graph",
-    "waiting": "Waiting for data...",
-    "rx": "Download",
-    "tx": "Upload"
+    "waiting": "Waiting for data..."
   },
   "conflict": {
     "title": "Routing Conflict Detected",
@@ -287,11 +185,8 @@
     "vpn_warning": "The VPN connection will be briefly interrupted during the update. The app will restart automatically.",
     "proceed": "Update Now",
     "cancel": "Later",
-    "copy_command": "Copy",
-    "copied": "Copied",
     "check_now": "Check now",
     "checking": "Checking…",
-    "up_to_date": "You're on the latest version ({version})",
     "last_checked": "Last checked {time}",
     "never_checked": "Never checked",
     "first_check_scheduled": "First check scheduled…",
@@ -308,13 +203,6 @@
     "desc": "Wi-Fi auto-connect rules need access to your current network name. Grant permission in System Settings → Privacy & Security → Location Services.",
     "open_settings": "Open Settings"
   },
-  "wifi_rules": {
-    "trusted_ssids": "Trusted Networks",
-    "trusted_hint": "On these networks, all auto-managed tunnels disconnect automatically.",
-    "no_trusted": "No trusted networks added.",
-    "add": "Add",
-    "ssid_placeholder": "Network name (SSID)"
-  },
   "automation": {
     "title": "Automation",
     "hint": "Rules run top to bottom; the first matching condition wins. Pick a condition and type its value, or use the suggestion for the network you're on. \"This network\" matches a specific router by its gateway MAC (precise; tells apart networks that share a subnet); \"subnet\" matches an IP range. Add separate rules to connect and to disconnect.",
@@ -330,12 +218,7 @@
     "cond_none": "otherwise",
     "cond_none_desc": "no other rule matched",
     "ssid_placeholder": "Wi-Fi name",
-    "subnet_current": "current network",
     "cond_network": "on this network",
-    "use_current": "Use current",
-    "net_captured": "this network",
-    "net_not_set": "click \"Use current\" while on the network",
-    "net_placeholder": "pick a network or click \"Use current\"",
     "mac_placeholder": "gateway MAC (e.g. b0:38:6c:54:8b:ab)",
     "drag_hint": "drag to reorder — the topmost matching rule wins",
     "mac_invalid": "not a valid MAC address (e.g. b0:38:6c:54:8b:ab)",

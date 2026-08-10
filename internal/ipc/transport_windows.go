@@ -12,18 +12,12 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-// Listen creates a named pipe listener.
-// ownerSID (parameter int is ignored on Windows; use SDDL string) controls ACL.
-func Listen(addr string, ownerUID int) (net.Listener, error) {
-	// H13: SYSTEM and Administrators get full control (GA). Interactive Users
-	// (IU / S-1-5-4) get read+write only (GRGW) so the unprivileged GUI
-	// process can connect to the helper pipe without requiring elevation.
-	// IU covers any user who has logged on interactively — this is the
-	// minimal group that enables the privilege-separation design.
-	sddl := "D:(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGW;;;IU)"
-
+// Listen creates a named pipe listener. ownerUID is ignored on Windows;
+// ownerSID (the spawning user's SID) scopes the pipe ACL to that user.
+func Listen(addr string, ownerUID int, ownerSID string) (net.Listener, error) {
+	_ = ownerUID
 	config := &winio.PipeConfig{
-		SecurityDescriptor: sddl,
+		SecurityDescriptor: buildPipeSDDL(ownerSID),
 		MessageMode:        false,
 		InputBufferSize:    65536,
 		OutputBufferSize:   65536,
@@ -34,6 +28,28 @@ func Listen(addr string, ownerUID int) (net.Listener, error) {
 		return nil, fmt.Errorf("listen pipe %s: %w", addr, err)
 	}
 	return l, nil
+}
+
+// buildPipeSDDL returns the pipe's security descriptor. SYSTEM and
+// Administrators get full control (GA). The read+write (GRGW) grant that
+// lets the unprivileged GUI connect is scoped to the spawning user's SID
+// — the previous grant to Interactive Users (IU / S-1-5-4) let EVERY
+// logged-on account on a multi-user machine drive a SYSTEM helper:
+// disconnect tunnels, disable the kill switch, forge SSIDs into the
+// automation engine, force shutdown (issue #20).
+//
+// An empty or malformed SID falls back to the historical IU grant so a
+// helper started by an older GUI (no --owner-sid) keeps working; the
+// fallback is logged as a warning at the call site of Run. Validation
+// uses windows.StringToSid — never interpolate an unvalidated string
+// into a security descriptor.
+func buildPipeSDDL(ownerSID string) string {
+	if ownerSID != "" {
+		if _, err := windows.StringToSid(ownerSID); err == nil {
+			return fmt.Sprintf("D:(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGW;;;%s)", ownerSID)
+		}
+	}
+	return "D:(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGW;;;IU)"
 }
 
 // Dial connects to a named pipe and verifies the server is owned by a trusted

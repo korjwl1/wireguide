@@ -13,7 +13,10 @@ func testSocketPath(t *testing.T) string {
 	if runtime.GOOS == "windows" {
 		return `\\.\pipe\wireguide-test-` + t.Name()
 	}
-	return filepath.Join(os.TempDir(), "wireguide-test-"+t.Name()+".sock")
+	// Listen deliberately rejects sockets placed directly in a directory
+	// owned by another UID. /tmp is normally root-owned on Linux, so give
+	// each test a private, test-user-owned parent directory instead.
+	return filepath.Join(t.TempDir(), "wireguide.sock")
 }
 
 // registerTestPing registers a Helper.Ping handler that returns the current
@@ -26,7 +29,7 @@ func registerTestPing(s *Server) {
 
 func TestClientServerRPC(t *testing.T) {
 	addr := testSocketPath(t)
-	listener, err := Listen(addr, -1)
+	listener, err := Listen(addr, -1, "")
 	if err != nil {
 		t.Fatalf("Listen: %v", err)
 	}
@@ -62,7 +65,7 @@ func TestClientServerRPC(t *testing.T) {
 
 func TestEventBroadcast(t *testing.T) {
 	addr := testSocketPath(t)
-	listener, err := Listen(addr, -1)
+	listener, err := Listen(addr, -1, "")
 	if err != nil {
 		t.Fatalf("Listen: %v", err)
 	}
@@ -109,7 +112,7 @@ func TestEventBroadcast(t *testing.T) {
 
 func TestMethodNotFound(t *testing.T) {
 	addr := testSocketPath(t)
-	listener, err := Listen(addr, -1)
+	listener, err := Listen(addr, -1, "")
 	if err != nil {
 		t.Fatalf("Listen: %v", err)
 	}

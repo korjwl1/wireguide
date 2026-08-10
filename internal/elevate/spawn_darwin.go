@@ -22,9 +22,15 @@ const (
 
 // SpawnHelper starts the privileged helper process.
 //
-// On first launch: installs the LaunchDaemon (one-time admin password prompt
-// via macOS native dialog). After that, the helper starts at boot via launchd
-// and the app never asks for a password again.
+// Installs (or restarts) the LaunchDaemon via a macOS native admin dialog.
+// The plist sets RunAtLoad=false, so launchd never starts the helper on its
+// own — the helper's lifetime is tied to the GUI's. That means the admin
+// prompt appears on first launch and again on any launch that finds no live
+// helper socket (i.e. after the helper self-exited when the GUI closed).
+// This is the intended trade: no invisible root process outliving the app.
+//
+// A live socket short-circuits the whole path (step 1), so relaunching the
+// GUI while a tunnel is still up does NOT re-prompt.
 //
 // ctx governs ONLY the post-install socket-readiness polling. The osascript
 // admin dialog is intentionally detached from ctx — a user typing their
@@ -79,8 +85,19 @@ func generatePlistContent(exe string, args Args) string {
         <string>--uid=%d</string>
         <string>--data-dir=%s</string>
     </array>
+    <!-- RunAtLoad is deliberately false. The job stays loaded across
+         reboots (the plist lives in /Library/LaunchDaemons), but launchd
+         must NOT start it at boot: a running GUI is what signals the user
+         wants WireGuide active. A root helper running at boot with no
+         window and no tray icon would evaluate Wi-Fi automation rules —
+         and could bring a tunnel up — while the user believes the app is
+         closed. Users who want WireGuide from boot enable auto_start,
+         which installs the GUI LaunchAgent; the GUI then spawns the
+         helper through the normal path. installAndLoadDaemon kickstarts
+         the job explicitly after bootstrap, since with RunAtLoad=false
+         bootstrap only loads it. -->
     <key>RunAtLoad</key>
-    <true/>
+    <false/>
     <key>KeepAlive</key>
     <dict>
         <key>SuccessfulExit</key>
@@ -163,6 +180,12 @@ func installAndLoadDaemon(ctx context.Context, args Args) error {
 	// 4. Set ownership/permissions
 	// 5. Bootout old daemon (ignore errors — may not exist)
 	// 6. Bootstrap new daemon
+	// 7. Kickstart it — REQUIRED, because the plist sets RunAtLoad=false.
+	//    bootstrap alone only registers the job with launchd; without the
+	//    kickstart the process never starts and the socket-readiness poll
+	//    below would time out with "daemon installed but socket not live".
+	//    -k replaces a survivor from a torn-down previous instance rather
+	//    than leaving it running.
 	// xattr -d strips com.apple.quarantine from the freshly copied helper
 	// binary. macOS adds this attr to anything downloaded (e.g. inside a
 	// dmg/zip release) and Gatekeeper blocks quarantined binaries from
@@ -189,7 +212,8 @@ func installAndLoadDaemon(ctx context.Context, args Args) error {
 			`chmod 644 %s && `+
 			`launchctl bootout system/%s 2>/dev/null; `+
 			`i=0; while [ $i -lt 20 ] && launchctl print system/%s >/dev/null 2>&1; do sleep 0.1; i=$((i+1)); done; `+
-			`launchctl bootstrap system %s`,
+			`launchctl bootstrap system %s && `+
+			`launchctl kickstart -k system/%s`,
 		shellQuote(exe), shellQuote(daemonBinary),
 		shellQuote(daemonBinary),
 		shellQuote(daemonBinary),
@@ -200,6 +224,7 @@ func installAndLoadDaemon(ctx context.Context, args Args) error {
 		daemonLabel,
 		daemonLabel,
 		shellQuote(daemonPlist),
+		daemonLabel,
 	)
 
 	escaped := strings.ReplaceAll(shellScript, `\`, `\\`)

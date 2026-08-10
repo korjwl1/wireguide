@@ -71,15 +71,3 @@ func parseARPMAC(out string) string {
 	return normalizeMAC(m)
 }
 
-// normalizeMAC lower-cases and zero-pads each octet so BSD's "0:1e:..."
-// and Linux's "00:1e:..." compare equal.
-func normalizeMAC(mac string) string {
-	parts := strings.Split(mac, ":")
-	for i, p := range parts {
-		if len(p) == 1 {
-			parts[i] = "0" + p
-		}
-		parts[i] = strings.ToLower(parts[i])
-	}
-	return strings.Join(parts, ":")
-}

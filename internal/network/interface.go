@@ -45,19 +45,33 @@ type NetworkManager interface {
 	Cleanup(ifaceName string) error
 }
 
+// DNSSnapshot carries the pre-VPN per-service DNS state needed for a
+// COMPLETE restore. Search domains must ride along with servers: the
+// previous servers-only snapshot meant the restore path left
+// `networksetup -setsearchdomains` overrides behind forever (issue #34).
+type DNSSnapshot struct {
+	Servers map[string][]string `json:"servers,omitempty"`
+	Search  map[string][]string `json:"search,omitempty"`
+}
+
+// Empty reports whether the snapshot holds no state at all.
+func (s DNSSnapshot) Empty() bool {
+	return len(s.Servers) == 0 && len(s.Search) == 0
+}
+
 // DNSStateRestorer is an optional interface that allows restoring DNS
 // settings from a persisted pre-modification snapshot during crash recovery.
 // Unlike RestoreDNS (which needs in-memory state from the same process),
 // this uses the snapshot saved to disk, preserving custom user preferences.
 type DNSStateRestorer interface {
-	RestoreDNSFromSnapshot(preModDNS map[string][]string) error
+	RestoreDNSFromSnapshot(snap DNSSnapshot) error
 }
 
 // SavedDNSSnapshot returns the current in-memory DNS snapshot for
 // persistence to the crash recovery journal. Platform managers that
 // capture per-service DNS state should implement this.
 type DNSSnapshotProvider interface {
-	SavedDNSSnapshot() map[string][]string
+	SavedDNSSnapshot() DNSSnapshot
 }
 
 // RoutingStateRestorer is an optional interface that platform managers may
@@ -66,6 +80,27 @@ type DNSSnapshotProvider interface {
 // defaults when the process has no in-memory state.
 type RoutingStateRestorer interface {
 	RestoreRoutingState(table, fwmark string)
+}
+
+// EndpointRouteStateProvider exposes only endpoint bypass/throw routes that
+// this manager actually installed. Persisting the exact owned set lets crash
+// recovery remove it without flushing unrelated routes from a user-selected
+// custom table.
+type EndpointRouteStateProvider interface {
+	InstalledEndpointRoutes() []string
+}
+
+// EndpointRouteStateRestorer restores the owned endpoint-route set from the
+// crash journal before RemoveRoutes runs in a fresh helper process.
+type EndpointRouteStateRestorer interface {
+	RestoreEndpointRoutes(routes []string)
+}
+
+// PersistentStateDirSetter lets platform managers persist recovery data next
+// to the tunnel journal. Linux uses it for the original resolv.conf snapshot;
+// other platforms do not need to implement it.
+type PersistentStateDirSetter interface {
+	SetPersistentStateDir(dataDir string)
 }
 
 // PreCloseCleaner is an optional interface for platform managers that need
@@ -77,11 +112,4 @@ type RoutingStateRestorer interface {
 // metric and clearing its DNS first makes that lingering adapter benign.
 type PreCloseCleaner interface {
 	PreCloseAdapterCleanup(ifaceName string)
-}
-
-// OriginalNetworkState captures the pre-tunnel network state for restoration.
-type OriginalNetworkState struct {
-	DNSServers []string `json:"dns_servers"`
-	DefaultGW  string   `json:"default_gateway"`
-	DefaultIf  string   `json:"default_interface"`
 }

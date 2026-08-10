@@ -26,6 +26,9 @@ type eventBridge struct {
 	// wake, wifi rules, health-check recovery). nil when the bridge runs
 	// without a history store.
 	onReconcileHistory func(activeNames []string, rx, tx map[string]int64, reason string)
+	// onQuitRequested terminates the app. Fired for ipc.EventQuit, which
+	// the helper broadcasts when someone runs `wireguide ctl stop`.
+	onQuitRequested func()
 
 	mu           sync.Mutex
 	subscribedTo *ipc.Client // tracks which client we're currently subscribed on
@@ -36,12 +39,14 @@ func newEventBridge(
 	clients *ipc.ClientHolder,
 	onStatusChange func(activeNames []string, handshakeMap map[string]bool),
 	onReconcileHistory func(activeNames []string, rx, tx map[string]int64, reason string),
+	onQuitRequested func(),
 ) *eventBridge {
 	return &eventBridge{
 		app:                app,
 		clients:            clients,
 		onStatusChange:     onStatusChange,
 		onReconcileHistory: onReconcileHistory,
+		onQuitRequested:    onQuitRequested,
 	}
 }
 
@@ -162,6 +167,18 @@ func (b *eventBridge) handleEvent(method string, params json.RawMessage) {
 			slog.Debug("event bridge: unmarshal auto_connect failed", "error", err)
 		} else {
 			b.app.Event.Emit("auto_connected", payload)
+		}
+	case ipc.EventQuit:
+		// `wireguide ctl stop` — the user asked for the whole app to go
+		// away. Run the same teardown the tray's Quit item does.
+		//
+		// In a goroutine: we're on the event-stream read loop, and
+		// quitApp's doShutdown makes blocking RPCs back to the helper.
+		// Quitting inline would deadlock — the helper can't answer while
+		// this goroutine is the one that has to read its reply.
+		slog.Info("event bridge: quit requested by CLI")
+		if b.onQuitRequested != nil {
+			go b.onQuitRequested()
 		}
 	case ipc.EventSettingsChanged:
 		// A setting was applied through another client (the CLI). Forward

@@ -115,7 +115,7 @@
         <p class="hint">{$t('tunnel.drop_hint')}</p>
       </div>
     {:else}
-      {#each sorted as tun}
+      {#each sorted as tun (tun.name)}
         <button
           class="tunnel-item"
           class:active={$selectedTunnel?.name === tun.name}

@@ -46,6 +46,11 @@ type Client struct {
 	pendingMu sync.Mutex
 	pending   map[uint64]chan *Response
 
+	// transient marks every request this client sends with
+	// Request.Transient, keeping the helper from treating it as a control
+	// connection. Set by NewTransientClient; see Request.Transient.
+	transient bool
+
 	// Lifecycle
 	closeOnce sync.Once
 	closed    chan struct{}
@@ -53,7 +58,23 @@ type Client struct {
 
 // NewClient creates a client connected to addr. It performs an initial Ping
 // to verify the helper is responsive and that the protocol version matches.
+//
+// The resulting client counts as a control connection: while it is attached
+// the helper's shutdown grace window stays cancelled. Use it for the GUI —
+// the process whose presence means "the user wants WireGuide running".
 func NewClient(addr string) (*Client, error) {
+	return newClient(addr, false)
+}
+
+// NewTransientClient is NewClient for short-lived callers — the `wireguide
+// ctl` CLI. Its requests carry Request.Transient, so the helper does not
+// treat the connection as a control connection and the client's exit does
+// not re-arm the shutdown grace window. See Request.Transient.
+func NewTransientClient(addr string) (*Client, error) {
+	return newClient(addr, true)
+}
+
+func newClient(addr string, transient bool) (*Client, error) {
 	conn, err := Dial(addr)
 	if err != nil {
 		return nil, fmt.Errorf("dial: %w", err)
@@ -64,6 +85,10 @@ func NewClient(addr string) (*Client, error) {
 		controlConn: conn,
 		pending:     make(map[uint64]chan *Response),
 		closed:      make(chan struct{}),
+		// Must be set before the initial Ping below: that Ping is the very
+		// request the server inspects to decide whether this connection is
+		// a control connection.
+		transient: transient,
 	}
 
 	go c.readLoop()
@@ -136,6 +161,7 @@ func (c *Client) CallWithContext(ctx context.Context, method string, params inte
 	if err != nil {
 		return err
 	}
+	req.Transient = c.transient
 
 	respCh := make(chan *Response, 1)
 	c.pendingMu.Lock()

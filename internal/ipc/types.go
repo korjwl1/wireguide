@@ -88,14 +88,6 @@ type ActiveTunnelsResponse struct {
 	Names []string `json:"names"`
 }
 
-// MultiStatusResponse carries status for every active tunnel plus an
-// aggregate state. The frontend can iterate Tunnels for per-tunnel detail
-// or use the top-level State for a single-tunnel-compatible view.
-type MultiStatusResponse struct {
-	State   domain.State        `json:"state"`
-	Tunnels []ConnectionStatus  `json:"tunnels"`
-}
-
 // BoolResponse wraps a single bool.
 type BoolResponse struct {
 	Value bool `json:"value"`
@@ -104,6 +96,13 @@ type BoolResponse struct {
 // StringResponse wraps a single string.
 type StringResponse struct {
 	Value string `json:"value"`
+}
+
+// RequestQuitResponse is returned from Helper.RequestQuit. NotifiedGUI
+// distinguishes "the app is shutting down" from "there was no app, just a
+// stray helper, and it's now stopping" so `ctl stop` can say which.
+type RequestQuitResponse struct {
+	NotifiedGUI bool `json:"notified_gui"`
 }
 
 // WifiSSIDPayload is broadcast by the helper whenever the system's

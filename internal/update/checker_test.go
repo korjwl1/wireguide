@@ -636,8 +636,12 @@ func TestDownloadUpdate_HTTPError(t *testing.T) {
 
 func TestMatchAsset_FindsPlatformAsset(t *testing.T) {
 	name := fmt.Sprintf("WireGuide-%s-%s.dmg", runtime.GOOS, runtime.GOARCH)
+	// The decoy must never match the running platform. A linux-amd64
+	// decoy broke this test the first time it ran on Linux CI: both
+	// assets matched and the decoy's .tar.gz is the preferred extension
+	// there, so matchAsset (correctly) returned the decoy.
 	assets := []Asset{
-		{Name: "WireGuide-linux-amd64.tar.gz"},
+		{Name: "WireGuide-plan9-mips.tar.gz"},
 		{Name: name},
 	}
 	got := matchAsset(assets)

@@ -23,17 +23,24 @@ type FirewallCleaner interface {
 // ActiveTunnelState is persisted to disk while a tunnel is active.
 // On startup, if this file exists, a previous crash is detected.
 type ActiveTunnelState struct {
-	TunnelName    string   `json:"tunnel_name"`
-	InterfaceName string   `json:"interface_name"`
-	DNSServers    []string `json:"dns_servers_original"`
-	FullTunnel    bool     `json:"full_tunnel"`
-	Table         string   `json:"table,omitempty"`
-	FwMark        string   `json:"fwmark,omitempty"`
-	// PreModDNS stores the original DNS settings per network service
+	TunnelName     string   `json:"tunnel_name"`
+	InterfaceName  string   `json:"interface_name"`
+	DNSServers     []string `json:"dns_servers_original"`
+	FullTunnel     bool     `json:"full_tunnel"`
+	Table          string   `json:"table,omitempty"`
+	FwMark         string   `json:"fwmark,omitempty"`
+	EndpointRoutes []string `json:"endpoint_routes,omitempty"`
+	// PreModDNS stores the original DNS servers per network service
 	// captured BEFORE any modification. Used for precise crash recovery
 	// instead of the blunt ResetDNSToSystemDefault which loses custom
 	// user preferences.
 	PreModDNS map[string][]string `json:"pre_mod_dns,omitempty"`
+	// PreModSearch stores the original search domains per network
+	// service. Absent in journals written before issue #34's fix; the
+	// restore then clears search domains to "Empty" (DHCP defaults),
+	// which is the correct behaviour for the common no-custom-domains
+	// setup and strictly better than leaking tunnel domains.
+	PreModSearch map[string][]string `json:"pre_mod_search,omitempty"`
 }
 
 // Legacy single-tunnel state file (kept for backward-compatible migration).
@@ -66,15 +73,6 @@ func SaveActiveState(dataDir string, state *ActiveTunnelState) error {
 func ClearActiveState(dataDir string, tunnelName string) error {
 	path := filepath.Join(dataDir, tunnelStatesDir, stateFileName(tunnelName))
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-		return err
-	}
-	return nil
-}
-
-// ClearAllActiveStates removes all per-tunnel state files.
-func ClearAllActiveStates(dataDir string) error {
-	dir := filepath.Join(dataDir, tunnelStatesDir)
-	if err := os.RemoveAll(dir); err != nil && !os.IsNotExist(err) {
 		return err
 	}
 	return nil
@@ -171,6 +169,9 @@ func RecoverFromCrash(dataDir string, fw FirewallCleaner) []string {
 		// per-tunnel state across iterations and double-restored
 		// overlapping services).
 		mgr := network.NewPlatformManager()
+		if setter, mok := mgr.(network.PersistentStateDirSetter); mok {
+			setter.SetPersistentStateDir(dataDir)
+		}
 		ok := true
 
 		// Restore routing state (table/fwmark) from persisted values so that
@@ -178,13 +179,17 @@ func RecoverFromCrash(dataDir string, fw FirewallCleaner) []string {
 		if rs, mok := mgr.(network.RoutingStateRestorer); mok {
 			rs.RestoreRoutingState(state.Table, state.FwMark)
 		}
+		if ers, mok := mgr.(network.EndpointRouteStateRestorer); mok {
+			ers.RestoreEndpointRoutes(state.EndpointRoutes)
+		}
 
 		// DNS: if we have pre-modification DNS state, restore it precisely.
 		// Otherwise fall back to the blunt ResetDNSToSystemDefault which
 		// clears everything to DHCP defaults (loses custom user preferences).
 		if len(state.PreModDNS) > 0 {
 			if restorer, mok := mgr.(network.DNSStateRestorer); mok {
-				if err := restorer.RestoreDNSFromSnapshot(state.PreModDNS); err != nil {
+				snap := network.DNSSnapshot{Servers: state.PreModDNS, Search: state.PreModSearch}
+				if err := restorer.RestoreDNSFromSnapshot(snap); err != nil {
 					slog.Warn("crash recovery: precise DNS restore failed, falling back to reset", "error", err)
 					if err := mgr.ResetDNSToSystemDefault(); err != nil {
 						ok = false
@@ -215,6 +220,14 @@ func RecoverFromCrash(dataDir string, fw FirewallCleaner) []string {
 				slog.Warn("crash recovery: network cleanup failed", "error", err)
 				ok = false
 			}
+			// A process crash closes the UAPI file descriptor but does not
+			// necessarily unlink /var/run/wireguard/<iface>.sock. Leaving it
+			// behind makes `wg show all` discover a dead phantom interface and
+			// can confuse external diagnostics after recovery.
+			if err := cleanupStaleUAPI(state.InterfaceName); err != nil {
+				slog.Warn("crash recovery: stale UAPI cleanup failed", "error", err)
+				ok = false
+			}
 		}
 
 		recovered = append(recovered, state.TunnelName)
@@ -235,8 +248,8 @@ func RecoverFromCrash(dataDir string, fw FirewallCleaner) []string {
 
 	// Clear ONLY the state files whose recovery fully succeeded.
 	// States that hit any error stay on disk so the next boot has
-	// another chance — silently dropping them via ClearAllActiveStates
-	// stranded the bug for users.
+	// another chance — silently dropping them all at once stranded
+	// the bug for users.
 	for _, name := range fullySucceeded {
 		ClearActiveState(dataDir, name)
 	}

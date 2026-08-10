@@ -120,7 +120,7 @@
   </div>
 
   <div class="log-entries" bind:this={logContainer} on:copy={handleCopy}>
-    {#each filtered as entry, i (i)}
+    {#each filtered as entry (entry.id)}
       <div class="log-entry level-{entry.level}">
         <span class="log-time">{formatTime(entry.time)}</span>
         <span class="log-source">{entry.source}</span>

@@ -32,6 +32,12 @@ import (
 // when the observer verifiably reports a light menu bar. We never call
 // SetTemplateIcon, so the Wails v3 sticky-isTemplateIcon bug (once set,
 // later SetIcon calls render monochrome) is never triggered.
+// appQuitting latches once the user picks Quit from the tray. Package-level
+// (unlike trayManager.quitting, which is per-instance) so the window-show
+// retry goroutines in the dock_* files can observe teardown without holding
+// a trayManager reference.
+var appQuitting atomic.Bool
+
 var (
 	trayOnIconDark   []byte // white W + green dot (dark menu bar)
 	trayOffIconDark  []byte // white W, no badge
@@ -419,6 +425,32 @@ func (t *trayManager) startAppearanceWatch() {
 	})
 }
 
+// quitApp is the single, platform-independent app teardown: stop the tray
+// rebuild machinery, run doShutdown (which disconnects tunnels and stops the
+// helper), then terminate. It backs both the tray's Quit item and
+// `wireguide ctl stop`, which reaches it via the helper's EventQuit
+// broadcast — so both routes leave exactly the same state behind.
+//
+// Safe to call more than once: doShutdown is guarded by a sync.Once and the
+// quit flags are idempotent.
+func (t *trayManager) quitApp() {
+	// Latch the quit flag BEFORE Destroy so any in-flight debounce
+	// timer that fires between here and the AfterFunc cancel will
+	// see it and bail. Then stop the timer explicitly to prevent
+	// the goroutine from running at all in the common case.
+	t.quitting.Store(true)
+	appQuitting.Store(true)
+	t.mu.Lock()
+	if t.rebuildTimer != nil {
+		t.rebuildTimer.Stop()
+		t.rebuildTimer = nil
+	}
+	t.mu.Unlock()
+	t.doShutdown()
+	t.tray.Destroy()
+	t.app.Quit()
+}
+
 func newTrayManager(app *application.App, win *application.WebviewWindow, tray *application.SystemTray, svc *wgapp.TunnelService, doShutdown func()) *trayManager {
 	t := &trayManager{
 		app:        app,
@@ -485,10 +517,9 @@ func (t *trayManager) setIconState(activeNames []string, handshakeMap map[string
 
 	if activeChanged {
 		onIcon, offIcon := t.macIcons()
-		if runtime.GOOS == "windows" && len(trayOnIconWindows) > 0 {
-			// Use the rounded-red app-icon variants on Windows so the
-			// tray icon actually stands out against a light system-tray
-			// background and isn't framed by a white square.
+		if (runtime.GOOS == "windows" || runtime.GOOS == "linux") && len(trayOnIconWindows) > 0 {
+			// Use the rounded-red app-icon variants on Windows and Linux so
+			// the tray icon stands out against light system-tray backgrounds.
 			onIcon, offIcon = trayOnIconWindows, trayOffIconWindows
 		}
 		if anyConnected {
@@ -496,7 +527,7 @@ func (t *trayManager) setIconState(activeNames []string, handshakeMap map[string
 			tooltip := "WireGuide — " + strings.Join(activeNames, ", ")
 			t.tray.SetTooltip(tooltip)
 		} else {
-			if runtime.GOOS == "darwin" || (runtime.GOOS == "windows" && len(offIcon) > 0) {
+			if runtime.GOOS == "darwin" || ((runtime.GOOS == "windows" || runtime.GOOS == "linux") && len(offIcon) > 0) {
 				t.tray.SetIcon(offIcon)
 			}
 			t.tray.SetTooltip("WireGuide")
@@ -627,20 +658,7 @@ func (t *trayManager) rebuildMenu() {
 	})
 	m.AddSeparator()
 	m.Add("Quit").OnClick(func(ctx *application.Context) {
-		// Latch the quit flag BEFORE Destroy so any in-flight debounce
-		// timer that fires between here and the AfterFunc cancel will
-		// see it and bail. Then stop the timer explicitly to prevent
-		// the goroutine from running at all in the common case.
-		t.quitting.Store(true)
-		t.mu.Lock()
-		if t.rebuildTimer != nil {
-			t.rebuildTimer.Stop()
-			t.rebuildTimer = nil
-		}
-		t.mu.Unlock()
-		t.doShutdown()
-		t.tray.Destroy()
-		t.app.Quit()
+		t.quitApp()
 	})
 	if created || runtime.GOOS == "windows" {
 		// Windows must go through SetMenu on EVERY rebuild: the tray popup

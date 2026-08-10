@@ -23,8 +23,10 @@ type FirewallManager interface {
 	// AddKillSwitchTunnel installs the per-tunnel permit filters (Permit
 	// tunnel LUID + Permit each peer endpoint outbound). Called when a tunnel
 	// connects WHILE the kill switch is already enabled. No-op if the kill
-	// switch is off. Idempotent for the same tunnel name.
-	AddKillSwitchTunnel(interfaceName string, endpoints []string) error
+	// switch is off. ifaceAddresses has the same meaning as EnableKillSwitch
+	// (and is ignored on platforms whose firewall keys only on interface).
+	// Idempotent for the same tunnel name.
+	AddKillSwitchTunnel(interfaceName string, ifaceAddresses []string, endpoints []string) error
 
 	// RemoveKillSwitchTunnel removes the per-tunnel permits that
 	// AddKillSwitchTunnel installed. Called when a tunnel disconnects. The

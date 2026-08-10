@@ -136,10 +136,6 @@
     tray_icon_style: 'color',
     auto_update_check: true,
     compact_list: false,
-    wifi_rules: {
-      trusted_ssids: [],
-      per_tunnel: {},
-    },
   };
   let loaded = false;
   let appVersion = '';
@@ -162,12 +158,6 @@
         // the Go side becomes undefined here; default to true to match
         // Settings.AutoUpdateCheckEnabled() semantics.
         settings.auto_update_check = (s.auto_update_check === false) ? false : true;
-        if (s.wifi_rules) {
-          settings.wifi_rules = {
-            trusted_ssids: s.wifi_rules.trusted_ssids || [],
-            per_tunnel: s.wifi_rules.per_tunnel || {},
-          };
-        }
       }
     } catch (e) {
       console.error('load settings:', e);
@@ -180,8 +170,8 @@
     // Re-fetch the freshest settings.json before writing so per-tunnel
     // wifi rule edits made in TunnelDetail (which calls SaveSettings
     // independently with its own modified per_tunnel map) aren't
-    // silently overwritten. We own only `trusted_ssids` in wifi_rules;
-    // `per_tunnel` belongs to TunnelDetail. If the fresh fetch fails
+    // silently overwritten. This screen owns NO part of wifi_rules —
+    // both halves are carried from the fresh fetch. If the fresh fetch fails
     // (helper restarting, IPC flake) we abort rather than write our
     // potentially-stale per_tunnel snapshot — a deferred save is far
     // better than clobbering the user's per-tunnel edits.
@@ -216,8 +206,13 @@
         // them from the fresh fetch so saving a Settings toggle never
         // wipes them.
         automation: fresh?.automation,
+        // Legacy Wi-Fi trust rules have no UI on this screen — carry both
+        // halves from the fresh fetch (not a load-time snapshot) so a
+        // Settings toggle can't clobber CLI edits made while it is open.
+        // The Go side still migrates trusted_ssids/per_tunnel into the
+        // Automation model, so the round-trip itself must stay.
         wifi_rules: {
-          trusted_ssids: settings.wifi_rules?.trusted_ssids || [],
+          trusted_ssids: fresh?.wifi_rules?.trusted_ssids || [],
           per_tunnel: perTunnel,
         },
       });
@@ -435,8 +430,11 @@
           <div class="settings-section">
             <h4 class="section-title">{$t('settings.section_startup')}</h4>
             <div class="settings-card">
-              <div class="setting-row">
-                <label class="setting-label" for="auto-start">{$t('settings.auto_start')}</label>
+              <div class="setting-row setting-row--toggle">
+                <div class="setting-info">
+                  <label class="setting-label" for="auto-start">{$t('settings.auto_start')}</label>
+                  <p class="setting-desc">{$t('settings.auto_start_hint')}</p>
+                </div>
                 <label class="toggle">
                   <input id="auto-start" type="checkbox" checked={settings.auto_start} on:change={onAutoStartChange} />
                   <span class="toggle-track"></span>

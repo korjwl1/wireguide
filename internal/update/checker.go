@@ -238,16 +238,6 @@ func parseReleaseBody(ctx context.Context, resp *http.Response, client *http.Cli
 	}, nil
 }
 
-// BrewUpgradeCommand returns the shell command a Homebrew user should
-// run to upgrade WireGuide. Returned as a string (not executed) so the
-// UI can show it next to a Copy button — the cross-platform-app
-// convention is that the user runs the package-manager command, not the
-// app itself. See research-update-patterns notes (Tailscale, OrbStack)
-// for context.
-func BrewUpgradeCommand() string {
-	return "brew upgrade --cask wireguide"
-}
-
 // Release represents a GitHub release.
 type Release struct {
 	TagName     string  `json:"tag_name"`

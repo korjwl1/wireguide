@@ -46,10 +46,18 @@ type LinuxManager struct {
 	// from "table was never set". Without this, removeFullTunnelRoutes
 	// cannot tell whether 0 means main table or uninitialised.
 	tableSet bool
+	// endpointThrowRoutes contains only throw routes successfully installed
+	// by this manager. They must be removed explicitly; deleting the default
+	// route from the policy table does not flush sibling throw routes.
+	endpointThrowRoutes []string
 }
 
 func NewPlatformManager() NetworkManager {
 	return &LinuxManager{}
+}
+
+func (m *LinuxManager) SetPersistentStateDir(dataDir string) {
+	m.dataDir = dataDir
 }
 
 func (m *LinuxManager) AssignAddress(ifaceName string, addresses []string) error {
@@ -122,6 +130,8 @@ func (m *LinuxManager) AddRoutes(ifaceName string, allowedIPs []string, fullTunn
 
 	// Table = off → skip routing entirely
 	if table == -1 {
+		m.table = -1
+		m.tableSet = true
 		slog.Info("Table=off, skipping route installation")
 		return nil
 	}
@@ -391,6 +401,8 @@ func (m *LinuxManager) addFullTunnelRoutesWithConfig(ifaceName string, endpoints
 		// idiom for "no route to here in this table, try the next rule".
 		if err := runCmd("ip", proto, "route", "add", "throw", hostCIDR, "table", tableStr); err != nil {
 			slog.Debug("endpoint throw route add failed (may already exist)", "ep", ep, "error", err)
+		} else {
+			m.endpointThrowRoutes = append(m.endpointThrowRoutes, hostCIDR)
 		}
 	}
 
@@ -398,6 +410,9 @@ func (m *LinuxManager) addFullTunnelRoutesWithConfig(ifaceName string, endpoints
 }
 
 func (m *LinuxManager) RemoveRoutes(ifaceName string, allowedIPs []string, fullTunnel bool) error {
+	if m.tableSet && m.table == -1 {
+		return nil
+	}
 	if fullTunnel {
 		return m.removeFullTunnelRoutes(ifaceName)
 	}
@@ -408,17 +423,27 @@ func (m *LinuxManager) RemoveRoutes(ifaceName string, allowedIPs []string, fullT
 		tableStr = strconv.Itoa(m.table)
 	}
 	for _, cidr := range allowedIPs {
-		var err error
-		if tableStr != "" {
-			err = runCmd("ip", "route", "delete", cidr, "dev", ifaceName, "table", tableStr)
-		} else {
-			err = runCmd("ip", "route", "delete", cidr, "dev", ifaceName)
-		}
+		args := splitRouteDeleteArgs(ifaceName, cidr, tableStr)
+		err := runCmd("ip", args...)
 		if err != nil {
 			slog.Warn("failed to remove route", "cidr", cidr, "iface", ifaceName, "table", tableStr, "error", err)
 		}
 	}
 	return nil
+}
+
+// splitRouteDeleteArgs mirrors AddRoutes' address-family selection. `ip route`
+// defaults to IPv4, so omitting -6 here leaves IPv6 split routes installed
+// after disconnect or a failed connect rollback.
+func splitRouteDeleteArgs(ifaceName, cidr, tableStr string) []string {
+	args := []string{"route", "delete", cidr, "dev", ifaceName}
+	if strings.Contains(cidr, ":") {
+		args = append([]string{"-6"}, args...)
+	}
+	if tableStr != "" {
+		args = append(args, "table", tableStr)
+	}
+	return args
 }
 
 // findOwnedTable scans candidate wg-quick table numbers (51820..51919) for
@@ -444,7 +469,10 @@ func (m *LinuxManager) findOwnedTable(ifaceName string) string {
 // persisted values (e.g. crash recovery state). This allows removeFullTunnelRoutes
 // to use the correct values even on a fresh process.
 func (m *LinuxManager) RestoreRoutingState(table, fwmark string) {
-	if table != "" {
+	if strings.EqualFold(strings.TrimSpace(table), "off") {
+		m.table = -1
+		m.tableSet = true
+	} else if table != "" {
 		if parsed, err := strconv.Atoi(table); err == nil {
 			m.table = parsed
 			m.tableSet = true
@@ -455,6 +483,14 @@ func (m *LinuxManager) RestoreRoutingState(table, fwmark string) {
 			m.fwmark = parsed
 		}
 	}
+}
+
+func (m *LinuxManager) InstalledEndpointRoutes() []string {
+	return append([]string(nil), m.endpointThrowRoutes...)
+}
+
+func (m *LinuxManager) RestoreEndpointRoutes(routes []string) {
+	m.endpointThrowRoutes = append([]string(nil), routes...)
 }
 
 func (m *LinuxManager) removeFullTunnelRoutes(ifaceName string) error {
@@ -474,6 +510,13 @@ func (m *LinuxManager) removeFullTunnelRoutes(ifaceName string) error {
 	if err := runCmd("ip", "-6", "route", "delete", "default", "dev", ifaceName, "table", tableStr); err != nil {
 		slog.Warn("failed to remove IPv6 default route", "table", tableStr, "error", err)
 	}
+	for _, hostCIDR := range m.endpointThrowRoutes {
+		args := endpointThrowRouteDeleteArgs(hostCIDR, tableStr)
+		if err := runCmd("ip", args...); err != nil {
+			slog.Warn("failed to remove endpoint throw route", "route", hostCIDR, "table", tableStr, "error", err)
+		}
+	}
+	m.endpointThrowRoutes = nil
 
 	// Policy rules — delete by priority. Targeting our priority is precise
 	// even when a previous helper crash left duplicates (each duplicate
@@ -499,6 +542,14 @@ func (m *LinuxManager) removeFullTunnelRoutes(ifaceName string) error {
 	deleteByPriority("-6", wgRulePrioritySuppress)
 
 	return nil
+}
+
+func endpointThrowRouteDeleteArgs(hostCIDR, tableStr string) []string {
+	args := []string{"route", "delete", "throw", hostCIDR, "table", tableStr}
+	if strings.Contains(hostCIDR, ":") {
+		args = append([]string{"-6"}, args...)
+	}
+	return args
 }
 
 func (m *LinuxManager) SetDNS(ifaceName string, servers []string) error {
@@ -809,25 +860,17 @@ func (m *LinuxManager) Cleanup(ifaceName string) error {
 		slog.Warn("Cleanup: RestoreDNS failed", "iface", ifaceName, "error", err)
 	}
 
-	// H10: Remove routes and policy rules (crash recovery path)
-	// Try removing full-tunnel routes with both stored and default values.
-	if err := m.removeFullTunnelRoutes(ifaceName); err != nil {
-		slog.Warn("Cleanup: removeFullTunnelRoutes failed", "iface", ifaceName, "error", err)
-	}
-
-	// H10: Clean up nftables rules that may have been left by the firewall.
-	// This is best-effort -- the firewall's own Cleanup should handle this,
-	// but in crash recovery the firewall object may not have state.
-	if out, err := runOut("nft", "delete", "table", "inet", "wireguide"); err != nil {
-		slog.Warn("cleanup: nft delete wireguide table", "error", err, "output", strings.TrimSpace(string(out)))
-	}
-	if out, err := runOut("nft", "delete", "table", "inet", "wireguide_dns"); err != nil {
-		slog.Warn("cleanup: nft delete wireguide_dns table", "error", err, "output", strings.TrimSpace(string(out)))
-	}
-
-	// Delete the interface
+	// Routes are removed by RemoveRoutes before Cleanup, with the tunnel's
+	// actual full/split classification. Do not remove full-tunnel policy rules
+	// here: a split tunnel may coexist with a full tunnel, and deleting the
+	// process-wide rules while cleaning the split tunnel breaks the survivor.
+	// Firewall tables are likewise owned by firewall.Manager and may protect
+	// other active tunnels; crash recovery calls that manager separately.
+	//
+	// Engine.Close normally deletes the TUN first. Keep this final delete as a
+	// best-effort fallback for platform/engine implementations where it remains.
 	if err := runCmd("ip", "link", "delete", "dev", ifaceName); err != nil {
-		slog.Warn("cleanup: failed to delete interface", "iface", ifaceName, "error", err)
+		slog.Debug("cleanup: interface already absent or delete failed", "iface", ifaceName, "error", err)
 	}
 	return nil
 }

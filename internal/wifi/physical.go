@@ -26,7 +26,12 @@ func PhysicalInterfaceIPs() []net.IP {
 		if ifi.Flags&net.FlagUp == 0 || ifi.Flags&net.FlagLoopback != 0 {
 			continue
 		}
-		if isTunnelIface(ifi.Name) {
+		// isVirtualIface (Linux sysfs) catches what the name denylist
+		// can't: docker0, virbr0, tailscale0, veth*, CNI bridges — all
+		// up, non-loopback, carrying routable IPs that would otherwise
+		// satisfy subnet Automation rules for networks the machine isn't
+		// physically on (issue #22).
+		if isTunnelIface(ifi.Name) || isVirtualIface(ifi.Name) {
 			continue
 		}
 		addrs, err := ifi.Addrs()
@@ -65,7 +70,8 @@ func PhysicalSubnets() []string {
 	seen := map[string]bool{}
 	var out []string
 	for _, ifi := range ifaces {
-		if ifi.Flags&net.FlagUp == 0 || ifi.Flags&net.FlagLoopback != 0 || isTunnelIface(ifi.Name) {
+		if ifi.Flags&net.FlagUp == 0 || ifi.Flags&net.FlagLoopback != 0 ||
+			isTunnelIface(ifi.Name) || isVirtualIface(ifi.Name) {
 			continue
 		}
 		addrs, err := ifi.Addrs()

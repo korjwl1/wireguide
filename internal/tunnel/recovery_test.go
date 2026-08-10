@@ -190,16 +190,3 @@ func TestRecoverFromCrashNilFirewall(t *testing.T) {
 	}
 }
 
-func TestClearAllActiveStates(t *testing.T) {
-	dir := t.TempDir()
-	SaveActiveState(dir, &ActiveTunnelState{TunnelName: "vpn1"})
-	SaveActiveState(dir, &ActiveTunnelState{TunnelName: "vpn2"})
-
-	if err := ClearAllActiveStates(dir); err != nil {
-		t.Fatalf("ClearAllActiveStates failed: %v", err)
-	}
-
-	if len(LoadActiveState(dir)) != 0 {
-		t.Error("all states should be cleared")
-	}
-}

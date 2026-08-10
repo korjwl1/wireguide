@@ -191,7 +191,16 @@ func Run(assetsHandler http.Handler, dataDir string) error {
 	// listener races with Wails' listener — the window gets destroyed despite
 	// Cancel. Hooks run sequentially BEFORE listeners, so Cancel() here
 	// reliably prevents Wails' default close/destroy behavior.
-	win.RegisterHook(events.Common.WindowClosing, func(event *application.WindowEvent) {
+	// Linux must intercept the native delete event itself. Wails maps
+	// Linux.WindowDeleteEvent to Common.WindowClosing asynchronously; hooking
+	// only the mapped event allows the default Common.WindowClosing listener to
+	// destroy the window before close-to-tray can cancel it. Windows and macOS
+	// expose a cancellable Common.WindowClosing event directly.
+	closingEvent := events.Common.WindowClosing
+	if runtime.GOOS == "linux" {
+		closingEvent = events.Linux.WindowDeleteEvent
+	}
+	win.RegisterHook(closingEvent, func(event *application.WindowEvent) {
 		event.Cancel()
 		win.Hide()
 		hideDock()
@@ -219,18 +228,20 @@ func Run(assetsHandler http.Handler, dataDir string) error {
 		tray.SetIcon(trayOffIconDark)
 	} else {
 		tray.SetLabel("WireGuide")
-		// Windows also needs an explicit SetIcon at init or Wails falls
-		// back to the embedded white-W template — setIconState only
-		// runs on connect/disconnect transitions, so a fresh launch
-		// with no tunnel previously never showed our rounded icon.
-		if runtime.GOOS == "windows" && len(trayOffIconWindows) > 0 {
+		// Windows and Linux need an explicit icon at startup. Without it,
+		// Linux StatusNotifier hosts display their own fallback icon and
+		// Windows falls back to Wails' embedded template. setIconState only
+		// runs on connection transitions, so it cannot initialise the icon.
+		if (runtime.GOOS == "windows" || runtime.GOOS == "linux") && len(trayOffIconWindows) > 0 {
 			tray.SetIcon(trayOffIconWindows)
 		}
-		// Windows convention: left-click on a tray icon is the primary
-		// action — show the main window (WireGuard-for-Windows, Discord,
-		// Slack all behave this way); the menu stays on right-click.
+		// Windows convention: left-click is the primary action and shows
+		// the main window; the context menu remains on right-click.
 		// Registered only here: on macOS any click opens the NSStatusItem
-		// menu natively, and an OnClick handler would fight it.
+		// menu natively, and an OnClick handler would fight it. On Linux,
+		// Wails' StatusNotifier fires the click handler for the dbusmenu
+		// "opened" event too, so registering it would raise the window on
+		// every right-click; Linux users get the "Show Window" menu item.
 		if runtime.GOOS == "windows" {
 			tray.OnClick(showDock)
 		}
@@ -296,7 +307,7 @@ func Run(assetsHandler http.Handler, dataDir string) error {
 	// process restarts. The health monitor swaps the client in the holder.
 	// Pass the tray's cheap icon-update hook — NOT the full menu rebuild —
 	// so the 1 Hz status stream doesn't trigger IPC round-trips on every event.
-	bridge := newEventBridge(app, clients, trayMgr.setIconState, tunnelService.ReconcileHistoryFromStatus)
+	bridge := newEventBridge(app, clients, trayMgr.setIconState, tunnelService.ReconcileHistoryFromStatus, trayMgr.quitApp)
 	bridge.start()
 
 	// Push the persisted log level to the helper now that the event

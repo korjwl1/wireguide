@@ -43,11 +43,13 @@ func getPeerCredFromFD(fd uintptr) (uid uint32, pid int32, err error) {
 	return getPeerCredPlatform(fd)
 }
 
-// verifyPeerUID checks that the peer's UID matches the expected owner.
-// Returns nil if the check passes or if peer credential retrieval is not
-// supported (fail-open would be worse, but on Unix we always have one of
+// verifyPeer checks that the peer's UID matches the expected owner.
+// expectedSID is Windows-only and ignored on Unix. Returns nil if the
+// check passes or if peer credential retrieval is not supported
+// (fail-open would be worse, but on Unix we always have one of
 // SO_PEERCRED or Getpeereid, so this path should not be hit).
-func verifyPeerUID(conn net.Conn, expectedUID int) error {
+func verifyPeer(conn net.Conn, expectedUID int, expectedSID string) error {
+	_ = expectedSID
 	if expectedUID < 0 {
 		// No owner restriction requested (e.g. test mode).
 		return nil

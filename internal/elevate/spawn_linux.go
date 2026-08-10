@@ -37,7 +37,17 @@ func SpawnHelper(ctx context.Context, args Args) error {
 	// Put the helper in its own process group so it survives Ctrl+C on the
 	// parent terminal (macOS version uses `& disown` for the same purpose).
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	return cmd.Start() // background
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	// Reap pkexec when it exits — without a Wait every spawn attempt (three
+	// per failed startup, plus one per health-monitor recovery) leaves a
+	// zombie parented to the GUI for the life of the process. Note Start()
+	// succeeding says nothing about authorization: pkexec exits non-zero
+	// AFTER the user dismisses the polkit dialog, so callers must treat
+	// readiness-poll timeout, not Start() error, as the failure signal.
+	go func() { _ = cmd.Wait() }()
+	return nil
 }
 
 // PlistNeedsReinstall is a no-op on Linux — there is no LaunchDaemon plist.

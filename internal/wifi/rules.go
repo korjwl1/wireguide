@@ -21,14 +21,6 @@ type TunnelSSIDs struct {
 	AutoConnectSSIDs []string `json:"auto_connect_ssids"`
 }
 
-// DefaultRules returns empty rules with maps initialized so
-// JSON marshaling produces {} rather than null for empty per-tunnel.
-func DefaultRules() *Rules {
-	return &Rules{
-		PerTunnel: make(map[string]TunnelSSIDs),
-	}
-}
-
 // Action determines what to do when the system joins the given SSID.
 // Returns:
 //

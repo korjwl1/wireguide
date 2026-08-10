@@ -64,8 +64,14 @@ func PingEndpointContext(ctx context.Context, endpoint string) *PingResult {
 	switch runtime.GOOS {
 	case "windows":
 		cmd = exec.CommandContext(ctx, "ping", "-n", "3", "-w", "3000", ip)
+	case "darwin":
+		// -W is per-reply wait in MILLISECONDS on macOS (BSD ping),
+		// unlike Linux where it's seconds. "-W 3" silently meant 3ms.
+		cmd = exec.CommandContext(ctx, "ping", "-c", "3", "-W", "3000", ip)
 	default:
 		cmd = exec.CommandContext(ctx, "ping", "-c", "3", "-W", "3", ip)
+	}
+	if runtime.GOOS != "windows" {
 		// Force canonical output so the parsers below aren't at the mercy
 		// of the user's locale. No Windows equivalent: ping.exe follows
 		// the system MUI language regardless of environment (see the
@@ -74,32 +80,33 @@ func PingEndpointContext(ctx context.Context, endpoint string) *PingResult {
 	}
 	sysexec.Hide(cmd)
 
-	start := time.Now()
 	out, err := cmd.CombinedOutput()
-	elapsed := time.Since(start)
 
 	if err != nil {
 		result.Error = "Host unreachable"
 		return result
 	}
 
-	result.Reachable = true
-
 	// Parse average latency from ping output
 	latency := parsePingLatency(string(out))
 	if latency > 0 {
+		result.Reachable = true
 		result.LatencyMs = latency
-	} else {
-		// Fallback: parse individual round-trip times from ping lines
-		// (e.g. "time=12.3 ms") and average them, which is more accurate
-		// than dividing the total wall-clock elapsed time.
-		if avg := parseIndividualPingTimes(string(out)); avg > 0 {
-			result.LatencyMs = avg
-		} else {
-			result.LatencyMs = float64(elapsed.Milliseconds()) / 3
-		}
+		return result
 	}
-
+	// Fallback: parse individual round-trip times from ping lines
+	// (e.g. "time=12.3 ms") and average them.
+	if avg := parseIndividualPingTimes(string(out)); avg > 0 {
+		result.Reachable = true
+		result.LatencyMs = avg
+		return result
+	}
+	// No RTT token anywhere in the output. This happens for router-sourced
+	// "Destination host unreachable" replies, which ping.exe can exit 0
+	// for — the host was never actually reached. The previous wall-clock/3
+	// estimate fabricated ~667ms+RTT latencies here (issue #32); report
+	// unreachable instead and let the UI render "—".
+	result.Error = "No reply times in ping output"
 	return result
 }
 

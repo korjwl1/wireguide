@@ -14,7 +14,9 @@ import (
 
 // Listen creates a Unix socket listener at addr.
 // If ownerUID >= 0, chowns the socket to that UID and sets mode 0600.
-func Listen(addr string, ownerUID int) (net.Listener, error) {
+// ownerSID is Windows-only and ignored here.
+func Listen(addr string, ownerUID int, ownerSID string) (net.Listener, error) {
+	_ = ownerSID
 	// Ensure parent directory exists. On macOS the socket lives in
 	// /var/run/wireguide/ — the helper (root) creates it, and the GUI
 	// (unprivileged user) needs to traverse it to reach the socket.

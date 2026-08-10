@@ -198,9 +198,23 @@ type Helper struct {
 
 // Run starts the helper listening on addr. Blocks until shutdown.
 // ownerUID: UID to chown socket to (Unix only, use -1 on Windows).
+// ownerSID: spawning user's SID (Windows only, "" on Unix) — scopes the
+// pipe ACL and per-connection peer checks to that user (issue #20).
 // dataDir: persistent data dir for crash recovery state.
-func Run(addr string, ownerUID int, dataDir string) error {
-	listener, err := ipc.Listen(addr, ownerUID)
+func Run(addr string, ownerUID int, ownerSID, dataDir string) error {
+	// wireguard-go allocates sizeable per-Device transient buffer pools. With
+	// the runtime default GOGC=100, repeated connect/disconnect on a long-lived
+	// helper retained hundreds of MiB of reclaimable heap before GC caught up
+	// (30 cycles on linux/arm64: ~118 MiB -> ~283 MiB). GOGC=50 kept the same
+	// workload near ~100 MiB with a modest CPU increase (~2.14s -> ~2.34s),
+	// while GOGC=20 bought little more memory at a much higher CPU cost.
+	// Respect an explicit administrator-provided GOGC override.
+	if _, explicitlyConfigured := os.LookupEnv("GOGC"); !explicitlyConfigured {
+		previousGCPercent := debug.SetGCPercent(50)
+		defer debug.SetGCPercent(previousGCPercent)
+	}
+
+	listener, err := ipc.Listen(addr, ownerUID, ownerSID)
 	if err != nil {
 		return fmt.Errorf("listen %s: %w", addr, err)
 	}
@@ -215,7 +229,7 @@ func Run(addr string, ownerUID int, dataDir string) error {
 	manager.SetEndpointProtector(fw)
 
 	h := &Helper{
-		server:          ipc.NewServer(listener, ownerUID),
+		server:          ipc.NewServer(listener, ownerUID).WithOwnerSID(ownerSID),
 		manager:         manager,
 		firewall:        fw,
 		activeCfgs:      make(map[string]*domain.WireGuardConfig),
@@ -271,23 +285,24 @@ func Run(addr string, ownerUID int, dataDir string) error {
 	// Register RPC handlers
 	h.registerHandlers()
 
-	// Grace-window shutdown on GUI disconnect — only when NOT running as a
-	// LaunchDaemon. When the daemon plist has KeepAlive=true, launchd
-	// handles restarts; the helper should stay alive even when no GUI is
-	// connected (so the next GUI launch connects instantly without a
-	// password prompt). In osascript/dev mode, the helper still shuts down
-	// after the grace window to avoid orphan processes.
-	if !isDaemon() {
-		h.server.OnConnect(h.cancelShutdownTimer)
-		h.server.OnDisconnect(h.startShutdownTimer)
-		// Arm the startup grace window now: a helper that never receives
-		// a GUI connection must not run forever (see startupGrace). The
-		// first OnConnect cancels it; the fire-time active-tunnel check
-		// keeps a crash-recovered tunnel alive even with no GUI.
-		h.armShutdownTimer(startupGrace, "startup, no GUI connected yet")
-	} else {
-		slog.Info("running as LaunchDaemon — shutdown grace disabled")
-	}
+	// Grace-window shutdown on GUI disconnect. This applies to EVERY launch
+	// mode, LaunchDaemon included: a running GUI is the user's statement of
+	// intent that WireGuide should be active, so a helper with no GUI (and
+	// no active tunnel) has no reason to exist. The LaunchDaemon plist sets
+	// RunAtLoad=false precisely so the boot path never produces an
+	// invisible root helper; this guard is the runtime half of the same
+	// rule, covering the case where the GUI dies without a clean Shutdown.
+	//
+	// Users who want WireGuide up from boot enable auto_start, which
+	// installs the GUI LaunchAgent — the GUI then spawns the helper on the
+	// normal path.
+	h.server.OnConnect(h.cancelShutdownTimer)
+	h.server.OnDisconnect(h.startShutdownTimer)
+	// Arm the startup grace window now: a helper that never receives
+	// a GUI connection must not run forever (see startupGrace). The
+	// first OnConnect cancels it; the fire-time active-tunnel check
+	// keeps a crash-recovered tunnel alive even with no GUI.
+	h.armShutdownTimer(startupGrace, "startup, no GUI connected yet")
 
 	// Start event emitter (diff loop)
 	h.goSafe("eventLoop", h.eventLoop)
@@ -517,30 +532,67 @@ func (h *Helper) armShutdownTimer(grace time.Duration, reason string) {
 		active = h.manager.ActiveTunnel()
 	}
 
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
 	if active != "" {
 		slog.Info("tunnel is active — helper stays alive (wg-quick semantics)",
 			"reason", reason, "active_tunnel", active)
+		// A previously armed window (e.g. the startup grace) is obsolete
+		// now that a tunnel is up — stop it rather than leaving it to fire
+		// into a transient not-connected instant later.
+		if h.shutdownTimer != nil {
+			h.shutdownTimer.Stop()
+			h.shutdownTimer = nil
+		}
 		return
 	}
 
 	slog.Info("no active tunnel — starting shutdown grace window",
 		"reason", reason, "grace", grace)
-	h.mu.Lock()
-	defer h.mu.Unlock()
 	if h.shutdownTimer != nil {
 		h.shutdownTimer.Stop()
 	}
-	h.shutdownTimer = time.AfterFunc(grace, func() {
+	var t *time.Timer
+	t = time.AfterFunc(grace, func() {
+		// Timer.Stop() cannot cancel a callback that has already started,
+		// so re-check under the lock that we are still the current timer —
+		// otherwise a cancel racing with the fire still shuts the helper
+		// down right after a GUI attached.
+		h.mu.Lock()
+		current := h.shutdownTimer
+		h.mu.Unlock()
+		if current != t {
+			return
+		}
 		// Double-check at fire time: a tunnel may have been activated between
 		// timer start and fire (e.g., reconnect monitor brought it back up).
-		if t := h.manager.ActiveTunnel(); t != "" {
-			slog.Info("shutdown timer fired but tunnel is now active — aborting shutdown",
-				"active_tunnel", t)
-			return
+		if h.manager != nil {
+			if tn := h.manager.ActiveTunnel(); tn != "" {
+				slog.Info("shutdown timer fired but tunnel is now active — aborting shutdown",
+					"active_tunnel", tn)
+				return
+			}
 		}
 		slog.Info("no reconnect within grace window, shutting down")
 		h.shutdown()
 	})
+	h.shutdownTimer = t
+}
+
+// maybeArmShutdownAfterTeardown re-arms the grace window after a tunnel
+// teardown that may have dropped the active count to zero. Transient CLI
+// clients (`ctl disconnect`, wifi-rule evaluation) never fire the server's
+// OnDisconnect, so without this a helper whose GUI already quit — kept alive
+// only by its active tunnel — would lose that tunnel and then live forever:
+// no GUI, no tunnel, no timer. armShutdownTimer's own active-tunnel guard
+// makes this a no-op while any tunnel is still up, and a GUI that IS attached
+// keeps its normal lifecycle (its later disconnect arms the window).
+func (h *Helper) maybeArmShutdownAfterTeardown(reason string) {
+	if h.server.HasControlConn() {
+		return
+	}
+	h.armShutdownTimer(shutdownGrace, reason)
 }
 
 // cancelShutdownTimer aborts a pending grace-window shutdown. Called when the
@@ -568,12 +620,6 @@ func (h *Helper) cancelShutdownTimer() {
 // the user expects when they click "Quit" in the tray.
 func (h *Helper) shutdown() {
 	h.server.Shutdown()
-}
-
-// isDaemon returns true when the helper was started by launchd (LaunchDaemon).
-// launchd always sets the process's parent PID to 1 (init/launchd).
-func isDaemon() bool {
-	return os.Getppid() == 1
 }
 
 // suspendFirewall saves the current firewall state and disables all firewall

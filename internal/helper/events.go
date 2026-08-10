@@ -115,8 +115,10 @@ func (h *Helper) statusDTO() ipc.ConnectionStatus {
 		result.LatencyMs = lat
 	}
 
-	// Include lightweight per-tunnel info (name + state + handshake
-	// presence + latency) so the frontend can show correct badges.
+	// Include complete per-tunnel status. The same DTO backs both the
+	// frontend's selected-tunnel statistics and `ctl status --json`; copying
+	// only name/state/handshake silently zeroed interface, duration, traffic,
+	// and endpoint whenever more than one tunnel was active.
 	// Pre-allocate to avoid the latent-bug of `append` aliasing a
 	// slice on the manager-returned struct.
 	if len(allStats) > 1 {
@@ -125,11 +127,9 @@ func (h *Helper) statusDTO() ipc.ConnectionStatus {
 			if ts == nil {
 				continue
 			}
-			sub := domain.ConnectionStatus{
-				State:         ts.State,
-				TunnelName:    ts.TunnelName,
-				LastHandshake: ts.LastHandshake,
-			}
+			sub := *ts
+			sub.ActiveTunnels = nil
+			sub.Tunnels = nil
 			if lat, ok := latencies[ts.TunnelName]; ok {
 				sub.LatencyMs = lat
 			}
@@ -151,6 +151,13 @@ func (h *Helper) statusDTO() ipc.ConnectionStatus {
 // and risks chewing through the 30s tick.
 func (h *Helper) latencyLoop() {
 	const tickInterval = 30 * time.Second
+	// With no GUI subscribed, nobody consumes 30s-fresh values — only an
+	// occasional `ctl status` reads the cache. The helper deliberately
+	// outlives the GUI while a tunnel is up (wg-quick semantics), so
+	// without this the headless state would spawn ping subprocesses every
+	// 30s forever. Probes continue at a slow cadence rather than stopping
+	// so ctl status latency stays approximately fresh.
+	const idleTickInterval = 5 * time.Minute
 	// Sleep briefly on startup so we don't ping immediately during
 	// helper boot, when the tunnel state is still settling.
 	select {
@@ -162,10 +169,14 @@ func (h *Helper) latencyLoop() {
 	for {
 		h.measureLatencies()
 
+		interval := tickInterval
+		if !h.server.HasSubscribers() {
+			interval = idleTickInterval
+		}
 		select {
 		case <-h.done:
 			return
-		case <-time.After(tickInterval):
+		case <-time.After(interval):
 		}
 	}
 }
@@ -276,7 +287,15 @@ func (h *Helper) runOneLatencyProbe(t latencyTask) {
 	h.latencyMu.Lock()
 	h.latencyByTunnel[t.tunnelName] = latency
 	h.latencyMu.Unlock()
-	slog.Info("endpoint latency measured",
+	// Debug, not Info: this fires per connected tunnel every 30s, and
+	// launchd appends StandardOutPath forever with no rotation — at Info
+	// it was 95.7% of a 7.7 MB helper log (33,720 of 35,240 lines over
+	// four months). Nothing is lost by demoting it: the same value is
+	// already broadcast in the status event, rendered in the UI and
+	// readable via `ctl status`. The log level is runtime-mutable, so
+	// anyone debugging a latency problem can turn it back on live with
+	// `wireguide ctl set loglevel debug` (or the Settings UI).
+	slog.Debug("endpoint latency measured",
 		"tunnel", t.tunnelName, "target", measuredTarget,
 		"configured_target", t.latencyProbeTarget,
 		"via_tunnel", viaTunnel,
@@ -313,7 +332,10 @@ func (h *Helper) eventLoop() {
 			}
 			if !bytes.Equal(lastJSON, currentJSON) {
 				lastJSON = currentJSON
-				h.server.Broadcast(ipc.EventStatus, status)
+				// Pass the bytes the diff already produced — RawMessage
+				// embeds as-is, avoiding a second marshal of the same
+				// struct inside Broadcast at 1 Hz.
+				h.server.Broadcast(ipc.EventStatus, json.RawMessage(currentJSON))
 			}
 		}
 	}

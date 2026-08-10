@@ -29,12 +29,12 @@ import (
 // We must NOT call conn.Close() — that would terminate the connection
 // shared with internal/reconnect/sleep_linux.go. We only unsubscribe our
 // own matcher + signal channel on stop.
-func startLinuxDBusWatcher(onChange func()) (stop func()) {
+func startLinuxDBusWatcher(onChange func()) (stop func(), attached bool) {
 	noop := func() {}
 	conn, err := dbus.SystemBus()
 	if err != nil {
 		slog.Debug("wifi: dbus unavailable, no event-driven SSID watcher", "error", err)
-		return noop
+		return noop, false
 	}
 
 	matchOpts := []dbus.MatchOption{
@@ -43,7 +43,7 @@ func startLinuxDBusWatcher(onChange func()) (stop func()) {
 	}
 	if err := conn.AddMatchSignal(matchOpts...); err != nil {
 		slog.Debug("wifi: NM AddMatchSignal failed", "error", err)
-		return noop
+		return noop, false
 	}
 
 	ch := make(chan *dbus.Signal, 16)
@@ -89,5 +89,5 @@ func startLinuxDBusWatcher(onChange func()) (stop func()) {
 	slog.Info("wifi: NetworkManager DBus watcher started (Wireless.StateChanged only)")
 	return func() {
 		once.Do(func() { close(stopCh) })
-	}
+	}, true
 }

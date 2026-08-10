@@ -28,6 +28,12 @@ func SpawnHelper(ctx context.Context, args Args) error {
 		`'--helper','--socket=%s','--data-dir=%s'`,
 		psEscape(args.SocketPath), psEscape(args.DataDir),
 	)
+	if args.SocketSID != "" {
+		// ValidateArgs vetted the SID format; the helper scopes the pipe
+		// ACL and peer checks to this SID instead of all interactive
+		// users (issue #20).
+		argList += fmt.Sprintf(`,'--owner-sid=%s'`, psEscape(args.SocketSID))
+	}
 	ps := fmt.Sprintf(
 		`Start-Process '%s' -ArgumentList %s -Verb RunAs -WindowStyle Hidden`,
 		psEscape(exe), argList,

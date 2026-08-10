@@ -7,6 +7,6 @@ package wifi
 // changes instantly; on other OSes the wifi.Monitor's per-platform
 // detection (CoreWLAN events on macOS, Wlanapi notifications on Windows)
 // covers the same ground.
-func startLinuxDBusWatcher(onChange func()) (stop func()) {
-	return func() {}
+func startLinuxDBusWatcher(onChange func()) (stop func(), attached bool) {
+	return func() {}, false
 }

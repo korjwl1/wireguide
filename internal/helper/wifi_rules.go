@@ -255,4 +255,5 @@ func (h *Helper) disconnectAutoManaged(name string) {
 	h.latencyMu.Lock()
 	delete(h.latencyByTunnel, name)
 	h.latencyMu.Unlock()
+	h.maybeArmShutdownAfterTeardown("rule-driven disconnect, no GUI attached")
 }
