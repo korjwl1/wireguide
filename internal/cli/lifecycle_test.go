@@ -1,6 +1,9 @@
 package cli
 
-import "testing"
+import (
+	"runtime"
+	"testing"
+)
 
 // TestBundleFromExePath pins the lookup that decides WHICH WireGuide.app
 // `ctl start` launches.
@@ -14,6 +17,12 @@ import "testing"
 // each build kept reinstalling its own plist and prompting for an admin
 // password on every launch.
 func TestBundleFromExePath(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		// bundleFromExePath only runs on the darwin launch path, and these
+		// fixtures are Unix paths that filepath mangles under Windows
+		// separator rules.
+		t.Skip("darwin-only bundle lookup; fixtures use Unix paths")
+	}
 	tests := []struct {
 		name string
 		exe  string

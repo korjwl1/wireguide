@@ -1,9 +1,19 @@
 package elevate
 
-import "testing"
+import (
+	"runtime"
+	"testing"
+)
 
 func TestValidateArgsSocketSID(t *testing.T) {
+	// The SID rules under test are path-independent, but the base Args must
+	// pass validateSpawnPath's absolute-path check on every OS — Unix
+	// fixtures are not absolute under Windows filepath rules. The Windows
+	// SocketPath is the production pipe address, which IsAbs accepts.
 	base := Args{SocketPath: "/var/run/wireguide/wireguide.sock", DataDir: "/var/lib/wireguide"}
+	if runtime.GOOS == "windows" {
+		base = Args{SocketPath: `\\.\pipe\wireguide`, DataDir: `C:\ProgramData\wireguide`}
+	}
 
 	valid := base
 	valid.SocketSID = "S-1-5-21-3623811015-3361044348-30300820-1013"
