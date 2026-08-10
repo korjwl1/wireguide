@@ -580,6 +580,21 @@ func (h *Helper) armShutdownTimer(grace time.Duration, reason string) {
 	h.shutdownTimer = t
 }
 
+// maybeArmShutdownAfterTeardown re-arms the grace window after a tunnel
+// teardown that may have dropped the active count to zero. Transient CLI
+// clients (`ctl disconnect`, wifi-rule evaluation) never fire the server's
+// OnDisconnect, so without this a helper whose GUI already quit — kept alive
+// only by its active tunnel — would lose that tunnel and then live forever:
+// no GUI, no tunnel, no timer. armShutdownTimer's own active-tunnel guard
+// makes this a no-op while any tunnel is still up, and a GUI that IS attached
+// keeps its normal lifecycle (its later disconnect arms the window).
+func (h *Helper) maybeArmShutdownAfterTeardown(reason string) {
+	if h.server.HasControlConn() {
+		return
+	}
+	h.armShutdownTimer(shutdownGrace, reason)
+}
+
 // cancelShutdownTimer aborts a pending grace-window shutdown. Called when the
 // GUI reconnects before the timer fires.
 func (h *Helper) cancelShutdownTimer() {

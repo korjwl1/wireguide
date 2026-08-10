@@ -262,6 +262,7 @@ func (h *Helper) doConnectHeld(cfg *domain.WireGuardConfig) error {
 			}
 			h.mu.Unlock()
 			restoreErr := h.enableKillSwitchForActiveTunnels()
+			h.maybeArmShutdownAfterTeardown("connect rolled back, no GUI attached")
 			return fmt.Errorf("restore kill switch after connect: %v (disconnect rollback: %v; blockade restore: %v)",
 				err, disconnectErr, restoreErr)
 		}
@@ -515,6 +516,7 @@ func (h *Helper) handleDisconnect(params json.RawMessage) (interface{}, error) {
 				"interface", iface, "error", err)
 		}
 	}
+	h.maybeArmShutdownAfterTeardown("tunnel disconnected, no GUI attached")
 	return ipc.Empty{}, nil
 }
 
