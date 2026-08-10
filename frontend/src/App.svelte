@@ -633,6 +633,10 @@
       await TunnelService.RunUpdate(updateInfo);
     } catch (e) {
       showToast('Update failed: ' + (e?.message || e));
+      // Rethrow: modal-context callers (Settings → About, the banner)
+      // render the failure inline — a toast alone can sit underneath an
+      // open modal where it is never seen.
+      throw e;
     }
   }
 

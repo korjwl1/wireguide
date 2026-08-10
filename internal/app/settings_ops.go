@@ -367,6 +367,10 @@ func (s *TunnelService) RunUpdate(info *update.UpdateInfo) error {
 		// generous even on a slow link. If it hangs past that, the GitHub
 		// API or the user's DNS is wedged — we'd rather surface that to
 		// the user via a clear timeout than spin forever with "Updating…".
+		// The progress event keeps the UI honest during that window — the
+		// tap refresh alone was observed taking 75 s with the button stuck
+		// on a static "Updating…" label the whole time.
+		s.emitUpdateProgress("refresh")
 		updCtx, updCancel := context.WithTimeout(context.Background(), 90*time.Second)
 		defer updCancel()
 		slog.Info("update: running brew update", "brew", brewBin)
@@ -392,11 +396,25 @@ func (s *TunnelService) RunUpdate(info *update.UpdateInfo) error {
 		// while doing nothing, stranding installs on old versions (observed
 		// live: 0.3.1 pinned for three months of "Update Now" clicks). The
 		// flag forces the upgrade regardless of brew version or cask flags.
+		s.emitUpdateProgress("install")
 		slog.Info("update: running brew upgrade --cask --greedy wireguide")
 		cmd := exec.CommandContext(upCtx, brewBin, "upgrade", "--cask", "--greedy", "wireguide")
 		out, err := cmd.CombinedOutput()
 		if err != nil {
 			return fmt.Errorf("brew upgrade failed: %w (%s)", err, string(out))
+		}
+
+		// Reaching this line means brew exited 0 WITHOUT the cask
+		// postflight killing us — i.e. no install actually ran (a real
+		// upgrade killalls this process before CombinedOutput returns).
+		// brew exits 0 on "already installed"-style skips, and treating
+		// that as success is exactly how "Update Now" no-op'd silently in
+		// the past. Verify the bundle on disk actually became the target
+		// version and fail loudly when it didn't.
+		if installed := installedBundleVersion(); installed != "" && installed != info.Version {
+			return fmt.Errorf(
+				"brew exited 0 but /Applications/WireGuide.app is still %s (expected %s) — brew output: %s",
+				installed, info.Version, strings.TrimSpace(string(out)))
 		}
 		return nil
 	}
@@ -406,4 +424,25 @@ func (s *TunnelService) RunUpdate(info *update.UpdateInfo) error {
 		return s.app.Browser.OpenURL("https://github.com/korjwl1/wireguide/releases/latest")
 	}
 	return exec.Command("open", "https://github.com/korjwl1/wireguide/releases/latest").Run()
+}
+
+// emitUpdateProgress tells the frontend which phase RunUpdate is in
+// ("refresh" = brew update, "install" = brew upgrade). Best-effort — a
+// nil app (tests) just skips the emit.
+func (s *TunnelService) emitUpdateProgress(phase string) {
+	if s.app != nil {
+		s.app.Event.Emit("update_progress", map[string]any{"phase": phase})
+	}
+}
+
+// installedBundleVersion reads CFBundleShortVersionString from the
+// installed app bundle. "" when unreadable (bundle missing, non-darwin);
+// callers must treat "" as "cannot verify", not as a mismatch.
+func installedBundleVersion() string {
+	out, err := exec.Command("defaults", "read",
+		"/Applications/WireGuide.app/Contents/Info", "CFBundleShortVersionString").Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
 }

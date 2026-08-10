@@ -196,7 +196,10 @@
     "time_hours_ago": "{n}時間前",
     "time_days_ago": "{n}日前",
     "dev_build_hint": "開発ビルドでは自動確認が無効化されています。上のボタンで手動確認してください。",
-    "auto_off_hint": "設定で自動確認がオフになっています。上のボタンで手動確認してください。"
+    "auto_off_hint": "設定で自動確認がオフになっています。上のボタンで手動確認してください。",
+    "install_failed": "アップデート失敗",
+    "progress_refresh": "パッケージリポジトリを確認中…",
+    "progress_install": "ダウンロードとインストール中…"
   },
   "wifi_permission": {
     "title": "位置情報サービスの許可が必要",

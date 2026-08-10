@@ -47,6 +47,7 @@ func init() {
 	application.RegisterEvent[HelperEvent]("helper")
 	application.RegisterEvent[struct{}]("helper_reset")
 	application.RegisterEvent[update.UpdateInfo]("update-available")
+	application.RegisterEvent[map[string]any]("update_progress")
 	application.RegisterEvent[ipc.SettingsChangedPayload]("settings_changed")
 	application.RegisterEvent[struct{}]("config_changed")
 	application.RegisterEvent[struct{}]("tunnels_changed")
