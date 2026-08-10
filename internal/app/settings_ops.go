@@ -387,8 +387,13 @@ func (s *TunnelService) RunUpdate(info *update.UpdateInfo) error {
 		// value never gets surfaced anywhere in practice.
 		upCtx, upCancel := context.WithTimeout(context.Background(), 5*time.Minute)
 		defer upCancel()
-		slog.Info("update: running brew upgrade --cask wireguide")
-		cmd := exec.CommandContext(upCtx, brewBin, "upgrade", "--cask", "wireguide")
+		// --greedy: older Homebrew skips auto_updates casks even when named
+		// explicitly, and the skip exits 0 — so this call reported success
+		// while doing nothing, stranding installs on old versions (observed
+		// live: 0.3.1 pinned for three months of "Update Now" clicks). The
+		// flag forces the upgrade regardless of brew version or cask flags.
+		slog.Info("update: running brew upgrade --cask --greedy wireguide")
+		cmd := exec.CommandContext(upCtx, brewBin, "upgrade", "--cask", "--greedy", "wireguide")
 		out, err := cmd.CombinedOutput()
 		if err != nil {
 			return fmt.Errorf("brew upgrade failed: %w (%s)", err, string(out))
