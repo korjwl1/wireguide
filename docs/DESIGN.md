@@ -7,7 +7,7 @@ WireGuide is a **two-process** WireGuard VPN client:
 - **GUI process** (unprivileged) — Wails v3 + Svelte webview, system tray, config editor
 - **Helper process** (root) — wireguard-go TUN, routing, DNS, firewall, reconnect
 
-They communicate over **JSON-RPC 2.0** on a Unix domain socket (`/var/run/wireguide/wireguide.sock`). The helper is installed as a macOS LaunchDaemon with `KeepAlive=true`.
+They communicate over **JSON-RPC 2.0** on a Unix domain socket (`/var/run/wireguide/wireguide.sock`). The helper is installed as a macOS LaunchDaemon with `RunAtLoad=false` and `KeepAlive={SuccessfulExit:false}`: launchd never starts it at boot (a running GUI is what signals the user wants WireGuide active) and only restarts it after a crash. The helper's lifetime is tied to the GUI — a 60 s startup grace covers a helper whose GUI never attaches, and it exits shortly after the last GUI connection drops if no tunnels remain (CLI control connections are transient and don't extend its life).
 
 ```
 ┌──────────────────────────────┐     ┌──────────────────────────────┐
@@ -30,7 +30,7 @@ WireGuard requires root to create TUN devices and modify routing tables. Rather 
 - **GUI stays unprivileged** — a compromised webview can't touch the network stack
 - **Helper does only privileged work** — smaller attack surface
 - **Helper survives GUI restarts** — closing the window doesn't kill the VPN
-- **LaunchDaemon KeepAlive** — helper auto-restarts on crash
+- **LaunchDaemon KeepAlive (crash-only)** — helper auto-restarts on crash, but never runs at boot and exits on its own once no GUI and no tunnels remain
 
 This mirrors the architecture of `wg-quick` (which also runs as root) but wraps it in a persistent daemon with IPC.
 
@@ -167,13 +167,13 @@ Equivalent to wg-quick's `monitor_daemon`. The change source is OS-specific — 
 
 Per-platform backends, all driven by the same `Firewall.SetKillSwitch` IPC method:
 
-- **macOS** — `pf` rules in the `com.apple.wireguide` anchor (details below)
+- **macOS** — `pf` rules in the `com.apple/wireguide` anchor (details below)
 - **Linux** — `nftables` table `wireguide_killswitch`, output chain `policy drop` with allow rules for loopback/tunnel/endpoint/DHCP. Input chain is strict (`policy drop`) — see [issue note](#linux-input-chain-strict)
 - **Windows** — WFP (Filtering Platform) provider + sublayer at weight `0xFFFF`, `ALE_AUTH_CONNECT_V4/V6` block filters plus allow exceptions for the tunnel LUID, loopback, DHCP/NDP, and the resolved peer endpoint. No `netsh advfirewall` is touched, matching the official wireguard-windows behavior
 
 ### macOS pf
 
-Rules are loaded into the `com.apple.wireguide` anchor. macOS ships with `anchor "com.apple/*" all` in pf.conf, so our anchor is automatically evaluated — **we never modify the main ruleset**.
+Rules are loaded into the `com.apple/wireguide` anchor (slash, not dot — pf's `*` wildcard doesn't cross the `/` path separator, so a dot-named anchor would never match the system wildcard). macOS ships with `anchor "com.apple/*" all` in pf.conf, so our anchor is automatically evaluated — **we never modify the main ruleset**.
 
 ```
 # WireGuide kill switch rules (loaded into anchor)
@@ -182,7 +182,7 @@ pass out quick proto udp to 1.2.3.4 port 443   # WG endpoint
 pass out quick proto udp from any port 68 to any port 67  # DHCP
 pass out quick proto udp from any port 546 to any port 547 # DHCPv6
 pass quick on utun6 all                         # tunnel interface
-anchor "com.apple.wireguide/dns"                # DNS sub-anchor
+anchor "dns"                                    # DNS sub-anchor (com.apple/wireguide/dns)
 block drop out all                              # block everything else
 block drop in all
 ```
@@ -350,7 +350,7 @@ This handles `brew upgrade` which replaces the app bundle but leaves the old hel
 
 ## IPC Protocol
 
-JSON-RPC 2.0 over Unix domain socket. Socket permissions: `0600`, peer UID verified via `SO_PEERCRED`.
+JSON-RPC 2.0 over a Unix domain socket (macOS/Linux; permissions `0600`, peer UID verified via `SO_PEERCRED`/`LOCAL_PEERCRED`) or a named pipe (Windows; the pipe's ACL is scoped to the launching user's SID and each connection's peer SID is verified — issue #20).
 
 | Method | Direction | Description |
 |--------|-----------|-------------|
@@ -359,6 +359,7 @@ JSON-RPC 2.0 over Unix domain socket. Socket permissions: `0600`, peer UID verif
 | `Helper.ForceShutdown` | GUI->Helper | Bypass graceful teardown; `os.Exit` after best-effort firewall cleanup. Used by the upgrade path when `Shutdown` is wedged. |
 | `Helper.Subscribe` | GUI->Helper | Subscribe to event notifications |
 | `Helper.SetLogLevel` | GUI->Helper | Change runtime log level |
+| `Helper.RequestQuit` | CLI->Helper | Ask the helper to shut the app down (`wireguide ctl stop`) |
 | `Tunnel.Connect` | GUI->Helper | Start VPN tunnel (`ConnectRequest`) |
 | `Tunnel.Disconnect` | GUI->Helper | Stop tunnel (`DisconnectRequest`, optional `TunnelName`) |
 | `Tunnel.Rename` | GUI->Helper | Rename tunnel (`RenameRequest`) — atomic update under `connectMu` |
@@ -371,12 +372,15 @@ JSON-RPC 2.0 over Unix domain socket. Socket permissions: `0600`, peer UID verif
 | `Monitor.SetHealthCheck` | GUI->Helper | Toggle per-tunnel health check |
 | `Network.SetPinInterface` | GUI->Helper | Toggle `-ifscope` route pinning |
 | `Wifi.ReportSSID` | GUI->Helper | Forward current SSID from GUI (macOS 14+ Location Services workaround) |
+| `Automation.Preview` | CLI->Helper | Read-only dump of the current network context + per-tunnel rule decision (`wireguide ctl automation`) |
 | `event.status` | Helper->GUI | 1 Hz status broadcast (includes `active_tunnels` list) |
 | `event.reconnect` | Helper->GUI | Reconnect state changes |
 | `event.log` | Helper->GUI | Structured log entries |
 | `event.wifi_ssid` | Helper->GUI | SSID changed (`WifiSSIDPayload{OldSSID, NewSSID}`) |
 | `event.auto_connect` | Helper->GUI | Wi-Fi rule fired and connected (`AutoConnectPayload{TunnelName}`) |
 | `event.critical_error` | Helper->GUI | A background goroutine exceeded the `goSafe` restart budget; tunnel state may not match reality. The GUI surfaces this via a banner/toast. |
+| `event.settings_changed` | Helper->GUI | Broadcast whenever a setting changes over IPC (`SettingsChangedPayload`), keeping other clients — e.g. the GUI after a `wireguide ctl set` — in sync |
+| `event.quit` | Helper->GUI | Helper asks the GUI to quit (relays `Helper.RequestQuit` from `wireguide ctl stop`) |
 
 ### Key Request/Response Types
 
@@ -427,8 +431,15 @@ All background goroutines wrapped in `goSafe()` — recovers panics, logs stack 
 
 | Install method | Update mechanism |
 |---------------|-----------------|
-| Homebrew | `brew update && brew upgrade --cask wireguide` (GUI triggers) |
+| Homebrew | `brew upgrade --cask --greedy wireguide` (GUI triggers; `HOMEBREW_NO_AUTO_UPDATE=1` since the checker already knows the target version) |
 | Binary zip | Opens GitHub Releases page in browser |
+
+The Homebrew path is verified, not trusted: after `brew` exits 0, the installed
+bundle's `CFBundleShortVersionString` is compared against the release version and
+a mismatch is surfaced as an error (a cask marked `auto_updates`, or an upgrade
+that silently no-ops, can otherwise "succeed" without installing anything —
+issue #38). Progress phases are emitted to the GUI as `update_progress` events,
+and a Homebrew 6 `untrusted tap` failure triggers `brew trust` + one retry.
 
 Homebrew cask `uninstall` block only quits the app (no sudo). Helper cleanup is in `zap` (full removal only). This allows `brew upgrade` without sudo.
 
@@ -454,4 +465,4 @@ WireGuide chose wireguard-go for cross-platform support and full control over ne
 
 ### Why pf anchors instead of modifying main ruleset?
 
-macOS Tahoe's `pfctl -sr` outputs `scrub-anchor` directives that cause syntax errors when re-loaded. Using anchors avoids touching the main ruleset entirely — `com.apple.*` wildcard evaluates our rules automatically.
+macOS Tahoe's `pfctl -sr` outputs `scrub-anchor` directives that cause syntax errors when re-loaded. Using anchors avoids touching the main ruleset entirely — the `com.apple/*` wildcard evaluates our rules automatically.

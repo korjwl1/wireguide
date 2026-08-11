@@ -12,7 +12,7 @@
   <a href="https://github.com/korjwl1/wireguide/releases/latest"><img src="https://img.shields.io/github/v/release/korjwl1/wireguide?style=flat-square" alt="Release" /></a>
   <a href="https://github.com/korjwl1/wireguide/stargazers"><img src="https://img.shields.io/github/stars/korjwl1/wireguide?style=flat-square" alt="Stars" /></a>
   <a href="#설치"><img src="https://img.shields.io/badge/homebrew-tap-blue?style=flat-square" alt="Homebrew" /></a>
-  <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows-lightgrey?style=flat-square" alt="Platform" />
+  <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey?style=flat-square" alt="Platform" />
   <a href="LICENSE"><img src="https://img.shields.io/github/license/korjwl1/wireguide?style=flat-square" alt="License" /></a>
 </p>
 
@@ -37,7 +37,7 @@
 
 ## 설치
 
-**macOS 15+ (Apple Silicon)** 및 **Windows 11 (amd64)** 에서 테스트 완료.
+**macOS 15+ (Apple Silicon)**, **Windows 11 (amd64)**, **Linux (Debian 13 / Raspberry Pi OS, amd64/arm64)** 에서 테스트 완료 — 실제 검증 범위는 아래 [테스트 커버리지](#테스트-커버리지) 참조.
 
 ### macOS (Homebrew) — 권장
 
@@ -61,6 +61,18 @@ brew install --cask wireguide
 > Windows SmartScreen에서 "확인되지 않은 게시자" 경고가 뜰 수 있습니다 — 현재 코드 서명이
 > 없습니다. "추가 정보" → "실행"을 클릭하세요.
 
+### Linux (DEB)
+
+[Releases](https://github.com/korjwl1/wireguide/releases)에서 `WireGuide-linux-amd64.deb`
+(또는 `-arm64.deb`) 패키지를 다운로드 후 설치:
+
+```bash
+sudo apt install ./WireGuide-linux-amd64.deb
+```
+
+앱 메뉴 등록과 트레이 연동이 함께 설치되며, 특권 헬퍼는 상시 서비스가 아니라
+PolicyKit을 통해 필요할 때만 기동됩니다.
+
 ### 소스에서 빌드
 
 ```bash
@@ -72,6 +84,23 @@ task build
 ./bin/wireguide
 ```
 
+### 테스트 커버리지
+
+수동 QA는 실물 하드웨어에서 진행하지만, 모든 조합을 커버하지는 못합니다.
+실제로 검증된 범위:
+
+| 플랫폼 | 테스트 환경 | 유선랜 | Wi-Fi |
+|--------|------------|:------:|:-----:|
+| macOS | macOS 26.4 (Tahoe), Apple Silicon | ✅ | ✅ |
+| Windows | Windows 11 (amd64), 데스크탑 | ✅ | ⚠️ 제대로 테스트되지 못함 |
+| Linux | Raspberry Pi OS Lite (arm64) | ⚠️ 미테스트 | ✅ |
+
+미검증 칸은 Wi-Fi 의존 기능에서 특히 중요합니다 — Windows의 SSID 기반
+자동화 규칙과 Wi-Fi↔유선 전환, Linux의 유선 게이트웨이/서브넷 감지가
+해당됩니다. **이 빈 곳에서 오류를 만나면 꼭
+[이슈로 알려주세요](https://github.com/korjwl1/wireguide/issues/new/choose)** —
+저희에게 없는 하드웨어의 문제는 제보가 있어야만 고칠 수 있습니다.
+
 ---
 
 ## 기능
@@ -79,7 +108,7 @@ task build
 | 기능 | 설명 |
 |------|------|
 | **자동화 (Automation)** | 터널별 조건→액션 규칙. 어느 네트워크에 있는지(Wi-Fi SSID / 서브넷 / 공유기 MAC 주소)에 따라 자동 연결·해제. 규칙은 우선순위 순서(드래그로 변경)이며 위에 있는 규칙이 우선. GUI 종료 시에도 헬퍼에서 독립 동작. |
-| **CLI** | `wireguide ctl` 명령줄 인터페이스 — 연결/해제/목록/가져오기/이름변경/삭제 및 자동화 규칙 설정. 실행 중인 헬퍼에 붙어 동작하므로 `wg-quick`과 달리 명령마다 sudo 불필요, 크로스플랫폼. |
+| **CLI** | `wireguide ctl` 명령줄 인터페이스 — 앱 시작/종료(`start`/`stop`), 연결/해제/목록(`--json` 지원)/가져오기/이름변경/삭제 및 자동화 규칙 설정. 실행 중인 헬퍼에 붙어 동작하므로 `wg-quick`과 달리 명령마다 sudo 불필요, 크로스플랫폼. |
 | **멀티 터널** | 여러 WireGuard 터널을 동시에 연결하고 터널별 독립 상태 관리 |
 | **터널 관리** | `.conf` 파일 가져오기, 생성, 편집, 내보내기. 드래그 앤 드롭 지원. |
 | **설정 에디터** | CodeMirror 6 기반 WireGuard 문법 강조 및 자동완성 |
@@ -98,7 +127,7 @@ task build
 | **다국어** | 영어, 한국어, 일본어 |
 | **테마** | 다크 / 라이트 / 시스템 자동 |
 
-[wireguard-go](https://git.zx2c4.com/wireguard-go) 2025년 5월 빌드 사용 (공식 앱 대비 57커밋 앞섬).
+[wireguard-go](https://git.zx2c4.com/wireguard-go) 2026년 5월 빌드 사용 (공식 macOS 앱의 엔진은 2023년 2월에서 멈춰 있음).
 
 ---
 

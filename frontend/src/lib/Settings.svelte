@@ -116,8 +116,13 @@
   async function doAboutUpdate() {
     aboutShowVpnWarn = false;
     aboutUpdating = true;
+    aboutCheckResult = '';
     try {
       if (onInstall) await onInstall();
+    } catch (e) {
+      // Inline, next to the button that failed — the toast alone renders
+      // under this modal.
+      aboutCheckResult = ($t('update.install_failed') || 'Update failed') + ': ' + (e?.message || e);
     } finally {
       aboutUpdating = false;
     }

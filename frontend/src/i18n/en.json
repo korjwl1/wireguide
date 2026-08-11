@@ -196,7 +196,10 @@
     "time_hours_ago": "{n}h ago",
     "time_days_ago": "{n}d ago",
     "dev_build_hint": "Automatic checks are disabled in development builds. Use the button above to check manually.",
-    "auto_off_hint": "Automatic checks are turned off in Settings. Use the button above to check manually."
+    "auto_off_hint": "Automatic checks are turned off in Settings. Use the button above to check manually.",
+    "install_failed": "Update failed",
+    "progress_refresh": "Checking the package repository…",
+    "progress_install": "Downloading and installing…"
   },
   "wifi_permission": {
     "title": "Location Services required",

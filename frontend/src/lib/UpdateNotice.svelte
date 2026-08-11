@@ -1,4 +1,6 @@
 <script>
+  import { onDestroy, onMount } from 'svelte';
+  import { Events } from '@wailsio/runtime';
   import { t } from '../i18n/index.js';
   import { connectionStatus } from '../stores/tunnels.js';
 
@@ -14,6 +16,21 @@
   let installing = false;
   let showConfirm = false;
   let showNotes = false;
+  // Live phase from the backend ("refresh" → brew update, "install" →
+  // brew upgrade). The tap refresh alone can take 75+ s; without this the
+  // button sat on a static label long enough to read as a hang.
+  let phase = '';
+  let errorMsg = '';
+  let unsubProgress = null;
+
+  onMount(() => {
+    unsubProgress = Events.On('update_progress', (e) => { phase = e?.data?.phase || ''; });
+  });
+  onDestroy(() => { if (unsubProgress) unsubProgress(); });
+
+  $: phaseLabel = phase === 'refresh' ? $t('update.progress_refresh')
+    : phase === 'install' ? $t('update.progress_install')
+    : '';
 
   $: visible = !!updateInfo?.available;
 
@@ -29,8 +46,18 @@
     if (installing) return;
     showConfirm = false;
     installing = true;
-    if (onInstall) await onInstall();
-    installing = false;
+    errorMsg = '';
+    try {
+      if (onInstall) await onInstall();
+      // Success without the cask postflight killing us should be
+      // impossible now (RunUpdate verifies the on-disk version), so
+      // reaching here means the process survives only briefly.
+    } catch (e) {
+      errorMsg = ($t('update.install_failed') || 'Update failed') + ': ' + (e?.message || e);
+    } finally {
+      installing = false;
+      phase = '';
+    }
   }
 
   function dismiss() {
@@ -56,6 +83,12 @@
       </div>
       {#if showNotes && updateInfo.release_notes}
         <div class="banner-notes">{updateInfo.release_notes}</div>
+      {/if}
+      {#if installing && phaseLabel}
+        <div class="banner-phase">{phaseLabel}</div>
+      {/if}
+      {#if errorMsg}
+        <div class="banner-error">{errorMsg}</div>
       {/if}
     </div>
 
@@ -118,6 +151,17 @@
     font: inherit;
     text-decoration: underline;
     cursor: pointer;
+  }
+  .banner-phase {
+    margin-top: 4px;
+    font: 400 11px/15px var(--font-sans);
+    color: var(--accent);
+  }
+  .banner-error {
+    margin-top: 4px;
+    font: 400 11px/15px var(--font-sans);
+    color: var(--error-text, #ff3b30);
+    white-space: pre-wrap;
   }
   .banner-notes {
     margin-top: 6px;

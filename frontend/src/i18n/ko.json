@@ -196,7 +196,10 @@
     "time_hours_ago": "{n}시간 전",
     "time_days_ago": "{n}일 전",
     "dev_build_hint": "개발 빌드에서는 자동 확인이 비활성화되어 있습니다. 위 버튼으로 수동 확인하세요.",
-    "auto_off_hint": "설정에서 자동 확인이 꺼져 있습니다. 위 버튼으로 수동 확인하세요."
+    "auto_off_hint": "설정에서 자동 확인이 꺼져 있습니다. 위 버튼으로 수동 확인하세요.",
+    "install_failed": "업데이트 실패",
+    "progress_refresh": "패키지 저장소 확인 중…",
+    "progress_install": "다운로드 및 설치 중…"
   },
   "wifi_permission": {
     "title": "위치 서비스 권한 필요",
