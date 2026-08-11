@@ -108,7 +108,7 @@ If something breaks, helper logs are plain text — not behind a paywall. Open a
 
 ## Install
 
-Tested on **macOS 15+ (Apple Silicon)**, **Windows 11 (amd64)**, and **Linux (Debian 13 / Raspberry Pi OS, amd64/arm64)**.
+Tested on **macOS 15+ (Apple Silicon)**, **Windows 11 (amd64)**, and **Linux (Debian 13 / Raspberry Pi OS, amd64/arm64)** — see [what's actually been exercised](#tested-coverage) below.
 
 ### macOS (Homebrew) — recommended
 
@@ -154,6 +154,23 @@ go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-alpha.74
 task build
 ./bin/wireguide
 ```
+
+### Tested coverage
+
+Manual QA runs on real hardware, but the hardware doesn't cover every
+combination. What has actually been exercised:
+
+| Platform | Tested on | Ethernet | Wi-Fi |
+|----------|-----------|:--------:|:-----:|
+| macOS | macOS 26.4 (Tahoe), Apple Silicon | ✅ | ✅ |
+| Windows | Windows 11 (amd64), desktop PC | ✅ | ⚠️ not properly tested |
+| Linux | Raspberry Pi OS Lite (arm64) | ⚠️ not tested | ✅ |
+
+The untested cells matter most for Wi-Fi-dependent features — SSID-based
+Automation rules and Wi-Fi↔Ethernet handover on Windows, and wired
+gateway/subnet detection on Linux. **If you hit an error in one of those
+gaps, please [open an issue](https://github.com/korjwl1/wireguide/issues/new/choose)**
+— reports from hardware we don't have are the only way those cells get fixed.
 
 ---
 

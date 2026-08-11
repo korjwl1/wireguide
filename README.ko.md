@@ -37,7 +37,7 @@
 
 ## 설치
 
-**macOS 15+ (Apple Silicon)**, **Windows 11 (amd64)**, **Linux (Debian 13 / Raspberry Pi OS, amd64/arm64)** 에서 테스트 완료.
+**macOS 15+ (Apple Silicon)**, **Windows 11 (amd64)**, **Linux (Debian 13 / Raspberry Pi OS, amd64/arm64)** 에서 테스트 완료 — 실제 검증 범위는 아래 [테스트 커버리지](#테스트-커버리지) 참조.
 
 ### macOS (Homebrew) — 권장
 
@@ -83,6 +83,23 @@ go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-alpha.74
 task build
 ./bin/wireguide
 ```
+
+### 테스트 커버리지
+
+수동 QA는 실물 하드웨어에서 진행하지만, 모든 조합을 커버하지는 못합니다.
+실제로 검증된 범위:
+
+| 플랫폼 | 테스트 환경 | 유선랜 | Wi-Fi |
+|--------|------------|:------:|:-----:|
+| macOS | macOS 26.4 (Tahoe), Apple Silicon | ✅ | ✅ |
+| Windows | Windows 11 (amd64), 데스크탑 | ✅ | ⚠️ 제대로 테스트되지 못함 |
+| Linux | Raspberry Pi OS Lite (arm64) | ⚠️ 미테스트 | ✅ |
+
+미검증 칸은 Wi-Fi 의존 기능에서 특히 중요합니다 — Windows의 SSID 기반
+자동화 규칙과 Wi-Fi↔유선 전환, Linux의 유선 게이트웨이/서브넷 감지가
+해당됩니다. **이 빈 곳에서 오류를 만나면 꼭
+[이슈로 알려주세요](https://github.com/korjwl1/wireguide/issues/new/choose)** —
+저희에게 없는 하드웨어의 문제는 제보가 있어야만 고칠 수 있습니다.
 
 ---
 
