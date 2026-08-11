@@ -1,5 +1,11 @@
 # WireGuard Desktop Client — 프로젝트 계획
 
+> **[역사 문서]** 구현 착수 전(2026년 초)에 작성된 최초 기획서로, 당시 검토 내용을
+> 보존하기 위해 그대로 둔다. 현재 구현과 다른 부분이 많다 — 실제 아키텍처와 동작은
+> [DESIGN.md](DESIGN.md)와 [README](../README.md)를 볼 것. (예: 프로젝트 이름은
+> WireGuide로 확정, 프론트엔드는 Svelte, IPC는 JSON-RPC, Pre/PostUp 스크립트 실행은
+> 보안상 제거, 키 생성·CIDR 계산기·속도 테스트·미니 모드는 구현 후 정리됨.)
+
 ## 배경
 
 - WireGuard 공식 macOS 앱이 2022년 이후 방치 상태

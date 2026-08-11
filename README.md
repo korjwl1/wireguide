@@ -12,7 +12,7 @@
   <a href="https://github.com/korjwl1/wireguide/releases/latest"><img src="https://img.shields.io/github/v/release/korjwl1/wireguide?style=flat-square" alt="Release" /></a>
   <a href="https://github.com/korjwl1/wireguide/stargazers"><img src="https://img.shields.io/github/stars/korjwl1/wireguide?style=flat-square" alt="Stars" /></a>
   <a href="#install"><img src="https://img.shields.io/badge/homebrew-tap-blue?style=flat-square" alt="Homebrew" /></a>
-  <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows-lightgrey?style=flat-square" alt="Platform" />
+  <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey?style=flat-square" alt="Platform" />
   <a href="LICENSE"><img src="https://img.shields.io/github/license/korjwl1/wireguide?style=flat-square" alt="License" /></a>
 </p>
 
@@ -99,8 +99,8 @@ WireGuide ships fewer knobs than most desktop VPN clients on purpose. The trade 
 
 - **Privilege separation.** A single binary runs in two modes. The GUI runs unprivileged. A small helper runs as root / Administrator. They talk over a local Unix socket (macOS/Linux) or named pipe (Windows). Nothing is exposed over HTTP or the network.
 - **OS-native firewall.** The kill switch uses `pf` (macOS), WFP (Windows), or `nftables` (Linux) — not a userspace packet filter that fails open.
-- **Up-to-date crypto.** Built on [wireguard-go](https://git.zx2c4.com/wireguard-go) (May 2025) — 57 commits ahead of the engine inside the official macOS app, which hasn't been updated since Feb 2023.
-- **Manual QA per release.** Every tagged release is exercised on macOS (Apple Silicon) and Windows 11 (amd64) before it goes out.
+- **Up-to-date crypto.** Built on a May 2026 build of [wireguard-go](https://git.zx2c4.com/wireguard-go) — years ahead of the engine inside the official macOS app, which hasn't been updated since Feb 2023.
+- **Manual QA per release.** Every tagged release is exercised on macOS (Apple Silicon), Windows 11 (amd64), and Linux (Debian 13 / Raspberry Pi OS ARM64) before it goes out, on top of a 3-OS `go test` matrix that gates every PR.
 
 If something breaks, helper logs are plain text — not behind a paywall. Open an issue and attach them.
 
@@ -108,7 +108,7 @@ If something breaks, helper logs are plain text — not behind a paywall. Open a
 
 ## Install
 
-Tested on **macOS 15+ (Apple Silicon)** and **Windows 11 (amd64)**.
+Tested on **macOS 15+ (Apple Silicon)**, **Windows 11 (amd64)**, and **Linux (Debian 13 / Raspberry Pi OS, amd64/arm64)**.
 
 ### macOS (Homebrew) — recommended
 
@@ -132,6 +132,18 @@ installer registers the helper service and shortcut.
 > Windows SmartScreen may warn that the publisher is unknown — the binary is
 > currently unsigned. Click "More info" → "Run anyway".
 
+### Linux (DEB)
+
+Download the `WireGuide-linux-amd64.deb` (or `-arm64.deb`) package from
+[Releases](https://github.com/korjwl1/wireguide/releases) and install it:
+
+```bash
+sudo apt install ./WireGuide-linux-amd64.deb
+```
+
+The package registers the app menu entry and tray integration; the privileged
+helper is started on demand through PolicyKit (no always-on service).
+
 ### Build from Source
 
 ```bash
@@ -153,8 +165,11 @@ helper over the local socket — so unlike `wg-quick` it needs no per-command
 `sudo`, works the same on macOS/Windows/Linux, and shares the GUI's tunnel store.
 
 ```
-wireguide ctl status                    # connection status
-wireguide ctl list                      # list tunnels (● = connected)
+wireguide ctl start                     # launch WireGuide (app + helper) and wait
+wireguide ctl stop                      # quit WireGuide (app + helper)
+
+wireguide ctl status [--json]           # connection status
+wireguide ctl list [--json]             # list tunnels (● = connected)
 wireguide ctl connect <name>            # connect a tunnel
 wireguide ctl disconnect [name]         # disconnect one (or all)
 wireguide ctl import <file> [name]      # import a .conf
@@ -177,13 +192,18 @@ wireguide ctl set loglevel <debug|info|warn|error>
 wireguide ctl dnsleak                        # check whether DNS leaks outside the tunnel
 wireguide ctl routes                         # OS routing table
 
+# Teach coding agents (Claude Code, Codex, ...) how to drive the CLI:
+wireguide ctl install-skills
+
 # e.g. turn the work VPN off on the office network, on everywhere else:
 wireguide ctl automation add work disconnect mac:b0:38:6c:54:8b:ab
 wireguide ctl automation add work connect else
 ```
 
-Connect/disconnect/status need the app (or its helper) running; list, import,
-rename, delete and automation edits work directly against the local files.
+Connect/disconnect/status need the app (or its helper) running — start it with
+`wireguide ctl start` (or by opening the app); nothing else starts a VPN stack
+behind your back. list, import, rename, delete and automation edits work
+directly against the local files.
 
 ---
 
@@ -234,6 +254,20 @@ graph LR
 See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup and guidelines.
 
 Found a bug? [Open an issue](https://github.com/korjwl1/wireguide/issues/new/choose).
+
+---
+
+## Code signing
+
+Once the SignPath Foundation OSS approval completes, Windows installers will be
+code-signed via SignPath. The signing policy is documented in
+[SIGNING-POLICY.md](SIGNING-POLICY.md).
+
+> Free code signing provided by [SignPath.io](https://signpath.io),
+> certificate by [SignPath Foundation](https://signpath.org).
+
+Until then, releases ship unsigned and SmartScreen shows the "unknown
+publisher" warning on first run.
 
 ---
 
