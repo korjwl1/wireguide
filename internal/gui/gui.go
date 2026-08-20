@@ -111,7 +111,7 @@ func Run(assetsHandler http.Handler, dataDir string) error {
 			// On retry, ensureHelper first probes for an already-running
 			// helper, so a UAC prompt the user answered while this dialog
 			// was up connects instantly instead of re-prompting.
-			if !askHelperRetry() {
+			if !askHelperRetry(err.Error()) {
 				return fmt.Errorf("helper setup cancelled by user")
 			}
 			continue

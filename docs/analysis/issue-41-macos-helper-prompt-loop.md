@@ -210,6 +210,35 @@ Ordered short-term → long-term:
    an opt-in "harden lifetime" setting. Issue #41's title is as much about
    the prompt frequency as about the failure.
 
+## Implemented on this branch
+
+Recommendations 1-3 are implemented in this branch (recommendation 4,
+Developer ID signing, is a project/funding decision; 5 is a product decision —
+both left open):
+
+- **Purge-then-install** (`internal/elevate/spawn_darwin.go`): the install
+  script now runs `bootout` → wait (5 s) → `rm -f` binary+plist → fresh copy →
+  `bootstrap` → `kickstart -k`. Replicates the reporter's working manual fix;
+  resets the BTM record instead of invalidating it. Bootout moved ahead of the
+  copy so a running helper's binary is never overwritten in place.
+- **Kickstart-only fast path**: when the installed binary (SHA-256) and plist
+  are byte-identical to the current build, the admin script is just
+  `launchctl kickstart -k …`, escalating to the full purge+install inside the
+  same admin session on failure. No BTM re-registration churn on routine cold
+  launches.
+- **Error surfacing**: the osascript install's combined output (which carries
+  launchctl's error text) now rides along in the returned error; the
+  "socket not live" failure names the helper log and the Login Items &
+  Extensions pane; `askHelperRetry` on macOS and Windows shows the error
+  detail in the retry dialog instead of looping blind.
+- Tests: `TestInstallScriptPurgesBeforeCopy` pins bootout < purge < copy
+  ordering; `TestKickstartOnlyPathEscalates` pins the same-session
+  escalation; existing kickstart/RunAtLoad pins still hold.
+
+Not verified on real macOS hardware (authored on Windows; `internal/elevate`
+cross-compiles and vets clean for darwin). Needs a Tahoe machine — ideally the
+reporter's — to confirm before release.
+
 ## Sources
 
 - https://mgaebler.me/en/blog/nix-macos-tahoe-btm-blocks-launchdaemons/

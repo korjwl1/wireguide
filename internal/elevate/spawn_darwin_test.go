@@ -83,3 +83,46 @@ func TestInstallScriptKickstarts(t *testing.T) {
 			"the helper process would never start")
 	}
 }
+
+// TestInstallScriptPurgesBeforeCopy pins the issue #41 fix ordering: the old
+// daemon must be booted out and its binary+plist REMOVED before the fresh
+// copy lands. Overwriting the ad-hoc-signed binary in place leaves a
+// Background Task Management record keyed to the old binary's identity, and
+// launchd then refuses to start the daemon — the admin-prompt loop from
+// issue #41. bootout must also precede the copy so we never rewrite the
+// binary of a still-running process.
+func TestInstallScriptPurgesBeforeCopy(t *testing.T) {
+	src, err := os.ReadFile("spawn_darwin.go")
+	if err != nil {
+		t.Fatalf("read source: %v", err)
+	}
+	s := string(src)
+
+	bootout := strings.Index(s, "launchctl bootout system/%s")
+	purge := strings.Index(s, "rm -f %s %s")
+	cp := strings.Index(s, "cp -f %s %s")
+	switch {
+	case purge == -1:
+		t.Fatal("install script no longer purges the old binary+plist; " +
+			"in-place overwrite re-breaks the BTM record (issue #41)")
+	case bootout == -1 || cp == -1:
+		t.Fatal("install script lost its bootout or copy step")
+	case !(bootout < purge && purge < cp):
+		t.Errorf("install script order must be bootout < purge < copy, got indexes %d/%d/%d",
+			bootout, purge, cp)
+	}
+}
+
+// TestKickstartOnlyPathEscalates guards the single-prompt guarantee: the
+// kickstart-only fast path must fall back to the full install inside the
+// same admin session (`|| { … }`), never strand the user with a failed
+// kickstart that a second password prompt would be needed to repair.
+func TestKickstartOnlyPathEscalates(t *testing.T) {
+	src, err := os.ReadFile("spawn_darwin.go")
+	if err != nil {
+		t.Fatalf("read source: %v", err)
+	}
+	if !strings.Contains(string(src), `launchctl kickstart -k system/%s 2>/dev/null || { %s; }`) {
+		t.Error("kickstart-only path no longer escalates to the full install in the same admin session")
+	}
+}

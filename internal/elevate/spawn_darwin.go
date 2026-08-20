@@ -3,8 +3,11 @@
 package elevate
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"os"
@@ -42,9 +45,21 @@ const (
 //
 // Flow:
 //  1. Socket already live → helper running, return immediately.
-//  2. Daemon not installed → install binary + plist + bootstrap (one-time sudo).
-//  3. Daemon installed but not running → bootout + bootstrap to restart.
-//  4. Dev fallback: if all else fails, osascript spawns helper directly.
+//  2. Installed daemon identical to this build (binary hash + plist) →
+//     kickstart-only admin script. No binary churn: rewriting an unchanged
+//     daemon re-registers it with Background Task Management on every
+//     launch, which on macOS 26 (Tahoe) spams "Background Items Added"
+//     notifications and risks tripping BTM's disallow state (issue #41).
+//     If the kickstart fails (job not bootstrapped, BTM blocked), the same
+//     script escalates to the full purge+install without a second prompt.
+//  3. Anything else (not installed, version change, plist drift) → purge
+//     the old binary+plist FIRST, then install fresh + bootstrap +
+//     kickstart. The purge is deliberate: replacing an ad-hoc-signed
+//     binary in place invalidates the BTM record keyed to the old
+//     binary's identity and launchd then refuses to start the daemon —
+//     the root cause of the issue #41 prompt loop. Removing the files
+//     resets the record so the fresh install registers cleanly (this is
+//     exactly the manual fix that worked for the reporter).
 func SpawnHelper(ctx context.Context, args Args) error {
 	if err := ValidateArgs(args); err != nil {
 		return fmt.Errorf("invalid spawn args: %w", err)
@@ -173,14 +188,29 @@ func installAndLoadDaemon(ctx context.Context, args Args) error {
 		return fmt.Errorf("plist validation failed: %s", strings.TrimSpace(string(out)))
 	}
 
-	// Single shell script that does everything as root:
-	// 1. Create target directory
-	// 2. Copy binary
-	// 3. Copy plist (from our validated temp file)
-	// 4. Set ownership/permissions
-	// 5. Bootout old daemon (ignore errors — may not exist)
-	// 6. Bootstrap new daemon
-	// 7. Kickstart it — REQUIRED, because the plist sets RunAtLoad=false.
+	// Full install script, run as root:
+	// 1. Bootout old daemon (ignore errors — may not exist), then wait for
+	//    launchd's asynchronous teardown to finish. Bootout comes FIRST —
+	//    before any file changes — because overwriting the binary of a
+	//    still-running signed process makes the kernel kill it (code
+	//    signature invalidation) and races launchd's KeepAlive logic.
+	//    If `launchctl bootstrap` ran while the old service was still
+	//    being torn down, it would fail with "service already loaded" and
+	//    the whole script exits non-zero — which surfaces as the macOS
+	//    "An error occurred. Try again?" osascript dialog the user used to
+	//    hit on every install. The polling loop waits up to 5 seconds
+	//    (old-helper cleanup can take seconds per active tunnel) for
+	//    `launchctl print` to stop finding the service.
+	// 2. PURGE the old binary + plist instead of overwriting in place.
+	//    Background Task Management keys its record to the ad-hoc-signed
+	//    binary's identity (cdhash); an in-place overwrite leaves a record
+	//    that no longer matches and launchd then refuses to start the
+	//    daemon (issue #41). Removing the files resets the record; the
+	//    fresh copy below registers as a new, cleanly-approved item.
+	// 3. Create target directory, copy binary, copy plist (from our
+	//    validated temp file), set ownership/permissions.
+	// 4. Bootstrap new daemon.
+	// 5. Kickstart it — REQUIRED, because the plist sets RunAtLoad=false.
 	//    bootstrap alone only registers the job with launchd; without the
 	//    kickstart the process never starts and the socket-readiness poll
 	//    below would time out with "daemon installed but socket not live".
@@ -192,17 +222,11 @@ func installAndLoadDaemon(ctx context.Context, args Args) error {
 	// running as root LaunchDaemons. Trailing `;` (not `&&`): on dev
 	// builds without quarantine the command is a no-op + nonzero exit,
 	// which we don't want to abort the install.
-	//
-	// `launchctl bootout` returns immediately, but the actual teardown
-	// is asynchronous. If `launchctl bootstrap` runs while the old
-	// service is still being torn down, it fails with "service already
-	// loaded" and the whole script exits non-zero — which surfaces as
-	// the macOS "An error occurred. Try again?" osascript dialog the
-	// user has been hitting on every install. The polling loop after
-	// bootout waits up to 2 seconds for `launchctl print` to stop
-	// finding the service, then bootstrap races no longer occur.
-	shellScript := fmt.Sprintf(
-		`mkdir -p /Library/PrivilegedHelperTools && `+
+	fullInstall := fmt.Sprintf(
+		`launchctl bootout system/%s 2>/dev/null; `+
+			`i=0; while [ $i -lt 50 ] && launchctl print system/%s >/dev/null 2>&1; do sleep 0.1; i=$((i+1)); done; `+
+			`rm -f %s %s && `+
+			`mkdir -p /Library/PrivilegedHelperTools && `+
 			`cp -f %s %s && `+
 			`xattr -d com.apple.quarantine %s 2>/dev/null; `+
 			`chown root:wheel %s && `+
@@ -210,10 +234,11 @@ func installAndLoadDaemon(ctx context.Context, args Args) error {
 			`cp -f %s %s && `+
 			`chown root:wheel %s && `+
 			`chmod 644 %s && `+
-			`launchctl bootout system/%s 2>/dev/null; `+
-			`i=0; while [ $i -lt 20 ] && launchctl print system/%s >/dev/null 2>&1; do sleep 0.1; i=$((i+1)); done; `+
 			`launchctl bootstrap system %s && `+
 			`launchctl kickstart -k system/%s`,
+		daemonLabel,
+		daemonLabel,
+		shellQuote(daemonBinary), shellQuote(daemonPlist),
 		shellQuote(exe), shellQuote(daemonBinary),
 		shellQuote(daemonBinary),
 		shellQuote(daemonBinary),
@@ -221,11 +246,23 @@ func installAndLoadDaemon(ctx context.Context, args Args) error {
 		shellQuote(tmpPlist), shellQuote(daemonPlist),
 		shellQuote(daemonPlist),
 		shellQuote(daemonPlist),
-		daemonLabel,
-		daemonLabel,
 		shellQuote(daemonPlist),
 		daemonLabel,
 	)
+
+	// When the installed daemon is byte-identical to what we would install
+	// (binary hash + plist content), skip the reinstall entirely and just
+	// kickstart the already-registered job — the common "cold app launch,
+	// helper self-exited earlier" path. This keeps the BTM record stable
+	// across launches. `|| { fullInstall; }` escalates in the SAME admin
+	// session if the kickstart fails (job not bootstrapped after a manual
+	// bootout, BTM disallowed, …), so the user never pays a second prompt.
+	shellScript := fullInstall
+	if daemonUpToDate(exe, plist) {
+		slog.Info("installed helper matches this build — kickstart-only path")
+		shellScript = fmt.Sprintf(`launchctl kickstart -k system/%s 2>/dev/null || { %s; }`,
+			daemonLabel, fullInstall)
+	}
 
 	escaped := strings.ReplaceAll(shellScript, `\`, `\\`)
 	escaped = strings.ReplaceAll(escaped, `"`, `\"`)
@@ -236,8 +273,13 @@ func installAndLoadDaemon(ctx context.Context, args Args) error {
 
 	slog.Info("installing LaunchDaemon (one-time admin prompt)")
 	// Detach osascript from ctx — see SpawnHelper doc for why.
-	if err := exec.Command("osascript", "-e", osascriptCmd).Run(); err != nil {
-		return fmt.Errorf("osascript install: %w", err)
+	// CombinedOutput, not Run: `do shell script` reports the failing
+	// command's stderr (launchctl error codes included) in osascript's
+	// own stderr, and swallowing it is why issue #41 looped with zero
+	// diagnostic surface. The tail of the output rides along in the
+	// returned error and ends up in the GUI's retry dialog.
+	if out, err := exec.Command("osascript", "-e", osascriptCmd).CombinedOutput(); err != nil {
+		return fmt.Errorf("osascript install: %w — %s", err, tailOf(out, 500))
 	}
 
 	// Wait for daemon socket to come up. Honour ctx so a shutdown
@@ -253,7 +295,55 @@ func installAndLoadDaemon(ctx context.Context, args Args) error {
 			return nil
 		}
 	}
-	return fmt.Errorf("daemon installed but socket not live after 6s")
+	return fmt.Errorf("daemon installed but socket not live after 6s — " +
+		"the helper did not start; check /var/log/wireguide-helper.log, and " +
+		"System Settings > General > Login Items & Extensions for a disabled " +
+		"WireGuide (or \"Unknown Developer\") background item blocking launchd")
+}
+
+// daemonUpToDate reports whether the installed daemon is byte-identical to
+// what this build would install: same binary content (SHA-256) and same
+// plist content. Used to route SpawnHelper onto the kickstart-only path.
+// Any read error (not installed yet, permissions) → false → full install.
+func daemonUpToDate(exe, wantPlist string) bool {
+	onDisk, err := os.ReadFile(daemonPlist)
+	if err != nil || !bytes.Equal(onDisk, []byte(wantPlist)) {
+		return false
+	}
+	selfSum, err := fileSHA256(exe)
+	if err != nil {
+		return false
+	}
+	installedSum, err := fileSHA256(daemonBinary)
+	if err != nil {
+		return false
+	}
+	return bytes.Equal(selfSum, installedSum)
+}
+
+// fileSHA256 returns the SHA-256 digest of the file at path.
+func fileSHA256(path string) ([]byte, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return nil, err
+	}
+	return h.Sum(nil), nil
+}
+
+// tailOf returns the last n bytes of out as a trimmed string — launchctl /
+// osascript put the interesting error last, and the retry dialog has
+// limited room.
+func tailOf(out []byte, n int) string {
+	s := strings.TrimSpace(string(out))
+	if len(s) > n {
+		s = "…" + s[len(s)-n:]
+	}
+	return s
 }
 
 // isSocketLive checks whether the helper socket accepts a connection.
