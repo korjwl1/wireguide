@@ -3,11 +3,13 @@
 package elevate
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // testArgs returns a representative Args for plist generation.
@@ -63,66 +65,122 @@ func TestPlistDoesNotRunAtLoad(t *testing.T) {
 	}
 }
 
-// TestInstallScriptKickstarts pairs with RunAtLoad=false: `launchctl
-// bootstrap` only registers the job, so without an explicit kickstart the
-// helper never starts and installAndLoadDaemon's readiness poll times out
-// with "daemon installed but socket not live after 6s".
-func TestInstallScriptKickstarts(t *testing.T) {
-	// Mirror the command construction in installAndLoadDaemon closely
-	// enough to catch a bootstrap that lost its kickstart.
-	src, err := os.ReadFile("spawn_darwin.go")
-	if err != nil {
-		t.Fatalf("read source: %v", err)
+// TestLaunchdDemandLifecycle executes our generated plist through real launchd
+// in a temporary per-user job. Its harmless fixture fails once, then exits 0.
+// No root helper or VPN state is touched.
+func TestLaunchdDemandLifecycle(t *testing.T) {
+	if os.Getenv("WIREGUIDE_TEST_LAUNCHD") != "1" {
+		t.Skip("set WIREGUIDE_TEST_LAUNCHD=1 in a logged-in macOS session")
 	}
-	s := string(src)
-	if !strings.Contains(s, "launchctl bootstrap system %s") {
-		t.Fatal("install script no longer bootstraps the daemon")
+	dir := t.TempDir()
+	marker := filepath.Join(dir, "runs")
+	fixture := filepath.Join(dir, "helper")
+	script := "#!/bin/sh\nif [ ! -f " + shellQuote(marker) + " ]; then echo first > " + shellQuote(marker) + "; exit 1; fi\necho restarted >> " + shellQuote(marker) + "\n"
+	if err := os.WriteFile(fixture, []byte(script), 0700); err != nil {
+		t.Fatal(err)
 	}
-	if !strings.Contains(s, "launchctl kickstart -k system/%s") {
-		t.Error("install script bootstraps but never kickstarts; with RunAtLoad=false " +
-			"the helper process would never start")
+	label := fmt.Sprintf("com.wireguide.issue41.test-%d", os.Getpid())
+	plist := generatePlistContent(fixture, testArgs())
+	plist = strings.ReplaceAll(plist, daemonBinary, fixture)
+	plist = strings.ReplaceAll(plist, daemonLabel, label)
+	plist = strings.ReplaceAll(plist, "/var/log/wireguide-helper.log", filepath.Join(dir, "helper.log"))
+	path := filepath.Join(dir, "helper.plist")
+	if err := os.WriteFile(path, []byte(plist), 0600); err != nil {
+		t.Fatal(err)
+	}
+	domain := fmt.Sprintf("gui/%d", os.Getuid())
+	target := domain + "/" + label
+	if out, err := exec.Command("launchctl", "bootstrap", domain, path).CombinedOutput(); err != nil {
+		t.Fatalf("bootstrap: %v: %s", err, out)
+	}
+	t.Cleanup(func() {
+		if out, err := exec.Command("launchctl", "bootout", target).CombinedOutput(); err != nil {
+			t.Errorf("probe cleanup: %v: %s", err, out)
+		}
+	})
+	time.Sleep(time.Second)
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatalf("helper ran before explicit demand (stat error: %v)", err)
+	}
+	if out, err := exec.Command("launchctl", "kickstart", target).CombinedOutput(); err != nil {
+		t.Fatalf("kickstart: %v: %s", err, out)
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		out, _ := os.ReadFile(marker)
+		if string(out) == "first\nrestarted\n" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("launchd did not restart failed helper: %q", out)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	// Give launchd longer than ThrottleInterval to prove a clean exit stays down.
+	time.Sleep(6 * time.Second)
+	out, err := os.ReadFile(marker)
+	if err != nil || string(out) != "first\nrestarted\n" {
+		t.Fatalf("helper restarted after successful exit: %q, %v", out, err)
 	}
 }
 
-// TestInstallScriptPurgesBeforeCopy pins the issue #41 fix ordering: the old
-// daemon must be booted out and its binary+plist REMOVED before the fresh
-// copy lands. Overwriting the ad-hoc-signed binary in place leaves a
-// Background Task Management record keyed to the old binary's identity, and
-// launchd then refuses to start the daemon — the admin-prompt loop from
-// issue #41. bootout must also precede the copy so we never rewrite the
-// binary of a still-running process.
-func TestInstallScriptPurgesBeforeCopy(t *testing.T) {
-	src, err := os.ReadFile("spawn_darwin.go")
-	if err != nil {
-		t.Fatalf("read source: %v", err)
-	}
-	s := string(src)
-
-	bootout := strings.Index(s, "launchctl bootout system/%s")
-	purge := strings.Index(s, "rm -f %s %s")
-	cp := strings.Index(s, "cp -f %s %s")
-	switch {
-	case purge == -1:
-		t.Fatal("install script no longer purges the old binary+plist; " +
-			"in-place overwrite re-breaks the BTM record (issue #41)")
-	case bootout == -1 || cp == -1:
-		t.Fatal("install script lost its bootout or copy step")
-	case !(bootout < purge && purge < cp):
-		t.Errorf("install script order must be bootout < purge < copy, got indexes %d/%d/%d",
-			bootout, purge, cp)
-	}
+// Run the actual generated shell in a process where every privileged command
+// is a shell function. No launchd jobs or system files are changed.
+func TestDaemonInstallScript(t *testing.T) {
+	for _, tt := range []struct {
+		name      string
+		upToDate  bool
+		fail      string
+		loaded    bool
+		wantError bool
+		want      string
+	}{
+		{"fresh install", false, "", false, false, "bootout\nprint\nrm\nmkdir\ncp\nxattr\nchown\nchmod\ncp\nchown\nchmod\nbootstrap\nkickstart\n"},
+		{"already installed", true, "", false, false, "kickstart\n"},
+		{"kickstart failure returned for bounded repair", true, "first-kickstart", false, true, "kickstart\n"},
+		{"copy failure", false, "cp", false, true, "bootout\nprint\nrm\nmkdir\ncp\n"},
+		{"purge failure", false, "rm", false, true, "bootout\nprint\nrm\n"},
+		{"quarantine absent", false, "xattr", false, false, "bootout\nprint\nrm\nmkdir\ncp\nxattr\nchown\nchmod\ncp\nchown\nchmod\nbootstrap\nkickstart\n"},
+		{"bootstrap failure", false, "bootstrap", false, true, "bootout\nprint\nrm\nmkdir\ncp\nxattr\nchown\nchmod\ncp\nchown\nchmod\nbootstrap\n"},
+		{"teardown timeout", false, "", true, true, ""},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			trace := filepath.Join(t.TempDir(), "trace")
+			stubs := `
+record() { printf '%s\n' "$1" >> "$TRACE"; [ "$FAIL" != "$1" ]; }
+launchctl() {
+    record "$1" || return 42
+    case "$1" in
+        print) [ "$LOADED" = true ]; return $? ;;
+        kickstart)
+            if [ "$FAIL" = first-kickstart ]; then FAIL=''; return 42; fi ;;
+    esac
 }
-
-// TestKickstartOnlyPathEscalates guards the single-prompt guarantee: the
-// kickstart-only fast path must fall back to the full install inside the
-// same admin session (`|| { … }`), never strand the user with a failed
-// kickstart that a second password prompt would be needed to repair.
-func TestKickstartOnlyPathEscalates(t *testing.T) {
-	src, err := os.ReadFile("spawn_darwin.go")
-	if err != nil {
-		t.Fatalf("read source: %v", err)
-	}
-	if !strings.Contains(string(src), `launchctl kickstart -k system/%s 2>/dev/null || { %s; }`) {
-		t.Error("kickstart-only path no longer escalates to the full install in the same admin session")
+rm() { record rm; }
+mkdir() { record mkdir; }
+cp() { record cp; }
+xattr() { record xattr; }
+chown() { record chown; }
+chmod() { record chmod; }
+sleep() { :; }
+`
+			cmd := exec.Command("/bin/sh", "-c", stubs+daemonInstallScript("/tmp/app's binary", "/tmp/helper.plist", tt.upToDate))
+			cmd.Env = append(os.Environ(), "TRACE="+trace, "FAIL="+tt.fail, fmt.Sprintf("LOADED=%t", tt.loaded))
+			out, err := cmd.CombinedOutput()
+			if (err != nil) != tt.wantError {
+				t.Errorf("error = %v, wantError = %t; output: %s", err, tt.wantError, out)
+			}
+			got, err := os.ReadFile(trace)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tt.loaded {
+				if strings.Contains(string(got), "rm\n") || strings.Contains(string(got), "cp\n") {
+					t.Errorf("changed files while old job was still loaded: %s", got)
+				}
+			} else if string(got) != tt.want {
+				t.Errorf("command trace = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }

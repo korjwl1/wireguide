@@ -7,7 +7,7 @@ WireGuide is a **two-process** WireGuard VPN client:
 - **GUI process** (unprivileged) — Wails v3 + Svelte webview, system tray, config editor
 - **Helper process** (root) — wireguard-go TUN, routing, DNS, firewall, reconnect
 
-They communicate over **JSON-RPC 2.0** on a Unix domain socket (`/var/run/wireguide/wireguide.sock`). The helper is installed as a macOS LaunchDaemon with `RunAtLoad=false` and `KeepAlive={SuccessfulExit:false}`: launchd never starts it at boot (a running GUI is what signals the user wants WireGuide active) and only restarts it after a crash. The helper's lifetime is tied to the GUI — a 60 s startup grace covers a helper whose GUI never attaches, and it exits shortly after the last GUI connection drops if no tunnels remain (CLI control connections are transient and don't extend its life).
+They communicate over **JSON-RPC 2.0** on a Unix domain socket (`/var/run/wireguide/wireguide.sock`). The helper is installed as a macOS LaunchDaemon with `RunAtLoad=false` and `KeepAlive={AfterInitialDemand:true, SuccessfulExit:false}`: launchd never starts it at boot (a running GUI is what signals the user wants WireGuide active) and only restarts it after a crash. The helper's lifetime is tied to the GUI — a 60 s startup grace covers a helper whose GUI never attaches, and it exits shortly after the last GUI connection drops if no tunnels remain (CLI control connections are transient and don't extend its life).
 
 ```
 ┌──────────────────────────────┐     ┌──────────────────────────────┐

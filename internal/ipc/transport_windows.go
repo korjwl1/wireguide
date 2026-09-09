@@ -3,6 +3,7 @@
 package ipc
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"time"
@@ -55,8 +56,14 @@ func buildPipeSDDL(ownerSID string) string {
 // Dial connects to a named pipe and verifies the server is owned by a trusted
 // principal (Local System or Built-in Administrators).
 func Dial(addr string) (net.Conn, error) {
-	timeout := 5 * time.Second
-	conn, err := winio.DialPipe(addr, &timeout)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return DialContext(ctx, addr)
+}
+
+// DialContext preserves pipe owner verification while bounding connection time.
+func DialContext(ctx context.Context, addr string) (net.Conn, error) {
+	conn, err := winio.DialPipeContext(ctx, addr)
 	if err != nil {
 		return nil, err
 	}

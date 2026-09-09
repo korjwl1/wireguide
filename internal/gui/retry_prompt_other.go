@@ -7,6 +7,6 @@ package gui
 // desktop), and retrying re-triggers the pkexec prompt, which is itself
 // the user-visible surface. The 3-attempt cap in gui.Run bounds this.
 // The error detail is already in the logs; there is no dialog to show it in.
-func askHelperRetry(string) bool {
+func askHelperRetry(error) bool {
 	return true
 }

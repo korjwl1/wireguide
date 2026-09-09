@@ -97,7 +97,8 @@ func Run(assetsHandler http.Handler, dataDir string) error {
 	// user-visible dialog explaining why the helper is required.
 	var initialClient *ipc.Client
 	for attempt := 0; attempt < 3; attempt++ {
-		helperCtx, helperCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		// ensureHelper starts its readiness timeout after authorization.
+		helperCtx, helperCancel := context.WithCancel(context.Background())
 		var err error
 		initialClient, err = ensureHelper(helperCtx, dataDir)
 		helperCancel()
@@ -111,7 +112,7 @@ func Run(assetsHandler http.Handler, dataDir string) error {
 			// On retry, ensureHelper first probes for an already-running
 			// helper, so a UAC prompt the user answered while this dialog
 			// was up connects instantly instead of re-prompting.
-			if !askHelperRetry(err.Error()) {
+			if !askHelperRetry(err) {
 				return fmt.Errorf("helper setup cancelled by user")
 			}
 			continue

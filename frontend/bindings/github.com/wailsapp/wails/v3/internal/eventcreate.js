@@ -28,6 +28,7 @@ function configure() {
         "settings_changed": $$createType4,
         "status": $$createType5,
         "update-available": $$createType6,
+        "update_progress": $$createType0,
     }));
 }
 

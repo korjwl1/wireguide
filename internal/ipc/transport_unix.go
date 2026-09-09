@@ -3,6 +3,7 @@
 package ipc
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -75,7 +76,7 @@ func Listen(addr string, ownerUID int, ownerSID string) (net.Listener, error) {
 		// reasons but never returns negative on Unix; gosec's G115 flag
 		// on these conversions is a false positive. We still guard
 		// ownerUID >= 0 because callers pass -1 to mean "no chown".
-		dirUID := uint32(st.Uid) //nolint:gosec // G115: kernel-supplied UID, always non-negative
+		dirUID := uint32(st.Uid)     //nolint:gosec // G115: kernel-supplied UID, always non-negative
 		euid := uint32(os.Geteuid()) //nolint:gosec // G115: os.Geteuid never negative on Unix
 		trusted := dirUID == euid
 		if !trusted && ownerUID >= 0 && dirUID == uint32(ownerUID) { //nolint:gosec // G115: ownerUID >= 0 checked
@@ -117,5 +118,10 @@ func Listen(addr string, ownerUID int, ownerSID string) (net.Listener, error) {
 
 // Dial connects to a Unix socket.
 func Dial(addr string) (net.Conn, error) {
-	return net.Dial("unix", addr)
+	return DialContext(context.Background(), addr)
+}
+
+// DialContext lets startup and recovery bound a stalled connection attempt.
+func DialContext(ctx context.Context, addr string) (net.Conn, error) {
+	return (&net.Dialer{}).DialContext(ctx, "unix", addr)
 }

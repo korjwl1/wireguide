@@ -20,7 +20,8 @@ import (
 // still-pending UAC prompt could go on to spawn an orphaned helper.
 // detail is the underlying error, appended so a persistent failure is
 // diagnosable from the dialog instead of retrying blind.
-func askHelperRetry(detail string) bool {
+func askHelperRetry(cause error) bool {
+	detail := cause.Error()
 	const idRetry = 4 // IDRETRY — not exported by x/sys/windows
 	const style = windows.MB_RETRYCANCEL | windows.MB_ICONWARNING |
 		windows.MB_SETFOREGROUND | windows.MB_TOPMOST
