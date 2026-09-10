@@ -102,8 +102,8 @@ func newMockSleepDetector() *mockSleepDetector {
 	}
 }
 
-func (d *mockSleepDetector) Start() { d.started.Store(true) }
-func (d *mockSleepDetector) Stop()  { d.stopped.Store(true) }
+func (d *mockSleepDetector) Start()                    { d.started.Store(true) }
+func (d *mockSleepDetector) Stop()                     { d.stopped.Store(true) }
 func (d *mockSleepDetector) WakeChan() <-chan struct{} { return d.wakeCh }
 
 func (d *mockSleepDetector) sendWake() {
@@ -846,5 +846,43 @@ func TestBackoffCapsAtMaxDelay(t *testing.T) {
 			t.Errorf("last gap %v exceeds 3x MaxDelay %v -- backoff may not be capped",
 				lastGap, cfg.MaxDelay)
 		}
+	}
+}
+
+func TestAdditionalHealthSignalPreservesActiveRetry(t *testing.T) {
+	started := make(chan string, 1)
+	mon, mgr, _ := newTestMonitor(testConfig(), func(ctx context.Context, name string) error {
+		started <- name
+		<-ctx.Done()
+		return ctx.Err()
+	})
+	mgr.setConnected(true, "one")
+	mon.Start()
+	defer mon.Stop()
+	mon.ReconnectTunnelIfIdle("one")
+	select {
+	case name := <-started:
+		if name != "one" {
+			t.Fatal(name)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("no reconnect")
+	}
+	mon.mu.Lock()
+	original := mon.retries["one"]
+	mon.mu.Unlock()
+	mon.ReconnectTunnelIfIdle("one")
+	mon.mu.Lock()
+	current := mon.retries["one"]
+	mon.mu.Unlock()
+	if current != original {
+		t.Fatal("ping health reset an active reconnect")
+	}
+	mon.CancelRetryFor("one")
+	mon.mu.Lock()
+	remaining := mon.retries["one"]
+	mon.mu.Unlock()
+	if remaining != nil {
+		t.Fatal("manual disconnect failed to cancel ping retry")
 	}
 }

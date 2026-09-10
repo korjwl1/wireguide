@@ -8,6 +8,7 @@ require (
 	github.com/makiuchi-d/gozxing v0.1.1
 	github.com/wailsapp/wails/v3 v3.0.0-alpha.74
 	golang.org/x/image v0.44.0
+	golang.org/x/net v0.57.0
 	golang.org/x/sys v0.47.0
 	golang.zx2c4.com/wireguard v0.0.0-20260522210424-ecfc5a8d5446
 	golang.zx2c4.com/wireguard/wgctrl v0.0.0-20241231184526-a9ab2273dd10
@@ -52,7 +53,6 @@ require (
 	github.com/wailsapp/go-webview2 v1.0.23 // indirect
 	github.com/xanzy/ssh-agent v0.3.3 // indirect
 	golang.org/x/crypto v0.54.0 // indirect
-	golang.org/x/net v0.57.0 // indirect
 	golang.org/x/sync v0.22.0 // indirect
 	golang.org/x/text v0.40.0 // indirect
 	golang.org/x/xerrors v0.0.0-20200804184101-5ec99f83aff1 // indirect

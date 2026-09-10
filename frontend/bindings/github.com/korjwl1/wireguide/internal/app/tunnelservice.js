@@ -23,6 +23,9 @@ import * as diag$0 from "../diag/models.js";
 import * as domain$0 from "../domain/models.js";
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
+import * as healthcheck$0 from "../healthcheck/models.js";
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore: Unused imports
 import * as storage$0 from "../storage/models.js";
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
@@ -302,12 +305,22 @@ export function GetTunnelDetail(name) {
 }
 
 /**
+ * @param {string} name
+ * @returns {$CancellablePromise<healthcheck$0.Config>}
+ */
+export function GetTunnelPingHealth(name) {
+    return $Call.ByID(3816721483, name).then(/** @type {($result: any) => any} */(($result) => {
+        return $$createType18($result);
+    }));
+}
+
+/**
  * GetUpdateState returns persisted state for the About tab UI.
  * @returns {$CancellablePromise<$models.UpdateState>}
  */
 export function GetUpdateState() {
     return $Call.ByID(3155746791).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType18($result);
+        return $$createType19($result);
     }));
 }
 
@@ -328,7 +341,7 @@ export function GetVersion() {
  */
 export function ImportConfig(name, content) {
     return $Call.ByID(2459134310, name, content).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType20($result);
+        return $$createType21($result);
     }));
 }
 
@@ -342,7 +355,7 @@ export function ImportConfig(name, content) {
  */
 export function ImportQRFromBytes(data, name) {
     return $Call.ByID(3817928306, data, name).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType20($result);
+        return $$createType21($result);
     }));
 }
 
@@ -355,7 +368,7 @@ export function ImportQRFromBytes(data, name) {
  */
 export function ImportQRFromPath(path, name) {
     return $Call.ByID(2544386800, path, name).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType20($result);
+        return $$createType21($result);
     }));
 }
 
@@ -367,7 +380,7 @@ export function ImportQRFromPath(path, name) {
  */
 export function ImportZip(path) {
     return $Call.ByID(976469479, path).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType22($result);
+        return $$createType23($result);
     }));
 }
 
@@ -379,7 +392,7 @@ export function ImportZip(path) {
  */
 export function ImportZipData(data) {
     return $Call.ByID(2432663343, data).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType22($result);
+        return $$createType23($result);
     }));
 }
 
@@ -397,7 +410,7 @@ export function ImportZipData(data) {
  */
 export function ListTunnels() {
     return $Call.ByID(3587038916).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType23($result);
+        return $$createType24($result);
     }));
 }
 
@@ -412,7 +425,7 @@ export function ListTunnels() {
  */
 export function ListTunnelsLocal() {
     return $Call.ByID(3031176175).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType23($result);
+        return $$createType24($result);
     }));
 }
 
@@ -503,7 +516,7 @@ export function RenameTunnel(oldName, newName) {
  */
 export function RunDNSLeakTest() {
     return $Call.ByID(2469114850).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType25($result);
+        return $$createType26($result);
     }));
 }
 
@@ -553,6 +566,17 @@ export function SaveAutomationRules(tunnel, rules) {
  */
 export function SaveSettings(settings) {
     return $Call.ByID(3676285513, settings);
+}
+
+/**
+ * SaveTunnelPingHealth updates only this tunnel's metadata. It cannot overwrite
+ * another tunnel's settings, automation rules, notes or WireGuard configuration.
+ * @param {string} name
+ * @param {healthcheck$0.Config} settings
+ * @returns {$CancellablePromise<void>}
+ */
+export function SaveTunnelPingHealth(name, settings) {
+    return $Call.ByID(2447701204, name, settings);
 }
 
 /**
@@ -707,11 +731,12 @@ const $$createType14 = domain$0.ConnectionStatus.createFrom;
 const $$createType15 = $Create.Nullable($$createType14);
 const $$createType16 = domain$0.WireGuardConfig.createFrom;
 const $$createType17 = $Create.Nullable($$createType16);
-const $$createType18 = $models.UpdateState.createFrom;
-const $$createType19 = $models.TunnelInfo.createFrom;
-const $$createType20 = $Create.Nullable($$createType19);
-const $$createType21 = $models.ZipImportResult.createFrom;
-const $$createType22 = $Create.Array($$createType21);
-const $$createType23 = $Create.Array($$createType19);
-const $$createType24 = $models.DNSLeakResult.createFrom;
-const $$createType25 = $Create.Nullable($$createType24);
+const $$createType18 = healthcheck$0.Config.createFrom;
+const $$createType19 = $models.UpdateState.createFrom;
+const $$createType20 = $models.TunnelInfo.createFrom;
+const $$createType21 = $Create.Nullable($$createType20);
+const $$createType22 = $models.ZipImportResult.createFrom;
+const $$createType23 = $Create.Array($$createType22);
+const $$createType24 = $Create.Array($$createType20);
+const $$createType25 = $models.DNSLeakResult.createFrom;
+const $$createType26 = $Create.Nullable($$createType25);

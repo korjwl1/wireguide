@@ -5,6 +5,7 @@
   import { errText } from './errors.js';
   import { createEventDispatcher, tick, onDestroy } from 'svelte';
   import AutomationEditor from './AutomationEditor.svelte';
+  import PingHealthSettings from './PingHealthSettings.svelte';
 
   export let TunnelService;
   const dispatch = createEventDispatcher();
@@ -591,6 +592,10 @@
     {#if error}
       <div class="error-msg">{error}</div>
     {/if}
+
+    {#key $selectedTunnel.name}
+      <PingHealthSettings {TunnelService} tunnelName={$selectedTunnel.name} />
+    {/key}
 
     <!-- SECONDARY ACTIONS: 4-up icon button grid -->
     <div class="secondary-actions">

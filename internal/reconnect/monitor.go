@@ -342,8 +342,24 @@ func (m *Monitor) triggerReconnect() {
 	m.triggerReconnectTunnel("")
 }
 
+// ReconnectTunnelIfIdle lets an additional health signal share the existing
+// retry/backoff state without resetting an in-flight retry.
+func (m *Monitor) ReconnectTunnelIfIdle(tunnelName string) {
+	if tunnelName != "" {
+		m.startReconnectTunnel(tunnelName, true)
+	}
+}
+
 func (m *Monitor) triggerReconnectTunnel(tunnelName string) {
+	m.startReconnectTunnel(tunnelName, false)
+}
+
+func (m *Monitor) startReconnectTunnel(tunnelName string, onlyIfIdle bool) {
 	m.mu.Lock()
+	if onlyIfIdle && (!m.running || m.retries[tunnelName] != nil || m.retries[""] != nil) {
+		m.mu.Unlock()
+		return
+	}
 
 	// Cancel ONLY the previous retry for this same key — per-tunnel
 	// triggers preserve other tunnels' backoff state. The empty-string
