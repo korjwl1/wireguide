@@ -65,9 +65,10 @@ WireGuard configuration exports do not contain these application settings.
   the Linux helper/app from this Mac with CGO disabled is blocked by Wails'
   GTK-dependent application package; this is not a Linux runtime pass.
 
-Native Windows/Linux tests and an actual VPN outage/reconnect scenario remain
-release checks. Loopback ICMP tests do not establish VPN routing, firewall,
-adapter or remote peer behavior on any platform.
+Follow-up [macOS execution checks](issue-42-macos-live-verification.md) now cover
+actual utun/WireGuard traffic, controlled ping outages, GUI cancellation,
+settings persistence, DNS/firewall restoration and native network/power events.
+Native Windows/Linux tests and remote-WAN/full-tunnel checks remain separate.
 
 ## Native release checks
 
