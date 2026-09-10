@@ -101,14 +101,40 @@ vet, focused race tests (including real launchd lifecycle and disabled-state
 fixtures), and Windows IPC/GUI compilation pass. The disabled dialog's
 Open Settings → Retry flow passes with stubbed UI commands.
 
-The new app was launched at 21:43:59 on 2026-09-08. The last recorded run
-stopped at native administrator authentication. Installation and post-install GUI recovery for
-this additional repair are **not yet verified**. Earlier passing live runs in
-the matrix below used the `c26cceb5…` candidate; they must not be presented as
-execution evidence for the new passive-recovery code. The planned remaining
-check is to shut down the idle helper while leaving the GUI open, observe a
-persistent error without repeated authorization, then reopen and recover.
-Evidence: `repair-gui.log`.
+### Native execution resumed on 2026-09-10
+
+The authorization pending since 2026-09-08 completed at 10:41:25 on September
+10. The candidate opened its GUI and completed the helper RPC handshake
+without an expired-readiness error. The app and installed helper both have
+SHA-256 `a4dabb0e6bc9d02dd0d30ee3ba426c50b5903ee014e0a00e0c34bd2e884bfa2e`.
+launchd reported `runs = 1`, helper PID 37579, and no previous exit.
+`ctl status --json` returned an empty active-tunnel list.
+
+At 10:42:19, a transient test client confirmed no active tunnels and sent
+Shutdown to the helper only. GUI PID 43079 stayed open. Seven process samples
+spanning 30.4 seconds showed no helper and no GUI-spawned authorization process.
+The GUI detected disconnection at 10:42:20 and displayed one persistent error
+banner timestamped 10:42:35, asking the user to quit and reopen for helper setup.
+A window capture confirmed the actual banner. This exercises the new passive
+recovery behavior, rather than relying on the earlier candidate's crash test.
+
+To check reconnection and banner clearing, the test operator explicitly
+requested `launchctl kickstart system/com.wireguide.helper` through native
+administrator authorization. That test command's authorization is separate
+from the GUI health monitor; it was not an automatic prompt from WireGuide.
+After approval, launchd started helper PID 41273. The same GUI logged
+`helper recovered` at 10:44:10. A second window capture confirmed the banner
+cleared automatically and the normal tunnel list returned. RPC responses again
+reported version 0.5.1 and zero active tunnels. Seven further samples over
+30.3 seconds all succeeded with the same helper PID and no GUI authorization
+children. Tunnel files and settings match
+the pretest backup. The GUI and recovered helper are left running.
+
+Evidence: `repair-gui.log`, `passive-outage.json`, `passive-outage.png`,
+`passive-recovered.png`, `passive-recovery.json`, and
+`passive-preservation.json` in the
+private local evidence directory. Earlier live runs in the matrix below used
+the `c26cceb5…` candidate and remain separate from these follow-up results.
 
 ## Acceptance criteria
 
