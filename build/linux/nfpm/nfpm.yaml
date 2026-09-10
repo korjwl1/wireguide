@@ -51,12 +51,20 @@ overrides:
     depends:
       - gtk3
       - webkit2gtk4.1
+      - libayatana-appindicator-gtk3
+      - polkit
+      - iproute
+      - nftables
   
   # Arch Linux package names.
   archlinux:
     depends:
       - gtk3
       - webkit2gtk-4.1
+      - libayatana-appindicator
+      - polkit
+      - iproute2
+      - nftables
 
 # scripts section to ensure desktop database is updated after install
 scripts:

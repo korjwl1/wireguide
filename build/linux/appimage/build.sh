@@ -30,6 +30,25 @@ else
     ./linuxdeploy-aarch64.AppImage --appdir "${APP_DIR}" --output appimage
 fi
 
-# Rename the generated AppImage
-mv "${APP_NAME}*.AppImage" "${APP_NAME}.AppImage"
-
+# Expand the generated filename (the old quoted glob was a literal '*').
+# The desktop Name may capitalise the product differently from APP_NAME.
+shopt -s nullglob nocaseglob
+images=( "${APP_NAME}"*.AppImage )
+# A previous build may already have the final filename. Prefer a newly
+# generated architecture-qualified file and replace the previous output.
+if [ "${#images[@]}" -gt 1 ]; then
+    generated=()
+    for candidate in "${images[@]}"; do
+        if [ "$candidate" != "${APP_NAME}.AppImage" ]; then
+            generated+=( "$candidate" )
+        fi
+    done
+    images=( "${generated[@]}" )
+fi
+if [ "${#images[@]}" -ne 1 ]; then
+    echo "Expected one generated ${APP_NAME} AppImage, found ${#images[@]}" >&2
+    exit 1
+fi
+if [ "${images[0]}" != "${APP_NAME}.AppImage" ]; then
+    mv -- "${images[0]}" "${APP_NAME}.AppImage"
+fi

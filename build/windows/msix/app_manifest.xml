@@ -29,7 +29,7 @@
   </Resources>
   
   <Applications>
-    <Application Id="com.korjwl1.wireguide" Executable="wireguide" EntryPoint="Windows.FullTrustApplication">
+    <Application Id="com.korjwl1.wireguide" Executable="wireguide.exe" EntryPoint="Windows.FullTrustApplication">
       <uap:VisualElements
         DisplayName="WireGuide"
         Description="Cross-platform WireGuard VPN desktop client"
@@ -41,7 +41,7 @@
       </uap:VisualElements>
       
       <Extensions>
-        <desktop:Extension Category="windows.fullTrustProcess" Executable="wireguide" />
+        <desktop:Extension Category="windows.fullTrustProcess" Executable="wireguide.exe" />
         
         
       </Extensions>

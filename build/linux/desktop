@@ -7,7 +7,7 @@ Exec=/usr/local/bin/wireguide %u
 Terminal=false
 Type=Application
 Icon=wireguide
-Categories=Utility;
+Categories=Network;
 StartupWMClass=wireguide
 
  
