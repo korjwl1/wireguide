@@ -426,7 +426,8 @@ jobs:
             desc "Cross-platform WireGuard VPN desktop client"
             homepage "https://github.com/korjwl1/wireguide"
 
-            depends_on macos: :catalina
+            depends_on arch: :arm64
+            depends_on macos: :big_sur
 
             app "WireGuide.app"
 
