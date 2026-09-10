@@ -6,7 +6,12 @@
 set -euxo pipefail
 
 # Define variables
-APP_DIR="${APP_NAME}.AppDir"
+build_dir=$(pwd -P)
+APP_DIR="${build_dir}/${APP_NAME}.AppDir"
+# Only accept output from this invocation. Preserve the previous final artifact
+# if packaging fails, but never report that artifact as a successful new build.
+output_dir=$(mktemp -d "${build_dir}/.wireguide-appimage.XXXXXX")
+trap 'rm -rf -- "$output_dir"' EXIT
 
 # Create AppDir structure
 mkdir -p "${APP_DIR}/usr/bin"
@@ -20,35 +25,22 @@ if [[ $(uname -m) == *x86_64* ]]; then
     chmod +x linuxdeploy-x86_64.AppImage
 
     # Run linuxdeploy to bundle the application
-    ./linuxdeploy-x86_64.AppImage --appdir "${APP_DIR}" --output appimage
+    (cd "$output_dir" && "${build_dir}/linuxdeploy-x86_64.AppImage" --appdir "${APP_DIR}" --output appimage)
 else
     # Download linuxdeploy and make it executable (arm64)
     wget -q -4 -N https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-aarch64.AppImage
     chmod +x linuxdeploy-aarch64.AppImage
 
     # Run linuxdeploy to bundle the application (arm64)
-    ./linuxdeploy-aarch64.AppImage --appdir "${APP_DIR}" --output appimage
+    (cd "$output_dir" && "${build_dir}/linuxdeploy-aarch64.AppImage" --appdir "${APP_DIR}" --output appimage)
 fi
 
 # Expand the generated filename (the old quoted glob was a literal '*').
 # The desktop Name may capitalise the product differently from APP_NAME.
 shopt -s nullglob nocaseglob
-images=( "${APP_NAME}"*.AppImage )
-# A previous build may already have the final filename. Prefer a newly
-# generated architecture-qualified file and replace the previous output.
-if [ "${#images[@]}" -gt 1 ]; then
-    generated=()
-    for candidate in "${images[@]}"; do
-        if [ "$candidate" != "${APP_NAME}.AppImage" ]; then
-            generated+=( "$candidate" )
-        fi
-    done
-    images=( "${generated[@]}" )
-fi
+images=( "${output_dir}/${APP_NAME}"*.AppImage )
 if [ "${#images[@]}" -ne 1 ]; then
     echo "Expected one generated ${APP_NAME} AppImage, found ${#images[@]}" >&2
     exit 1
 fi
-if [ "${images[0]}" != "${APP_NAME}.AppImage" ]; then
-    mv -- "${images[0]}" "${APP_NAME}.AppImage"
-fi
+mv -- "${images[0]}" "${build_dir}/${APP_NAME}.AppImage"

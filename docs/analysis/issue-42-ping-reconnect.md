@@ -28,6 +28,22 @@ settings are rechecked after probing under the connection-action lock so a
 stale result cannot initiate a reconnect after a manual disconnect or rename.
 The existing handshake-age setting remains independent.
 
+Review follow-up: each ping-triggered retry now retains a predicate over the
+settings that caused it. The helper sweeps invalid retries on its five-second
+health tick even while a tunnel is disconnected, and the monitor rechecks the
+predicate before teardown and before reconnecting. Disabling, changing targets,
+renaming or deleting the profile expires the old retry. Wake/network/handshake
+retries do not have this predicate and are left intact. An operation already
+executing when settings change is subject to its existing cancellation limits;
+this cannot undo a disconnect that has already happened.
+
+The follow-up tests drive real settings persistence into the helper predicate
+and monitor with a fake tunnel manager. All four changes above prevent both
+disconnect and reconnect; bypassing the predicate reproduces all four failures.
+Additional tests cover failed-attempt backoff, preservation of another retry
+reason, and firewall restoration when settings change during teardown. These
+tests and helper/reconnect/app race checks passed on macOS arm64.
+
 Settings live in the tunnel metadata sidecar. Updating them preserves notes
 and unrelated settings; rename/delete follow the existing sidecar lifecycle.
 WireGuard configuration exports do not contain these application settings.

@@ -859,7 +859,7 @@ func TestAdditionalHealthSignalPreservesActiveRetry(t *testing.T) {
 	mgr.setConnected(true, "one")
 	mon.Start()
 	defer mon.Stop()
-	mon.ReconnectTunnelIfIdle("one")
+	mon.ReconnectTunnelIfIdle("one", nil)
 	select {
 	case name := <-started:
 		if name != "one" {
@@ -871,7 +871,7 @@ func TestAdditionalHealthSignalPreservesActiveRetry(t *testing.T) {
 	mon.mu.Lock()
 	original := mon.retries["one"]
 	mon.mu.Unlock()
-	mon.ReconnectTunnelIfIdle("one")
+	mon.ReconnectTunnelIfIdle("one", nil)
 	mon.mu.Lock()
 	current := mon.retries["one"]
 	mon.mu.Unlock()
@@ -884,5 +884,65 @@ func TestAdditionalHealthSignalPreservesActiveRetry(t *testing.T) {
 	mon.mu.Unlock()
 	if remaining != nil {
 		t.Fatal("manual disconnect failed to cancel ping retry")
+	}
+}
+
+func TestInvalidPingRetryDoesNotCancelOtherReasons(t *testing.T) {
+	cfg := testConfig()
+	cfg.InitialDelay = time.Hour
+	mon, _, _ := newTestMonitor(cfg, func(context.Context, string) error { t.Error("unexpected attempt"); return nil })
+	mon.running = true
+	defer mon.Stop()
+	mon.triggerReconnectTunnel("network")
+	mon.mu.Lock()
+	network := mon.retries["network"]
+	mon.mu.Unlock()
+	mon.ReconnectTunnelIfIdle("network", func() bool { return false })
+	mon.ReconnectTunnelIfIdle("ping", func() bool { return false })
+	mon.CancelInvalidRetries()
+	mon.mu.Lock()
+	defer mon.mu.Unlock()
+	if mon.retries["ping"] != nil {
+		t.Error("invalid ping retry retained")
+	}
+	if mon.retries["network"] != network {
+		t.Error("ping cancellation changed network retry")
+	}
+}
+
+func TestPingSettingsChangeAfterFailedAttemptStopsBackoff(t *testing.T) {
+	var valid atomic.Bool
+	valid.Store(true)
+	var attempts atomic.Int32
+	mon, _, _ := newTestMonitor(testConfig(), func(context.Context, string) error {
+		attempts.Add(1)
+		valid.Store(false)
+		return errors.New("connection failed")
+	})
+	mon.running = true
+	defer mon.Stop()
+	mon.ReconnectTunnelIfIdle("ping", valid.Load)
+	waitFor(t, time.Second, "expired retry cleared", func() bool { return attempts.Load() > 0 && !mon.GetState().Reconnecting })
+	if attempts.Load() != 1 {
+		t.Fatalf("attempts=%d, want one", attempts.Load())
+	}
+}
+
+func TestPingSettingsChangeDuringDisconnectRestoresFirewall(t *testing.T) {
+	var valid atomic.Bool
+	valid.Store(true)
+	var resumed atomic.Int32
+	mon, mgr, _ := newTestMonitor(testConfig(), func(context.Context, string) error {
+		t.Error("reconnected after settings changed during disconnect")
+		return nil
+	})
+	mgr.disconnectFn = func() error { valid.Store(false); return nil }
+	mon.SetFirewallCallbacks(func() error { return nil }, func() error { resumed.Add(1); return nil })
+	mon.running = true
+	defer mon.Stop()
+	mon.ReconnectTunnelIfIdle("ping", valid.Load)
+	waitFor(t, time.Second, "firewall restored", func() bool { return resumed.Load() == 1 })
+	if mon.GetState().Reconnecting {
+		t.Fatal("invalid retry retained")
 	}
 }

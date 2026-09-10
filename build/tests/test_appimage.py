@@ -55,6 +55,16 @@ class AppImageOutputTests(unittest.TestCase):
     def test_missing_output(self):
         self.assertNotEqual(self.run_package([])[0], 0)
 
+    def test_missing_output_does_not_reuse_previous_build(self):
+        code, content, _ = self.run_package([], previous=True)
+        self.assertNotEqual(code, 0)
+        self.assertEqual(content, "old")
+
+    def test_exact_name_replaces_previous_output(self):
+        code, content, log = self.run_package(["wireguide.AppImage"], previous=True)
+        self.assertEqual(code, 0, log)
+        self.assertEqual(content, "new")
+
     def test_ambiguous_output(self):
         self.assertNotEqual(self.run_package(["wireguide-a.AppImage", "wireguide-b.AppImage"])[0], 0)
 

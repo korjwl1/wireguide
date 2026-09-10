@@ -11,7 +11,7 @@ https://github.com/korjwl1/wireguide/issues/6
 
 | Area | Decision |
 | --- | --- |
-| Linux AppImage output | Fix the quoted wildcard, accept capitalized desktop names and exact output names, replace previous build output, and reject missing/ambiguous generated files. Five script-level tests use a fake linuxdeploy without network access. |
+| Linux AppImage output | Fix the quoted wildcard, accept capitalized desktop names and exact output names, replace previous build output, and reject missing/ambiguous generated files. Seven script-level tests use a fake linuxdeploy without network access. |
 | Linux package dependencies | Keep common polkit, iproute/iproute2 and nftables dependencies in RPM/Arch overrides alongside Ayatana libraries; overrides replace the common dependency list. |
 | Linux desktop category | Use Network in both the generated and static desktop entry. |
 | Windows MSIX | Match packaged `wireguide.exe` in application executables and installer conversion template. |
@@ -50,6 +50,12 @@ committed and verified, its local branch can be deleted; do not delete the activ
 issue #41/#42 work branch. No remote branch exists for the old branch. This does
 not close issue #6 or establish native Windows/Linux test coverage.
 
-Validation: five AppImage script scenarios, shell syntax, MSIX XML executable
+Review follow-up: linuxdeploy now runs in a fresh temporary output directory.
+If it reports success without producing an expected artifact, packaging fails
+and preserves the previous final artifact. Previously, a stale final artifact
+could be accepted as the new result. The added regression test fails against
+the previous script and passes with output isolation.
+
+Validation: seven AppImage script scenarios, shell syntax, MSIX XML executable
 paths, Windows network cross-build, and review of the resulting diff. Installer
 execution and Linux distribution package installation still require native tests.

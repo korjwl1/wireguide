@@ -35,6 +35,9 @@ func (h *Helper) pingHealthLoop() {
 		case <-ctx.Done():
 			return
 		case now := <-ticker.C:
+			// Settings may change while the tunnel is down in retry backoff.
+			// Invalidate those retries before filtering for connected tunnels.
+			h.monitor.CancelInvalidRetries()
 			if h.userTunnelStore == nil {
 				continue
 			}
@@ -100,7 +103,7 @@ func (h *Helper) pingHealthLoop() {
 					latestConfig, err := latest.PingHealth.Normalize()
 					if err == nil && reflect.DeepEqual(config, latestConfig) && ctx.Err() == nil && state.policy.Observe(time.Now(), reachable) {
 						slog.Warn("ping targets failed repeatedly; reconnecting tunnel", "tunnel", name, "failures", config.FailureThreshold)
-						h.monitor.ReconnectTunnelIfIdle(name)
+						h.monitor.ReconnectTunnelIfIdle(name, h.pingRetryGuard(name, config))
 					}
 				}
 				h.connectMu.Unlock()
@@ -113,5 +116,19 @@ func (h *Helper) pingHealthLoop() {
 				}
 			}
 		}
+	}
+}
+
+// Retain the triggering settings for the lifetime of this retry, including
+// failed connection attempts. Save/edit/disable/rename/delete invalidates the
+// old reason without canceling retries caused by other health signals.
+func (h *Helper) pingRetryGuard(name string, triggered healthcheck.Config) func() bool {
+	return func() bool {
+		_, meta, err := h.userTunnelStore.LoadWithMeta(name)
+		if err != nil || meta == nil || meta.PingHealth == nil {
+			return false
+		}
+		latest, err := meta.PingHealth.Normalize()
+		return err == nil && latest.Enabled && reflect.DeepEqual(triggered, latest)
 	}
 }

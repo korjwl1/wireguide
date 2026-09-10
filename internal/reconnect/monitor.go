@@ -87,6 +87,9 @@ type retryState struct {
 	done    chan struct{}
 	attempt int
 	delay   time.Duration
+	// nil for wake/network/handshake retries; ping retries retain the settings
+	// that caused them and expire when those settings change.
+	stillNeeded func() bool
 }
 
 // Monitor watches tunnel health and triggers reconnection.
@@ -344,17 +347,51 @@ func (m *Monitor) triggerReconnect() {
 
 // ReconnectTunnelIfIdle lets an additional health signal share the existing
 // retry/backoff state without resetting an in-flight retry.
-func (m *Monitor) ReconnectTunnelIfIdle(tunnelName string) {
+func (m *Monitor) ReconnectTunnelIfIdle(tunnelName string, stillNeeded func() bool) {
 	if tunnelName != "" {
-		m.startReconnectTunnel(tunnelName, true)
+		m.startReconnectTunnel(tunnelName, true, stillNeeded)
 	}
 }
 
 func (m *Monitor) triggerReconnectTunnel(tunnelName string) {
-	m.startReconnectTunnel(tunnelName, false)
+	m.startReconnectTunnel(tunnelName, false, nil)
 }
 
-func (m *Monitor) startReconnectTunnel(tunnelName string, onlyIfIdle bool) {
+// CancelInvalidRetries also runs while tunnels are disconnected or in backoff.
+// Evaluate predicates outside mu: they can read storage and must not block
+// other tunnels' monitor operations. Only remove the entry we evaluated.
+func (m *Monitor) CancelInvalidRetries() {
+	m.mu.Lock()
+	pending := make(map[string]*retryState, len(m.retries))
+	for name, entry := range m.retries {
+		if entry.stillNeeded != nil {
+			pending[name] = entry
+		}
+	}
+	m.mu.Unlock()
+	for name, entry := range pending {
+		m.cancelInvalidRetry(name, entry)
+	}
+}
+
+func (m *Monitor) cancelInvalidRetry(name string, entry *retryState) bool {
+	if entry.stillNeeded == nil || entry.stillNeeded() {
+		return false
+	}
+	m.mu.Lock()
+	removed := m.retries[name] == entry
+	if removed {
+		entry.cancel()
+		delete(m.retries, name)
+	}
+	m.mu.Unlock()
+	if removed {
+		m.notifyStatus(m.GetState())
+	}
+	return true
+}
+
+func (m *Monitor) startReconnectTunnel(tunnelName string, onlyIfIdle bool, stillNeeded func() bool) {
 	m.mu.Lock()
 	if onlyIfIdle && (!m.running || m.retries[tunnelName] != nil || m.retries[""] != nil) {
 		m.mu.Unlock()
@@ -381,8 +418,9 @@ func (m *Monitor) startReconnectTunnel(tunnelName string, onlyIfIdle bool) {
 	// triggers for the same key can't both spawn goroutines.
 	ctx, cancel := context.WithCancel(context.Background())
 	entry := &retryState{
-		cancel: cancel,
-		done:   make(chan struct{}),
+		cancel:      cancel,
+		done:        make(chan struct{}),
+		stillNeeded: stillNeeded,
 	}
 	m.retries[tunnelName] = entry
 	m.mu.Unlock()
@@ -482,7 +520,7 @@ func (m *Monitor) reconnectWithBackoff(ctx context.Context, tunnelName string, e
 		// may have clicked Disconnect between the timer firing and this line.
 		// Without this check a final reconnectFn() would run against the
 		// user's explicit wish and silently bring the tunnel back up.
-		if ctx.Err() != nil {
+		if ctx.Err() != nil || m.cancelInvalidRetry(tunnelName, entry) {
 			slog.Info("reconnection cancelled before attempt", "attempt", attempt)
 			return
 		}
@@ -529,7 +567,7 @@ func (m *Monitor) reconnectWithBackoff(ctx context.Context, tunnelName string, e
 
 		// One more cancellation check before the actual reconnect — manager
 		// Disconnect can take a moment and the user's cancel may land here.
-		if ctx.Err() != nil {
+		if ctx.Err() != nil || m.cancelInvalidRetry(tunnelName, entry) {
 			slog.Info("reconnection cancelled before reconnectFn", "attempt", attempt)
 			// Re-enable firewall even on cancel to avoid leaving the
 			// system unprotected.
