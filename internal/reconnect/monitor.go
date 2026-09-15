@@ -94,6 +94,9 @@ type retryState struct {
 
 // Monitor watches tunnel health and triggers reconnection.
 type Monitor struct {
+	// Serialize complete lifecycle transitions, including detector startup and
+	// teardown, without holding mu while workers finish.
+	lifecycleMu     sync.Mutex
 	mu              sync.Mutex
 	cfg             Config
 	manager         TunnelManager
@@ -104,6 +107,7 @@ type Monitor struct {
 	stopCh          chan struct{}
 	wg              sync.WaitGroup
 	running         bool
+	stopping        bool
 	sleepDetector   SleepDetector
 	networkDetector NetworkChangeDetector
 
@@ -156,8 +160,10 @@ func (m *Monitor) SetHealthCheck(enabled bool) {
 
 // Start begins monitoring the tunnel connection.
 func (m *Monitor) Start() {
+	m.lifecycleMu.Lock()
+	defer m.lifecycleMu.Unlock()
 	m.mu.Lock()
-	if m.running {
+	if m.running || m.stopping {
 		m.mu.Unlock()
 		return
 	}
@@ -171,6 +177,14 @@ func (m *Monitor) Start() {
 	// finish. Lock-protected Add closes that window.
 	m.wg.Add(2)
 	m.mu.Unlock()
+	// Finish detector startup before Stop can tear them down. Starting them
+	// in triggerLoop allowed a delayed goroutine to start after Stop returned.
+	if m.sleepDetector != nil {
+		m.sleepDetector.Start()
+	}
+	if m.networkDetector != nil {
+		m.networkDetector.Start()
+	}
 
 	go func() {
 		defer m.wg.Done()
@@ -199,12 +213,15 @@ func (m *Monitor) Start() {
 
 // Stop stops the monitor and waits for all goroutines to exit.
 func (m *Monitor) Stop() {
+	m.lifecycleMu.Lock()
+	defer m.lifecycleMu.Unlock()
 	m.mu.Lock()
 	if !m.running {
 		m.mu.Unlock()
 		return
 	}
 	m.running = false
+	m.stopping = true
 	close(m.stopCh)
 	for _, r := range m.retries {
 		if r.cancel != nil {
@@ -232,6 +249,11 @@ func (m *Monitor) Stop() {
 	waitDone := make(chan struct{})
 	go func() {
 		m.wg.Wait()
+		// If the bounded Stop wait times out, keep Start disabled until the
+		// old workers really exit; their WaitGroup/channel cannot be reused.
+		m.mu.Lock()
+		m.stopping = false
+		m.mu.Unlock()
 		close(waitDone)
 	}()
 	select {
@@ -630,13 +652,6 @@ func (m *Monitor) reconnectWithBackoff(ctx context.Context, tunnelName string, e
 // rebuild it against the (potentially new) underlying network — so a
 // single select keeps the logic visible.
 func (m *Monitor) triggerLoop() {
-	if m.sleepDetector != nil {
-		m.sleepDetector.Start()
-	}
-	if m.networkDetector != nil {
-		m.networkDetector.Start()
-	}
-
 	var wakeCh <-chan struct{}
 	if m.sleepDetector != nil {
 		wakeCh = m.sleepDetector.WakeChan()

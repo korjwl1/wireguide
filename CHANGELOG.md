@@ -10,6 +10,7 @@ All notable changes to WireGuide will be documented in this file.
 ### Fixed
 - **macOS helper recovery (#41)** — hardened helper installation, startup and crash recovery; avoid repeated authorization attempts during recovery, detect unresponsive helpers, and show actionable errors. These changes address concrete recovery defects; the original reporter's exact failure has not been reproduced locally.
 - **Reconnect cancellation** — disabling monitoring, changing targets, renaming/deleting a profile or manually disconnecting prevents stale ping retries from reconnecting the tunnel.
+- **Monitor lifecycle** — serialize concurrent start/stop operations so a new monitor cannot reuse channels or worker state before the previous shutdown finishes.
 - **macOS updates** — Homebrew-compatible macOS/architecture requirements and install steps. In-app updates verify the installed version, then wait for normal app shutdown before relaunching the updated app.
 - **Packaging** — Linux desktop/DEB metadata and AppImage build fixes, including rejecting stale output; corrected Windows MSIX architecture metadata and IPv6 interface selection.
 - **Error messages** — native validation errors display readable text instead of serialized JSON.

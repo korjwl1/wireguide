@@ -582,6 +582,64 @@ func TestConcurrent_StartStop(t *testing.T) {
 	}
 }
 
+type blockingStopNetworkDetector struct {
+	starts      atomic.Int32
+	stopEntered chan struct{}
+	releaseStop chan struct{}
+	once        sync.Once
+}
+
+func (d *blockingStopNetworkDetector) Start() { d.starts.Add(1) }
+func (d *blockingStopNetworkDetector) Stop() {
+	d.once.Do(func() {
+		close(d.stopEntered)
+		<-d.releaseStop
+	})
+}
+func (d *blockingStopNetworkDetector) ChangeChan() <-chan struct{} { return nil }
+
+func TestStartWaitsForDetectorShutdown(t *testing.T) {
+	mon, _, _ := newTestMonitor(testConfig(), func(context.Context, string) error { return nil })
+	detector := &blockingStopNetworkDetector{
+		stopEntered: make(chan struct{}),
+		releaseStop: make(chan struct{}),
+	}
+	mon.networkDetector = detector
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(detector.releaseStop) }) }
+	t.Cleanup(func() { release(); mon.Stop() })
+	mon.Start()
+	waitFor(t, time.Second, "initial detector startup", func() bool { return detector.starts.Load() == 1 })
+	stopped := make(chan struct{})
+	go func() { mon.Stop(); close(stopped) }()
+	select {
+	case <-detector.stopEntered:
+	case <-time.After(time.Second):
+		t.Fatal("detector shutdown did not start")
+	}
+	restarted := make(chan struct{})
+	go func() { mon.Start(); close(restarted) }()
+	select {
+	case <-restarted:
+		t.Fatal("Start returned while previous detector shutdown was blocked")
+	case <-time.After(100 * time.Millisecond):
+	}
+	if detector.starts.Load() != 1 {
+		t.Fatal("new detector started before old detector finished stopping")
+	}
+	release()
+	for _, done := range []chan struct{}{stopped, restarted} {
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Fatal("lifecycle transition did not finish after detector shutdown")
+		}
+	}
+	if detector.starts.Load() != 2 {
+		t.Fatal("detector did not restart after shutdown")
+	}
+}
+
 func TestStop_CancelsActiveReconnect(t *testing.T) {
 	var reconnectCalls atomic.Int32
 	reconnectFn := func(_ context.Context, name string) error {
