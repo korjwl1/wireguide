@@ -63,7 +63,9 @@ type Client struct {
 // the helper's shutdown grace window stays cancelled. Use it for the GUI —
 // the process whose presence means "the user wants WireGuide running".
 func NewClient(addr string) (*Client, error) {
-	return newClient(addr, false)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return NewClientContext(ctx, addr)
 }
 
 // NewTransientClient is NewClient for short-lived callers — the `wireguide
@@ -71,11 +73,30 @@ func NewClient(addr string) (*Client, error) {
 // treat the connection as a control connection and the client's exit does
 // not re-arm the shutdown grace window. See Request.Transient.
 func NewTransientClient(addr string) (*Client, error) {
-	return newClient(addr, true)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return newClient(ctx, addr, true)
 }
 
-func newClient(addr string, transient bool) (*Client, error) {
-	conn, err := Dial(addr)
+// NewClientContext bounds both connection and the initial RPC handshake.
+func NewClientContext(ctx context.Context, addr string) (*Client, error) {
+	return newClient(ctx, addr, false)
+}
+
+// ProbeHelper verifies actual RPC health without taking a GUI control lease.
+func ProbeHelper(ctx context.Context, addr string) (PingResponse, error) {
+	c, err := newClient(ctx, addr, true)
+	if err != nil {
+		return PingResponse{}, err
+	}
+	defer c.Close()
+	var ping PingResponse
+	err = c.CallWithContext(ctx, MethodPing, nil, &ping)
+	return ping, err
+}
+
+func newClient(ctx context.Context, addr string, transient bool) (*Client, error) {
+	conn, err := DialContext(ctx, addr)
 	if err != nil {
 		return nil, fmt.Errorf("dial: %w", err)
 	}
@@ -95,8 +116,6 @@ func newClient(addr string, transient bool) (*Client, error) {
 
 	// Verify the helper is alive and speaks the same protocol version.
 	var ping PingResponse
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
 	if err := c.CallWithContext(ctx, MethodPing, nil, &ping); err != nil {
 		c.Close()
 		return nil, fmt.Errorf("initial ping failed: %w", err)

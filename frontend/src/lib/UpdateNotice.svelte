@@ -49,9 +49,7 @@
     errorMsg = '';
     try {
       if (onInstall) await onInstall();
-      // Success without the cask postflight killing us should be
-      // impossible now (RunUpdate verifies the on-disk version), so
-      // reaching here means the process survives only briefly.
+      // RunUpdate verifies the installed version and schedules the restart.
     } catch (e) {
       errorMsg = ($t('update.install_failed') || 'Update failed') + ': ' + (e?.message || e);
     } finally {

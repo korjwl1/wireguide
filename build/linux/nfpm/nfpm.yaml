@@ -6,7 +6,7 @@
 name: "wireguide"
 arch: ${GOARCH}
 platform: "linux"
-version: "0.5.1"
+version: "0.6.0"
 section: "default"
 priority: "extra"
 maintainer: ${GIT_COMMITTER_NAME} <${GIT_COMMITTER_EMAIL}>
@@ -51,12 +51,20 @@ overrides:
     depends:
       - gtk3
       - webkit2gtk4.1
+      - libayatana-appindicator-gtk3
+      - polkit
+      - iproute
+      - nftables
   
   # Arch Linux package names.
   archlinux:
     depends:
       - gtk3
       - webkit2gtk-4.1
+      - libayatana-appindicator
+      - polkit
+      - iproute2
+      - nftables
 
 # scripts section to ensure desktop database is updated after install
 scripts:

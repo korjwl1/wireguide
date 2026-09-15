@@ -123,14 +123,15 @@ func (d *darwinNetworkChangeDetector) Start() {
 
 func (d *darwinNetworkChangeDetector) Stop() {
 	d.mu.Lock()
+	defer d.mu.Unlock()
 	if !d.running {
-		d.mu.Unlock()
 		return
 	}
-	d.running = false
 	close(d.stopCh)
-	d.mu.Unlock()
+	// poll does not acquire mu. Keep Start out until the old poller exits,
+	// so it cannot replace stopCh or Add to the WaitGroup during this Wait.
 	d.wg.Wait()
+	d.running = false
 }
 
 func (d *darwinNetworkChangeDetector) ChangeChan() <-chan struct{} {

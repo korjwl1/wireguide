@@ -312,6 +312,7 @@ func Run(addr string, ownerUID int, ownerSID, dataDir string) error {
 	// goroutine is supervised by goSafe like every other long-running
 	// helper background task.
 	h.goSafe("latencyLoop", h.latencyLoop)
+	h.goSafe("pingHealthLoop", h.pingHealthLoop)
 
 	// Start Wi-Fi SSID monitor. On change we broadcast the event for
 	// any GUI listener AND evaluate the user's wifi rules right here

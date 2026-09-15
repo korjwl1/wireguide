@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net"
 	"os"
+	"runtime"
 	"sync"
 	"time"
 
@@ -18,7 +19,8 @@ import (
 )
 
 // ensureHelper connects to an existing helper (via socket) or spawns a new
-// one with privilege elevation. Polls for readiness until the context expires.
+// one with privilege elevation. Authorization time is excluded from the
+// 30-second readiness timeout; ctx can still cancel recovery during shutdown.
 func ensureHelper(ctx context.Context, dataDir string) (*ipc.Client, error) {
 	addr := ipc.DefaultSocketPath()
 	forceReinstall := false
@@ -31,7 +33,10 @@ func ensureHelper(ctx context.Context, dataDir string) (*ipc.Client, error) {
 	}
 
 	// Try an existing helper first (survives GUI restarts).
-	if client, err := ipc.NewClient(addr); err == nil {
+	connectCtx, connectCancel := context.WithTimeout(ctx, 2*time.Second)
+	client, connectErr := ipc.NewClientContext(connectCtx, addr)
+	connectCancel()
+	if connectErr == nil {
 		pingCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
 		defer cancel()
 		var resp ipc.PingResponse
@@ -112,40 +117,67 @@ func ensureHelper(ctx context.Context, dataDir string) (*ipc.Client, error) {
 	// Spawn new helper with elevation
 	slog.Info("spawning helper with elevation...")
 	args.ForceReinstall = forceReinstall
-	if err := elevate.SpawnHelper(ctx, args); err != nil {
+	return spawnAndConnectHelper(ctx, args, elevate.SpawnHelper, 30*time.Second)
+}
+
+// spawnAndConnectHelper keeps interactive authorization outside the readiness
+// timeout. The spawn function also allows testing without an admin dialog.
+func spawnAndConnectHelper(ctx context.Context, args elevate.Args, spawn func(context.Context, elevate.Args) error, readyTimeout time.Duration) (*ipc.Client, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if err := spawn(ctx, args); err != nil {
 		return nil, fmt.Errorf("spawn helper: %w", err)
 	}
 
-	// Poll for readiness until the context is cancelled.
+	// Start the readiness budget after the native authorization prompt closes.
+	// Otherwise a password entered after 30s makes a successful install fail.
+	ctx, cancel := context.WithTimeout(ctx, readyTimeout)
+	defer cancel()
 	for {
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
-		case <-time.After(200 * time.Millisecond):
+		default:
 		}
-		client, err := ipc.NewClient(addr)
+		client, err := ipc.NewClientContext(ctx, args.SocketPath)
 		if err != nil {
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(200 * time.Millisecond):
+			}
 			continue
 		}
 		var resp ipc.PingResponse
 		if err := client.CallWithContext(ctx, ipc.MethodPing, nil, &resp); err == nil {
 			// After force reinstall, verify we connected to the NEW helper.
-			if forceReinstall && resp.AppVersion != "" && resp.AppVersion != update.CurrentVersion() {
+			if args.ForceReinstall && resp.AppVersion != "" && resp.AppVersion != update.CurrentVersion() {
 				slog.Debug("polling: still old helper version", "got", resp.AppVersion)
 				client.Close()
+				select {
+				case <-ctx.Done():
+					return nil, ctx.Err()
+				case <-time.After(200 * time.Millisecond):
+				}
 				continue
 			}
 			slog.Info("helper ready", "app_version", resp.AppVersion)
 			return client, nil
 		}
 		client.Close()
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(200 * time.Millisecond):
+		}
 	}
 }
 
 // startHelperHealthMonitor runs a background goroutine that pings the helper
 // every 5 seconds. On failure it:
 //  1. Emits a "helper" event to notify the frontend
-//  2. Attempts to re-spawn the helper and establish a new connection
+//  2. Reconnects to launchd’s restarted helper on macOS, without authorization
 //  3. Swaps the new connection into the ClientHolder
 //  4. Asks the event bridge to re-subscribe
 //  5. Emits "helper" (alive) once the connection is back
@@ -160,6 +192,8 @@ func startHelperHealthMonitor(app *application.App, clients *ipc.ClientHolder, d
 		defer ticker.Stop()
 
 		wasAlive := true
+		var outageStarted time.Time
+		outageReported := false
 		for {
 			select {
 			case <-done:
@@ -200,6 +234,8 @@ func startHelperHealthMonitor(app *application.App, clients *ipc.ClientHolder, d
 					Message: "Helper process not responding: " + err.Error(),
 				})
 				wasAlive = false
+				outageStarted = time.Now()
+				outageReported = false
 
 				// Try to recover immediately — don't wait for the next tick.
 				if recoverHelper(clients, bridge, dataDir, done) {
@@ -228,6 +264,13 @@ func startHelperHealthMonitor(app *application.App, clients *ipc.ClientHolder, d
 				app.Event.Emit("helper", HelperEvent{Alive: true})
 				wasAlive = true
 			}
+			if !wasAlive && !outageReported && time.Since(outageStarted) >= 10*time.Second {
+				app.Event.Emit("critical_error", ipc.CriticalErrorPayload{
+					Where:  "Helper connection",
+					Detail: "The VPN helper is unavailable. Quit and reopen WireGuide to retry helper setup.",
+				})
+				outageReported = true
+			}
 		}
 	}()
 }
@@ -236,7 +279,7 @@ func startHelperHealthMonitor(app *application.App, clients *ipc.ClientHolder, d
 // true if a new client is now in place. Best-effort — caller decides whether
 // to retry on the next tick.
 func recoverHelper(clients *ipc.ClientHolder, bridge *eventBridge, dataDir string, done <-chan struct{}) bool {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	// Allow early exit when shutdown is requested: cancel the context
@@ -252,7 +295,15 @@ func recoverHelper(clients *ipc.ClientHolder, bridge *eventBridge, dataDir strin
 	}()
 	defer close(earlyExit)
 
-	newClient, err := ensureHelper(ctx, dataDir)
+	// macOS launchd handles crash restarts. Background recovery must never
+	// reopen administrator prompts after cancellation or a persistent failure.
+	var newClient *ipc.Client
+	var err error
+	if runtime.GOOS == "darwin" {
+		newClient, err = reconnectHelper(ctx, ipc.DefaultSocketPath())
+	} else {
+		newClient, err = ensureHelper(ctx, dataDir)
+	}
 	if err != nil {
 		slog.Debug("helper recovery attempt failed", "error", err)
 		return false
@@ -265,6 +316,27 @@ func recoverHelper(clients *ipc.ClientHolder, bridge *eventBridge, dataDir strin
 	// Wi-Fi transition.
 	ResendSSIDToHelper(clients)
 	return true
+}
+
+// reconnectHelper is deliberately limited to RPC connection and version checks.
+// It cannot install, shut down, or replace a helper during background recovery.
+func reconnectHelper(ctx context.Context, addr string) (*ipc.Client, error) {
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	client, err := ipc.NewClientContext(ctx, addr)
+	if err != nil {
+		return nil, err
+	}
+	var ping ipc.PingResponse
+	if err := client.CallWithContext(ctx, ipc.MethodPing, nil, &ping); err != nil {
+		client.Close()
+		return nil, err
+	}
+	if ping.AppVersion != update.CurrentVersion() {
+		client.Close()
+		return nil, fmt.Errorf("helper version %q does not match app %q; reopen WireGuide to update it", ping.AppVersion, update.CurrentVersion())
+	}
+	return client, nil
 }
 
 // isHelperGoneErr returns true when the error looks like "the helper

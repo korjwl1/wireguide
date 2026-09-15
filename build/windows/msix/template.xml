@@ -8,7 +8,7 @@
         AllowPromptForPassword="false">
     </Settings>
     <Installer
-        Path="wireguide"
+        Path="wireguide.exe"
         Arguments=""
         InstallLocation="C:\Program Files\WireGuide">
     </Installer>
@@ -17,7 +17,7 @@
         PackageDisplayName="WireGuide"
         PublisherName="CN=korjwl1"
         PublisherDisplayName="korjwl1"
-        Version="0.5.1.0"
+        Version="0.6.0.0"
         PackageDescription="Cross-platform WireGuard VPN desktop client">
         <Capabilities>
             <Capability Name="runFullTrust" />
@@ -28,7 +28,7 @@
                 Id="com.korjwl1.wireguide"
                 Description="Cross-platform WireGuard VPN desktop client"
                 DisplayName="WireGuide"
-                ExecutableName="wireguide"
+                ExecutableName="wireguide.exe"
                 EntryPoint="Windows.FullTrustApplication">
                 
             </Application>

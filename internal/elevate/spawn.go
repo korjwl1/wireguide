@@ -2,6 +2,7 @@
 package elevate
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -9,6 +10,11 @@ import (
 	"regexp"
 	"strings"
 )
+
+// ErrBackgroundDisabled requires a user decision in macOS settings, not another
+// automatic reinstall or an attempt to override a disabled background item.
+var ErrBackgroundDisabled = errors.New("WireGuide background service is disabled")
+var ErrAuthorizationCanceled = errors.New("administrator authorization was canceled")
 
 // Args holds arguments for spawning the helper.
 type Args struct {

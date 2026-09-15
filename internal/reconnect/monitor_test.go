@@ -102,8 +102,8 @@ func newMockSleepDetector() *mockSleepDetector {
 	}
 }
 
-func (d *mockSleepDetector) Start() { d.started.Store(true) }
-func (d *mockSleepDetector) Stop()  { d.stopped.Store(true) }
+func (d *mockSleepDetector) Start()                    { d.started.Store(true) }
+func (d *mockSleepDetector) Stop()                     { d.stopped.Store(true) }
 func (d *mockSleepDetector) WakeChan() <-chan struct{} { return d.wakeCh }
 
 func (d *mockSleepDetector) sendWake() {
@@ -582,6 +582,64 @@ func TestConcurrent_StartStop(t *testing.T) {
 	}
 }
 
+type blockingStopNetworkDetector struct {
+	starts      atomic.Int32
+	stopEntered chan struct{}
+	releaseStop chan struct{}
+	once        sync.Once
+}
+
+func (d *blockingStopNetworkDetector) Start() { d.starts.Add(1) }
+func (d *blockingStopNetworkDetector) Stop() {
+	d.once.Do(func() {
+		close(d.stopEntered)
+		<-d.releaseStop
+	})
+}
+func (d *blockingStopNetworkDetector) ChangeChan() <-chan struct{} { return nil }
+
+func TestStartWaitsForDetectorShutdown(t *testing.T) {
+	mon, _, _ := newTestMonitor(testConfig(), func(context.Context, string) error { return nil })
+	detector := &blockingStopNetworkDetector{
+		stopEntered: make(chan struct{}),
+		releaseStop: make(chan struct{}),
+	}
+	mon.networkDetector = detector
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(detector.releaseStop) }) }
+	t.Cleanup(func() { release(); mon.Stop() })
+	mon.Start()
+	waitFor(t, time.Second, "initial detector startup", func() bool { return detector.starts.Load() == 1 })
+	stopped := make(chan struct{})
+	go func() { mon.Stop(); close(stopped) }()
+	select {
+	case <-detector.stopEntered:
+	case <-time.After(time.Second):
+		t.Fatal("detector shutdown did not start")
+	}
+	restarted := make(chan struct{})
+	go func() { mon.Start(); close(restarted) }()
+	select {
+	case <-restarted:
+		t.Fatal("Start returned while previous detector shutdown was blocked")
+	case <-time.After(100 * time.Millisecond):
+	}
+	if detector.starts.Load() != 1 {
+		t.Fatal("new detector started before old detector finished stopping")
+	}
+	release()
+	for _, done := range []chan struct{}{stopped, restarted} {
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Fatal("lifecycle transition did not finish after detector shutdown")
+		}
+	}
+	if detector.starts.Load() != 2 {
+		t.Fatal("detector did not restart after shutdown")
+	}
+}
+
 func TestStop_CancelsActiveReconnect(t *testing.T) {
 	var reconnectCalls atomic.Int32
 	reconnectFn := func(_ context.Context, name string) error {
@@ -846,5 +904,103 @@ func TestBackoffCapsAtMaxDelay(t *testing.T) {
 			t.Errorf("last gap %v exceeds 3x MaxDelay %v -- backoff may not be capped",
 				lastGap, cfg.MaxDelay)
 		}
+	}
+}
+
+func TestAdditionalHealthSignalPreservesActiveRetry(t *testing.T) {
+	started := make(chan string, 1)
+	mon, mgr, _ := newTestMonitor(testConfig(), func(ctx context.Context, name string) error {
+		started <- name
+		<-ctx.Done()
+		return ctx.Err()
+	})
+	mgr.setConnected(true, "one")
+	mon.Start()
+	defer mon.Stop()
+	mon.ReconnectTunnelIfIdle("one", nil)
+	select {
+	case name := <-started:
+		if name != "one" {
+			t.Fatal(name)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("no reconnect")
+	}
+	mon.mu.Lock()
+	original := mon.retries["one"]
+	mon.mu.Unlock()
+	mon.ReconnectTunnelIfIdle("one", nil)
+	mon.mu.Lock()
+	current := mon.retries["one"]
+	mon.mu.Unlock()
+	if current != original {
+		t.Fatal("ping health reset an active reconnect")
+	}
+	mon.CancelRetryFor("one")
+	mon.mu.Lock()
+	remaining := mon.retries["one"]
+	mon.mu.Unlock()
+	if remaining != nil {
+		t.Fatal("manual disconnect failed to cancel ping retry")
+	}
+}
+
+func TestInvalidPingRetryDoesNotCancelOtherReasons(t *testing.T) {
+	cfg := testConfig()
+	cfg.InitialDelay = time.Hour
+	mon, _, _ := newTestMonitor(cfg, func(context.Context, string) error { t.Error("unexpected attempt"); return nil })
+	mon.running = true
+	defer mon.Stop()
+	mon.triggerReconnectTunnel("network")
+	mon.mu.Lock()
+	network := mon.retries["network"]
+	mon.mu.Unlock()
+	mon.ReconnectTunnelIfIdle("network", func() bool { return false })
+	mon.ReconnectTunnelIfIdle("ping", func() bool { return false })
+	mon.CancelInvalidRetries()
+	mon.mu.Lock()
+	defer mon.mu.Unlock()
+	if mon.retries["ping"] != nil {
+		t.Error("invalid ping retry retained")
+	}
+	if mon.retries["network"] != network {
+		t.Error("ping cancellation changed network retry")
+	}
+}
+
+func TestPingSettingsChangeAfterFailedAttemptStopsBackoff(t *testing.T) {
+	var valid atomic.Bool
+	valid.Store(true)
+	var attempts atomic.Int32
+	mon, _, _ := newTestMonitor(testConfig(), func(context.Context, string) error {
+		attempts.Add(1)
+		valid.Store(false)
+		return errors.New("connection failed")
+	})
+	mon.running = true
+	defer mon.Stop()
+	mon.ReconnectTunnelIfIdle("ping", valid.Load)
+	waitFor(t, time.Second, "expired retry cleared", func() bool { return attempts.Load() > 0 && !mon.GetState().Reconnecting })
+	if attempts.Load() != 1 {
+		t.Fatalf("attempts=%d, want one", attempts.Load())
+	}
+}
+
+func TestPingSettingsChangeDuringDisconnectRestoresFirewall(t *testing.T) {
+	var valid atomic.Bool
+	valid.Store(true)
+	var resumed atomic.Int32
+	mon, mgr, _ := newTestMonitor(testConfig(), func(context.Context, string) error {
+		t.Error("reconnected after settings changed during disconnect")
+		return nil
+	})
+	mgr.disconnectFn = func() error { valid.Store(false); return nil }
+	mon.SetFirewallCallbacks(func() error { return nil }, func() error { resumed.Add(1); return nil })
+	mon.running = true
+	defer mon.Stop()
+	mon.ReconnectTunnelIfIdle("ping", valid.Load)
+	waitFor(t, time.Second, "firewall restored", func() bool { return resumed.Load() == 1 })
+	if mon.GetState().Reconnecting {
+		t.Fatal("invalid retry retained")
 	}
 }

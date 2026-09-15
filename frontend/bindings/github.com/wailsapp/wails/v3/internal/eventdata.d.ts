@@ -31,6 +31,7 @@ declare module "@wailsio/runtime" {
             "status": domain$0.ConnectionStatus;
             "tunnels_changed": {};
             "update-available": update$0.UpdateInfo;
+            "update_progress": { [_ in string]?: any };
         }
     }
 }

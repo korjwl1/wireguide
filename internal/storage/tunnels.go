@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/korjwl1/wireguide/internal/config"
+	"github.com/korjwl1/wireguide/internal/healthcheck"
 )
 
 // TunnelStore manages .conf files on disk.
@@ -396,8 +397,9 @@ func (s *TunnelStore) path(name string) string {
 // format is shared with other clients (wg-quick, official apps) and embedding
 // app-specific fields as comments would be lost on round-trip through them.
 type TunnelMeta struct {
-	Notes              string `json:"notes,omitempty"`
-	LatencyProbeTarget string `json:"latency_probe_target,omitempty"`
+	PingHealth         *healthcheck.Config `json:"ping_health,omitempty"`
+	Notes              string              `json:"notes,omitempty"`
+	LatencyProbeTarget string              `json:"latency_probe_target,omitempty"`
 	// CreatedUnix is when the tunnel was first added, stamped once on
 	// creation and preserved across edits/rename. The .conf mtime is NOT a
 	// reliable "date added": editing a tunnel rewrites the file and would
