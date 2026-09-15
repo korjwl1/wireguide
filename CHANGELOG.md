@@ -2,7 +2,7 @@
 
 All notable changes to WireGuide will be documented in this file.
 
-## [0.6.0] - 2026-09-15
+## [0.5.2] - 2026-09-15
 
 ### Added
 - **Reconnect on ping failure (#42)** — optional per-tunnel health checks with up to five IPv4/IPv6 targets, configurable check intervals and consecutive-failure thresholds. Reconnection starts only when every target fails, with a cooldown to avoid repeated reconnect loops. Monitoring is disabled by default.
@@ -16,7 +16,7 @@ All notable changes to WireGuide will be documented in this file.
 - **Error messages** — native validation errors display readable text instead of serialized JSON.
 
 ### Upgrade notes
-- **Homebrew users upgrading from 0.5.1 or earlier:** quit and reopen WireGuide once after the upgrade to run the new version. Those older clients rely on the cask's removed restart hook; automatic in-app restart is handled by WireGuide starting with 0.6.0.
+- **Homebrew users upgrading from 0.5.1 or earlier:** quit and reopen WireGuide once after the upgrade to run the new version. Those older clients rely on the cask's removed restart hook; automatic in-app restart is handled by WireGuide starting with 0.5.2.
 - Terminal `brew install` / `brew upgrade` no longer force-close or automatically launch WireGuide. Restart a running app after upgrading it.
 
 ## [0.5.1] - 2026-08-11
