@@ -444,18 +444,10 @@ jobs:
             # is auto-upgrading hits a lock contention).
             auto_updates true
 
-            postflight do
-              system_command "/usr/bin/xattr",
-                             args: ["-dr", "com.apple.quarantine", "#{appdir}/WireGuide.app"]
-              system_command "/usr/bin/killall",
-                             args: ["wireguide"],
-                             must_succeed: false
-              system_command "/bin/sleep",
-                             args: ["1"],
-                             must_succeed: false
-              system_command "/usr/bin/open",
-                             args: ["#{appdir}/WireGuide.app"],
-                             must_succeed: false
+            # App updates handle their own restart after Homebrew has finished.
+            postflight_steps do
+              run "/usr/bin/xattr",
+                  args: ["-dr", "com.apple.quarantine", "{{appdir}}/WireGuide.app"]
             end
 
             uninstall quit: "com.korjwl1.wireguide"

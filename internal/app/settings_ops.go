@@ -347,9 +347,7 @@ func (s *TunnelService) DismissUpdate(version string) error {
 // RunUpdate performs the update end-to-end:
 //
 //   - Homebrew installs → `brew update && brew upgrade --cask wireguide`,
-//     letting the cask's postflight handle the killall + relaunch. This
-//     is the "one-click" expectation users have, not "copy this command
-//     into your terminal".
+//     then verifying the installed version and restarting the app.
 //   - Non-brew installs → open the GitHub Releases page in the browser.
 //     Auto-replacing an un-notarised `.app` bundle needs sudo and races
 //     with Gatekeeper quarantining of the new binary; redirecting the
@@ -378,17 +376,8 @@ func (s *TunnelService) RunUpdate(info *update.UpdateInfo) error {
 			slog.Warn("brew update failed, continuing with upgrade", "error", err, "output", string(out))
 		}
 
-		// `brew upgrade --cask wireguide` runs the cask postflight which
-		// killalls and relaunches us. The postflight typically completes
-		// in 10–20 s; 5 min is a defensive ceiling for slow disks or
-		// signature-check work — if we hit it, brew is genuinely stuck.
-		//
-		// Note: the cask postflight kills *this* process, which is the
-		// parent of brew's exec. Go's exec.CommandContext attaches the
-		// child's Wait, but a SIGKILL on the parent terminates the wait
-		// before brew completes — the new wireguide binary that brew
-		// installs will be launched fresh, so this RunUpdate's return
-		// value never gets surfaced anywhere in practice.
+		// Allow five minutes for download and installation. Restart only after
+		// Homebrew exits successfully and the installed version is verified.
 		upCtx, upCancel := context.WithTimeout(context.Background(), 5*time.Minute)
 		defer upCancel()
 		// --greedy: older Homebrew skips auto_updates casks even when named
@@ -427,19 +416,14 @@ func (s *TunnelService) RunUpdate(info *update.UpdateInfo) error {
 			return fmt.Errorf("brew upgrade failed: %w (%s)", err, string(out))
 		}
 
-		// Reaching this line means brew exited 0 WITHOUT the cask
-		// postflight killing us — i.e. no install actually ran (a real
-		// upgrade killalls this process before CombinedOutput returns).
-		// brew exits 0 on "already installed"-style skips, and treating
-		// that as success is exactly how "Update Now" no-op'd silently in
-		// the past. Verify the bundle on disk actually became the target
-		// version and fail loudly when it didn't.
-		if installed := installedBundleVersion(); installed != "" && installed != info.Version {
+		// Homebrew also exits zero when it skips an upgrade. Verify disk state
+		// before quitting the currently running app.
+		if installed := installedBundleVersion(); installed != info.Version {
 			return fmt.Errorf(
 				"brew exited 0 but /Applications/WireGuide.app is still %s (expected %s) — brew output: %s",
 				installed, info.Version, strings.TrimSpace(string(out)))
 		}
-		return nil
+		return s.restartAfterUpdate()
 	}
 
 	slog.Info("update: opening GitHub Releases page (non-brew install)")

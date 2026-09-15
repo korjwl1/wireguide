@@ -524,9 +524,7 @@ export function RunDNSLeakTest() {
  * RunUpdate performs the update end-to-end:
  * 
  *   - Homebrew installs → `brew update && brew upgrade --cask wireguide`,
- *     letting the cask's postflight handle the killall + relaunch. This
- *     is the "one-click" expectation users have, not "copy this command
- *     into your terminal".
+ *     then verifying the installed version and restarting the app.
  *   - Non-brew installs → open the GitHub Releases page in the browser.
  *     Auto-replacing an un-notarised `.app` bundle needs sudo and races
  *     with Gatekeeper quarantining of the new binary; redirecting the
