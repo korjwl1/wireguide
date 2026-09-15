@@ -2,6 +2,22 @@
 
 All notable changes to WireGuide will be documented in this file.
 
+## [0.6.0] - 2026-09-15
+
+### Added
+- **Reconnect on ping failure (#42)** — optional per-tunnel health checks with up to five IPv4/IPv6 targets, configurable check intervals and consecutive-failure thresholds. Reconnection starts only when every target fails, with a cooldown to avoid repeated reconnect loops. Monitoring is disabled by default.
+
+### Fixed
+- **macOS helper recovery (#41)** — hardened helper installation, startup and crash recovery; avoid repeated authorization attempts during recovery, detect unresponsive helpers, and show actionable errors. These changes address concrete recovery defects; the original reporter's exact failure has not been reproduced locally.
+- **Reconnect cancellation** — disabling monitoring, changing targets, renaming/deleting a profile or manually disconnecting prevents stale ping retries from reconnecting the tunnel.
+- **macOS updates** — Homebrew-compatible macOS/architecture requirements and install steps. In-app updates verify the installed version, then wait for normal app shutdown before relaunching the updated app.
+- **Packaging** — Linux desktop/DEB metadata and AppImage build fixes, including rejecting stale output; corrected Windows MSIX architecture metadata and IPv6 interface selection.
+- **Error messages** — native validation errors display readable text instead of serialized JSON.
+
+### Upgrade notes
+- **Homebrew users upgrading from 0.5.1 or earlier:** quit and reopen WireGuide once after the upgrade to run the new version. Those older clients rely on the cask's removed restart hook; automatic in-app restart is handled by WireGuide starting with 0.6.0.
+- Terminal `brew install` / `brew upgrade` no longer force-close or automatically launch WireGuide. Restart a running app after upgrading it.
+
 ## [0.5.1] - 2026-08-11
 
 Patch release: the in-app "Update Now" button is now trustworthy on macOS. If you are on 0.5.0 via Homebrew, this is also the first update the button itself should complete cleanly end-to-end.
