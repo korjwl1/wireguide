@@ -61,13 +61,21 @@ brew install --cask wireguide
 > Windows SmartScreen에서 "확인되지 않은 게시자" 경고가 뜰 수 있습니다 — 현재 코드 서명이
 > 없습니다. "추가 정보" → "실행"을 클릭하세요.
 
-### Linux (DEB)
+### Linux (DEB / RPM)
 
-[Releases](https://github.com/korjwl1/wireguide/releases)에서 `WireGuide-linux-amd64.deb`
-(또는 `-arm64.deb`) 패키지를 다운로드 후 설치:
+[Releases](https://github.com/korjwl1/wireguide/releases)에서 배포판에 맞는 패키지를
+다운로드 후 설치합니다.
+
+Debian / Ubuntu — `WireGuide-linux-amd64.deb` (또는 `-arm64.deb`):
 
 ```bash
 sudo apt install ./WireGuide-linux-amd64.deb
+```
+
+Fedora / RHEL — `WireGuide-linux-amd64.rpm` (또는 `-arm64.rpm`):
+
+```bash
+sudo dnf install ./WireGuide-linux-amd64.rpm
 ```
 
 앱 메뉴 등록과 트레이 연동이 함께 설치되며, 특권 헬퍼는 상시 서비스가 아니라

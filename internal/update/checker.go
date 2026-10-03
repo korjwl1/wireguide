@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -969,11 +970,40 @@ func preferredExtensions(goos string) []string {
 	case "darwin":
 		return []string{".dmg", ".zip", ".pkg"}
 	case "linux":
+		// Releases ship both .deb and .rpm; installLinux hands the file
+		// to dpkg or rpm by extension, so the wrong one fails to install.
+		if linuxPackageFormat() == "rpm" {
+			return []string{".tar.gz", ".tar.xz", ".rpm", ".deb", ".appimage"}
+		}
 		return []string{".tar.gz", ".tar.xz", ".deb", ".rpm", ".appimage"}
 	case "windows":
 		return []string{".exe", ".msi", ".zip"}
 	}
 	return []string{".zip", ".tar.gz"}
+}
+
+// linuxPackageFormat reports which package format this host should
+// update with: "rpm" or "deb". A var so tests can stub it.
+var linuxPackageFormat = detectLinuxPackageFormat
+
+// detectLinuxPackageFormat prefers whichever package manager actually
+// owns the current wireguide install — Fedora ships a dpkg package and
+// Debian an rpm one, so mere tool presence is ambiguous. Falls back to
+// tool presence for unpackaged (source/AppImage) installs, then to deb.
+func detectLinuxPackageFormat() string {
+	if exec.Command("rpm", "-q", "wireguide").Run() == nil {
+		return "rpm"
+	}
+	if out, err := exec.Command("dpkg-query", "-W", "-f=${Status}", "wireguide").Output(); err == nil &&
+		strings.Contains(string(out), "install ok installed") {
+		return "deb"
+	}
+	_, dpkgErr := exec.LookPath("dpkg")
+	_, rpmErr := exec.LookPath("rpm")
+	if dpkgErr != nil && rpmErr == nil {
+		return "rpm"
+	}
+	return "deb"
 }
 
 // BrewPath returns the absolute path to the brew binary, or empty string

@@ -73,12 +73,27 @@ jobs:
           dpkg-deb --info bin/wireguide.deb
           dpkg-deb --contents bin/wireguide.deb
 
+      # Mirrors release.yml's RPM step so a broken overrides.rpm block in
+      # nfpm.yaml fails the PR instead of the tag build.
+      - name: Build and inspect RPM
+        env:
+          GOARCH: amd64
+          GIT_COMMITTER_NAME: WireGuide CI
+          GIT_COMMITTER_EMAIL: noreply@example.com
+        run: |
+          sudo apt-get install -y rpm
+          wails3 tool package -name wireguide -format rpm -config ./build/linux/nfpm/nfpm.yaml -out ./bin
+          rpm -qip bin/wireguide.rpm
+          rpm -qp --requires bin/wireguide.rpm
+          rpm -qpl bin/wireguide.rpm
+
       - uses: actions/upload-artifact@v4
         with:
           name: linux-amd64-ci
           path: |
             bin/wireguide
             bin/wireguide.deb
+            bin/wireguide.rpm
           if-no-files-found: error
           retention-days: 7
 

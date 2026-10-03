@@ -275,10 +275,29 @@ jobs:
           dpkg-deb --info bin/wireguide.deb
           mv bin/wireguide.deb "bin/WireGuide-linux-${{ matrix.arch }}.deb"
 
+      - name: Package RPM
+        # Same nfpm.yaml as the DEB; its `overrides.rpm` block swaps in
+        # Fedora/RHEL dependency names, and nfpm maps GOARCH to the RPM
+        # arch (amd64 → x86_64, arm64 → aarch64). nfpm writes RPMs in pure
+        # Go, so no rpmbuild is needed — the `rpm` CLI is only installed
+        # to sanity-check the result.
+        env:
+          GOARCH: ${{ matrix.arch }}
+          GIT_COMMITTER_NAME: WireGuide CI
+          GIT_COMMITTER_EMAIL: noreply@example.com
+        run: |
+          sudo apt-get install -y rpm
+          wails3 tool package -name wireguide -format rpm -config ./build/linux/nfpm/nfpm.yaml -out ./bin
+          rpm -qip bin/wireguide.rpm
+          rpm -qp --requires bin/wireguide.rpm
+          mv bin/wireguide.rpm "bin/WireGuide-linux-${{ matrix.arch }}.rpm"
+
       - uses: actions/upload-artifact@v4
         with:
           name: linux-${{ matrix.arch }}
-          path: bin/WireGuide-linux-${{ matrix.arch }}.deb
+          path: |
+            bin/WireGuide-linux-${{ matrix.arch }}.deb
+            bin/WireGuide-linux-${{ matrix.arch }}.rpm
           if-no-files-found: error
           retention-days: 7
 

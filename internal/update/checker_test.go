@@ -660,6 +660,26 @@ func TestMatchAsset_NoMatch(t *testing.T) {
 	}
 }
 
+func TestMatchAsset_LinuxFollowsPackageFormat(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("linux-only asset preference")
+	}
+	orig := linuxPackageFormat
+	t.Cleanup(func() { linuxPackageFormat = orig })
+
+	assets := []Asset{
+		{Name: "WireGuide-linux-" + runtime.GOARCH + ".deb"},
+		{Name: "WireGuide-linux-" + runtime.GOARCH + ".rpm"},
+	}
+	for _, format := range []string{"deb", "rpm"} {
+		linuxPackageFormat = func() string { return format }
+		want := "WireGuide-linux-" + runtime.GOARCH + "." + format
+		if got := matchAsset(assets); got != want {
+			t.Errorf("format %s: matchAsset = %q, want %q", format, got, want)
+		}
+	}
+}
+
 func TestMatchAsset_EmptyAssets(t *testing.T) {
 	got := matchAsset(nil)
 	if got != "" {

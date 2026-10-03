@@ -132,13 +132,21 @@ installer registers the helper service and shortcut.
 > Windows SmartScreen may warn that the publisher is unknown — the binary is
 > currently unsigned. Click "More info" → "Run anyway".
 
-### Linux (DEB)
+### Linux (DEB / RPM)
 
-Download the `WireGuide-linux-amd64.deb` (or `-arm64.deb`) package from
-[Releases](https://github.com/korjwl1/wireguide/releases) and install it:
+Download the package for your distribution from
+[Releases](https://github.com/korjwl1/wireguide/releases) and install it.
+
+Debian / Ubuntu — `WireGuide-linux-amd64.deb` (or `-arm64.deb`):
 
 ```bash
 sudo apt install ./WireGuide-linux-amd64.deb
+```
+
+Fedora / RHEL — `WireGuide-linux-amd64.rpm` (or `-arm64.rpm`):
+
+```bash
+sudo dnf install ./WireGuide-linux-amd64.rpm
 ```
 
 The package registers the app menu entry and tray integration; the privileged
