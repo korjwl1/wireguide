@@ -219,30 +219,16 @@ func (h *Helper) automationConnect(name, reason, ssid string) {
 // SSID change handler would try to disconnect a tunnel already
 // gone.
 func (h *Helper) disconnectAutoManaged(name string) {
+	// Same lock the manual disconnect path holds, so a rule-driven teardown
+	// can't interleave with a Connect/Disconnect from a GUI or the CLI.
+	// Lock order: reevalMu (held by our caller) -> connectMu. Nothing under
+	// connectMu may re-enter reevaluateAutomation.
+	h.connectMu.Lock()
 	if h.monitor != nil {
 		h.monitor.CancelRetryFor(name)
 	}
-	// Snapshot the interface name before teardown so we can strip it from
-	// the kill-switch filter set afterwards, exactly as handleDisconnect
-	// does. Without this a rule-driven disconnect leaves a dead tunnel's
-	// LUID permitted in the WFP filters (issue #12).
-	iface := ""
-	if h.firewall.IsKillSwitchEnabled() {
-		for _, st := range h.manager.AllStatuses() {
-			if st != nil && st.TunnelName == name && st.InterfaceName != "" {
-				iface = st.InterfaceName
-				break
-			}
-		}
-	}
 	if err := h.manager.DisconnectTunnel(name); err != nil {
 		slog.Warn("automation disconnect failed", "tunnel", name, "error", err)
-	}
-	if iface != "" {
-		if err := h.firewall.RemoveKillSwitchTunnel(iface); err != nil {
-			slog.Warn("RemoveKillSwitchTunnel after automation disconnect failed",
-				"interface", iface, "error", err)
-		}
 	}
 	h.mu.Lock()
 	delete(h.activeCfgs, name)
@@ -255,5 +241,9 @@ func (h *Helper) disconnectAutoManaged(name string) {
 	h.latencyMu.Lock()
 	delete(h.latencyByTunnel, name)
 	h.latencyMu.Unlock()
+	// Strips the dead tunnel's kill-switch permit (issue #12) and its DNS
+	// rules, exactly as handleDisconnect does.
+	h.reconcileFirewallLocked("automation-disconnect")
+	h.connectMu.Unlock()
 	h.maybeArmShutdownAfterTeardown("rule-driven disconnect, no GUI attached")
 }

@@ -19,6 +19,7 @@ func FuzzParse(f *testing.F) {
 	f.Add("\xef\xbb\xbf[Interface]\nPrivateKey=YYY=\n")
 	f.Add("[Interface]\nPrivateKey=\n[Peer]\nPublicKey=\n")
 	f.Add("[Interface]\nAddress=10.0.0.1/32\nDNS=1.1.1.1,2.2.2.2\n")
+	f.Add("[Interface]\nDNS=~a.b\n")
 	f.Add("[InTeRfAcE]\n")
 	f.Add("# comment only\n; also comment\n")
 	f.Add("[Peer]\nAllowedIPs=0.0.0.0/0,::/0,10.0.0.0/8\n")

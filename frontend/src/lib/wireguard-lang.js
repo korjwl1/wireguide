@@ -39,6 +39,9 @@ const wireguardMode = {
     // Values after = sign
     if (stream.match(/^=\s*/)) return 'operator';
 
+    // Split-DNS routing domains in DNS= lists: ~corp.example
+    if (stream.match(/^~[A-Za-z0-9][A-Za-z0-9.-]*/)) return 'string';
+
     // IP addresses / CIDR
     if (stream.match(/^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(\/\d{1,2})?/)) return 'number';
 
@@ -47,6 +50,9 @@ const wireguardMode = {
 
     // Base64 keys (44 chars)
     if (stream.match(/^[A-Za-z0-9+/]{43}=/)) return 'string';
+
+    // List separators (DNS = 1.1.1.1, ~corp.lan): keep tokenizing the line
+    if (stream.match(/^,\s*/)) return null;
 
     // Consume rest of line
     stream.skipToEnd();

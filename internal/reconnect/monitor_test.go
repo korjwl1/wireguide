@@ -1004,3 +1004,21 @@ func TestPingSettingsChangeDuringDisconnectRestoresFirewall(t *testing.T) {
 		t.Fatal("invalid retry retained")
 	}
 }
+
+func TestFailedSuspendStillOwesResume(t *testing.T) {
+	var valid atomic.Bool
+	valid.Store(true)
+	var resumed atomic.Int32
+	mon, mgr, _ := newTestMonitor(testConfig(), func(context.Context, string) error {
+		t.Error("reconnected after settings changed during disconnect")
+		return nil
+	})
+	mgr.disconnectFn = func() error { valid.Store(false); return nil }
+	mon.SetFirewallCallbacks(
+		func() error { return errors.New("partial suspend") },
+		func() error { resumed.Add(1); return nil })
+	mon.running = true
+	defer mon.Stop()
+	mon.ReconnectTunnelIfIdle("ping", valid.Load)
+	waitFor(t, time.Second, "firewall resumed after failed suspend", func() bool { return resumed.Load() == 1 })
+}

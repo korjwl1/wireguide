@@ -174,6 +174,25 @@ gaps, please [open an issue](https://github.com/korjwl1/wireguide/issues/new/cho
 
 ---
 
+## DNS
+
+`DNS =` in `[Interface]` takes IP servers, search domains and split-DNS domains:
+
+```ini
+DNS = 10.0.0.1                          # all queries go to the tunnel (default)
+DNS = 10.0.0.1, corp.example            # plus a search domain
+DNS = 192.168.1.1, ~corp.lan, ~1.168.192.in-addr.arpa
+```
+
+- **No `~` token**: global mode. The tunnel's servers replace system DNS while connected and it is restored on disconnect.
+- **Any `~name` token**: split mode. The servers are added as a supplemental resolver for the `~` domains only. System DNS (and your own search domains) are never touched, and DNS protection is never applied to the tunnel. Plain hostnames in the list become match and search domains, so bare names expand. At least one server IP is required, and the server must be reachable through `AllowedIPs`.
+- Reverse zones (`~1.168.192.in-addr.arpa`) are not derived automatically; add them yourself.
+- Split DNS works on macOS (SystemConfiguration supplemental resolver) and Linux with systemd-resolved (`resolvectl`). On Windows the tunnel connects without DNS handling.
+
+On macOS a resolver for a matched domain does **not** fall back to your local DNS when it answers NXDOMAIN, so a name that only exists locally under a `~` domain will fail. `dig`, `nslookup` and `host` read `/etc/resolv.conf` and bypass supplemental resolvers; test with `dscacheutil -q host -a name <host>` (or `ping`/`curl`). Match domains ending in `.local` may be answered by mDNS instead of the tunnel.
+
+---
+
 ## Command line
 
 WireGuide ships a small CLI, `wireguide ctl`, for scripting and automation. Like

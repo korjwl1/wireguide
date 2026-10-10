@@ -6,6 +6,13 @@ import (
 	"net"
 	"regexp"
 	"strconv"
+	"strings"
+)
+
+// Limits for split-DNS ("~domain") entries in Interface.DNS.
+const (
+	maxSplitDomains   = 32
+	maxSplitDomainLen = 253
 )
 
 // hostnameRegex matches RFC 1035 hostnames (single-label or FQDN).
@@ -96,10 +103,43 @@ func validateInterface(iface *InterfaceConfig, result *ValidationResult) {
 	// DNS: optional. Each entry is either an IP address (DNS server) or a
 	// hostname (search domain) — matching wg-quick's `DNS = 1.1.1.1, corp.example.com`
 	// syntax. The network adapter splits them at apply time.
+	//
+	// A "~name" entry is a split-DNS routing domain: the tunnel's IP servers
+	// then answer only for that domain and system DNS is left alone.
+	var hasIP bool
+	matchSeen := make(map[string]struct{})
 	for _, dns := range iface.DNS {
-		if net.ParseIP(dns) == nil && !hostnameRegex.MatchString(dns) {
+		if strings.HasPrefix(dns, "~") {
+			dom := dns[1:]
+			switch {
+			case dom == "":
+				result.addError("Interface.DNS", `invalid DNS entry "~": a split-DNS domain is required after "~"`)
+			case dom == ".":
+				result.addError("Interface.DNS", `invalid DNS entry "~.": use plain DNS servers to send all queries through the tunnel`)
+			case strings.HasPrefix(dom, "~"):
+				result.addError("Interface.DNS", fmt.Sprintf("invalid DNS entry %q: only one leading \"~\" is allowed", dns))
+			case strings.HasSuffix(dom, "."):
+				result.addError("Interface.DNS", fmt.Sprintf("invalid DNS entry %q: trailing dot is not allowed", dns))
+			case len(dom) > maxSplitDomainLen || !hostnameRegex.MatchString(dom):
+				result.addError("Interface.DNS", fmt.Sprintf("invalid split-DNS domain: %q", dns))
+			default:
+				matchSeen[strings.ToLower(dom)] = struct{}{}
+			}
+			continue
+		}
+		if net.ParseIP(dns) != nil {
+			hasIP = true
+			continue
+		}
+		if !hostnameRegex.MatchString(dns) {
 			result.addError("Interface.DNS", fmt.Sprintf("invalid DNS entry (not an IP or hostname): %q", dns))
 		}
+	}
+	if len(matchSeen) > 0 && !hasIP {
+		result.addError("Interface.DNS", `split DNS ("~domain") requires at least one DNS server IP address`)
+	}
+	if len(matchSeen) > maxSplitDomains {
+		result.addError("Interface.DNS", fmt.Sprintf("too many split-DNS domains (%d, max %d)", len(matchSeen), maxSplitDomains))
 	}
 
 	// MTU: optional, valid range
@@ -185,4 +225,3 @@ func (r *ValidationResult) ErrorMessages() []string {
 	}
 	return msgs
 }
-

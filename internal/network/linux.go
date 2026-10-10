@@ -16,6 +16,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/korjwl1/wireguide/internal/domain"
 )
 
 // cmdTimeout bounds every external command (ip/nft/resolvectl/resolvconf).
@@ -557,6 +559,12 @@ func (m *LinuxManager) SetDNS(ifaceName string, servers []string) error {
 		return nil
 	}
 
+	// Split DNS ("~domain" tokens) is resolved-only: the other backends can
+	// only express a global resolver, so they must never be used for it.
+	if parsed := domain.ParseDNSEntries(servers); len(parsed.Match) > 0 {
+		return setSplitDNSResolvectl(ifaceName, parsed)
+	}
+
 	// Separate DNS IPs from search domains (H9)
 	var dnsIPs, searchDomains []string
 	for _, s := range servers {
@@ -617,6 +625,44 @@ func (m *LinuxManager) SetDNS(ifaceName string, servers []string) error {
 	}
 	content := strings.Join(lines, "\n") + "\n"
 	return writeResolvConf(content)
+}
+
+// splitDNSRunCmd is a var so tests can intercept resolvectl invocations.
+var splitDNSRunCmd = runCmd
+
+// setSplitDNSResolvectl configures split DNS via systemd-resolved only. A
+// missing resolvectl or a failed dns/domain command yields
+// ErrSplitDNSUnsupported; resolvconf and resolv.conf rewriting are global
+// and never used here.
+func setSplitDNSResolvectl(ifaceName string, p domain.DNSEntries) error {
+	if len(p.Servers) == 0 {
+		return fmt.Errorf("split DNS requires at least one DNS server address")
+	}
+	for _, d := range append(append([]string(nil), p.Match...), p.Search...) {
+		if !isValidSearchDomain(d) {
+			return fmt.Errorf("invalid split DNS domain %q", d)
+		}
+	}
+	cmds := resolvectlSplitCommands(ifaceName, p)
+	for i, args := range cmds {
+		if err := splitDNSRunCmd("resolvectl", args...); err != nil {
+			if i == len(cmds)-1 {
+				// default-route is unsupported on old systemd; harmless to skip.
+				slog.Debug("resolvectl default-route failed (old systemd?)", "error", err)
+				continue
+			}
+			if i > 0 {
+				// dns succeeded but a later step failed: a link with servers
+				// and no routing domain becomes a default-route resolver,
+				// i.e. a global override. Undo it (best effort).
+				if rerr := splitDNSRunCmd("resolvectl", "revert", ifaceName); rerr != nil {
+					slog.Warn("resolvectl revert after partial split DNS failed", "iface", ifaceName, "error", rerr)
+				}
+			}
+			return fmt.Errorf("%w: %v", ErrSplitDNSUnsupported, err)
+		}
+	}
+	return nil
 }
 
 // tryResolvectl attempts to set DNS via systemd-resolved. Returns true on success.

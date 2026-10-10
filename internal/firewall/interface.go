@@ -82,3 +82,19 @@ type FirewallManager interface {
 	// brings new rules up.
 	RecoverFromCrash() bool
 }
+
+// DNSPermit allows port-53 traffic to one resolver while DNS protection is
+// active. Interface == "" means "on any interface" (a resolver that is
+// reached over the physical network, e.g. a split-tunnel's public resolver).
+type DNSPermit struct {
+	Interface string
+	Server    string
+}
+
+// DNSPermitSetter is an optional FirewallManager extension for backends that
+// can render the complete DNS permit set atomically (macOS pf, Linux nft). SetDNSPermits
+// replaces the whole set; an empty/nil set removes every DNS rule. Backends
+// that don't implement it keep using Enable/DisableDNSProtection.
+type DNSPermitSetter interface {
+	SetDNSPermits(permits []DNSPermit) error
+}

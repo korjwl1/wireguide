@@ -887,18 +887,33 @@ func activeTunnelName() string {
 	return resp.Value
 }
 
+// activeTunnelNames returns every connected tunnel, not only the first.
+func activeTunnelNames() []string {
+	c, err := dialHelper()
+	if err != nil {
+		return nil
+	}
+	defer c.Close()
+	var resp ipc.ActiveTunnelsResponse
+	if c.Call(ipc.MethodActiveTunnels, nil, &resp) != nil {
+		return nil
+	}
+	return resp.Names
+}
+
 // --- diagnostics ---
 
 func cmdDNSLeak(_ []string) int {
 	// Compare against the active tunnel's DNS servers when there is one.
-	var expected []string
-	if name := activeTunnelName(); name != "" {
-		if store, err := tunnelStore(); err == nil {
+	var perTunnel [][]string
+	if store, err := tunnelStore(); err == nil {
+		for _, name := range activeTunnelNames() {
 			if cfg, err := store.Load(name); err == nil {
-				expected = cfg.Interface.DNS
+				perTunnel = append(perTunnel, cfg.Interface.DNS)
 			}
 		}
 	}
+	expected := diag.ExpectedDNSForTunnels(perTunnel)
 	res := diag.RunDNSLeakTest(expected)
 	if res == nil {
 		fmt.Fprintln(os.Stderr, "dnsleak: no result")
@@ -910,6 +925,8 @@ func cmdDNSLeak(_ []string) int {
 	}
 	if res.Leaked {
 		fmt.Println("LEAK: DNS queries are resolving outside the tunnel")
+	} else if res.SplitMode {
+		fmt.Println("OK: split DNS - only the configured domains use the tunnel resolver")
 	} else {
 		fmt.Println("OK: DNS is pinned to the tunnel")
 	}

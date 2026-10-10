@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/korjwl1/wireguide/internal/domain"
 	"github.com/korjwl1/wireguide/internal/sysexec"
 )
 
@@ -22,6 +23,10 @@ type DNSLeakResult struct {
 	DNSServers []DNSServer `json:"dns_servers"`
 	TestDomain string      `json:"test_domain"`
 	Error      string      `json:"error,omitempty"`
+	// SplitMode is true when the tunnel uses split DNS ("~domain" entries):
+	// default system resolvers are expected there, so they are not leaks.
+	SplitMode           bool     `json:"split_mode,omitempty"`
+	MissingMatchDomains []string `json:"missing_match_domains,omitempty"`
 }
 
 // DNSServer represents a detected DNS resolver.
@@ -30,6 +35,9 @@ type DNSServer struct {
 	Hostname string `json:"hostname"`
 	IsVPN    bool   `json:"is_vpn"` // true if this is the expected VPN DNS
 }
+
+// The expectedDNS arguments below are the tunnel's raw `DNS=` entries. Any
+// "~domain" token switches the test to split mode (see runSplitDNSCheck).
 
 // RunDNSLeakTest is a context-less convenience wrapper for callers that
 // don't have one. Bounded by a hard 10-second cap so a hung resolver
@@ -52,6 +60,10 @@ func RunDNSLeakTest(expectedDNS []string) *DNSLeakResult {
 // (which on a machine with 8 system DNS entries could exceed a minute).
 func RunDNSLeakTestContext(ctx context.Context, expectedDNS []string) *DNSLeakResult {
 	result := &DNSLeakResult{}
+
+	if parsed := domain.ParseDNSEntries(expectedDNS); len(parsed.Match) > 0 {
+		return runSplitDNSCheck(ctx, result, parsed)
+	}
 
 	// Generate a fresh random subdomain so the test query can't be
 	// served from any resolver's cache. crypto/rand (16 bytes hex)
@@ -77,7 +89,7 @@ func RunDNSLeakTestContext(ctx context.Context, expectedDNS []string) *DNSLeakRe
 	}
 
 	type probeResult struct {
-		idx     int
+		idx      int
 		hostname string
 		responds bool
 	}

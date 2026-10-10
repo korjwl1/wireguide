@@ -273,6 +273,7 @@ func (m *Manager) ConnectWithContext(ctx context.Context, cfg *domain.WireGuardC
 		if err := netMgr.RemoveRoutes(ifaceName, nil, fullTunnel); err != nil {
 			slog.Warn("connect race: RemoveRoutes failed", "iface", ifaceName, "error", err)
 		}
+		removeSplitDNS(netMgr, ifaceName)
 		if err := netMgr.RestoreDNS(ifaceName); err != nil {
 			slog.Warn("connect race: RestoreDNS failed", "iface", ifaceName, "error", err)
 		}
