@@ -22,3 +22,5 @@ func platformInstall(ctx context.Context, path string, info *UpdateInfo) (*Insta
 	_, _, _ = ctx, path, info
 	return nil, platformSelfUpdateSupport()
 }
+
+func platformCleanupPreviousUpdate() {}

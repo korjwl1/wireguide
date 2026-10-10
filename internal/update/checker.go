@@ -112,7 +112,7 @@ type CheckResult struct {
 // doesn't have a context (e.g. test code).
 func CheckForUpdateConditional(ctx context.Context, prevETag, prevLastModified string) (*CheckResult, error) {
 	client := newUpdateClient(10 * time.Second)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiEndpoint, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, releaseAPIEndpoint(), nil)
 	if err != nil {
 		return nil, err
 	}

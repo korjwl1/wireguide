@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strconv"
 	"time"
 
@@ -29,11 +28,7 @@ func (s *TunnelService) restartAfterUpdate(appPath string) error {
 	if s.app == nil {
 		return fmt.Errorf("update installed, but application restart is unavailable")
 	}
-	root := os.Getenv("SystemRoot")
-	if root == "" {
-		root = `C:\Windows`
-	}
-	cmd := exec.Command(filepath.Join(root, "System32", "WindowsPowerShell", "v1.0", "powershell.exe"),
+	cmd := exec.Command(sysexec.PowerShellPath(),
 		"-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", updateRestartScript)
 	cmd.Env = append(os.Environ(),
 		"WIREGUIDE_RESTART_PID="+strconv.Itoa(os.Getpid()),

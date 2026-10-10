@@ -49,6 +49,14 @@ func SelfUpdateSupport() error {
 	return selfUpdateSupport()
 }
 
+// CleanupPreviousUpdate removes what an earlier self-update left behind
+// for after the restart (the macOS bundle swap keeps the replaced app
+// until then, because the old process is still running from it). Call
+// once at GUI startup; best-effort and a no-op where nothing is kept.
+func CleanupPreviousUpdate() {
+	platformCleanupPreviousUpdate()
+}
+
 // Install runs the OS-specific installer for a downloaded update.
 //
 // The caller must pass the UpdateInfo that DownloadUpdate filled in.

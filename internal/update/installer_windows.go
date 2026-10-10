@@ -43,31 +43,39 @@ const (
 //
 // Flow: elevate + start the installer (UAC prompt) → wait for it →
 // if the installer killed the GUI (the normal case), relaunch the
-// freshly installed wireguide.exe as the regular, non-elevated user →
-// exit with the installer's code. The GUI blocks on this script, so a
-// declined prompt or failed install surfaces back in the UI; on success
-// the GUI is gone before the script ends and the relaunch takes over.
+// freshly installed wireguide.exe as the regular, non-elevated user and
+// delete the installer (the GUI that downloaded it is gone) → exit with
+// the installer's code. The GUI blocks on this script, so a declined
+// prompt or failed install surfaces back in the UI; on success the GUI
+// is gone before the script ends and the relaunch takes over.
+//
+// Process.Start with a ProcessStartInfo rather than Start-Process: in
+// Windows PowerShell 5.1, Start-Process -Verb RunAs rethrows a declined
+// UAC prompt as an InvalidOperationException with no inner Win32Exception,
+// so the 1223 check could never match. Process.Start surfaces it as a
+// MethodInvocationException wrapping the Win32Exception, and returns a
+// process object whose ExitCode is readable after WaitForExit.
 //
 // WIREGUIDE_UPDATE_VERB is "RunAs" in production; tests leave it empty
 // to exercise the script without a UAC prompt.
 const installerWaiterScript = `
 $ErrorActionPreference = 'Stop'
-$a = @{ FilePath = $env:WIREGUIDE_UPDATE_INSTALLER; ArgumentList = $env:WIREGUIDE_UPDATE_ARGS; PassThru = $true }
-if ($env:WIREGUIDE_UPDATE_VERB) { $a.Verb = $env:WIREGUIDE_UPDATE_VERB }
+$psi = New-Object System.Diagnostics.ProcessStartInfo $env:WIREGUIDE_UPDATE_INSTALLER, $env:WIREGUIDE_UPDATE_ARGS
+$psi.UseShellExecute = $true
+if ($env:WIREGUIDE_UPDATE_VERB) { $psi.Verb = $env:WIREGUIDE_UPDATE_VERB }
 try {
-  $p = Start-Process @a
+  $p = [System.Diagnostics.Process]::Start($psi)
 } catch {
   $e = $_.Exception
   while ($e.InnerException) { $e = $e.InnerException }
   if ($e -is [System.ComponentModel.Win32Exception] -and $e.NativeErrorCode -eq 1223) { exit 1223 }
   exit 1001
 }
-$null = $p.Handle
 $p.WaitForExit()
 $code = $p.ExitCode
-if ($null -eq $code) { $code = 0 }
 if (-not (Get-Process -Id ([int]$env:WIREGUIDE_UPDATE_GUI_PID) -ErrorAction SilentlyContinue)) {
   try { Start-Process -FilePath $env:WIREGUIDE_UPDATE_APP } catch { }
+  Remove-Item -LiteralPath $env:WIREGUIDE_UPDATE_INSTALLER -Force -ErrorAction SilentlyContinue
 }
 exit $code
 `
@@ -100,6 +108,10 @@ func platformSelfUpdateSupport() error {
 	_, _, err := windowsInstallLayout()
 	return err
 }
+
+// platformCleanupPreviousUpdate has nothing to do on Windows: the NSIS
+// installer replaces files in place and the waiter deletes the installer.
+func platformCleanupPreviousUpdate() {}
 
 func platformInstall(ctx context.Context, path string, info *UpdateInfo) (*InstallResult, error) {
 	if !strings.EqualFold(filepath.Ext(path), ".exe") {
@@ -138,7 +150,7 @@ func platformInstall(ctx context.Context, path string, info *UpdateInfo) (*Insta
 
 	// /S = silent, /D = install dir (must be last and unquoted — NSIS
 	// takes the rest of the command line verbatim, spaces included).
-	code, err := runInstallerWaiter(ctx, installerWaiterEnv{
+	code, err := runInstallerWaiter(installerWaiterEnv{
 		Installer: path,
 		Args:      "/S /D=" + dir,
 		App:       exe,
@@ -173,8 +185,13 @@ type installerWaiterEnv struct {
 
 // runInstallerWaiter runs installerWaiterScript and returns its exit
 // code. err is non-nil only when PowerShell itself couldn't run.
-func runInstallerWaiter(ctx context.Context, e installerWaiterEnv) (int, error) {
-	cmd := exec.CommandContext(ctx, powershellPath(),
+//
+// Deliberately not bound to the caller's context: killing the waiter
+// while the UAC prompt is up would not withdraw the prompt, and an
+// approval after that would install, kill the GUI and leave nobody to
+// relaunch the app.
+func runInstallerWaiter(e installerWaiterEnv) (int, error) {
+	cmd := exec.Command(sysexec.PowerShellPath(),
 		"-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
 		"-EncodedCommand", encodePowerShell(installerWaiterScript))
 	cmd.Env = append(os.Environ(),
@@ -206,16 +223,6 @@ func encodePowerShell(script string) string {
 		b[2*i+1] = byte(c >> 8)
 	}
 	return base64.StdEncoding.EncodeToString(b)
-}
-
-// powershellPath pins Windows PowerShell by absolute path instead of a
-// PATH lookup — this process is about to trigger an elevation prompt.
-func powershellPath() string {
-	root := os.Getenv("SystemRoot")
-	if root == "" {
-		root = `C:\Windows`
-	}
-	return filepath.Join(root, "System32", "WindowsPowerShell", "v1.0", "powershell.exe")
 }
 
 // installerProductVersion returns MAJOR.MINOR.PATCH from the PE version

@@ -10,6 +10,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"golang.org/x/sys/unix"
 )
 
 // macOS releases ship WireGuide-darwin-arm64.zip: an ad-hoc-signed
@@ -63,7 +65,30 @@ func platformSelfUpdateSupport() error {
 		return fmt.Errorf("%w: %s is not writable by this user", ErrSelfUpdateUnsupported, filepath.Dir(bundle))
 	}
 	_ = os.Remove(probe)
+	// Moving a directory to another parent also rewrites its ".." entry,
+	// which needs write access on the bundle itself — a root-owned bundle
+	// under an admin-writable /Applications would otherwise pass the probe
+	// above, download, and only then fail the swap.
+	if err := unix.Access(bundle, unix.W_OK); err != nil {
+		return fmt.Errorf("%w: %s is not writable by this user", ErrSelfUpdateUnsupported, bundle)
+	}
 	return nil
+}
+
+// platformCleanupPreviousUpdate removes the staging directories a bundle
+// swap kept next to the app (the replaced bundle, which the old process
+// was still running from) and any left by an interrupted update.
+func platformCleanupPreviousUpdate() {
+	bundle, err := runningAppBundle()
+	if err != nil {
+		return
+	}
+	leftovers, _ := filepath.Glob(filepath.Join(filepath.Dir(bundle), ".wireguide-update-*"))
+	for _, dir := range leftovers {
+		if err := os.RemoveAll(dir); err != nil {
+			slog.Warn("update: could not remove leftover update directory", "path", dir, "error", err)
+		}
+	}
 }
 
 func platformInstall(ctx context.Context, path string, info *UpdateInfo) (*InstallResult, error) {
@@ -120,6 +145,10 @@ func platformInstall(ctx context.Context, path string, info *UpdateInfo) (*Insta
 		}
 		return nil, err
 	}
+	// Keep previous.app: this process is still running from it until the
+	// relaunch, and the quit path may read its Resources. The next startup
+	// removes it (CleanupPreviousUpdate).
+	keepStaging = true
 	slog.Info("update: app bundle replaced", "bundle", target, "version", info.Version)
 	return &InstallResult{RelaunchPath: target}, nil
 }
@@ -138,7 +167,7 @@ func checkStagedBundle(ctx context.Context, bundle, wantVersion string) error {
 	if id := readPlistKey(ctx, plist, "CFBundleIdentifier"); id != darwinBundleID {
 		return fmt.Errorf("update bundle identifier is %q, want %q", id, darwinBundleID)
 	}
-	if v := readPlistKey(ctx, plist, "CFBundleShortVersionString"); v != wantVersion {
+	if v := readPlistKey(ctx, plist, "CFBundleShortVersionString"); versionCore(v) != versionCore(wantVersion) {
 		return fmt.Errorf("update bundle version is %q, want %q", v, wantVersion)
 	}
 	if out, err := exec.CommandContext(ctx, "/usr/bin/codesign", "--verify", "--deep", "--strict", bundle).CombinedOutput(); err != nil {

@@ -280,7 +280,7 @@ func TestApply_NoNewerReleaseAborts(t *testing.T) {
 	fr.tag = "v0.0.1"
 	calls := stubPlatform(t, nil)
 
-	if _, err := Apply(context.Background(), "", nil); err == nil {
+	if _, err := Apply(context.Background(), "0.0.1", nil); err == nil {
 		t.Fatal("expected error when the latest release is not newer")
 	}
 	if len(*calls) != 0 {
@@ -382,5 +382,17 @@ func TestVersionCore(t *testing.T) {
 		if got := versionCore(in); got != want {
 			t.Errorf("versionCore(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+// The frontend must name the version the user agreed to; without it Apply
+// refuses before touching the network.
+func TestApply_RequiresVersion(t *testing.T) {
+	calls := stubPlatform(t, nil)
+	if _, err := Apply(context.Background(), "", nil); err == nil {
+		t.Fatal("expected an error without a version")
+	}
+	if len(*calls) != 0 {
+		t.Error("platform installer must not run")
 	}
 }

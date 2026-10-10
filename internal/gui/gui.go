@@ -309,6 +309,10 @@ func Run(assetsHandler http.Handler, dataDir string) error {
 	healthWg.Add(1)
 	startConfigWatcher(app, configFilePath(paths.ConfigDir), paths.TunnelsDir, healthDone, &healthWg)
 
+	// Remove what a self-update kept for after its restart (the replaced
+	// macOS bundle). Best-effort; off the startup path.
+	go update.CleanupPreviousUpdate()
+
 	// Update scheduler — periodic GitHub Releases check. Lives in the GUI
 	// process (not the helper) because update notifications are a pure UI
 	// concern and the helper runs as root with minimum network surface by

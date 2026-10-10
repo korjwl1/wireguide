@@ -38,7 +38,7 @@ func writeRelaunchMarkerApp(t *testing.T) (app, marker string) {
 
 func TestInstallerWaiter_PropagatesInstallerExitCode_NoRelaunchWhileGUIAlive(t *testing.T) {
 	app, marker := writeRelaunchMarkerApp(t)
-	code, err := runInstallerWaiter(context.Background(), installerWaiterEnv{
+	code, err := runInstallerWaiter(installerWaiterEnv{
 		Installer: cmdExe(),
 		Args:      "/c exit 3",
 		App:       app,
@@ -64,7 +64,7 @@ func TestInstallerWaiter_RelaunchesAfterGUIExit(t *testing.T) {
 		t.Fatal(err)
 	}
 	app, marker := writeRelaunchMarkerApp(t)
-	code, err := runInstallerWaiter(context.Background(), installerWaiterEnv{
+	code, err := runInstallerWaiter(installerWaiterEnv{
 		Installer: cmdExe(),
 		Args:      "/c exit 0",
 		App:       app,
@@ -86,7 +86,7 @@ func TestInstallerWaiter_RelaunchesAfterGUIExit(t *testing.T) {
 }
 
 func TestInstallerWaiter_LaunchFailure(t *testing.T) {
-	code, err := runInstallerWaiter(context.Background(), installerWaiterEnv{
+	code, err := runInstallerWaiter(installerWaiterEnv{
 		Installer: filepath.Join(t.TempDir(), "missing-installer.exe"),
 		Args:      "/S",
 		App:       cmdExe(),
@@ -106,7 +106,7 @@ func TestInstallerWaiter_PathIsNotCode(t *testing.T) {
 	dir := t.TempDir()
 	injected := filepath.Join(dir, "injected")
 	weird := filepath.Join(dir, "it's $(New-Item -Path '"+injected+"') x.exe")
-	code, err := runInstallerWaiter(context.Background(), installerWaiterEnv{
+	code, err := runInstallerWaiter(installerWaiterEnv{
 		Installer: weird,
 		Args:      "/S",
 		App:       cmdExe(),

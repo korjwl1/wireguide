@@ -314,6 +314,12 @@ func (s *TunnelService) RunUpdate(info *update.UpdateInfo) error {
 	if info == nil || !info.Available {
 		return fmt.Errorf("no update available")
 	}
+	// The banner and Settings → About can both start an update; two runs
+	// would download twice and race on the installer / bundle swap.
+	if !s.updateRunning.CompareAndSwap(false, true) {
+		return fmt.Errorf("an update is already in progress")
+	}
+	defer s.updateRunning.Store(false)
 
 	if runtime.GOOS == "darwin" && update.IsBrewInstall() {
 		brewBin := update.BrewPath()
