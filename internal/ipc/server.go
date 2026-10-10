@@ -58,7 +58,10 @@ type subscriber struct {
 	ch   chan []byte
 }
 
-// NewServer creates a server. ownerUID is the expected UID of connecting
+// NewServer creates a server on an already-bound listener — one from Listen,
+// or one adopted from launchd (socket activation). Every accepted connection
+// is peer-credential checked against ownerUID regardless of where the
+// listener came from. ownerUID is the expected UID of connecting
 // peers on Unix (pass -1 to skip peer credential checks, e.g. in tests).
 func NewServer(listener net.Listener, ownerUID ...int) *Server {
 	uid := -1

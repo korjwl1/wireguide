@@ -4,18 +4,21 @@ package elevate
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/korjwl1/wireguide/internal/ipc"
 )
 
 // testArgs returns a representative Args for plist generation.
 func testArgs() Args {
 	return Args{
-		SocketPath: "/var/run/wireguide/wireguide.sock",
+		SocketPath: "/var/run/com.wireguide.helper.sock",
 		SocketUID:  501,
 		DataDir:    "/Library/Application Support/wireguide",
 	}
@@ -65,22 +68,72 @@ func TestPlistDoesNotRunAtLoad(t *testing.T) {
 	}
 }
 
+// plistExtract reads a key back through plutil so XML comments mentioning a
+// key can't satisfy the assertion.
+func plistExtract(t *testing.T, path, keypath string) string {
+	t.Helper()
+	out, err := exec.Command("plutil", "-extract", keypath, "raw", "-o", "-", path).CombinedOutput()
+	if err != nil {
+		t.Fatalf("plutil -extract %s: %v\n%s", keypath, err, out)
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// TestPlistDeclaresLaunchdSocket pins the socket-activation contract: launchd
+// binds the socket directly under /var/run (it does not create parent
+// directories), private to the owning uid, and the boot behaviour is unchanged.
+func TestPlistDeclaresLaunchdSocket(t *testing.T) {
+	plist := generatePlistContent("/Library/PrivilegedHelperTools/com.wireguide.helper", testArgs())
+	path := filepath.Join(t.TempDir(), "test.plist")
+	if err := os.WriteFile(path, []byte(plist), 0644); err != nil {
+		t.Fatal(err)
+	}
+	for keypath, want := range map[string]string{
+		"Sockets.Listeners.SockPathName":  "/var/run/com.wireguide.helper.sock",
+		"Sockets.Listeners.SockType":      "stream",
+		"Sockets.Listeners.SockPathMode":  "384", // 0600
+		"Sockets.Listeners.SockPathOwner": fmt.Sprint(os.Getuid()),
+		"RunAtLoad":                       "false",
+		"KeepAlive.AfterInitialDemand":    "true",
+		"KeepAlive.SuccessfulExit":        "false",
+	} {
+		if got := plistExtract(t, path, keypath); got != want {
+			t.Errorf("%s = %q, want %q", keypath, got, want)
+		}
+	}
+	if got := plistExtract(t, path, "Sockets.Listeners.SockPathName"); filepath.Dir(got) != "/var/run" {
+		t.Errorf("SockPathName %q must sit directly in /var/run", got)
+	}
+	if got := plistExtract(t, path, "Sockets.Listeners.SockPathName"); got != ipc.DarwinSocketPath {
+		t.Errorf("SockPathName %q differs from ipc.DarwinSocketPath %q", got, ipc.DarwinSocketPath)
+	}
+}
+
 // TestLaunchdDemandLifecycle executes our generated plist through real launchd
-// in a temporary per-user job. Its harmless fixture fails once, then exits 0.
-// No root helper or VPN state is touched.
+// in a temporary per-user job: loading it runs nothing (runs = 0), and the
+// first connect to its socket launches it. The fixture fails once and is then
+// restarted by KeepAlive. No root helper or VPN state is touched.
 func TestLaunchdDemandLifecycle(t *testing.T) {
 	if os.Getenv("WIREGUIDE_TEST_LAUNCHD") != "1" {
 		t.Skip("set WIREGUIDE_TEST_LAUNCHD=1 in a logged-in macOS session")
 	}
-	dir := t.TempDir()
+	// sun_path is limited to 104 bytes on darwin; t.TempDir is too long.
+	dir, err := os.MkdirTemp("/tmp", "wg-demand-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
 	marker := filepath.Join(dir, "runs")
+	sock := filepath.Join(dir, "helper.sock")
 	fixture := filepath.Join(dir, "helper")
-	script := "#!/bin/sh\nif [ ! -f " + shellQuote(marker) + " ]; then echo first > " + shellQuote(marker) + "; exit 1; fi\necho restarted >> " + shellQuote(marker) + "\n"
+	script := "#!/bin/sh\nif [ ! -f " + shellQuote(marker) + " ]; then echo first > " + shellQuote(marker) + "; exit 1; fi\necho restarted >> " + shellQuote(marker) + "\nexit 0\n"
 	if err := os.WriteFile(fixture, []byte(script), 0700); err != nil {
 		t.Fatal(err)
 	}
 	label := fmt.Sprintf("com.wireguide.issue41.test-%d", os.Getpid())
 	plist := generatePlistContent(fixture, testArgs())
+	// The socket path embeds the label, so rewrite it before the label.
+	plist = strings.ReplaceAll(plist, ipc.DarwinSocketPath, sock)
 	plist = strings.ReplaceAll(plist, daemonBinary, fixture)
 	plist = strings.ReplaceAll(plist, daemonLabel, label)
 	plist = strings.ReplaceAll(plist, "/var/log/wireguide-helper.log", filepath.Join(dir, "helper.log"))
@@ -100,27 +153,31 @@ func TestLaunchdDemandLifecycle(t *testing.T) {
 	})
 	time.Sleep(time.Second)
 	if _, err := os.Stat(marker); !os.IsNotExist(err) {
-		t.Fatalf("helper ran before explicit demand (stat error: %v)", err)
+		t.Fatalf("helper ran before any connect (stat error: %v)", err)
 	}
-	if out, err := exec.Command("launchctl", "kickstart", target).CombinedOutput(); err != nil {
-		t.Fatalf("kickstart: %v: %s", err, out)
+	if out, _ := exec.Command("launchctl", "print", target).CombinedOutput(); !strings.Contains(string(out), "runs = 0") {
+		t.Fatalf("expected runs = 0 after bootstrap:\n%s", out)
 	}
-	deadline := time.Now().Add(10 * time.Second)
+	if err := daemonLoadedFromPrint(exec.Command("launchctl", "print", target).CombinedOutput()); err != nil {
+		t.Fatalf("freshly bootstrapped job should pass the loaded check: %v", err)
+	}
+	// The connect itself is the demand.
+	c, err := net.DialTimeout("unix", sock, 5*time.Second)
+	if err != nil {
+		out, _ := exec.Command("launchctl", "print", target).CombinedOutput()
+		t.Fatalf("connect to launchd socket: %v\n%s", err, out)
+	}
+	defer c.Close()
+	deadline := time.Now().Add(15 * time.Second)
 	for {
 		out, _ := os.ReadFile(marker)
 		if string(out) == "first\nrestarted\n" {
 			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("launchd did not restart failed helper: %q", out)
+			t.Fatalf("connect did not launch the job and have KeepAlive restart the failed run: %q", out)
 		}
 		time.Sleep(100 * time.Millisecond)
-	}
-	// Give launchd longer than ThrottleInterval to prove a clean exit stays down.
-	time.Sleep(6 * time.Second)
-	out, err := os.ReadFile(marker)
-	if err != nil || string(out) != "first\nrestarted\n" {
-		t.Fatalf("helper restarted after successful exit: %q, %v", out, err)
 	}
 }
 
@@ -129,20 +186,18 @@ func TestLaunchdDemandLifecycle(t *testing.T) {
 func TestDaemonInstallScript(t *testing.T) {
 	for _, tt := range []struct {
 		name      string
-		upToDate  bool
 		fail      string
 		loaded    bool
 		wantError bool
 		want      string
 	}{
-		{"fresh install", false, "", false, false, "bootout\nprint\nrm\nmkdir\ncp\nxattr\nchown\nchmod\ncp\nchown\nchmod\nbootstrap\nkickstart\n"},
-		{"already installed", true, "", false, false, "kickstart\n"},
-		{"kickstart failure returned for bounded repair", true, "first-kickstart", false, true, "kickstart\n"},
-		{"copy failure", false, "cp", false, true, "bootout\nprint\nrm\nmkdir\ncp\n"},
-		{"purge failure", false, "rm", false, true, "bootout\nprint\nrm\n"},
-		{"quarantine absent", false, "xattr", false, false, "bootout\nprint\nrm\nmkdir\ncp\nxattr\nchown\nchmod\ncp\nchown\nchmod\nbootstrap\nkickstart\n"},
-		{"bootstrap failure", false, "bootstrap", false, true, "bootout\nprint\nrm\nmkdir\ncp\nxattr\nchown\nchmod\ncp\nchown\nchmod\nbootstrap\n"},
-		{"teardown timeout", false, "", true, true, ""},
+		{"fresh install", "", false, false, "bootout\nprint\nrm\nmkdir\ncp\nxattr\nchown\nchmod\ncp\nchown\nchmod\nbootstrap\nkickstart\n"},
+		{"kickstart failure after bootstrap", "kickstart", false, true, "bootout\nprint\nrm\nmkdir\ncp\nxattr\nchown\nchmod\ncp\nchown\nchmod\nbootstrap\nkickstart\n"},
+		{"copy failure", "cp", false, true, "bootout\nprint\nrm\nmkdir\ncp\n"},
+		{"purge failure", "rm", false, true, "bootout\nprint\nrm\n"},
+		{"quarantine absent", "xattr", false, false, "bootout\nprint\nrm\nmkdir\ncp\nxattr\nchown\nchmod\ncp\nchown\nchmod\nbootstrap\nkickstart\n"},
+		{"bootstrap failure", "bootstrap", false, true, "bootout\nprint\nrm\nmkdir\ncp\nxattr\nchown\nchmod\ncp\nchown\nchmod\nbootstrap\n"},
+		{"teardown timeout", "", true, true, ""},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			trace := filepath.Join(t.TempDir(), "trace")
@@ -152,8 +207,6 @@ launchctl() {
     record "$1" || return 42
     case "$1" in
         print) [ "$LOADED" = true ]; return $? ;;
-        kickstart)
-            if [ "$FAIL" = first-kickstart ]; then FAIL=''; return 42; fi ;;
     esac
 }
 rm() { record rm; }
@@ -164,7 +217,7 @@ chown() { record chown; }
 chmod() { record chmod; }
 sleep() { :; }
 `
-			cmd := exec.Command("/bin/sh", "-c", stubs+daemonInstallScript("/tmp/app's binary", "/tmp/helper.plist", tt.upToDate))
+			cmd := exec.Command("/bin/sh", "-c", stubs+daemonInstallScript("/tmp/app's binary", "/tmp/helper.plist"))
 			cmd.Env = append(os.Environ(), "TRACE="+trace, "FAIL="+tt.fail, fmt.Sprintf("LOADED=%t", tt.loaded))
 			out, err := cmd.CombinedOutput()
 			if (err != nil) != tt.wantError {
@@ -182,5 +235,73 @@ sleep() { :; }
 				t.Errorf("command trace = %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestAppBundleOf(t *testing.T) {
+	for exe, want := range map[string]string{
+		"/Applications/WireGuide.app/Contents/MacOS/wireguide": "/Applications/WireGuide.app",
+		"/Users/u/Apps/Wire & Guide.app/Contents/MacOS/wg":     "/Users/u/Apps/Wire & Guide.app",
+		"/Library/PrivilegedHelperTools/com.wireguide.helper":  "",
+		"/Users/u/dev/wireguide/wireguide":                     "",
+		"/Applications/NotAnApp/Contents/MacOS/wireguide":      "",
+		"relative/X.app/Contents/MacOS/wireguide":              "",
+		"/Applications/A\x01B.app/Contents/MacOS/wireguide":    "",
+	} {
+		if got := appBundleOf(exe); got != want {
+			t.Errorf("appBundleOf(%q) = %q, want %q", exe, got, want)
+		}
+	}
+}
+
+// The plist pins the installing app bundle so an orphaned helper can
+// uninstall itself. A dev run (exe outside a .app) omits the flag, and an
+// install written by an older build (no flag) no longer matches, so it is
+// detected as needing a reinstall exactly once.
+func TestPlistCarriesAppBundle(t *testing.T) {
+	const exe = "/Applications/Wire & Guide.app/Contents/MacOS/wireguide"
+	withApp := generatePlistContent(exe, testArgs())
+	dev := generatePlistContent("/Users/u/dev/wireguide", testArgs())
+	if withApp == dev {
+		t.Fatal("plist must differ when an app bundle is pinned")
+	}
+	if strings.Contains(dev, "--app-bundle") {
+		t.Error("dev run must not pin an app bundle")
+	}
+
+	path := filepath.Join(t.TempDir(), "test.plist")
+	if err := os.WriteFile(path, []byte(withApp), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := exec.Command("plutil", "-lint", path).CombinedOutput(); err != nil {
+		t.Fatalf("plutil -lint: %v\n%s", err, out)
+	}
+	if got, want := plistExtract(t, path, "ProgramArguments.5"), "--app-bundle=/Applications/Wire & Guide.app"; got != want {
+		t.Errorf("ProgramArguments.5 = %q, want %q", got, want)
+	}
+}
+
+// A symlinked executable (Homebrew's /opt/homebrew/bin/wireguide) resolves to
+// the real bundle so all launch paths produce the same plist.
+func TestAppBundleOfResolvesSymlinks(t *testing.T) {
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	macos := filepath.Join(root, "WireGuide.app", "Contents", "MacOS")
+	if err := os.MkdirAll(macos, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	real := filepath.Join(macos, "wireguide")
+	if err := os.WriteFile(real, nil, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(root, "bin-wireguide")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(root, "WireGuide.app")
+	if got := appBundleOf(link); got != want {
+		t.Errorf("appBundleOf(symlink) = %q, want %q", got, want)
 	}
 }

@@ -123,6 +123,8 @@ Download from [Releases](https://github.com/korjwl1/wireguide/releases), unzip, 
 
 > If macOS shows "app is damaged", run: `xattr -cr /Applications/WireGuide.app`
 
+> The first launch of a new version asks for your administrator password once, to install or update the privileged helper. After that, opening the app (including at login) does not ask again.
+
 ### Windows (Installer)
 
 Download the latest `WireGuide-windows-amd64.exe` (or `-arm64.exe`) installer from

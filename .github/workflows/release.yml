@@ -456,6 +456,8 @@ jobs:
                 delete: [
                   "/Library/PrivilegedHelperTools/com.wireguide.helper",
                   "/Library/LaunchDaemons/com.wireguide.helper.plist",
+                  "/var/run/com.wireguide.helper.sock",
+                  "/Library/Application Support/wireguide/pf-token",
                 ],
                 trash: [
                   "~/Library/Application Support/WireGuide",

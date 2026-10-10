@@ -49,6 +49,7 @@ func main() {
 	socketUID := flag.Int("uid", -1, "socket owner UID (Unix only)")
 	ownerSID := flag.String("owner-sid", "", "socket owner SID (Windows only)")
 	dataDir := flag.String("data-dir", "", "data directory for crash recovery")
+	appBundle := flag.String("app-bundle", "", "path of the .app that installed this helper (macOS); the helper uninstalls itself if it is gone")
 	flag.Parse()
 
 	if *helperMode {
@@ -88,7 +89,7 @@ func main() {
 			}
 		}
 		log.Println("WireGuide helper starting...")
-		if err := helper.Run(*socketPath, *socketUID, *ownerSID, *dataDir); err != nil {
+		if err := helper.Run(*socketPath, *socketUID, *ownerSID, *dataDir, *appBundle); err != nil {
 			log.Fatal("helper error:", err)
 		}
 		return

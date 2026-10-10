@@ -251,12 +251,22 @@ func Run(assetsHandler http.Handler, dataDir string) error {
 	tray.SetTooltip("WireGuide")
 
 	// 7. Shutdown coordination (declared upfront so closures can reference it)
+	//
+	// healthDone stops the helper health monitor and the other background
+	// loops. It is closed at the START of a quit (stopHealth), not only after
+	// app.Run returns: the helper socket is launchd-activated, so a health
+	// tick that pings or reconnects after the quit's Shutdown RPC would
+	// start the helper again right after the user quit.
+	healthDone := make(chan struct{})
+	var stopHealthOnce sync.Once
+	stopHealth := func() { stopHealthOnce.Do(func() { close(healthDone) }) }
 	var (
 		shutdownOnce sync.Once
 		doShutdown   func()
 	)
 	doShutdown = func() {
 		shutdownOnce.Do(func() {
+			stopHealth() // before any RPC to the helper; see healthDone above
 			slog.Info("shutting down GUI + helper")
 			// Close any in-flight history sessions BEFORE the helper goes
 			// away — snapshotActiveStats needs the helper alive to fetch
@@ -322,7 +332,6 @@ func Run(assetsHandler http.Handler, dataDir string) error {
 		}
 	}
 
-	healthDone := make(chan struct{})
 	var healthWg sync.WaitGroup
 	healthWg.Add(1)
 	startHelperHealthMonitor(app, clients, dataDir, bridge, healthDone, &healthWg)
@@ -382,7 +391,7 @@ func Run(assetsHandler http.Handler, dataDir string) error {
 
 	// 9. Run (blocks)
 	err = app.Run()
-	close(healthDone)
+	stopHealth()
 	healthWg.Wait()
 	return err
 }

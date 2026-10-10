@@ -21,10 +21,11 @@ const macBundleID = "com.korjwl1.wireguide"
 
 // startTimeout bounds how long `ctl start` waits for the helper socket.
 //
-// Deliberately long. Any launch that finds no live helper shows a macOS
-// admin-password dialog, and the socket appears only once the user has
+// Deliberately long. A first install or an app update shows a macOS
+// admin-password dialog, and the helper appears only once the user has
 // typed it — osascript gives that dialog no deadline of its own, so a
 // short timeout here does not cancel anything, it just makes the CLI lie.
+// (Ordinary launches need no password: the helper socket is launchd-owned.)
 // At two minutes this reported failure and exited nonzero while the app
 // was still up and waiting; the user then typed the password, everything
 // worked, and a script had already taken the failure branch.
@@ -41,13 +42,15 @@ const authHintAfter = 15 * time.Second
 // Deliberately the ONLY command that starts anything. `connect`, `status`
 // and friends fail with "is the app running?" instead of silently starting
 // a VPN stack behind the user's back — the same contract the docker CLI has
-// with dockerd. Starting is an explicit act because on macOS it costs an
-// admin-password prompt, and because a running WireGuide is exactly what
-// the helper treats as consent to apply automation rules.
+// with dockerd. Starting is an explicit act because a running WireGuide is
+// exactly what the helper treats as consent to apply automation rules (and,
+// after an update, a first launch can cost an admin-password prompt). Note a
+// reachable helper is NOT proof the app is running — on macOS the dial can
+// itself start the helper — so "already running" requires a GUI attached.
 func cmdStart(_ []string) int {
 	// Already up? Then this is a no-op, not an error — `ctl start` should
 	// be safe to put at the top of a script.
-	if c, err := dialHelper(); err == nil {
+	if c, err := dialHelperStrict(); err == nil {
 		c.Close()
 		fmt.Println("WireGuide is already running")
 		return 0
@@ -60,7 +63,7 @@ func cmdStart(_ []string) int {
 
 	fmt.Println("starting WireGuide…")
 	if runtime.GOOS == "darwin" {
-		fmt.Println("(macOS may ask for your administrator password to start the VPN helper)")
+		fmt.Println("(after an update macOS may ask for your administrator password once)")
 	}
 
 	start := time.Now()
@@ -68,7 +71,7 @@ func cmdStart(_ []string) int {
 	hinted := false
 	for time.Now().Before(deadline) {
 		time.Sleep(500 * time.Millisecond)
-		if c, err := dialHelper(); err == nil {
+		if c, err := dialHelperStrict(); err == nil {
 			c.Close()
 			fmt.Println("WireGuide is running")
 			return 0
@@ -94,7 +97,7 @@ func cmdStart(_ []string) int {
 // attached. That keeps `stop` free of per-OS "terminate that application"
 // machinery.
 func cmdStop(_ []string) int {
-	c, err := dialHelper()
+	c, ping, err := dialHelperRaw()
 	if err != nil {
 		// Nothing to stop is success: `ctl stop` states a desired end
 		// state, and we're already in it.
@@ -102,6 +105,13 @@ func cmdStop(_ []string) int {
 		return 0
 	}
 	defer c.Close()
+
+	// A helper with no app attached and no tunnel is idle (a probe started
+	// it) and exits on its own shortly; there is nothing to stop.
+	if !appRunning(ping) && activeTunnelCount(c) == 0 {
+		fmt.Println("WireGuide is not running")
+		return 0
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -121,19 +131,43 @@ func cmdStop(_ []string) int {
 	}
 
 	// Confirm it actually went away rather than reporting success on a
-	// request that was merely accepted.
+	// request that was merely accepted. On macOS every probe dial can start
+	// the helper again (launchd socket activation), so "stopped" is "no app
+	// attached and no tunnel up", not "the socket stopped answering".
 	deadline := time.Now().Add(20 * time.Second)
 	for time.Now().Before(deadline) {
 		time.Sleep(500 * time.Millisecond)
-		probe, perr := dialHelper()
+		probe, pping, perr := dialHelperRaw()
 		if perr != nil {
 			fmt.Println("WireGuide stopped")
 			return 0
 		}
+		done := quitComplete(pping, activeTunnelCount(probe))
 		probe.Close()
+		if done {
+			fmt.Println("WireGuide stopped")
+			return 0
+		}
 	}
 	fmt.Fprintln(os.Stderr, "stop: WireGuide did not shut down within 20s")
 	return 1
+}
+
+// quitComplete is cmdStop's success test for a helper that still answers:
+// no GUI attached and no active tunnels. (A helper that predates GUIAttached
+// can't say, so it only counts as stopped once it stops answering.)
+func quitComplete(ping ipc.PingResponse, activeTunnels int) bool {
+	return !appRunning(ping) && activeTunnels == 0
+}
+
+// activeTunnelCount returns how many tunnels the helper has up, or -1 when it
+// can't say (treated as "some", so a stop is never reported on a guess).
+func activeTunnelCount(c *ipc.Client) int {
+	var active ipc.ActiveTunnelsResponse
+	if err := c.Call(ipc.MethodActiveTunnels, nil, &active); err != nil {
+		return -1
+	}
+	return len(active.Names)
 }
 
 // launchApp starts the GUI, detached from this process so the CLI can exit

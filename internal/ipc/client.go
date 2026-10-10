@@ -78,6 +78,13 @@ func NewTransientClient(addr string) (*Client, error) {
 	return newClient(ctx, addr, true)
 }
 
+// NewTransientClientContext is NewTransientClient with the caller's context
+// bounding the dial and initial Ping (the CLI needs longer than 5s on macOS,
+// where the dial itself may start the helper).
+func NewTransientClientContext(ctx context.Context, addr string) (*Client, error) {
+	return newClient(ctx, addr, true)
+}
+
 // NewClientContext bounds both connection and the initial RPC handshake.
 func NewClientContext(ctx context.Context, addr string) (*Client, error) {
 	return newClient(ctx, addr, false)

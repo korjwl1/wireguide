@@ -320,6 +320,11 @@ func (h *Helper) eventLoop() {
 		case <-h.done:
 			return
 		case <-ticker.C:
+			// Safety net, independent of GUI subscribers: if the set of
+			// connected tunnels changed behind the handlers' back (loop-
+			// watchdog teardown, direct manager calls), reconcile so DNS
+			// rules and kill-switch permits never outlive their tunnel.
+			h.maybeReconcileOnTunnelChange()
 			// Skip if nobody's listening — saves the wgctrl syscalls + JSON marshal.
 			if !h.server.HasSubscribers() {
 				lastJSON = nil // force next broadcast (post-resubscribe) to fire

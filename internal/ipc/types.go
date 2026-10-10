@@ -10,7 +10,16 @@ type PingResponse struct {
 	Version    string `json:"version"`     // IPC protocol version
 	AppVersion string `json:"app_version"` // Application version (e.g. "0.1.5")
 	PID        int    `json:"pid"`
+	// GUIAttached reports whether a non-transient control connection (the
+	// GUI) is attached. Protocol minor >= 2; older helpers omit it, so use
+	// PingResponse.GUIKnown before trusting a false value.
+	GUIAttached bool `json:"gui_attached"`
 }
+
+// GUIKnown reports whether the helper that produced this ping reports
+// GUIAttached at all (protocol minor >= 2). An older helper cannot say, and
+// callers must not read its zero value as "no GUI".
+func (p PingResponse) GUIKnown() bool { return MinorOf(p.Version) >= 2 }
 
 // ConnectRequest is the parameter for Tunnel.Connect.
 type ConnectRequest struct {
@@ -164,4 +173,3 @@ type AutomationTunnelDecision struct {
 	Decision  string `json:"decision"` // "connect" | "disconnect" | "unmanaged"
 	Active    bool   `json:"active"`
 }
-

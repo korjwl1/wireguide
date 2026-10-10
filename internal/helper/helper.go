@@ -22,19 +22,25 @@ package helper
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"math/rand"
+	"net"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"runtime"
 	"runtime/debug"
 	"sync"
+	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/korjwl1/wireguide/internal/domain"
 	"github.com/korjwl1/wireguide/internal/firewall"
 	"github.com/korjwl1/wireguide/internal/ipc"
+	"github.com/korjwl1/wireguide/internal/launchd"
 	"github.com/korjwl1/wireguide/internal/network"
 	"github.com/korjwl1/wireguide/internal/reconnect"
 	"github.com/korjwl1/wireguide/internal/storage"
@@ -118,6 +124,71 @@ const shutdownGrace = 10 * time.Second
 // happens before crash recovery has restored any tunnel.
 const startupGrace = 60 * time.Second
 
+// activatedStartupGrace replaces startupGrace when launchd started the helper
+// because something connected to its socket. Any process running as the user
+// can cause that (a `ctl` probe, a stray connect), and no GUI is promised, so
+// a probe must not leave a root process around for a minute. An active tunnel
+// still keeps the helper alive (armShutdownTimer's guard).
+const activatedStartupGrace = 15 * time.Second
+
+// startupGraceFor picks the first-connection grace window for this launch.
+func startupGraceFor(activated bool) time.Duration {
+	if activated {
+		return activatedStartupGrace
+	}
+	return startupGrace
+}
+
+// activateLaunchd is launchd.Listeners, replaceable in tests.
+var activateLaunchd = launchd.Listeners
+
+// fallbackAddr is the address a non-launchd-managed helper listens on.
+// ipc.Listen refuses to manage /var/run itself, so a non-launchd start
+// pointed at the launchd socket path (a dev run with default arguments) keeps
+// to the legacy subdirectory instead.
+func fallbackAddr(addr string) string {
+	if filepath.Dir(addr) == filepath.Dir(ipc.DarwinSocketPath) {
+		slog.Warn("not launchd-managed; using legacy socket directory instead of /var/run",
+			"requested", addr, "using", ipc.LegacyDarwinSocketPath)
+		return ipc.LegacyDarwinSocketPath
+	}
+	return addr
+}
+
+// acquireListener returns the socket the IPC server should accept on.
+//
+// On darwin the LaunchDaemon plist declares the socket (Sockets.Listeners),
+// so launchd owns it from boot and starts this process on the first connect;
+// adopting that socket is what lets the GUI "start" the helper just by
+// dialing, without an administrator prompt. ipc.Listen must NOT run in that
+// case: it unlinks the path, which would orphan launchd's socket.
+//
+// Only "not launchd-managed" (dev run, test, old plist) falls back to
+// listening ourselves. Any other activation error is fatal: continuing would
+// leave launchd's connection pending and respawn the helper in a loop.
+func acquireListener(addr string, ownerUID int, ownerSID string) (l net.Listener, listenAddr string, activated bool, err error) {
+	if runtime.GOOS == "darwin" {
+		ls, aerr := activateLaunchd()
+		switch {
+		case aerr == nil && len(ls) > 0:
+			for _, extra := range ls[1:] {
+				extra.Close()
+			}
+			return ls[0], addr, true, nil
+		case aerr == nil, errors.Is(aerr, launchd.ErrNotManaged), errors.Is(aerr, launchd.ErrNoSocketEntry):
+			slog.Info("launchd socket activation not in use; listening directly", "reason", aerr)
+		default:
+			return nil, addr, false, fmt.Errorf("launchd socket activation: %w", aerr)
+		}
+		addr = fallbackAddr(addr)
+	}
+	l, err = ipc.Listen(addr, ownerUID, ownerSID)
+	if err != nil {
+		return nil, addr, false, fmt.Errorf("listen %s: %w", addr, err)
+	}
+	return l, addr, false, nil
+}
+
 // Helper holds the helper process state.
 type Helper struct {
 	server   *ipc.Server
@@ -138,17 +209,38 @@ type Helper struct {
 	mu         sync.Mutex
 	activeCfgs map[string]*domain.WireGuardConfig // cached for reconnect, keyed by tunnel name
 
-	// Firewall state saved during reconnect suspend/resume cycle.
-	// These track what was active before suspend so resume can restore it.
-	fwSavedKillSwitch    bool
-	fwSavedDNSProtection bool
-	fwSavedDNSServers    []string // DNS servers to re-enable on resume
+	// Wanted firewall state, guarded by mu. dnsWanted is the user's DNS
+	// protection setting (restored from persisted settings at start);
+	// ksWanted is the kill switch the user asked for. The firewall itself is
+	// always derived from these plus the tunnels that are actually up
+	// (reconcileFirewallLocked), never from a snapshot of firewall state.
+	dnsWanted bool
+	ksWanted  bool
+	// reconciledKey is the connected (tunnel, iface) set the last reconcile
+	// saw; the event loop compares against it. Guarded by mu.
+	reconciledKey string
+	// reconcileFails / reconcileRetryAt back off the safety-net retry after a
+	// failed reconcile (reconciledKey is then set to reconcileDirtyKey).
+	// Guarded by mu.
+	reconcileFails   int
+	reconcileRetryAt time.Time
+
+	// Reconcile bookkeeping, guarded by connectMu (every reconcile caller
+	// holds it): the permit set last applied, whether that apply succeeded,
+	// the interfaces folded into the kill switch, and how many reconnect
+	// attempts currently have the firewall suspended.
+	lastPermits    []firewall.DNSPermit
+	dnsApplied     bool
+	ksIfaces       map[string]struct{}
+	fwSuspendDepth int
 
 	// shutdownTimer is a singleton grace-window timer. When the control
 	// connection drops we Reset it; when the GUI reconnects we Stop it. This
 	// avoids the previous bug where every disconnect spawned a fresh goroutine
 	// and multiple shutdowns could race.
 	shutdownTimer *time.Timer
+	// armedGrace is the duration of the most recently armed window (tests).
+	armedGrace time.Duration
 
 	// latencyByTunnel caches the most recent endpoint round-trip time
 	// (in ms) per tunnel name. Updated by latencyLoop every 30s; read by
@@ -192,16 +284,36 @@ type Helper struct {
 	userTunnelStore *storage.TunnelStore
 	userAppSupport  string
 
+	// activated is true when launchd started this process through its
+	// socket (see acquireListener). Set once in Run before Serve.
+	activated bool
+	// guiSeen is set when the first non-transient control connection (the
+	// GUI) arrives. Until then the helper is dormant: no automation runs, so
+	// a helper started by a stray connect (or at boot-adjacent times) never
+	// acts on the user's network on its own. guiSeenCh is closed at the same
+	// moment for goroutines that wait for it. This is a consent signal, not a
+	// security boundary — any same-user process can attach.
+	guiSeen     atomic.Bool
+	guiSeenCh   chan struct{}
+	guiSeenOnce sync.Once
+
 	done        chan struct{}
 	cleanupOnce sync.Once
+	// cleanupDone is closed when cleanup() has finished; the signal handler
+	// bounds its wait on it.
+	cleanupDone chan struct{}
 }
+
+// signalShutdownTimeout bounds how long a SIGTERM/SIGINT-driven shutdown may
+// take before the process exits anyway.
+const signalShutdownTimeout = 3 * time.Second
 
 // Run starts the helper listening on addr. Blocks until shutdown.
 // ownerUID: UID to chown socket to (Unix only, use -1 on Windows).
 // ownerSID: spawning user's SID (Windows only, "" on Unix) — scopes the
 // pipe ACL and per-connection peer checks to that user (issue #20).
 // dataDir: persistent data dir for crash recovery state.
-func Run(addr string, ownerUID int, ownerSID, dataDir string) error {
+func Run(addr string, ownerUID int, ownerSID, dataDir, appBundle string) error {
 	// wireguard-go allocates sizeable per-Device transient buffer pools. With
 	// the runtime default GOGC=100, repeated connect/disconnect on a long-lived
 	// helper retained hundreds of MiB of reclaimable heap before GC caught up
@@ -214,9 +326,9 @@ func Run(addr string, ownerUID int, ownerSID, dataDir string) error {
 		defer debug.SetGCPercent(previousGCPercent)
 	}
 
-	listener, err := ipc.Listen(addr, ownerUID, ownerSID)
+	listener, addr, activated, err := acquireListener(addr, ownerUID, ownerSID)
 	if err != nil {
-		return fmt.Errorf("listen %s: %w", addr, err)
+		return err
 	}
 
 	manager := tunnel.NewManager(dataDir)
@@ -237,6 +349,9 @@ func Run(addr string, ownerUID int, ownerSID, dataDir string) error {
 		autoConnectedBy: make(map[string]string),
 		logLevel:        new(slog.LevelVar), // defaults to Info
 		done:            make(chan struct{}),
+		cleanupDone:     make(chan struct{}),
+		activated:       activated,
+		guiSeenCh:       make(chan struct{}),
 	}
 
 	// Derive the user's Application Support dir from the uid the
@@ -263,19 +378,29 @@ func Run(addr string, ownerUID int, ownerSID, dataDir string) error {
 	// own firewall instance so cleanup reuses its in-memory state
 	// instead of constructing a fresh one inside the tunnel package
 	// (which previously decoupled the cleanup from the helper's view).
-	if recovered := tunnel.RecoverFromCrash(dataDir, fw); len(recovered) > 0 {
-		slog.Warn("recovered from previous crash", "tunnels", recovered)
+	recoverAll := func() {
+		if recovered := tunnel.RecoverFromCrash(dataDir, fw); len(recovered) > 0 {
+			slog.Warn("recovered from previous crash", "tunnels", recovered)
+		}
+
+		// Firewall crash recovery. A helper restart means every tunnel interface
+		// the previous process owned is gone, so no WireGuide firewall rule can
+		// still be valid: the firewall implementation clears stale state
+		// unconditionally (on macOS: flush both pf anchors, release the persisted
+		// pf reference, drop legacy markers), whether or not any state file
+		// exists. Must run BEFORE any tunnel brings new rules up.
+		if recovered := fw.RecoverFromCrash(); recovered {
+			slog.Warn("recovered firewall state from previous crash")
+		}
 	}
 
-	// Firewall crash recovery — restores OS-level firewall state (e.g. macOS
-	// pf enabled/disabled) that the previous helper persisted to disk before
-	// dying. Must run BEFORE any tunnel rebrings rules up, otherwise the new
-	// rules would mask whatever stale state the crashed helper left behind.
-	// No-op on Linux/Windows (their firewall implementations don't persist
-	// state across crashes).
-	if recovered := fw.RecoverFromCrash(); recovered {
-		slog.Warn("recovered firewall state from previous crash")
+	// A socket-activated helper outlives its app. If the app that installed it
+	// is gone, uninstall instead of staying startable, but only AFTER recovery
+	// so no pf block or DNS override is left behind with no binary to undo it.
+	if HandleOrphanedInstall(appBundle, recoverAll) {
+		return nil
 	}
+	recoverAll()
 
 	// Reconnect monitor — uses cached config
 	h.monitor = reconnect.NewMonitor(manager, h.reconnectFn, h.onReconnectState, reconnect.DefaultConfig())
@@ -288,21 +413,31 @@ func Run(addr string, ownerUID int, ownerSID, dataDir string) error {
 	// Grace-window shutdown on GUI disconnect. This applies to EVERY launch
 	// mode, LaunchDaemon included: a running GUI is the user's statement of
 	// intent that WireGuide should be active, so a helper with no GUI (and
-	// no active tunnel) has no reason to exist. The LaunchDaemon plist sets
-	// RunAtLoad=false precisely so the boot path never produces an
-	// invisible root helper; this guard is the runtime half of the same
-	// rule, covering the case where the GUI dies without a clean Shutdown.
+	// no active tunnel) has no reason to exist.
 	//
-	// Users who want WireGuide up from boot enable auto_start, which
-	// installs the GUI LaunchAgent — the GUI then spawns the helper on the
-	// normal path.
-	h.server.OnConnect(h.cancelShutdownTimer)
+	// On macOS the LaunchDaemon plist has RunAtLoad=false and declares the
+	// socket itself (socket activation), so launchd never starts the helper
+	// at boot — it starts only when something connects to the socket, which
+	// is how the app brings it up without an administrator prompt. Two
+	// runtime rules keep that safe: the helper is dormant (no automation, see
+	// guiSeen) until a GUI attaches, and a launchd-activated helper that gets
+	// no GUI exits after the short activatedStartupGrace. The grace window
+	// below also covers a GUI that dies without a clean Shutdown. launchd
+	// keeps the socket across exits, so the next connect starts a fresh
+	// helper.
+	//
+	// Users who want WireGuide up from login enable auto_start, which
+	// installs the GUI LaunchAgent — the GUI then dials the socket.
+	h.server.OnConnect(func() {
+		h.markGUISeen()
+		h.cancelShutdownTimer()
+	})
 	h.server.OnDisconnect(h.startShutdownTimer)
 	// Arm the startup grace window now: a helper that never receives
 	// a GUI connection must not run forever (see startupGrace). The
 	// first OnConnect cancels it; the fire-time active-tunnel check
 	// keeps a crash-recovered tunnel alive even with no GUI.
-	h.armShutdownTimer(startupGrace, "startup, no GUI connected yet")
+	h.armStartupGrace()
 
 	// Start event emitter (diff loop)
 	h.goSafe("eventLoop", h.eventLoop)
@@ -333,12 +468,16 @@ func Run(addr string, ownerUID int, ownerSID, dataDir string) error {
 	// them in Settings (plus log level once at GUI startup), so without
 	// this a freshly-restarted headless helper ran with defaults — health
 	// check off, pin-interface off, log level Info — regardless of
-	// config.json. Kill switch / DNS protection are deliberately NOT
-	// auto-applied here: they are firewall state transitions tied to the
-	// connect path (see applyPostConnectFirewall); enabling them at boot
-	// with no tunnel up would block all traffic, which is a product
-	// decision, not a restore.
+	// config.json. The kill switch is deliberately NOT
+	// applied here: enabling the kill switch at boot with no tunnel up would
+	// block all traffic, which is a product decision, not a restore.
+	// DNS protection IS restored as WANTED state (dnsWanted): it installs no
+	// rule until a connected tunnel justifies one (reconcileFirewallLocked),
+	// so it can never blackhole DNS on a helper with nothing connected. The
+	// setting itself is persisted by the GUI/CLI in config.json, exactly like
+	// health_check and pin_interface.
 	if settings, err := h.loadUserSettings(); err == nil {
+		h.setDNSWanted(settings.DNSProtection)
 		h.monitor.SetHealthCheck(settings.HealthCheck)
 		if settings.PinInterface {
 			if err := h.manager.SetPinInterface(true); err != nil {
@@ -351,6 +490,7 @@ func Run(addr string, ownerUID int, ownerSID, dataDir string) error {
 		slog.Info("restored persisted helper settings",
 			"health_check", settings.HealthCheck,
 			"pin_interface", settings.PinInterface,
+			"dns_protection", settings.DNSProtection,
 			"log_level", settings.LogLevel)
 	}
 
@@ -362,6 +502,14 @@ func Run(addr string, ownerUID int, ownerSID, dataDir string) error {
 	// Running it here, after wifiMon starts, also handles the boot
 	// case where the helper starts before the Wi-Fi has joined.
 	h.goSafe("ssidStartupRule", func() {
+		// Dormant until a GUI attaches (guiSeen): a helper nobody asked for
+		// must not act on the user's network. Wait for the first GUI, then
+		// settle as before.
+		select {
+		case <-h.done:
+			return
+		case <-h.guiSeenCh:
+		}
 		// Brief delay to let the network stack settle and crash
 		// recovery finish — racing handleSSIDChange against an
 		// in-flight RecoverFromCrash would corrupt activeCfgs.
@@ -433,6 +581,50 @@ func Run(addr string, ownerUID int, ownerSID, dataDir string) error {
 		}
 	}()
 
+	// SIGTERM (launchctl bootout, logout/shutdown, kill) and SIGINT take the
+	// same single graceful path as every other shutdown: Shutdown() makes
+	// Serve return, then Run's cleanup() runs once (cleanupOnce). Bounded: a
+	// wedged teardown must not outlive launchd's patience, and the utun
+	// devices die with the process anyway.
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGTERM, os.Interrupt)
+	defer signal.Stop(sigCh)
+	go func() {
+		// Keep listening until cleanup has FINISHED (not merely started): a
+		// SIGTERM that arrives mid-cleanup must still enforce the bounded
+		// exit below.
+		select {
+		case sig := <-sigCh:
+			slog.Info("signal received, shutting down", "signal", sig.String())
+		case <-h.cleanupDone:
+			return
+		}
+		h.shutdown()
+		select {
+		case <-h.cleanupDone:
+		case <-time.After(signalShutdownTimeout):
+			slog.Warn("signal shutdown: cleanup did not finish in time; clearing firewall and DNS and exiting")
+			// Best effort, bounded: never leave pf/nft/WFP rules up, or a
+			// networksetup DNS override pointing at a dead tunnel resolver
+			// (it persists in SystemConfiguration past process death, #34).
+			fwDone := make(chan struct{})
+			go func() {
+				defer close(fwDone)
+				if err := h.firewall.Cleanup(); err != nil {
+					slog.Warn("signal shutdown: firewall.Cleanup failed", "error", err)
+				}
+				if h.manager != nil {
+					h.manager.RestoreDNSBestEffort()
+				}
+			}()
+			select {
+			case <-fwDone:
+			case <-time.After(3 * time.Second):
+			}
+			os.Exit(0)
+		}
+	}()
+
 	slog.Info("helper listening", "addr", addr, "pid", "daemon")
 
 	// Serve (blocks until shutdown)
@@ -458,6 +650,14 @@ func (h *Helper) reconnectFn(ctx context.Context, name string) error {
 	cfgs := h.copyActiveCfgs()
 	h.mu.Unlock()
 
+	// connectMu is released by defer so a panic in Connect unwinds it BEFORE
+	// the monitor's deferred resumeFirewall (which takes connectMu) runs.
+	connectLocked := func(cfg *domain.WireGuardConfig) error {
+		h.connectMu.Lock()
+		defer h.connectMu.Unlock()
+		return h.manager.ConnectWithContext(ctx, cfg)
+	}
+
 	if name != "" {
 		cfg, ok := cfgs[name]
 		if !ok {
@@ -466,10 +666,7 @@ func (h *Helper) reconnectFn(ctx context.Context, name string) error {
 		if err := ctx.Err(); err != nil {
 			return fmt.Errorf("reconnect %q cancelled before Connect: %w", name, err)
 		}
-		h.connectMu.Lock()
-		err := h.manager.ConnectWithContext(ctx, cfg)
-		h.connectMu.Unlock()
-		return err
+		return connectLocked(cfg)
 	}
 
 	// Legacy path: reconnect all tunnels.
@@ -481,10 +678,7 @@ func (h *Helper) reconnectFn(ctx context.Context, name string) error {
 		if err := ctx.Err(); err != nil {
 			return fmt.Errorf("reconnect-all cancelled mid-loop: %w", err)
 		}
-		h.connectMu.Lock()
-		err := h.manager.ConnectWithContext(ctx, cfg)
-		h.connectMu.Unlock()
-		if err != nil {
+		if err := connectLocked(cfg); err != nil {
 			lastErr = err
 		}
 	}
@@ -523,10 +717,27 @@ func (h *Helper) startShutdownTimer() {
 	h.armShutdownTimer(shutdownGrace, "GUI disconnected")
 }
 
+// markGUISeen records the first GUI attachment and releases anything waiting
+// on it (the startup rule re-evaluation).
+func (h *Helper) markGUISeen() {
+	h.guiSeen.Store(true)
+	h.guiSeenOnce.Do(func() {
+		if h.guiSeenCh != nil {
+			close(h.guiSeenCh)
+		}
+	})
+}
+
 // armShutdownTimer is the shared countdown behind startShutdownTimer (GUI
 // disconnect) and the startup grace window (never-connected helper). The
 // active-tunnel guard applies to both: an active tunnel always keeps the
 // helper alive.
+// armStartupGrace arms the no-GUI-yet window Run starts with: the short
+// activatedStartupGrace for a launchd-started helper, startupGrace otherwise.
+func (h *Helper) armStartupGrace() {
+	h.armShutdownTimer(startupGraceFor(h.activated), "startup, no GUI connected yet")
+}
+
 func (h *Helper) armShutdownTimer(grace time.Duration, reason string) {
 	active := ""
 	if h.manager != nil {
@@ -549,6 +760,7 @@ func (h *Helper) armShutdownTimer(grace time.Duration, reason string) {
 		return
 	}
 
+	h.armedGrace = grace
 	slog.Info("no active tunnel — starting shutdown grace window",
 		"reason", reason, "grace", grace)
 	if h.shutdownTimer != nil {
@@ -617,145 +829,16 @@ func (h *Helper) cancelShutdownTimer() {
 //
 // Exit code 0 matters here: the LaunchDaemon plist's KeepAlive is configured
 // with SuccessfulExit=false, so launchd respawns only on crash. A successful
-// exit driven by this function will NOT restart the daemon — which is what
-// the user expects when they click "Quit" in the tray.
+// exit driven by this function will NOT restart the daemon on its own — which
+// is what the user expects when they click "Quit" in the tray. (launchd keeps
+// the socket, so the NEXT connect starts a fresh helper.)
 func (h *Helper) shutdown() {
 	h.server.Shutdown()
 }
 
-// suspendFirewall saves the current firewall state and disables all firewall
-// rules. Called by the reconnect monitor before Disconnect so that old pf rules
-// referencing the previous utun interface name don't block the new connection.
-func (h *Helper) suspendFirewall() error {
-	ksEnabled := h.firewall.IsKillSwitchEnabled()
-	dnsEnabled := h.firewall.IsDNSProtectionEnabled()
-
-	h.mu.Lock()
-	h.fwSavedKillSwitch = ksEnabled
-	h.fwSavedDNSProtection = dnsEnabled
-	// DNS servers are stored from any active config's Interface.DNS
-	for _, cfg := range h.activeCfgs {
-		if len(cfg.Interface.DNS) > 0 {
-			h.fwSavedDNSServers = cfg.Interface.DNS
-			break
-		}
-	}
-	h.mu.Unlock()
-
-	if !ksEnabled && !dnsEnabled {
-		slog.Debug("suspendFirewall: no firewall rules active, nothing to suspend")
-		return nil
-	}
-
-	slog.Info("suspending firewall rules for reconnect",
-		"kill_switch", ksEnabled, "dns_protection", dnsEnabled)
-
-	// Disable DNS protection first (it may be a sub-anchor of the kill switch).
-	dnsDisabled := false
-	if dnsEnabled {
-		if err := h.firewall.DisableDNSProtection(); err != nil {
-			slog.Warn("suspendFirewall: failed to disable DNS protection", "error", err)
-		} else {
-			dnsDisabled = true
-		}
-	}
-	if ksEnabled {
-		if err := h.firewall.DisableKillSwitch(); err != nil {
-			// We just turned DNS protection off but the kill switch
-			// is still on — that's an inconsistent state. Try to
-			// re-enable DNS protection so the system goes back to
-			// where it was, and surface the error to the caller so
-			// resumeFirewall isn't called against a state that
-			// already half-resumed.
-			if dnsDisabled {
-				h.mu.Lock()
-				dnsServers := h.fwSavedDNSServers
-				h.mu.Unlock()
-				ifaceName := ""
-				if status := h.manager.Status(); status != nil {
-					ifaceName = status.InterfaceName
-				}
-				if ifaceName != "" && len(dnsServers) > 0 {
-					if rollbackErr := h.firewall.EnableDNSProtection(ifaceName, dnsServers); rollbackErr != nil {
-						slog.Error("suspendFirewall: DNS protection rollback ALSO failed",
-							"error", rollbackErr)
-					}
-				}
-			}
-			return fmt.Errorf("suspendFirewall: disable kill switch: %w", err)
-		}
-	}
-
-	return nil
-}
-
-// resumeFirewall re-enables firewall rules that were active before the
-// reconnect suspend. It reads the NEW interface name and endpoints from the
-// tunnel manager so the pf rules match the newly created utun interface.
-func (h *Helper) resumeFirewall() error {
-	h.mu.Lock()
-	restoreKS := h.fwSavedKillSwitch
-	restoreDNS := h.fwSavedDNSProtection
-	savedDNSServers := h.fwSavedDNSServers
-	var ifaceAddresses []string
-	for _, cfg := range h.activeCfgs {
-		ifaceAddresses = append(ifaceAddresses, cfg.Interface.Address...)
-	}
-	// Clear saved state so a second resume is a no-op.
-	h.fwSavedKillSwitch = false
-	h.fwSavedDNSProtection = false
-	h.fwSavedDNSServers = nil
-	h.mu.Unlock()
-
-	if !restoreKS && !restoreDNS {
-		slog.Debug("resumeFirewall: no firewall rules to restore")
-		return nil
-	}
-
-	status := h.manager.Status()
-	ifaceName := ""
-	if status != nil {
-		ifaceName = status.InterfaceName
-	}
-
-	slog.Info("resuming firewall rules after reconnect",
-		"kill_switch", restoreKS, "dns_protection", restoreDNS,
-		"new_interface", ifaceName)
-
-	if restoreKS {
-		if ifaceName == "" {
-			slog.Warn("resumeFirewall: no interface name available, cannot re-enable kill switch")
-		} else {
-			endpoints := h.manager.ResolvedEndpoints()
-			if len(endpoints) == 0 {
-				slog.Warn("resumeFirewall: no resolved endpoints, cannot re-enable kill switch")
-			} else {
-				if err := h.firewall.EnableKillSwitch(ifaceName, ifaceAddresses, endpoints); err != nil {
-					slog.Error("resumeFirewall: failed to re-enable kill switch", "error", err)
-					return fmt.Errorf("resumeFirewall: enable kill switch: %w", err)
-				}
-			}
-		}
-	}
-
-	if restoreDNS {
-		if ifaceName == "" {
-			slog.Warn("resumeFirewall: no interface name available, cannot re-enable DNS protection")
-		} else if len(savedDNSServers) == 0 {
-			slog.Warn("resumeFirewall: no DNS servers saved, cannot re-enable DNS protection")
-		} else {
-			if err := h.firewall.EnableDNSProtection(ifaceName, savedDNSServers); err != nil {
-				slog.Error("resumeFirewall: failed to re-enable DNS protection", "error", err)
-				return fmt.Errorf("resumeFirewall: enable DNS protection: %w", err)
-			}
-		}
-	}
-
-	return nil
-}
-
 func (h *Helper) cleanup() {
 	h.cleanupOnce.Do(func() {
+		defer close(h.cleanupDone)
 		slog.Info("helper cleanup starting",
 			"connected", h.manager.IsConnected(),
 			"call_stack", string(debug.Stack()))
