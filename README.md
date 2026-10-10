@@ -65,7 +65,7 @@ That means most of WireGuide runs silently in the background.
 - Drag-and-drop `.conf` import (also QR and ZIP)
 - A list of tunnels, each with one big toggle (sortable, resizable, optional compact mode)
 - A tray icon that shows whether you're connected
-- Per-tunnel **Automation** — connect or disconnect a tunnel automatically based on which network you're on (by Wi-Fi SSID, subnet, or the router's MAC address; rules are ordered by priority and drag-reorderable)
+- Per-tunnel **Automation** — connect or disconnect a tunnel automatically based on which network you're on (by Wi-Fi SSID, subnet, or the router's MAC address, with "is" / "is not" matching; rules are ordered by priority and drag-reorderable)
 - A **command-line interface** (`wireguide ctl …`) for scripting — see below
 
 ### What runs silently underneath
@@ -198,6 +198,7 @@ wireguide ctl automation                # what the engine decides right now
 wireguide ctl automation rules <name>   # list a tunnel's rules
 wireguide ctl automation add <name> <connect|disconnect> <cond>
     #   cond = ssid:<wifi>  subnet:<CIDR>  mac:<gateway-MAC>  else
+    #   negated: not-ssid:<wifi>  not-subnet:<CIDR>  not-mac:<MAC>
 wireguide ctl automation rm <name> <n>
 
 # Settings & diagnostics:
@@ -215,7 +216,21 @@ wireguide ctl install-skills
 # e.g. turn the work VPN off on the office network, on everywhere else:
 wireguide ctl automation add work disconnect mac:b0:38:6c:54:8b:ab
 wireguide ctl automation add work connect else
+
+# e.g. a tunnel for a remote site: off at home, on anywhere else:
+wireguide ctl automation add remote disconnect ssid:HomeWiFi
+wireguide ctl automation add remote connect not-ssid:HomeWiFi
 ```
+
+**"is not" rules.** A negated rule matches only when the value is known and
+different. While it is unknown the tunnel is left alone and later rules are
+*not* tried: a blank Wi-Fi name during a roam, a network that changed less
+than ~15 seconds ago, or no default route. A blank Wi-Fi name on an Ethernet
+or USB-tethered connection counts as "no Wi-Fi" and matches. Positive rules
+are unchanged (no delay; unknown input just doesn't match). If you connect or
+disconnect a tunnel by hand, automation leaves that tunnel alone until the
+network changes. Tunnels with automation rules are also not restored by the
+sleep/wake reconnect; the rules decide.
 
 Connect/disconnect/status need the app (or its helper) running — start it with
 `wireguide ctl start` (or by opening the app); nothing else starts a VPN stack

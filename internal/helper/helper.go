@@ -22,14 +22,18 @@ package helper
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"math/rand"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"runtime"
 	"runtime/debug"
+	"sort"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/korjwl1/wireguide/internal/domain"
@@ -138,11 +142,30 @@ type Helper struct {
 	mu         sync.Mutex
 	activeCfgs map[string]*domain.WireGuardConfig // cached for reconnect, keyed by tunnel name
 
-	// Firewall state saved during reconnect suspend/resume cycle.
-	// These track what was active before suspend so resume can restore it.
-	fwSavedKillSwitch    bool
-	fwSavedDNSProtection bool
-	fwSavedDNSServers    []string // DNS servers to re-enable on resume
+	// Wanted firewall state, guarded by mu. dnsWanted is the user's DNS
+	// protection setting (restored from persisted settings at start);
+	// ksWanted is the kill switch the user asked for. The firewall itself is
+	// always derived from these plus the tunnels that are actually up
+	// (reconcileFirewallLocked), never from a snapshot of firewall state.
+	dnsWanted bool
+	ksWanted  bool
+	// reconciledKey is the connected (tunnel, iface) set the last reconcile
+	// saw; the event loop compares against it. Guarded by mu.
+	reconciledKey string
+	// reconcileFails / reconcileRetryAt back off the safety-net retry after a
+	// failed reconcile (reconciledKey is then set to reconcileDirtyKey).
+	// Guarded by mu.
+	reconcileFails   int
+	reconcileRetryAt time.Time
+
+	// Reconcile bookkeeping, guarded by connectMu (every reconcile caller
+	// holds it): the permit set last applied, whether that apply succeeded,
+	// the interfaces folded into the kill switch, and how many reconnect
+	// attempts currently have the firewall suspended.
+	lastPermits    []firewall.DNSPermit
+	dnsApplied     bool
+	ksIfaces       map[string]struct{}
+	fwSuspendDepth int
 
 	// shutdownTimer is a singleton grace-window timer. When the control
 	// connection drops we Reset it; when the GUI reconnects we Stop it. This
@@ -178,12 +201,49 @@ type Helper struct {
 	// report, so evaluation treats the SSID as unknown rather than acting
 	// on the old network's name. Guarded by wifiMu.
 	ssidStampGW string
+	// ssidFromGUI is set once the GUI has reported an SSID (macOS). The
+	// stamp and its staleness guard apply only then: on Linux/Windows the
+	// helper reads the SSID itself, so it is always fresh. Guarded by wifiMu.
+	ssidFromGUI bool
+	// guiAttachedFn, when set, replaces the server's control-connection
+	// check in guiAttached (tests only).
+	guiAttachedFn func() bool
+
+	// connectedFn, when set, replaces manager.ActiveTunnels() in the legacy
+	// reconnect path (tests only).
+	connectedFn func() []string
 
 	// reevalMu serialises Automation re-evaluations. The three triggers
 	// (SSID change, network change, poll) can fire concurrently; the
 	// lock ensures only one evaluation drives connect/disconnect at a
 	// time so they don't race on the same tunnel.
 	reevalMu sync.Mutex
+
+	// reevalTrigger, when set, replaces reevaluateAutomation for the
+	// rules-change watcher and the preview drift check (tests only).
+	reevalTrigger func(reason string)
+	// rulesWatchInterval overrides rulesWatchDefaultInterval; rulesStat
+	// replaces os.Stat of config.json (tests only).
+	rulesWatchInterval time.Duration
+	rulesStat          func(path string) (mtimeNano, size int64, err error)
+	// previewDriftMu guards previewDriftLast (rate limit for the preview's
+	// self-heal); previewDriftNow overrides time.Now (tests only).
+	previewDriftMu   sync.Mutex
+	previewDriftLast time.Time
+	previewDriftNow  func() time.Time
+
+	// settle tracks how long the network fingerprint has been stable so
+	// negated rules can wait out roam blips; settleTimer re-triggers a
+	// held evaluation when the window elapses. Both guarded by settleMu.
+	settleMu    sync.Mutex
+	settle      *wifi.SettleTracker
+	settleTimer *time.Timer
+
+	// manualOverride latches an explicit user connect/disconnect per tunnel
+	// (with the network identity it was made on) so automation doesn't undo
+	// it until the network settles on a different identity. Guarded by
+	// wifiMu.
+	manualOverride map[string]manualLatch
 
 	// userTunnelStore reads .conf files from the user's home dir
 	// (derived from the uid passed at launch). Needed so wifi rules
@@ -194,7 +254,14 @@ type Helper struct {
 
 	done        chan struct{}
 	cleanupOnce sync.Once
+	// cleanupDone is closed when cleanup() has finished; the signal handler
+	// bounds its wait on it.
+	cleanupDone chan struct{}
 }
+
+// signalShutdownTimeout bounds how long a SIGTERM/SIGINT-driven shutdown may
+// take before the process exits anyway.
+const signalShutdownTimeout = 3 * time.Second
 
 // Run starts the helper listening on addr. Blocks until shutdown.
 // ownerUID: UID to chown socket to (Unix only, use -1 on Windows).
@@ -235,8 +302,10 @@ func Run(addr string, ownerUID int, ownerSID, dataDir string) error {
 		activeCfgs:      make(map[string]*domain.WireGuardConfig),
 		latencyByTunnel: make(map[string]float64),
 		autoConnectedBy: make(map[string]string),
+		manualOverride:  make(map[string]manualLatch),
 		logLevel:        new(slog.LevelVar), // defaults to Info
 		done:            make(chan struct{}),
+		cleanupDone:     make(chan struct{}),
 	}
 
 	// Derive the user's Application Support dir from the uid the
@@ -267,12 +336,12 @@ func Run(addr string, ownerUID int, ownerSID, dataDir string) error {
 		slog.Warn("recovered from previous crash", "tunnels", recovered)
 	}
 
-	// Firewall crash recovery — restores OS-level firewall state (e.g. macOS
-	// pf enabled/disabled) that the previous helper persisted to disk before
-	// dying. Must run BEFORE any tunnel rebrings rules up, otherwise the new
-	// rules would mask whatever stale state the crashed helper left behind.
-	// No-op on Linux/Windows (their firewall implementations don't persist
-	// state across crashes).
+	// Firewall crash recovery. A helper restart means every tunnel interface
+	// the previous process owned is gone, so no WireGuide firewall rule can
+	// still be valid: the firewall implementation clears stale state
+	// unconditionally (on macOS: flush both pf anchors, release the persisted
+	// pf reference, drop legacy markers), whether or not any state file
+	// exists. Must run BEFORE any tunnel brings new rules up.
 	if recovered := fw.RecoverFromCrash(); recovered {
 		slog.Warn("recovered firewall state from previous crash")
 	}
@@ -280,6 +349,7 @@ func Run(addr string, ownerUID int, ownerSID, dataDir string) error {
 	// Reconnect monitor — uses cached config
 	h.monitor = reconnect.NewMonitor(manager, h.reconnectFn, h.onReconnectState, reconnect.DefaultConfig())
 	h.monitor.SetFirewallCallbacks(h.suspendFirewall, h.resumeFirewall)
+	h.monitor.SetLegacyTeardown(h.legacyTeardown)
 	h.monitor.Start()
 
 	// Register RPC handlers
@@ -333,12 +403,16 @@ func Run(addr string, ownerUID int, ownerSID, dataDir string) error {
 	// them in Settings (plus log level once at GUI startup), so without
 	// this a freshly-restarted headless helper ran with defaults — health
 	// check off, pin-interface off, log level Info — regardless of
-	// config.json. Kill switch / DNS protection are deliberately NOT
-	// auto-applied here: they are firewall state transitions tied to the
-	// connect path (see applyPostConnectFirewall); enabling them at boot
-	// with no tunnel up would block all traffic, which is a product
-	// decision, not a restore.
+	// config.json. The kill switch is deliberately NOT
+	// applied here: enabling the kill switch at boot with no tunnel up would
+	// block all traffic, which is a product decision, not a restore.
+	// DNS protection IS restored as WANTED state (dnsWanted): it installs no
+	// rule until a connected tunnel justifies one (reconcileFirewallLocked),
+	// so it can never blackhole DNS on a helper with nothing connected. The
+	// setting itself is persisted by the GUI/CLI in config.json, exactly like
+	// health_check and pin_interface.
 	if settings, err := h.loadUserSettings(); err == nil {
+		h.setDNSWanted(settings.DNSProtection)
 		h.monitor.SetHealthCheck(settings.HealthCheck)
 		if settings.PinInterface {
 			if err := h.manager.SetPinInterface(true); err != nil {
@@ -351,6 +425,7 @@ func Run(addr string, ownerUID int, ownerSID, dataDir string) error {
 		slog.Info("restored persisted helper settings",
 			"health_check", settings.HealthCheck,
 			"pin_interface", settings.PinInterface,
+			"dns_protection", settings.DNSProtection,
 			"log_level", settings.LogLevel)
 	}
 
@@ -380,22 +455,27 @@ func Run(addr string, ownerUID int, ownerSID, dataDir string) error {
 		default:
 		}
 		// Use the helper's known SSID (reported by the GUI on macOS 14+,
-		// polled elsewhere) rather than a direct read. Skip only when the
-		// network is entirely unknown — acting on an unknown SSID would
-		// let none_match rules disconnect a freshly crash-recovered
-		// tunnel before we know what network we're on. Subnet-only rules
-		// still get their first evaluation from the network-change / poll
-		// trigger below.
+		// polled elsewhere) rather than a direct read. With an unknown
+		// SSID, skip unless a tunnel has a negated rule: negated rules
+		// hold on unknown input (and a blank SSID on Ethernet/tethering is
+		// a known value), but a none_match rule would act on the unknown
+		// network and could disconnect a freshly crash-recovered tunnel.
+		// Subnet-only rules still get their first evaluation from the
+		// network-change / poll trigger below.
 		ssid := ""
 		if h.wifiMon != nil {
 			ssid = h.wifiMon.LastSSID()
 		}
-		if ssid == "" {
+		if ssid == "" && !h.anyNegatedRules() {
 			return
 		}
 		slog.Info("startup rule re-evaluation", "ssid", ssid)
 		h.reevaluateAutomation("startup")
 	})
+
+	// Rules-change trigger: nothing else re-evaluates when the user saves
+	// new Automation rules, so the settle tracker would never see them.
+	h.goSafe("automationRulesWatch", h.rulesWatchLoop)
 
 	// Hybrid subnet-rule trigger. Subnet-based Automation conditions must
 	// re-evaluate when the physical network changes even if the SSID
@@ -433,6 +513,50 @@ func Run(addr string, ownerUID int, ownerSID, dataDir string) error {
 		}
 	}()
 
+	// SIGTERM (launchctl bootout, logout/shutdown, kill) and SIGINT take the
+	// same single graceful path as every other shutdown: Shutdown() makes
+	// Serve return, then Run's cleanup() runs once (cleanupOnce). Bounded: a
+	// wedged teardown must not outlive launchd's patience, and the utun
+	// devices die with the process anyway.
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGTERM, os.Interrupt)
+	defer signal.Stop(sigCh)
+	go func() {
+		// Keep listening until cleanup has FINISHED (not merely started): a
+		// SIGTERM that arrives mid-cleanup must still enforce the bounded
+		// exit below.
+		select {
+		case sig := <-sigCh:
+			slog.Info("signal received, shutting down", "signal", sig.String())
+		case <-h.cleanupDone:
+			return
+		}
+		h.shutdown()
+		select {
+		case <-h.cleanupDone:
+		case <-time.After(signalShutdownTimeout):
+			slog.Warn("signal shutdown: cleanup did not finish in time; clearing firewall and DNS and exiting")
+			// Best effort, bounded: never leave pf/nft/WFP rules up, or a
+			// networksetup DNS override pointing at a dead tunnel resolver
+			// (it persists in SystemConfiguration past process death, #34).
+			fwDone := make(chan struct{})
+			go func() {
+				defer close(fwDone)
+				if err := h.firewall.Cleanup(); err != nil {
+					slog.Warn("signal shutdown: firewall.Cleanup failed", "error", err)
+				}
+				if h.manager != nil {
+					h.manager.RestoreDNSBestEffort()
+				}
+			}()
+			select {
+			case <-fwDone:
+			case <-time.After(3 * time.Second):
+			}
+			os.Exit(0)
+		}
+	}()
+
 	slog.Info("helper listening", "addr", addr, "pid", "daemon")
 
 	// Serve (blocks until shutdown)
@@ -458,6 +582,14 @@ func (h *Helper) reconnectFn(ctx context.Context, name string) error {
 	cfgs := h.copyActiveCfgs()
 	h.mu.Unlock()
 
+	// connectMu is released by defer so a panic in Connect unwinds it BEFORE
+	// the monitor's deferred resumeFirewall (which takes connectMu) runs.
+	connectLocked := func(cfg *domain.WireGuardConfig) error {
+		h.connectMu.Lock()
+		defer h.connectMu.Unlock()
+		return h.manager.ConnectWithContext(ctx, cfg)
+	}
+
 	if name != "" {
 		cfg, ok := cfgs[name]
 		if !ok {
@@ -466,29 +598,224 @@ func (h *Helper) reconnectFn(ctx context.Context, name string) error {
 		if err := ctx.Err(); err != nil {
 			return fmt.Errorf("reconnect %q cancelled before Connect: %w", name, err)
 		}
-		h.connectMu.Lock()
-		err := h.manager.ConnectWithContext(ctx, cfg)
-		h.connectMu.Unlock()
-		return err
+		return alreadyConnectedIsOK(connectLocked(cfg))
 	}
 
-	// Legacy path: reconnect all tunnels.
+	// Legacy path: restore the cached tunnels that are down. Tunnels that
+	// automation governs are left to it (it is re-evaluated afterwards), as
+	// are tunnels the user disconnected on purpose; tunnels that are still
+	// connected are simply skipped.
 	if len(cfgs) == 0 {
-		return fmt.Errorf("no cached config for reconnect")
+		return reconnect.ErrNothingToReconnect
 	}
+	deferToAutomation := false
+	defer func() {
+		if !deferToAutomation {
+			return
+		}
+		// Asynchronously and WITHOUT connectMu: lock order is
+		// reevalMu -> connectMu, never the reverse.
+		h.goSafe("reconnectReevaluate", func() {
+			select {
+			case <-h.done:
+				return
+			default:
+			}
+			h.reevaluateAutomation("reconnect")
+		})
+	}()
+
+	if err := waitForDefaultRoute(ctx, gatewayWaitBudget); err != nil {
+		return fmt.Errorf("reconnect-all cancelled waiting for a default route: %w", err)
+	}
+
+	connected := make(map[string]bool)
+	for _, n := range h.connectedTunnels() {
+		connected[n] = true
+	}
+	ruleTunnels := h.automationRuleTunnels()
+	names := make([]string, 0, len(cfgs))
+	for n := range cfgs {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+
+	var netCtx *wifi.NetworkContext
 	var lastErr error
-	for _, cfg := range cfgs {
+	attempted := 0
+	for _, n := range names {
+		cfg := cfgs[n]
+		latch, latched := h.manualLatchFor(n)
+		if connected[n] {
+			// A connected tunnel that automation or the user owns was left
+			// alone by legacyTeardown; the network may have changed under
+			// it, so make sure automation re-evaluates.
+			if latched || ruleTunnels[n] {
+				deferToAutomation = true
+			}
+			continue
+		}
+		if latched && latch.disconnected {
+			slog.Info("legacy reconnect: skipping tunnel the user disconnected", "tunnel", n)
+			continue
+		}
+		if ruleTunnels[n] && !latched {
+			// Defer only when automation will actually decide this tunnel
+			// (connect/disconnect, or held until the network settles). If
+			// its rules don't apply here (unmanaged) automation does
+			// nothing, so the legacy path must restore it.
+			if netCtx == nil {
+				c := h.currentNetworkContext()
+				netCtx = &c
+			}
+			state, info := wifi.EvaluateDetailed(h.automationRules(n), *netCtx)
+			if state != wifi.StateUnmanaged || info.Held {
+				slog.Info("legacy reconnect: leaving tunnel to automation", "tunnel", n)
+				deferToAutomation = true
+				continue
+			}
+		}
+		if cidr, addr, overlaps := overlapsLocalNetwork(cfg); overlaps {
+			slog.Info("legacy reconnect: skipping tunnel whose AllowedIPs overlap the local network",
+				"tunnel", n, "cidr", cidr, "local_address", addr.String())
+			continue
+		}
 		if err := ctx.Err(); err != nil {
 			return fmt.Errorf("reconnect-all cancelled mid-loop: %w", err)
 		}
-		h.connectMu.Lock()
-		err := h.manager.ConnectWithContext(ctx, cfg)
-		h.connectMu.Unlock()
-		if err != nil {
+		attempted++
+		if err := alreadyConnectedIsOK(connectLocked(cfg)); err != nil {
 			lastErr = err
 		}
 	}
+	if lastErr == nil && attempted == 0 && !deferToAutomation {
+		allConnected := true
+		for _, n := range names {
+			if !connected[n] {
+				allConnected = false
+			}
+		}
+		if !allConnected {
+			// Everything still down was skipped on purpose.
+			return reconnect.ErrNothingToReconnect
+		}
+	}
 	return lastErr
+}
+
+// legacyTeardown is the reconnect monitor's teardown for the legacy
+// wake/interface-change path. Instead of dropping an arbitrary tunnel it
+// tears down only the connected tunnels that no one else owns, so
+// reconnectFn("") can rebuild them on the new network. Tunnels governed by
+// automation rules or held by a manual latch are left untouched: automation
+// decides them (it is re-evaluated after the legacy attempt), and bouncing
+// them would only cause an outage on every network blip.
+func (h *Helper) legacyTeardown() error {
+	h.connectMu.Lock()
+	defer h.connectMu.Unlock()
+	return h.legacyTeardownWith(h.connectedTunnels(), h.manager.DisconnectTunnel)
+}
+
+// connectedTunnels lists the currently connected tunnels (test seam:
+// connectedFn overrides the manager).
+func (h *Helper) connectedTunnels() []string {
+	if h.connectedFn != nil {
+		return h.connectedFn()
+	}
+	return h.manager.ActiveTunnels()
+}
+
+// legacyTeardownWith implements legacyTeardown over an explicit set of
+// connected tunnels. Caller MUST hold h.connectMu.
+func (h *Helper) legacyTeardownWith(active []string, disconnect func(string) error) error {
+	ruleTunnels := h.automationRuleTunnels()
+	for _, n := range active {
+		if _, latched := h.manualLatchFor(n); latched || ruleTunnels[n] {
+			slog.Info("legacy reconnect: leaving connected tunnel untouched (owned by automation or manual choice)",
+				"tunnel", n, "latched", latched)
+			continue
+		}
+		if err := disconnect(n); err != nil {
+			var te *tunnel.TunnelError
+			if errors.As(err, &te) && te.Kind == tunnel.ErrNotConnected {
+				continue
+			}
+			return fmt.Errorf("legacy reconnect teardown of %q: %w", n, err)
+		}
+	}
+	return nil
+}
+
+// guiAttached reports whether a GUI control connection is attached. Safe on
+// a helper without a server (tests).
+func (h *Helper) guiAttached() bool {
+	if h.guiAttachedFn != nil {
+		return h.guiAttachedFn()
+	}
+	return h.server != nil && h.server.HasControlConn()
+}
+
+// alreadyConnectedIsOK maps tunnel.ErrAlreadyConnected to success: the
+// reconnect's goal (the tunnel is up) already holds, so it must not count
+// as a failed attempt that backs off and retries.
+func alreadyConnectedIsOK(err error) error {
+	var te *tunnel.TunnelError
+	if errors.As(err, &te) && te.Kind == tunnel.ErrAlreadyConnected {
+		return nil
+	}
+	return err
+}
+
+// anyNegatedRules reports whether any tunnel has a negated automation rule.
+func (h *Helper) anyNegatedRules() bool {
+	settings, err := h.loadUserSettings()
+	if err != nil {
+		return false
+	}
+	settings.EnsureAutomation()
+	if settings.Automation == nil {
+		return false
+	}
+	for _, rules := range settings.Automation.PerTunnel {
+		if wifi.HasNegated(rules) {
+			return true
+		}
+	}
+	return false
+}
+
+// automationRules returns tunnel name's automation rules (nil when settings
+// can't be read).
+func (h *Helper) automationRules(name string) []wifi.Rule {
+	settings, err := h.loadUserSettings()
+	if err != nil {
+		return nil
+	}
+	settings.EnsureAutomation()
+	if settings.Automation == nil {
+		return nil
+	}
+	return settings.Automation.PerTunnel[name]
+}
+
+// automationRuleTunnels returns the set of tunnels that have automation
+// rules (empty when settings can't be read).
+func (h *Helper) automationRuleTunnels() map[string]bool {
+	out := map[string]bool{}
+	settings, err := h.loadUserSettings()
+	if err != nil {
+		return out
+	}
+	settings.EnsureAutomation()
+	if settings.Automation == nil {
+		return out
+	}
+	for name, rules := range settings.Automation.PerTunnel {
+		if len(rules) > 0 {
+			out[name] = true
+		}
+	}
+	return out
 }
 
 // copyActiveCfgs returns a shallow copy of the active configs map.
@@ -623,139 +950,9 @@ func (h *Helper) shutdown() {
 	h.server.Shutdown()
 }
 
-// suspendFirewall saves the current firewall state and disables all firewall
-// rules. Called by the reconnect monitor before Disconnect so that old pf rules
-// referencing the previous utun interface name don't block the new connection.
-func (h *Helper) suspendFirewall() error {
-	ksEnabled := h.firewall.IsKillSwitchEnabled()
-	dnsEnabled := h.firewall.IsDNSProtectionEnabled()
-
-	h.mu.Lock()
-	h.fwSavedKillSwitch = ksEnabled
-	h.fwSavedDNSProtection = dnsEnabled
-	// DNS servers are stored from any active config's Interface.DNS
-	for _, cfg := range h.activeCfgs {
-		if len(cfg.Interface.DNS) > 0 {
-			h.fwSavedDNSServers = cfg.Interface.DNS
-			break
-		}
-	}
-	h.mu.Unlock()
-
-	if !ksEnabled && !dnsEnabled {
-		slog.Debug("suspendFirewall: no firewall rules active, nothing to suspend")
-		return nil
-	}
-
-	slog.Info("suspending firewall rules for reconnect",
-		"kill_switch", ksEnabled, "dns_protection", dnsEnabled)
-
-	// Disable DNS protection first (it may be a sub-anchor of the kill switch).
-	dnsDisabled := false
-	if dnsEnabled {
-		if err := h.firewall.DisableDNSProtection(); err != nil {
-			slog.Warn("suspendFirewall: failed to disable DNS protection", "error", err)
-		} else {
-			dnsDisabled = true
-		}
-	}
-	if ksEnabled {
-		if err := h.firewall.DisableKillSwitch(); err != nil {
-			// We just turned DNS protection off but the kill switch
-			// is still on — that's an inconsistent state. Try to
-			// re-enable DNS protection so the system goes back to
-			// where it was, and surface the error to the caller so
-			// resumeFirewall isn't called against a state that
-			// already half-resumed.
-			if dnsDisabled {
-				h.mu.Lock()
-				dnsServers := h.fwSavedDNSServers
-				h.mu.Unlock()
-				ifaceName := ""
-				if status := h.manager.Status(); status != nil {
-					ifaceName = status.InterfaceName
-				}
-				if ifaceName != "" && len(dnsServers) > 0 {
-					if rollbackErr := h.firewall.EnableDNSProtection(ifaceName, dnsServers); rollbackErr != nil {
-						slog.Error("suspendFirewall: DNS protection rollback ALSO failed",
-							"error", rollbackErr)
-					}
-				}
-			}
-			return fmt.Errorf("suspendFirewall: disable kill switch: %w", err)
-		}
-	}
-
-	return nil
-}
-
-// resumeFirewall re-enables firewall rules that were active before the
-// reconnect suspend. It reads the NEW interface name and endpoints from the
-// tunnel manager so the pf rules match the newly created utun interface.
-func (h *Helper) resumeFirewall() error {
-	h.mu.Lock()
-	restoreKS := h.fwSavedKillSwitch
-	restoreDNS := h.fwSavedDNSProtection
-	savedDNSServers := h.fwSavedDNSServers
-	var ifaceAddresses []string
-	for _, cfg := range h.activeCfgs {
-		ifaceAddresses = append(ifaceAddresses, cfg.Interface.Address...)
-	}
-	// Clear saved state so a second resume is a no-op.
-	h.fwSavedKillSwitch = false
-	h.fwSavedDNSProtection = false
-	h.fwSavedDNSServers = nil
-	h.mu.Unlock()
-
-	if !restoreKS && !restoreDNS {
-		slog.Debug("resumeFirewall: no firewall rules to restore")
-		return nil
-	}
-
-	status := h.manager.Status()
-	ifaceName := ""
-	if status != nil {
-		ifaceName = status.InterfaceName
-	}
-
-	slog.Info("resuming firewall rules after reconnect",
-		"kill_switch", restoreKS, "dns_protection", restoreDNS,
-		"new_interface", ifaceName)
-
-	if restoreKS {
-		if ifaceName == "" {
-			slog.Warn("resumeFirewall: no interface name available, cannot re-enable kill switch")
-		} else {
-			endpoints := h.manager.ResolvedEndpoints()
-			if len(endpoints) == 0 {
-				slog.Warn("resumeFirewall: no resolved endpoints, cannot re-enable kill switch")
-			} else {
-				if err := h.firewall.EnableKillSwitch(ifaceName, ifaceAddresses, endpoints); err != nil {
-					slog.Error("resumeFirewall: failed to re-enable kill switch", "error", err)
-					return fmt.Errorf("resumeFirewall: enable kill switch: %w", err)
-				}
-			}
-		}
-	}
-
-	if restoreDNS {
-		if ifaceName == "" {
-			slog.Warn("resumeFirewall: no interface name available, cannot re-enable DNS protection")
-		} else if len(savedDNSServers) == 0 {
-			slog.Warn("resumeFirewall: no DNS servers saved, cannot re-enable DNS protection")
-		} else {
-			if err := h.firewall.EnableDNSProtection(ifaceName, savedDNSServers); err != nil {
-				slog.Error("resumeFirewall: failed to re-enable DNS protection", "error", err)
-				return fmt.Errorf("resumeFirewall: enable DNS protection: %w", err)
-			}
-		}
-	}
-
-	return nil
-}
-
 func (h *Helper) cleanup() {
 	h.cleanupOnce.Do(func() {
+		defer close(h.cleanupDone)
 		slog.Info("helper cleanup starting",
 			"connected", h.manager.IsConnected(),
 			"call_stack", string(debug.Stack()))
@@ -770,6 +967,7 @@ func (h *Helper) cleanup() {
 		if h.wifiMon != nil {
 			h.wifiMon.Stop()
 		}
+		h.stopSettleTimer()
 		network.UnsubscribeNetworkChange("automation")
 		h.monitor.Stop()
 		// Tear down tunnels BEFORE removing kill-switch / pf rules.

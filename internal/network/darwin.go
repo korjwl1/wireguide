@@ -176,6 +176,14 @@ func (m *DarwinManager) AddRoutes(ifaceName string, allowedIPs []string, fullTun
 			hasV6Default = true
 			continue
 		}
+		// Non-default route that contains an address on a local physical
+		// interface: routing it through the tunnel would hijack the LAN
+		// (gateway, resolver and all). Skip it instead.
+		if ip, overlaps := LocalNetworkOverlap(cidr); overlaps {
+			slog.Warn("AllowedIPs overlaps local network; not routing it through the tunnel",
+				"interface", ifaceName, "cidr", cidr, "local_address", ip.String())
+			continue
+		}
 		// Non-default route: skip if already pointing at this interface (idempotent)
 		family := "-inet"
 		if isV6 {

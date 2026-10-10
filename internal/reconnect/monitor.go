@@ -3,6 +3,7 @@ package reconnect
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"runtime/debug"
@@ -50,6 +51,12 @@ type State struct {
 	MaxAttempts  int    `json:"max_attempts"`
 	NextRetry    string `json:"next_retry"`
 }
+
+// ErrNothingToReconnect is returned by a ReconnectFunc when there is no
+// tunnel left that it should restore (nothing cached, or every candidate
+// is owned by automation or was disconnected on purpose). The legacy
+// all-tunnels retry ends instead of backing off forever.
+var ErrNothingToReconnect = errors.New("nothing to reconnect")
 
 // ReconnectFunc is called to perform the actual reconnection of a specific
 // tunnel identified by name. The ctx is the same ctx the monitor created for
@@ -101,6 +108,7 @@ type Monitor struct {
 	cfg             Config
 	manager         TunnelManager
 	reconnectFn     ReconnectFunc
+	legacyTeardown  func() error
 	statusFn        StatusChangedFunc
 	fwSuspendFn     FirewallSuspendFunc
 	fwResumeFn      FirewallResumeFunc
@@ -147,6 +155,17 @@ func (m *Monitor) SetFirewallCallbacks(suspend FirewallSuspendFunc, resume Firew
 	defer m.mu.Unlock()
 	m.fwSuspendFn = suspend
 	m.fwResumeFn = resume
+}
+
+// SetLegacyTeardown installs the teardown used by the legacy all-tunnels
+// path (tunnelName == "") INSTEAD of manager.Disconnect(). It lets the owner
+// decide which tunnels may be torn down (e.g. leave automation-owned tunnels
+// alone). A nil error, or ErrNotConnected, counts as success. Must be called
+// before Start().
+func (m *Monitor) SetLegacyTeardown(fn func() error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.legacyTeardown = fn
 }
 
 // SetHealthCheck enables or disables the periodic handshake age check.
@@ -490,6 +509,25 @@ func (m *Monitor) reconnectWithBackoff(ctx context.Context, tunnelName string, e
 	entry.delay = m.cfg.InitialDelay
 	m.mu.Unlock()
 
+	// firewallSuspended is true between a suspend attempt and its matching
+	// resume. The deferred resume guarantees the firewall is restored on
+	// EVERY exit path (success, failure, cancel, give-up, panic): a
+	// suspended firewall must never outlive this goroutine. Panic coverage
+	// relies on the callbacks' locks being released by defer while the panic
+	// unwinds (reconnectFn does; a panic inside a manager-internal locked
+	// section is not covered).
+	firewallSuspended := false
+	resumeFirewall := func(reason string) {
+		if !firewallSuspended || m.fwResumeFn == nil {
+			return
+		}
+		firewallSuspended = false
+		if err := m.fwResumeFn(); err != nil {
+			slog.Warn("failed to resume firewall", "reason", reason, "error", err)
+		}
+	}
+	defer resumeFirewall("reconnect goroutine exit")
+
 	for {
 		m.mu.Lock()
 		if !m.running {
@@ -550,12 +588,13 @@ func (m *Monitor) reconnectWithBackoff(ctx context.Context, tunnelName string, e
 		// Suspend firewall rules before disconnect so old pf rules (which
 		// reference the old utun interface name) don't block the new
 		// connection's traffic when the interface name changes.
-		firewallWasSuspended := false
 		if m.fwSuspendFn != nil {
+			// A failed suspend may still have been partial, so resume is
+			// owed either way (resume is idempotent and reconciles from the
+			// helper's wanted state).
+			firewallSuspended = true
 			if err := m.fwSuspendFn(); err != nil {
 				slog.Warn("failed to suspend firewall for reconnect", "error", err)
-			} else {
-				firewallWasSuspended = true
 			}
 		}
 
@@ -567,17 +606,35 @@ func (m *Monitor) reconnectWithBackoff(ctx context.Context, tunnelName string, e
 		if tunnelName != "" {
 			disconnectErr = m.manager.DisconnectTunnel(tunnelName)
 		} else {
-			disconnectErr = m.manager.Disconnect()
+			m.mu.Lock()
+			teardown := m.legacyTeardown
+			m.mu.Unlock()
+			if teardown != nil {
+				// First attempt only: the hook bounces every plain connected
+				// tunnel, so repeating it on later attempts would keep
+				// dropping tunnels that were already rebuilt while another
+				// one stays unreachable. Later attempts let reconnectFn("")
+				// restore just the tunnels that are still down.
+				if attempt == 1 {
+					disconnectErr = teardown()
+				}
+			} else {
+				disconnectErr = m.manager.Disconnect()
+			}
+		}
+		// ErrNotConnected only means there is nothing to tear down: on the
+		// legacy path everything is already down, and on the per-tunnel path
+		// an earlier attempt's failed connect removed the tunnel. Fall
+		// through to the reconnect step (the helper decides from its cached
+		// configs whether anything is left to restore); treating it as a
+		// teardown failure would back off forever without ever reconnecting.
+		if disconnectErr != nil && isNotConnected(disconnectErr) {
+			disconnectErr = nil
 		}
 		if disconnectErr != nil {
 			slog.Warn("pre-reconnect disconnect failed; will retry after backoff",
 				"tunnel", tunnelName, "attempt", attempt, "error", disconnectErr)
-			if firewallWasSuspended && m.fwResumeFn != nil {
-				if err := m.fwResumeFn(); err != nil {
-					slog.Warn("failed to resume firewall after disconnect failure",
-						"error", err)
-				}
-			}
+			resumeFirewall("disconnect failure")
 			m.mu.Lock()
 			entry.delay = delay * 2
 			if entry.delay > m.cfg.MaxDelay {
@@ -593,25 +650,30 @@ func (m *Monitor) reconnectWithBackoff(ctx context.Context, tunnelName string, e
 			slog.Info("reconnection cancelled before reconnectFn", "attempt", attempt)
 			// Re-enable firewall even on cancel to avoid leaving the
 			// system unprotected.
-			if firewallWasSuspended && m.fwResumeFn != nil {
-				if err := m.fwResumeFn(); err != nil {
-					slog.Warn("failed to resume firewall after cancel", "error", err)
-				}
-			}
+			resumeFirewall("cancel")
 			return
 		}
 
 		// Attempt reconnection — pass tunnel name so only the specific
 		// tunnel is reconnected when doing per-tunnel health recovery.
 		if err := m.reconnectFn(ctx, tunnelName); err != nil {
+			if errors.Is(err, ErrNothingToReconnect) {
+				// Nothing left to restore: end this retry rather than
+				// cycling (and suspending the firewall) forever.
+				slog.Info("reconnect retry ended: nothing to reconnect", "tunnel", tunnelName, "attempt", attempt)
+				resumeFirewall("nothing to reconnect")
+				m.notifyStatus(State{Reconnecting: false})
+				m.mu.Lock()
+				if cur, ok := m.retries[tunnelName]; ok && cur == entry {
+					delete(m.retries, tunnelName)
+				}
+				m.mu.Unlock()
+				return
+			}
 			slog.Warn("reconnection failed", "attempt", attempt, "tunnel", tunnelName, "error", err)
 			// Re-enable firewall after failed attempt so the system stays
 			// protected between retries.
-			if firewallWasSuspended && m.fwResumeFn != nil {
-				if err := m.fwResumeFn(); err != nil {
-					slog.Warn("failed to resume firewall after failed reconnect", "error", err)
-				}
-			}
+			resumeFirewall("failed reconnect")
 			// Exponential backoff stored on the entry so a sibling
 			// trigger (e.g. CancelRetry + new triggerReconnectTunnel)
 			// can read it for an informative GetState snapshot, and so
@@ -627,11 +689,7 @@ func (m *Monitor) reconnectWithBackoff(ctx context.Context, tunnelName string, e
 		}
 
 		// Resume firewall with the new interface name and endpoints.
-		if firewallWasSuspended && m.fwResumeFn != nil {
-			if err := m.fwResumeFn(); err != nil {
-				slog.Warn("failed to resume firewall after successful reconnect", "error", err)
-			}
-		}
+		resumeFirewall("successful reconnect")
 
 		slog.Info("reconnected successfully", "attempt", attempt, "tunnel", tunnelName)
 		m.notifyStatus(State{Reconnecting: false})
@@ -677,6 +735,13 @@ func (m *Monitor) triggerLoop() {
 			}
 		}
 	}
+}
+
+// isNotConnected reports whether err is the tunnel manager's "nothing is
+// connected" error.
+func isNotConnected(err error) bool {
+	var te *tunnel.TunnelError
+	return errors.As(err, &te) && te.Kind == tunnel.ErrNotConnected
 }
 
 func (m *Monitor) notifyStatus(state State) {

@@ -151,17 +151,30 @@ type SettingsChangedPayload struct {
 // the network context the helper currently sees plus each rule-bearing
 // tunnel's evaluated decision. No connect/disconnect is performed.
 type AutomationPreviewResponse struct {
-	SSID        string                     `json:"ssid"`
-	PhysicalIPs []string                   `json:"physical_ips"`
-	GatewayMAC  string                     `json:"gateway_mac"`
-	Tunnels     []AutomationTunnelDecision `json:"tunnels"`
+	SSID        string   `json:"ssid"`
+	PhysicalIPs []string `json:"physical_ips"`
+	GatewayMAC  string   `json:"gateway_mac"`
+	// PrimaryIface is the default-route interface ("" when unknown).
+	PrimaryIface  string `json:"primary_iface,omitempty"`
+	PrimaryIsWiFi bool   `json:"primary_is_wifi,omitempty"`
+	Online        bool   `json:"online"`
+	// Settled is true once the network has been stable long enough for
+	// negated rules to act; SettleRemainingSec counts down otherwise.
+	Settled            bool                       `json:"settled"`
+	SettleRemainingSec int                        `json:"settle_remaining_sec,omitempty"`
+	Tunnels            []AutomationTunnelDecision `json:"tunnels"`
 }
 
 // AutomationTunnelDecision is one tunnel's evaluated desired state.
 type AutomationTunnelDecision struct {
 	Name      string `json:"name"`
 	RuleCount int    `json:"rule_count"`
-	Decision  string `json:"decision"` // "connect" | "disconnect" | "unmanaged"
-	Active    bool   `json:"active"`
+	// Decision is "connect" | "disconnect" | "unmanaged", or "held" (a
+	// negated rule's input is unknown, so the tunnel is left alone) or
+	// "latched" (a manual connect/disconnect overrides rules until the
+	// network changes).
+	Decision string `json:"decision"`
+	Active   bool   `json:"active"`
+	Held     bool   `json:"held,omitempty"`
+	Latched  bool   `json:"latched,omitempty"`
 }
-

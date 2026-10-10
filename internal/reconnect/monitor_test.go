@@ -1004,3 +1004,148 @@ func TestPingSettingsChangeDuringDisconnectRestoresFirewall(t *testing.T) {
 		t.Fatal("invalid retry retained")
 	}
 }
+
+func TestFailedSuspendStillOwesResume(t *testing.T) {
+	var valid atomic.Bool
+	valid.Store(true)
+	var resumed atomic.Int32
+	mon, mgr, _ := newTestMonitor(testConfig(), func(context.Context, string) error {
+		t.Error("reconnected after settings changed during disconnect")
+		return nil
+	})
+	mgr.disconnectFn = func() error { valid.Store(false); return nil }
+	mon.SetFirewallCallbacks(
+		func() error { return errors.New("partial suspend") },
+		func() error { resumed.Add(1); return nil })
+	mon.running = true
+	defer mon.Stop()
+	mon.ReconnectTunnelIfIdle("ping", valid.Load)
+	waitFor(t, time.Second, "firewall resumed after failed suspend", func() bool { return resumed.Load() == 1 })
+}
+
+func TestLegacyRetryEndsWhenNothingToReconnect(t *testing.T) {
+	var calls atomic.Int32
+	mon, mgr, sd := newTestMonitor(testConfig(), func(context.Context, string) error {
+		calls.Add(1)
+		return ErrNothingToReconnect
+	})
+	mgr.setConnected(true, "t")
+	mon.Start()
+	defer mon.Stop()
+
+	sd.sendWake()
+	waitFor(t, 2*time.Second, "reconnectFn called", func() bool { return calls.Load() >= 1 })
+	// The retry slot must be released rather than backing off forever.
+	waitFor(t, 2*time.Second, "retry slot cleared", func() bool {
+		mon.mu.Lock()
+		defer mon.mu.Unlock()
+		return len(mon.retries) == 0
+	})
+	time.Sleep(4 * testConfig().MaxDelay)
+	if n := calls.Load(); n != 1 {
+		t.Errorf("retry kept cycling: %d calls", n)
+	}
+}
+
+func TestLegacyReconnectToleratesNotConnectedDisconnect(t *testing.T) {
+	var calls atomic.Int32
+	mon, mgr, sd := newTestMonitor(testConfig(), func(context.Context, string) error {
+		calls.Add(1)
+		return nil
+	})
+	mgr.disconnectFn = func() error {
+		return &tunnel.TunnelError{Kind: tunnel.ErrNotConnected, Message: "no tunnel is connected"}
+	}
+	mgr.setConnected(true, "t")
+	mon.Start()
+	defer mon.Stop()
+
+	sd.sendWake()
+	waitFor(t, 2*time.Second, "reconnectFn reached despite ErrNotConnected", func() bool { return calls.Load() >= 1 })
+}
+
+func TestLegacyTeardownHookReplacesManagerDisconnect(t *testing.T) {
+	var calls, hook atomic.Int32
+	mon, mgr, sd := newTestMonitor(testConfig(), func(context.Context, string) error {
+		calls.Add(1)
+		return nil
+	})
+	var mgrDisconnects atomic.Int32
+	mgr.disconnectFn = func() error {
+		mgrDisconnects.Add(1)
+		return nil
+	}
+	mon.SetLegacyTeardown(func() error {
+		hook.Add(1)
+		return &tunnel.TunnelError{Kind: tunnel.ErrNotConnected, Message: "nothing to tear down"}
+	})
+	mgr.setConnected(true, "t")
+	mon.Start()
+	defer mon.Stop()
+
+	sd.sendWake()
+	waitFor(t, 2*time.Second, "reconnectFn reached", func() bool { return calls.Load() >= 1 })
+	if hook.Load() != 1 {
+		t.Errorf("legacy teardown hook calls = %d, want 1", hook.Load())
+	}
+	if mgrDisconnects.Load() != 0 {
+		t.Errorf("manager.Disconnect must not be called when the hook is set, got %d", mgrDisconnects.Load())
+	}
+}
+
+// The legacy teardown hook runs only on the first attempt of a retry entry:
+// later attempts must not bounce tunnels rebuilt by earlier ones.
+func TestLegacyTeardownHookRunsOnFirstAttemptOnly(t *testing.T) {
+	var calls, hook atomic.Int32
+	mon, mgr, sd := newTestMonitor(testConfig(), func(context.Context, string) error {
+		if calls.Add(1) < 3 {
+			return errors.New("unreachable")
+		}
+		return nil
+	})
+	mon.SetLegacyTeardown(func() error {
+		hook.Add(1)
+		return nil
+	})
+	mgr.setConnected(true, "t")
+	mon.Start()
+	defer mon.Stop()
+
+	sd.sendWake()
+	waitFor(t, 5*time.Second, "third attempt reached", func() bool { return calls.Load() >= 3 })
+	if hook.Load() != 1 {
+		t.Errorf("legacy teardown hook calls = %d, want 1", hook.Load())
+	}
+}
+
+// After a failed reconnect the manager has removed the tunnel, so the next
+// attempt's pre-reconnect teardown returns ErrNotConnected. The per-tunnel
+// retry must treat that as "nothing to tear down" and call reconnectFn again,
+// not back off forever without ever reconnecting.
+func TestPerTunnelRetry_ErrNotConnectedStillReconnects(t *testing.T) {
+	var reconnectCalls atomic.Int32
+	reconnectFn := func(_ context.Context, name string) error {
+		reconnectCalls.Add(1)
+		return errors.New("endpoint lookup failed")
+	}
+	mon, mgr, _ := newTestMonitor(testConfig(), reconnectFn)
+	var disconnects atomic.Int32
+	mgr.disconnectFn = func() error {
+		// The first teardown succeeds (the tunnel was up); after the failed
+		// connect the entry is gone.
+		if disconnects.Add(1) == 1 {
+			return nil
+		}
+		return &tunnel.TunnelError{Kind: tunnel.ErrNotConnected, Message: "no tunnel is connected"}
+	}
+	mon.mu.Lock()
+	mon.running = true
+	mon.mu.Unlock()
+	defer mon.Stop()
+
+	mon.triggerReconnectTunnel("home-vpn")
+
+	waitFor(t, 3*time.Second, "reconnectFn called again after ErrNotConnected", func() bool {
+		return reconnectCalls.Load() >= 3
+	})
+}

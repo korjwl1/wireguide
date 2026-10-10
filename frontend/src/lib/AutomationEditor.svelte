@@ -59,6 +59,7 @@
           _id: ++ruleId,
           when: {
             type: r.when?.type || 'network',
+            negate: !!r.when?.negate,
             ssid: r.when?.ssid || '',
             subnet: r.when?.subnet || '',
             gateway_mac: r.when?.gateway_mac || '',
@@ -101,7 +102,7 @@
     // No save() here: a blank draft is not a configuration change — it
     // becomes persistable on the first input that completes it. Saving
     // now would also manufacture a self-write config_changed echo.
-    rules = [...rules, { _id: ++ruleId, when: { type: 'network', ssid: '', subnet: '', gateway_mac: '', label: '' }, do: 'connect' }];
+    rules = [...rules, { _id: ++ruleId, when: { type: 'network', negate: false, ssid: '', subnet: '', gateway_mac: '', label: '' }, do: 'connect' }];
   }
 
   function removeRule(i) {
@@ -203,6 +204,8 @@
     else if (t === 'subnet' && r.when.subnet.trim() !== '') when = { type: 'subnet', subnet: r.when.subnet.trim() };
     else if (t === 'network' && r.when.gateway_mac.trim() !== '') when = { type: 'network', gateway_mac: macCanon(r.when.gateway_mac) };
     if (!when) return null;
+    // "is not" only applies to concrete conditions; else can't be negated.
+    if (r.when.negate && t !== 'none_match') when.negate = true;
     if (r.when.label) when.label = r.when.label;
     return { when, do: r.do };
   }
@@ -289,6 +292,7 @@
     return {
       do: d?.do || 'connect',
       type: d?.when?.type || 'network',
+      negate: !!d?.when?.negate && d?.when?.type !== 'none_match',
       ssid: (d?.when?.ssid || '').trim(),
       subnet: (d?.when?.subnet || '').trim(),
       mac: macCanon(d?.when?.gateway_mac || ''),
@@ -301,7 +305,7 @@
     // Positional compare is intentional: order is rule priority.
     return disk.some((d, i) => {
       const a = normRule(d), b = normRule(local[i]);
-      return a.do !== b.do || a.type !== b.type || a.ssid !== b.ssid ||
+      return a.do !== b.do || a.type !== b.type || a.negate !== b.negate || a.ssid !== b.ssid ||
         a.subnet !== b.subnet || a.mac !== b.mac || a.label !== b.label;
     });
   }
@@ -377,6 +381,13 @@
                 <option value="ssid">{$t('automation.cond_ssid')}</option>
                 <option value="none_match">{$t('automation.cond_none')}</option>
               </select>
+              {#if rule.when.type !== 'none_match'}
+                <select class="am-neg" bind:value={rule.when.negate} on:change={save} aria-label={$t('automation.negate')}
+                  title={rule.when.negate ? $t('automation.negated_hint') : ''}>
+                  <option value={false}>{$t('automation.is')}</option>
+                  <option value={true}>{$t('automation.is_not')}</option>
+                </select>
+              {/if}
               {#if rule.when.type === 'network'}
                 <input
                   class="am-val" class:am-invalid={macInvalid(rule.when.gateway_mac)}
@@ -530,6 +541,7 @@
     border-radius: 7px; padding: 5px 7px;
   }
   .am-do { font-weight: 600; }
+  .am-neg { font-weight: 600; }
   .am-when { font: 400 11px var(--font-sans); color: var(--text-muted); }
   .am-val { flex: 1; min-width: 120px; }
   .am-val-none { color: var(--text-muted); border: 0 !important; background: transparent !important; }

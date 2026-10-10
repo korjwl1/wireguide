@@ -313,8 +313,8 @@ func daemonStateSummary(ctx context.Context) string {
 func daemonInstallScript(exe, tmpPlist string, upToDate bool) string {
 	fullInstall := fmt.Sprintf(
 		`launchctl bootout system/%s 2>/dev/null; `+
-			`i=0; while [ $i -lt 50 ] && launchctl print system/%s >/dev/null 2>&1; do sleep 0.1; i=$((i+1)); done; `+
-			`if [ $i -ge 50 ]; then echo 'WireGuide helper did not unload within 5s; no files were changed' >&2; exit 1; fi; `+
+			`i=0; while [ $i -lt 150 ] && launchctl print system/%s >/dev/null 2>&1; do sleep 0.1; i=$((i+1)); done; `+
+			`if [ $i -ge 150 ]; then echo 'WireGuide helper did not unload within 15s; no files were changed' >&2; exit 1; fi; `+
 			`rm -f %s %s && `+
 			`mkdir -p /Library/PrivilegedHelperTools && `+
 			`cp -f %s %s && `+

@@ -49,6 +49,8 @@ wireguide ctl automation                 # what the engine decides right now
 wireguide ctl automation rules <name>    # list a tunnel's rules, in priority order
 wireguide ctl automation add <name> <connect|disconnect> <cond>
     #   cond = ssid:<wifi-name>   subnet:<CIDR>   mac:<gateway-MAC>   else
+    #   negated: not-ssid:<name>  not-subnet:<CIDR>  not-mac:<MAC>  (matches only when
+    #   the value is known and different; unknown, e.g. a blank SSID mid-roam, holds)
 wireguide ctl automation rm <name> <n>   # remove rule number <n> (from 'rules')
 ` + "```" + `
 ` + "`mac:`" + ` fingerprints a specific router (precise, works on Wi-Fi and Ethernet,

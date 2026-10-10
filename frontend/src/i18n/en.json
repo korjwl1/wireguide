@@ -208,7 +208,7 @@
   },
   "automation": {
     "title": "Automation",
-    "hint": "Rules run top to bottom; the first matching condition wins. Pick a condition and type its value, or use the suggestion for the network you're on. \"This network\" matches a specific router by its gateway MAC (precise; tells apart networks that share a subnet); \"subnet\" matches an IP range. Add separate rules to connect and to disconnect.",
+    "hint": "Rules run top to bottom; the first matching condition wins. Pick a condition and type its value, or use the suggestion for the network you're on. \"This network\" matches a specific router by its gateway MAC (precise; tells apart networks that share a subnet); \"subnet\" matches an IP range. Add separate rules to connect and to disconnect. \"is not\" matches only when the value is known and different: while it is unknown (for example a blank Wi-Fi name while roaming, or the network just changed and hasn't settled for about 15 seconds) the tunnel is left alone and later rules are not tried.",
     "empty": "No rules — this tunnel is never auto-managed. Add a rule below.",
     "add_rule": "Add rule",
     "action": "Action",
@@ -225,7 +225,11 @@
     "mac_placeholder": "gateway MAC (e.g. b0:38:6c:54:8b:ab)",
     "drag_hint": "drag to reorder — the topmost matching rule wins",
     "mac_invalid": "not a valid MAC address (e.g. b0:38:6c:54:8b:ab)",
-    "subnet_invalid": "not a valid CIDR (e.g. 192.168.0.0/24)"
+    "subnet_invalid": "not a valid CIDR (e.g. 192.168.0.0/24)",
+    "is": "is",
+    "is_not": "is not",
+    "negate": "Match mode",
+    "negated_hint": "\"is not\" matches only when the value is known and different; while unknown the tunnel is left as it is."
   },
   "ping_health": {
     "title": "Reconnect on ping failure",
