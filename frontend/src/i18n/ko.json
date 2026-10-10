@@ -235,6 +235,7 @@
     "auto_off_hint": "설정에서 자동 확인이 꺼져 있습니다. 위 버튼으로 수동 확인하세요.",
     "install_failed": "업데이트 실패",
     "progress_refresh": "패키지 저장소 확인 중…",
+    "progress_download": "업데이트 다운로드 및 검증 중…",
     "progress_install": "다운로드 및 설치 중…"
   },
   "wifi_permission": {

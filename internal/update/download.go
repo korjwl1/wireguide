@@ -15,17 +15,23 @@ import (
 )
 
 // DownloadUpdate downloads the release asset to a secure temp file and
-// verifies the SHA256 checksum if available.
+// verifies it against SHA256SUMS (and, when a public key is embedded,
+// the SHA256SUMS.sig Ed25519 signature). Verification is mandatory: any
+// failure deletes the file and returns an error.
 //
-// CURRENTLY UNREFERENCED FROM PRODUCTION CODE — macOS uses Homebrew for
-// updates (see internal/app/settings_ops.go → IsBrewInstall path) and
-// Linux/Windows ship without auto-install plumbing yet. This function
-// (and the rest of the verify* / install* family below) is kept on
-// purpose for the day we add native Linux/Windows update flows; it is
-// fully exercised by checker_test.go so it doesn't bit-rot. If you're
-// auditing for dead code and considering deletion: confirm with the
-// maintainer first.
+// Production callers reach this through Apply (apply.go), which feeds it
+// an UpdateInfo re-fetched in the backend and hands the result to
+// Install. On success the authoritative hash is recorded in the
+// unexported info.verifiedSHA256 — Install refuses any UpdateInfo that
+// lacks it, so a struct round-tripped through the frontend with
+// hash_verified=true forged on it cannot reach an installer.
 func DownloadUpdate(info *UpdateInfo) (string, error) {
+	// Never inherit verification state from the caller: the flags are
+	// JSON-visible and may have round-tripped through the frontend.
+	info.HashVerified = false
+	info.SignatureVerified = false
+	info.verifiedSHA256 = ""
+
 	if info.DownloadURL == "" {
 		return "", fmt.Errorf("no download URL for %s/%s", runtime.GOOS, runtime.GOARCH)
 	}
@@ -158,6 +164,7 @@ func DownloadUpdate(info *UpdateInfo) (string, error) {
 	}
 	info.HashVerified = true
 	info.SignatureVerified = signatureChecked
+	info.verifiedSHA256 = strings.ToLower(actual)
 
 	return destPath, nil
 }

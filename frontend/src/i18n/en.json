@@ -235,6 +235,7 @@
     "auto_off_hint": "Automatic checks are turned off in Settings. Use the button above to check manually.",
     "install_failed": "Update failed",
     "progress_refresh": "Checking the package repository…",
+    "progress_download": "Downloading and verifying the update…",
     "progress_install": "Downloading and installing…"
   },
   "wifi_permission": {

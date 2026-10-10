@@ -50,7 +50,7 @@ func TestUpdateRestartWaitsForOldProcessAndPreservesPath(t *testing.T) {
 }
 
 func TestUpdateRestartWithoutApplication(t *testing.T) {
-	if err := (&TunnelService{}).restartAfterUpdate(); err == nil {
+	if err := (&TunnelService{}).restartAfterUpdate("/Applications/WireGuide.app"); err == nil {
 		t.Fatal("missing application must not report successful restart")
 	}
 }

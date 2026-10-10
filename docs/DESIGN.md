@@ -630,7 +630,21 @@ All background goroutines wrapped in `goSafe()` — recovers panics, logs stack 
 | Install method | Update mechanism |
 |---------------|-----------------|
 | Homebrew | `brew upgrade --cask --greedy wireguide` (GUI triggers; `HOMEBREW_NO_AUTO_UPDATE=1` since the checker already knows the target version) |
-| Binary zip | Opens GitHub Releases page in browser |
+| macOS zip (bundle in a user-writable folder) | Download → verify → extract with `ditto` next to the running bundle → check bundle id / version / `codesign --verify` → rename-swap (rollback on failure) → relaunch |
+| Windows NSIS install (`uninstall.exe` beside `wireguide.exe`) | Download → verify → run the installer elevated and silent (`/S /D=<install dir>`) via a hidden PowerShell waiter that relaunches the app non-elevated |
+| Linux `.deb`, portable / dev binaries, translocated or read-only bundles | Opens GitHub Releases page in browser |
+
+Direct-download updates go through `update.Apply`: the release is re-fetched in
+the backend (the frontend only supplies the version the user approved), the
+asset is checked against `SHA256SUMS`, and `SHA256SUMS.sig` must verify against
+the Ed25519 key baked into production builds (`-tags production`); dev builds
+without a key fall back to checksum-only per `require_signed_dev.go`. Any
+verification failure aborts with an error — it never degrades to the Releases
+page or to an unverified install. `Install` re-hashes the file right before use
+(on Windows under a share-deny-write handle held across the UAC launch) and
+checks the artifact's own version (Windows PE version resource, macOS
+`CFBundleShortVersionString`) against the release tag, because the signed
+`SHA256SUMS` uses version-less asset names.
 
 The Homebrew path is verified, not trusted: after `brew` exits 0, the installed
 bundle's `CFBundleShortVersionString` is compared against the release version and

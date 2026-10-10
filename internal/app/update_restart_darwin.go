@@ -22,12 +22,15 @@ done
 exec "$3" "$2"
 `
 
-func (s *TunnelService) restartAfterUpdate() error {
+// restartAfterUpdate quits the GUI and reopens appPath (the .app bundle:
+// /Applications/WireGuide.app for Homebrew, the swapped bundle's own path
+// for a direct-download self-update) once this process has exited.
+func (s *TunnelService) restartAfterUpdate(appPath string) error {
 	if s.app == nil {
 		return fmt.Errorf("update installed, but application restart is unavailable")
 	}
 	cmd := exec.Command("/bin/sh", "-c", updateRestartScript, "wireguide-restart",
-		strconv.Itoa(os.Getpid()), "/Applications/WireGuide.app", "/usr/bin/open")
+		strconv.Itoa(os.Getpid()), appPath, "/usr/bin/open")
 	// The launcher must survive the GUI's termination, with no inherited
 	// output pipes that could keep an update command waiting for EOF.
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}

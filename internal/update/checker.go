@@ -250,6 +250,12 @@ type UpdateInfo struct {
 	ExpectedHash      string `json:"expected_hash,omitempty"` // pre-parsed SHA256 for this asset
 	HashVerified      bool   `json:"hash_verified"`           // set to true after successful checksum verification
 	SignatureVerified bool   `json:"signature_verified"`      // true iff Ed25519 .sig also verified
+
+	// verifiedSHA256 is the lower-case hex digest DownloadUpdate checked
+	// the downloaded file against. Unexported so it never crosses the
+	// JSON boundary: only a successful DownloadUpdate in this process can
+	// set it, and Install re-hashes the file against it right before use.
+	verifiedSHA256 string
 }
 
 // allowedRedirectHosts is the closed set of hostnames our update HTTP
