@@ -282,3 +282,21 @@ func (m *Manager) activeTunnelNamesLocked() []string {
 	sort.Strings(names)
 	return names
 }
+
+// ConnectedInterfaces returns tunnel name -> OS interface name for every
+// tunnel currently in the Connected state. It reads only in-memory state (no
+// wgctrl round trip), so callers may poll it cheaply.
+func (m *Manager) ConnectedInterfaces() map[string]string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make(map[string]string)
+	for name, e := range m.tunnels {
+		if e.state != domain.StateConnected || e.engine == nil {
+			continue
+		}
+		if iface := e.engine.InterfaceName(); iface != "" {
+			out[name] = iface
+		}
+	}
+	return out
+}

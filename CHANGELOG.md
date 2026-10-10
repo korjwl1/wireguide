@@ -2,6 +2,20 @@
 
 All notable changes to WireGuide will be documented in this file.
 
+## Unreleased
+
+### Fixed
+- **macOS DNS protection no longer outlives its tunnels** (#48) -- the helper now owns DNS protection as wanted state and reconciles the firewall against the tunnels that are actually connected (on connect, disconnect, automation, reconnect suspend/resume, and a tunnel-set watchdog in the event loop). Previously the `block ... port 53` pf rule survived disconnects, so system DNS stayed dead until quit or reboot.
+- **DNS protection no longer blackholes split tunnels** -- resolvers reached over the physical network (e.g. 1.1.1.1 with a LAN-only AllowedIPs) get an any-interface permit, resolvers inside AllowedIPs or behind a default-route tunnel are pinned to the tunnel, split-DNS (`~domain`) tunnels never trigger protection, and `0.0.0.0/1` + `128.0.0.0/1` full tunnels are recognised. Loopback resolvers on port 53 are always exempt, and search domains in `DNS =` no longer cause errors.
+- **Stale pf state cleared on every helper start** -- both WireGuide pf anchors are flushed unconditionally at startup, not only when a state file exists.
+- **pf is reference counted** -- WireGuide enables pf with `pfctl -E`, persists the token (with boot time) and releases it with `pfctl -X`; it never runs `pfctl -e` or `pfctl -d`, so other pf users (Internet Sharing, other VPNs) are no longer switched off. `/etc/pf.conf` is reloaded only when the active ruleset lacks `anchor "com.apple/*"`.
+- **Single firewall model on macOS** -- kill switch and DNS rules render from one model, so toggling the kill switch can no longer resurrect stale DNS rules.
+- **Reconnect monitor** -- the firewall is resumed on every exit path of a reconnect attempt (including panic), rebuilt from the currently connected tunnels instead of the alphabetically first one, and stays fail-closed with the kill switch when no tunnel is up.
+- **Linux** -- repeated DNS-protection enables replace the nftables DNS table instead of appending to it; the backend applies the full permit set, removes a stale `wireguide_dns` table at helper start, and surfaces a failed table delete instead of ignoring it.
+- **Failed firewall reconciles are retried** -- a failed apply is no longer recorded as handled; the event-loop safety net retries with backoff. macOS pf applies roll back the two anchors together and restore the model on failure.
+- **pf token robustness** -- pf is re-enabled if it was stopped externally, a dead token no longer wedges disable/cleanup, tokens are keyed to `kern.bootsessionuuid`, and pf query output no longer includes pfctl's stderr notices.
+- **Helper shutdown** -- SIGTERM/SIGINT run the normal graceful shutdown, bounded to 3 s even when the signal arrives mid-cleanup.
+
 ## [0.5.2] - 2026-09-15
 
 ### Added

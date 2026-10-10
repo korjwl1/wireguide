@@ -238,38 +238,49 @@ func (f *LinuxFirewall) DisableKillSwitch() error {
 	return nil
 }
 
-func (f *LinuxFirewall) EnableDNSProtection(interfaceName string, dnsServers []string) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-
-	if len(dnsServers) == 0 {
-		return nil
-	}
-
-	// Validate interface name before interpolating into nft rules.
-	if !validIfaceName.MatchString(interfaceName) {
-		return fmt.Errorf("invalid interface name %q", interfaceName)
-	}
-
-	// H12: Detect IPv4 vs IPv6 for each DNS server
+// renderDNSTable renders the wireguide_dns nft script for a permit set. A
+// pinned permit is bound to its interface by name; an unpinned permit (a
+// resolver reached over the physical network, e.g. from a split tunnel) has no
+// interface match. Invalid entries are skipped with a warning.
+func renderDNSTable(permits []DNSPermit) string {
 	var dnsAllowed []string
-	for _, dns := range dnsServers {
-		if net.ParseIP(dns) == nil {
-			slog.Warn("skipping invalid DNS IP in nft rules", "dns", dns)
+	seen := make(map[DNSPermit]struct{})
+	for _, p := range permits {
+		if net.ParseIP(p.Server) == nil {
+			slog.Warn("skipping invalid DNS IP in nft rules", "dns", p.Server)
 			continue
 		}
+		if p.Interface != "" && !validIfaceName.MatchString(p.Interface) {
+			slog.Warn("skipping DNS permit with invalid interface", "interface", p.Interface, "dns", p.Server)
+			continue
+		}
+		if _, dup := seen[p]; dup {
+			continue
+		}
+		seen[p] = struct{}{}
 		addrKw := "ip"
-		if strings.Contains(dns, ":") {
+		if strings.Contains(p.Server, ":") {
 			addrKw = "ip6"
 		}
-		dnsAllowed = append(dnsAllowed,
-			fmt.Sprintf("%s daddr %s tcp dport 53 oif %s accept", addrKw, dns, interfaceName))
-		dnsAllowed = append(dnsAllowed,
-			fmt.Sprintf("%s daddr %s udp dport 53 oif %s accept", addrKw, dns, interfaceName))
+		oif := ""
+		if p.Interface != "" {
+			oif = fmt.Sprintf(" oifname %q", p.Interface)
+		}
+		for _, proto := range []string{"tcp", "udp"} {
+			dnsAllowed = append(dnsAllowed,
+				fmt.Sprintf("%s daddr %s %s dport 53%s accept", addrKw, p.Server, proto, oif))
+		}
 	}
-
-	rules := fmt.Sprintf(`
-table inet %s_dns {
+	if len(dnsAllowed) == 0 {
+		return ""
+	}
+	// Single atomic script: create-if-missing then delete, then define the
+	// table fresh. Without the delete a repeated enable would APPEND a new
+	// accept set after the previous set's drop rules.
+	return fmt.Sprintf(`
+add table inet %[1]s_dns
+delete table inet %[1]s_dns
+table inet %[1]s_dns {
   chain dns_output {
     type filter hook output priority -1; policy accept;
     # Allow DNS to loopback (systemd-resolved stub at 127.0.0.53, local
@@ -277,13 +288,31 @@ table inet %s_dns {
     # systemd-resolved would have ALL DNS blocked.
     oif lo tcp dport 53 accept
     oif lo udp dport 53 accept
-    %s
+    %[2]s
     tcp dport 53 drop
     udp dport 53 drop
   }
 }
 `, nftTable, strings.Join(dnsAllowed, "\n    "))
+}
 
+// SetDNSPermits replaces the whole DNS permit set atomically. An empty (or
+// fully invalid) set removes the DNS table.
+func (f *LinuxFirewall) SetDNSPermits(permits []DNSPermit) error {
+	rules := renderDNSTable(permits)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if rules == "" {
+		if out, err := nftDeleteDNSTable(); err != nil && !isNftNotFound(fmt.Errorf("%s", out)) {
+			// Surface the failure: the table (and its port-53 drop) is
+			// still in the kernel, so the reconcile must not be marked
+			// clean or it would never retry.
+			slog.Warn("nft delete dns table failed", "error", err, "output", strings.TrimSpace(string(out)))
+			return fmt.Errorf("nft delete dns table: %w (%s)", err, strings.TrimSpace(string(out)))
+		}
+		f.dnsProtectionEnabled = false
+		return nil
+	}
 	if err := nftApply(rules); err != nil {
 		return err
 	}
@@ -291,12 +320,28 @@ table inet %s_dns {
 	return nil
 }
 
+func (f *LinuxFirewall) EnableDNSProtection(interfaceName string, dnsServers []string) error {
+	if len(dnsServers) == 0 {
+		return nil
+	}
+	// Validate interface name before interpolating into nft rules.
+	if !validIfaceName.MatchString(interfaceName) {
+		return fmt.Errorf("invalid interface name %q", interfaceName)
+	}
+	permits := make([]DNSPermit, 0, len(dnsServers))
+	for _, dns := range dnsServers {
+		permits = append(permits, DNSPermit{Interface: interfaceName, Server: dns})
+	}
+	return f.SetDNSPermits(permits)
+}
+
 func (f *LinuxFirewall) DisableDNSProtection() error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	// LOW: Log errors from nft delete
-	if out, err := nftDeleteDNSTable(); err != nil {
+	if out, err := nftDeleteDNSTable(); err != nil && !isNftNotFound(fmt.Errorf("%s", out)) {
 		slog.Warn("nft delete dns table failed", "error", err, "output", strings.TrimSpace(string(out)))
+		return fmt.Errorf("nft delete dns table: %w (%s)", err, strings.TrimSpace(string(out)))
 	}
 	f.dnsProtectionEnabled = false
 	return nil
@@ -314,10 +359,20 @@ func (f *LinuxFirewall) IsDNSProtectionEnabled() bool {
 	return f.dnsProtectionEnabled
 }
 
-// RecoverFromCrash is a no-op on Linux — nftables rules don't survive a
-// process crash to begin with, since they live in the kernel under our table
-// name and we recreate them on every EnableKillSwitch.
+// RecoverFromCrash removes a wireguide_dns table left behind by a previous
+// helper (nft tables are kernel state and outlive the process that made them).
+// A stale DNS block would otherwise blackhole port 53 until the next protected
+// connect. The kill-switch table is recreated on every EnableKillSwitch.
 func (f *LinuxFirewall) RecoverFromCrash() bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.dnsProtectionEnabled = false
+	if out, err := nftDeleteDNSTable(); err == nil {
+		slog.Info("recovery: removed stale DNS protection table")
+		return true
+	} else if !isNftNotFound(fmt.Errorf("%s", out)) {
+		slog.Warn("recovery: nft delete dns table failed", "error", err, "output", strings.TrimSpace(string(out)))
+	}
 	return false
 }
 
@@ -351,7 +406,7 @@ func nftApply(rules string) error {
 
 // nftDeleteDNSTable removes the wireguide_dns nftables table with a bounded
 // timeout. Returns the same (output, error) shape callers expect.
-func nftDeleteDNSTable() ([]byte, error) {
+var nftDeleteDNSTable = func() ([]byte, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), nftCmdTimeout)
 	defer cancel()
 	return exec.CommandContext(ctx, "nft", "delete", "table", "inet", nftTable+"_dns").CombinedOutput()
