@@ -281,6 +281,9 @@ func Run(addr string, ownerUID int, ownerSID, dataDir string, restoreDesired boo
 	// boot-time check alone decides. Elsewhere only the GUI respawns the
 	// helper, and only its mid-session recovery passes --restore-desired.
 	h.restoreOnStart = runtime.GOOS == "darwin" || restoreDesired
+	// A loop-watchdog trip runs the helper's teardown, not a bare
+	// DisconnectTunnel inside the Manager (issue #49).
+	manager.SetOnForcedDisconnect(h.handleForcedDisconnect)
 
 	// Derive the user's Application Support dir from the uid the
 	// LaunchDaemon plist passed in (`--uid=501` typically). Helper

@@ -92,6 +92,38 @@ type Manager struct {
 	// enable/disable calls, mirroring the historical behaviour on
 	// platforms that don't have this protection layer.
 	endpointProtector EndpointProtector
+
+	// onForcedDisconnect receives teardowns the Manager decides on by
+	// itself (the runaway-TX watchdog). Set by the helper via
+	// SetOnForcedDisconnect so the teardown runs through its disconnect
+	// path; nil → the Manager disconnects the tunnel directly. Guarded by
+	// m.mu.
+	onForcedDisconnect func(ForcedDisconnect)
+}
+
+// ForcedDisconnect is a teardown the Manager decided on without a caller
+// asking for it: the runaway-TX watchdog saw a routing loop (issue #49).
+type ForcedDisconnect struct {
+	TunnelName string
+	Interface  string
+	Reason     string
+	// current reports whether the session the event was raised for is
+	// still the tunnel's live session.
+	current func() bool
+}
+
+// NewForcedDisconnect builds a ForcedDisconnect outside the Manager, for
+// tests of the code that handles one. current may be nil (always current).
+func NewForcedDisconnect(name, iface, reason string, current func() bool) ForcedDisconnect {
+	return ForcedDisconnect{TunnelName: name, Interface: iface, Reason: reason, current: current}
+}
+
+// Current reports whether the tunnel is still on the session the event was
+// raised for. False means that session is already gone: the user turned the
+// tunnel off, or a reconnect replaced it (its own watchdog watches the new
+// session), so there is nothing left to tear down.
+func (f ForcedDisconnect) Current() bool {
+	return f.current == nil || f.current()
 }
 
 // EndpointProtector is the minimal slice of the firewall manager that
@@ -135,6 +167,55 @@ func NewManager(dataDir string) *Manager {
 // then skips the hook entirely).
 func (m *Manager) SetEndpointProtector(p EndpointProtector) {
 	m.endpointProtector = p
+}
+
+// SetOnForcedDisconnect hands watchdog teardowns to fn instead of
+// disconnecting the tunnel inside the Manager. A direct DisconnectTunnel
+// skips everything the caller keeps per tunnel (the helper's cached config,
+// desired state, kill-switch permits, DNS rules), and the helper's wake
+// reconnect would bring the looping tunnel straight back (issue #49).
+// fn runs on its own goroutine, without m.mu held.
+func (m *Manager) SetOnForcedDisconnect(fn func(ForcedDisconnect)) {
+	m.mu.Lock()
+	m.onForcedDisconnect = fn
+	m.mu.Unlock()
+}
+
+// loopWatchdogTripped handles a runaway-TX watchdog trip for the session
+// running engine. It never blocks the watchdog goroutine.
+func (m *Manager) loopWatchdogTripped(name, iface string, engine *Engine, bytesPerSec uint64) {
+	slog.Error("loop watchdog tripped — initiating forced disconnect",
+		"tunnel", name, "interface", iface, "bytes_per_sec", bytesPerSec)
+	m.mu.Lock()
+	hook := m.onForcedDisconnect
+	m.mu.Unlock()
+	ev := ForcedDisconnect{
+		TunnelName: name,
+		Interface:  iface,
+		Reason: fmt.Sprintf("routing loop detected: %d MiB/s sent with almost nothing received",
+			bytesPerSec/(1<<20)),
+		current: func() bool { return m.isSession(name, engine) },
+	}
+	go func() {
+		if hook != nil {
+			hook(ev)
+			return
+		}
+		if !ev.Current() {
+			return
+		}
+		if err := m.DisconnectTunnel(name); err != nil {
+			slog.Error("loop watchdog: forced disconnect failed", "tunnel", name, "error", err)
+		}
+	}()
+}
+
+// isSession reports whether name is connected on engine.
+func (m *Manager) isSession(name string, engine *Engine) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	e, ok := m.tunnels[name]
+	return ok && e.engine == engine && e.state == domain.StateConnected
 }
 
 // getOrCreateEntry returns the entry for a tunnel, creating a disconnected
@@ -297,28 +378,19 @@ func (m *Manager) ConnectWithContext(ctx context.Context, cfg *domain.WireGuardC
 	entry.connectedAt = time.Now()
 	entry.state = domain.StateConnected
 
-	// Start the runaway-TX watchdog for full-tunnel connects. The
-	// watchdog is a no-op on non-Windows and on split-tunnel because
-	// the loop class is full-tunnel-Windows-only. We launch it under
-	// a child context so DisconnectTunnel's cancel reliably stops it
-	// without depending on the Manager's lifetime.
+	// Start the runaway-TX watchdog for full-tunnel connects only (the
+	// loop class needs routes that capture the endpoint). It is a no-op
+	// on Linux, where fwmark keeps WireGuard's own packets out of the
+	// tunnel; Windows and macOS run it. We launch it under a child context so
+	// DisconnectTunnel's cancel reliably stops it without depending on
+	// the Manager's lifetime.
 	if cfg.IsFullTunnel() {
 		watchdogCtx, cancel := context.WithCancel(context.Background())
 		entry.watchdogCancel = cancel
 		ifaceName := engine.InterfaceName()
 		tunnelName := name
 		startLoopWatchdog(watchdogCtx, ifaceName, func(bps uint64) {
-			slog.Error("loop watchdog tripped — initiating forced disconnect",
-				"tunnel", tunnelName, "interface", ifaceName, "bytes_per_sec", bps)
-			// Run the disconnect on a fresh goroutine so we don't
-			// block the watchdog goroutine, and so we don't hold any
-			// implicit lock the caller might have.
-			go func() {
-				if err := m.DisconnectTunnel(tunnelName); err != nil {
-					slog.Error("loop watchdog: forced disconnect failed",
-						"tunnel", tunnelName, "error", err)
-				}
-			}()
+			m.loopWatchdogTripped(tunnelName, ifaceName, engine, bps)
 		})
 
 		// Start the IP_UNICAST_IF re-pin monitor (Windows-only, no-op

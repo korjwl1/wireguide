@@ -130,6 +130,13 @@ type AutoConnectPayload struct {
 	TunnelName string `json:"tunnel_name"`
 }
 
+// ForcedDisconnectPayload names a tunnel the helper tore down on its own
+// and why (EventForcedDisconnect).
+type ForcedDisconnectPayload struct {
+	TunnelName string `json:"tunnel_name"`
+	Reason     string `json:"reason"`
+}
+
 // CriticalErrorPayload describes a permanently-dead helper goroutine.
 // Where is the goSafe name (e.g. "eventLoop", "latencyLoop"); Detail is a
 // short human-readable summary of the last panic / restart-budget breach.

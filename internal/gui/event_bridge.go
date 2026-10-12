@@ -168,6 +168,16 @@ func (b *eventBridge) handleEvent(method string, params json.RawMessage) {
 		} else {
 			b.app.Event.Emit("auto_connected", payload)
 		}
+	case ipc.EventForcedDisconnect:
+		// The helper tore a tunnel down on its own (loop watchdog, issue
+		// #49). EventStatus already shows it as down; the frontend tells
+		// the user why, since it won't reconnect by itself.
+		var payload ipc.ForcedDisconnectPayload
+		if err := json.Unmarshal(params, &payload); err != nil {
+			slog.Debug("event bridge: unmarshal forced_disconnect failed", "error", err)
+		} else {
+			b.app.Event.Emit("forced_disconnect", payload)
+		}
 	case ipc.EventQuit:
 		// `wireguide ctl stop` — the user asked for the whole app to go
 		// away. Run the same teardown the tray's Quit item does.

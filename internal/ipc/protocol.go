@@ -151,6 +151,11 @@ const (
 	EventLog         = "event.log"
 	EventWifiSSID    = "event.wifi_ssid"
 	EventAutoConnect = "event.auto_connect"
+	// EventForcedDisconnect tells the GUI the helper tore a tunnel down on
+	// its own — the runaway-TX watchdog saw a routing loop (issue #49) —
+	// so the user learns why it went down and that it won't come back by
+	// itself.
+	EventForcedDisconnect = "event.forced_disconnect"
 	// EventQuit tells a connected GUI to terminate — the cross-platform
 	// half of `wireguide ctl stop`. The GUI runs its normal quit path
 	// (which disconnects tunnels and stops the helper), so no per-OS

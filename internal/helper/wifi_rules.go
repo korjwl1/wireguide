@@ -211,16 +211,26 @@ func (h *Helper) automationConnect(name, reason, ssid string) {
 	h.server.Broadcast(ipc.EventAutoConnect, ipc.AutoConnectPayload{TunnelName: name})
 }
 
-// disconnectAutoManaged tears down a tunnel that the wifi-rule
-// engine auto-connected, then clears every cache that referenced it
-// (activeCfgs, autoConnectedBy, in-flight retry). Without each of
-// these cleanups the helper's various recovery paths would
-// resurrect the tunnel: the reconnect monitor would fire its
-// pending retry; manager.Disconnect()'s legacy "all tunnels" path
-// would re-Connect from a stale activeCfgs entry; and the next
-// SSID change handler would try to disconnect a tunnel already
-// gone.
+// disconnectAutoManaged tears down a tunnel a Wi-Fi rule turned off.
+// Caller holds reevalMu; connectMu is taken here, as handleDisconnect
+// does, so the teardown and its desired-state write can't interleave with
+// a connect of the same tunnel.
 func (h *Helper) disconnectAutoManaged(name string) {
+	h.connectMu.Lock()
+	defer h.connectMu.Unlock()
+	h.teardownTunnelHeld(name, "rule-driven disconnect, no GUI attached")
+}
+
+// teardownTunnelHeld disconnects a tunnel the user didn't turn off by hand
+// (a Wi-Fi rule, or the loop watchdog) and clears every cache that
+// referenced it: activeCfgs, pendingDesired, autoConnectedBy, the latency
+// cache, its in-flight retry, and the desired-state file. Without each of
+// these the helper's recovery paths would resurrect the tunnel: the
+// reconnect monitor would fire its pending retry, the wake reconnect would
+// re-Connect from a stale activeCfgs entry, the next SSID change would try
+// to disconnect a tunnel already gone, and the issue #44 restore would bring
+// it back after a helper restart. Caller holds connectMu.
+func (h *Helper) teardownTunnelHeld(name, shutdownReason string) {
 	if h.monitor != nil {
 		h.monitor.CancelRetryFor(name)
 	}
@@ -238,21 +248,27 @@ func (h *Helper) disconnectAutoManaged(name string) {
 		}
 	}
 	if err := h.manager.DisconnectTunnel(name); err != nil {
-		slog.Warn("automation disconnect failed", "tunnel", name, "error", err)
+		slog.Warn("tunnel teardown failed", "tunnel", name, "error", err)
 	}
 	if iface != "" {
 		if err := h.firewall.RemoveKillSwitchTunnel(iface); err != nil {
-			slog.Warn("RemoveKillSwitchTunnel after automation disconnect failed",
+			slog.Warn("RemoveKillSwitchTunnel after teardown failed",
 				"interface", iface, "error", err)
 		}
 	}
 	if err := h.reapplyDNSProtection(); err != nil {
-		slog.Warn("DNS protection after automation disconnect failed", "error", err)
+		slog.Warn("DNS protection after teardown failed", "error", err)
 	}
 	h.mu.Lock()
 	delete(h.activeCfgs, name)
 	delete(h.pendingDesired, name)
+	nothingLeft := len(h.activeCfgs) == 0 && len(h.pendingDesired) == 0
 	h.mu.Unlock()
+	if nothingLeft && h.monitor != nil {
+		// Same as handleDisconnect: the all-tunnels retry has nothing left
+		// to bring back.
+		h.monitor.CancelRetry()
+	}
 	h.wifiMu.Lock()
 	delete(h.autoConnectedBy, name)
 	h.wifiMu.Unlock()
@@ -261,10 +277,6 @@ func (h *Helper) disconnectAutoManaged(name string) {
 	h.latencyMu.Lock()
 	delete(h.latencyByTunnel, name)
 	h.latencyMu.Unlock()
-	// A rule-driven disconnect is user intent by proxy — the desired-state
-	// file must drop the tunnel too, or the issue #44 restore path would
-	// resurrect it after the next helper restart (same resurrection class
-	// as the retries and caches cleared above).
 	h.persistDesiredState()
-	h.maybeArmShutdownAfterTeardown("rule-driven disconnect, no GUI attached")
+	h.maybeArmShutdownAfterTeardown(shutdownReason)
 }

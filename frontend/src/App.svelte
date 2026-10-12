@@ -49,6 +49,7 @@
   let helperResetUnsub = null;
   let wifiSsidUnsub = null;
   let autoConnectedUnsub = null;
+  let forcedDisconnectUnsub = null;
   let criticalErrorUnsub = null;
   let updateUnsub = null;
   let configChangedUnsub = null;
@@ -207,6 +208,13 @@
       await applyFirewallSettings();
     });
 
+    // The helper tore a tunnel down on its own (routing-loop watchdog).
+    // It won't come back by itself, so say why it went down.
+    forcedDisconnectUnsub = Events.On('forced_disconnect', (event) => {
+      const { tunnel_name, reason } = event.data || {};
+      showToast(`⚠ ${tunnel_name || 'Tunnel'} disconnected: ${reason || 'forced by the helper'}`, 10000);
+    });
+
     // External config.json / tunnel-file changes (the CLI) — reflect them
     // in the running GUI so it never sits on stale state.
     configChangedUnsub = Events.On('config_changed', () => {
@@ -242,6 +250,7 @@
     if (helperResetUnsub) helperResetUnsub();
     if (wifiSsidUnsub) wifiSsidUnsub();
     if (autoConnectedUnsub) autoConnectedUnsub();
+    if (forcedDisconnectUnsub) forcedDisconnectUnsub();
     if (criticalErrorUnsub) criticalErrorUnsub();
     if (updateUnsub) updateUnsub();
     if (configChangedUnsub) configChangedUnsub();
@@ -253,10 +262,10 @@
     criticalErrors = criticalErrors.filter((_, i) => i !== idx);
   }
 
-  function showToast(msg) {
+  function showToast(msg, ms = 3000) {
     if (toastTimer) clearTimeout(toastTimer);
     toast = msg;
-    toastTimer = setTimeout(() => { toast = ''; toastTimer = null; }, 3000);
+    toastTimer = setTimeout(() => { toast = ''; toastTimer = null; }, ms);
   }
 
   // sanitizeImportName maps an arbitrary filename stem to something
