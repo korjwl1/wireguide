@@ -193,6 +193,10 @@ func (h *Helper) handleRename(params json.RawMessage) (interface{}, error) {
 		delete(h.pendingDesired, req.OldName)
 		h.pendingDesired[req.NewName] = struct{}{}
 	}
+	if _, ok := h.watchdogBlocked[req.OldName]; ok {
+		delete(h.watchdogBlocked, req.OldName)
+		h.watchdogBlocked[req.NewName] = struct{}{}
+	}
 	h.mu.Unlock()
 
 	// Sync autoConnectedBy under h.wifiMu, released before the next lock
@@ -376,6 +380,7 @@ func (h *Helper) handleConnect(params json.RawMessage) (interface{}, error) {
 	if err := h.doConnectHeld(req.Config); err != nil {
 		return nil, err
 	}
+	h.clearWatchdogBlockHeld(req.Config.Name)
 
 	h.applyPostConnectFirewall(req.Config)
 	return ipc.Empty{}, nil

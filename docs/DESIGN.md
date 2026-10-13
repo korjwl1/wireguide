@@ -241,7 +241,7 @@ current network context = { SSID, physical IPs, gateway MAC }
   └─ poll (30s)       → Windows/Linux fallback (no process-wide monitor yet)
 
 for each tunnel with rules:
-  Evaluate(rules, ctx) → StateConnect  → doConnectHeld (same as manual)
+  Evaluate(rules, ctx) → StateConnect  → doConnectHeld (unless watchdog-blocked)
                          StateDisconnect → disconnectAutoManaged
                          StateUnmanaged  → leave as-is
 ```
@@ -338,6 +338,21 @@ Wake detected (all tunnels)
 **Exponential backoff**: 5s initial, 60s max, unlimited attempts.
 
 **Firewall suspend/resume**: on reconnect, utun name changes (utun4->utun5). Old kill switch rules block the new interface. Suspending before disconnect and resuming after connect with fresh interface/endpoints prevents this deadlock.
+
+### Loop watchdog and forced disconnect
+
+Windows and macOS full tunnels have a traffic watchdog as a last-resort guard
+against an endpoint routing loop. The primary protections are the endpoint
+bypass route and, on Windows, socket binding plus WFP endpoint filters. The
+watchdog's high outbound traffic and low inbound traffic are evidence of a
+possible loop, not proof; legitimate one-way traffic can have that shape.
+
+On a trip, `tunnel.Manager` sends the session identity to the helper. The
+helper checks that the same session is still connected, records a durable
+automation block, and tears the tunnel down through its normal state path:
+reconnect cache, desired-tunnel list, retry, kill-switch permit, and DNS rules.
+The block survives a helper restart. A successful manual Connect clears it;
+automatic rules and crash restore cannot bring the tunnel back first.
 
 ## Helper Version Sync
 

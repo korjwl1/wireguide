@@ -18,20 +18,17 @@ package tunnel
 // route-table mutation we didn't anticipate, or the brief delete-then-add
 // window inside reapply() when the gateway changes. It samples the tunnel
 // interface's Obytes/Ibytes at a slow cadence via `netstat -ibn` and
-// forces a disconnect when sustained TX exceeds a "no plausible user
-// workload" ceiling with grossly asymmetric RX (the canonical loop
-// signature: encrypted UDP loops through utun and never reaches the
-// peer, so no handshake response ever arrives).
+// forces a disconnect when sustained TX is high with grossly asymmetric
+// RX (a loop signature: encrypted UDP re-enters utun and never reaches the
+// peer). This is a safety heuristic, not proof of a loop; sustained
+// one-way traffic can also meet the threshold.
 //
 // Threshold rationale matches the Windows watchdog exactly — see
 // loop_watchdog_windows.go for the full derivation. In short:
-//   - 50 MiB/s ≈ 400 Mbps: above sustained organic VPN workload, well
-//     below the kernel-line-rate a loop produces (gigabit physical link
-//     saturates at ~120 MiB/s).
-//   - 10:1 TX:RX ratio: tolerates upload-heavy workloads (iperf3 -R,
-//     Resilio share) which settle around 50:1 thanks to TCP ACKs /
-//     WireGuard keepalives; trips on the effectively-infinite ratio a
-//     real loop produces.
+//   - 50 MiB/s ≈ 400 Mbps: below the rate a loop can produce on a gigabit
+//     link, but also reachable by a fast legitimate upload.
+//   - 10:1 TX:RX ratio: catches the effectively-infinite ratio of a
+//     loop, but can also match legitimate upload-heavy workloads.
 //   - 3 × 5 s = 15 s sustained: defeats bursty downloads and brief
 //     speed-tests, trips on the steady-state loop signature.
 

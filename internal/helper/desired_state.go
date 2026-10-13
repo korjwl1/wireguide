@@ -31,9 +31,11 @@ import (
 // This file closes that gap with a small intent file,
 // <dataDir>/desired-tunnels.json:
 //
-//   - Written on user-intent transitions only: successful Connect
+//   - The wanted-tunnel list is written on successful Connect
 //     (doConnectHeld), Disconnect, and tunnel rename. Clean shutdown clears
-//     it (cleanup). The monitor's internal teardown-before-reconnect
+//     that list (cleanup). A watchdog trip also writes a durable automation
+//     block that survives clean shutdown until a manual Connect succeeds.
+//     The monitor's internal teardown-before-reconnect
 //     deliberately does NOT touch it — a tunnel mid-reconnect is still
 //     wanted. A failed Connect needs no write: activeCfgs rolls back to the
 //     pre-call state, which is what the file already records.
@@ -83,9 +85,10 @@ const desiredStateFile = "desired-tunnels.json"
 const bootTimeSlack = 2 * time.Second
 
 type desiredStateJSON struct {
-	Tunnels       []string `json:"tunnels"`
-	KillSwitch    bool     `json:"kill_switch,omitempty"`
-	DNSProtection bool     `json:"dns_protection,omitempty"`
+	Tunnels         []string `json:"tunnels"`
+	WatchdogBlocked []string `json:"watchdog_blocked,omitempty"`
+	KillSwitch      bool     `json:"kill_switch,omitempty"`
+	DNSProtection   bool     `json:"dns_protection,omitempty"`
 }
 
 func desiredStatePath(dataDir string) string {
@@ -115,20 +118,31 @@ func loadDesiredIntent(dataDir string) desiredStateJSON {
 	return st
 }
 
+func loadWatchdogBlocked(dataDir string) map[string]struct{} {
+	blocked := make(map[string]struct{})
+	for _, name := range loadDesiredIntent(dataDir).WatchdogBlocked {
+		if name != "" {
+			blocked[name] = struct{}{}
+		}
+	}
+	return blocked
+}
+
 // saveDesiredState writes names with no firewall intent.
 func saveDesiredState(dataDir string, names []string) error {
 	return saveDesiredIntent(dataDir, desiredStateJSON{Tunnels: names})
 }
 
 // saveDesiredIntent writes sorted, de-duplicated names plus the firewall
-// intent atomically (temp file + rename). No tunnels removes the file
-// entirely: firewall intent is only restored together with tunnels.
+// intent and watchdog blocks atomically (temp file + rename). With neither
+// wanted tunnels nor watchdog blocks, the file is removed.
 func saveDesiredIntent(dataDir string, st desiredStateJSON) error {
 	if dataDir == "" {
 		return nil
 	}
 	st.Tunnels = normalizeTunnelNames(st.Tunnels)
-	if len(st.Tunnels) == 0 {
+	st.WatchdogBlocked = normalizeTunnelNames(st.WatchdogBlocked)
+	if len(st.Tunnels) == 0 && len(st.WatchdogBlocked) == 0 {
 		clearDesiredState(dataDir)
 		return nil
 	}
@@ -197,8 +211,9 @@ func desiredStatePredatesBoot(modTime, bootTime time.Time) bool {
 
 // persistDesiredState snapshots activeCfgs plus pendingDesired into the
 // desired-state file. Called on user-intent transitions (connect success,
-// disconnect, rename). An empty snapshot removes the file, so a helper that
-// cleanly ends with no tunnels leaves nothing to restore on its next start.
+// disconnect, rename) and watchdog trips. A watchdog block remains in the
+// file even when no tunnel is wanted, so automation cannot recreate a loop
+// after the helper restarts.
 func (h *Helper) persistDesiredState() {
 	if h.dataDir == "" {
 		return
@@ -216,6 +231,9 @@ func (h *Helper) persistDesiredState() {
 	}
 	for name := range h.pendingDesired {
 		st.Tunnels = append(st.Tunnels, name)
+	}
+	for name := range h.watchdogBlocked {
+		st.WatchdogBlocked = append(st.WatchdogBlocked, name)
 	}
 	// A reconnect suspends the kill switch and remembers it was on; record
 	// that, not the momentary "off" (issue #44).
@@ -378,8 +396,21 @@ var systemBootTimeNow = systemBootTime
 // desired-state rewrite. The helper only just started, so the blocking
 // window is a fresh session's first seconds.
 func (h *Helper) restoreDesiredTunnels() {
-	names := loadDesiredState(h.dataDir)
+	intent := loadDesiredIntent(h.dataDir)
+	names := make([]string, 0, len(intent.Tunnels))
+	for _, name := range intent.Tunnels {
+		if !h.isWatchdogBlocked(name) {
+			names = append(names, name)
+		}
+	}
 	if len(names) == 0 {
+		if len(intent.Tunnels) > 0 {
+			// The helper died after recording a watchdog trip but before
+			// finishing teardown. Remove the now-blocked desired entry.
+			h.connectMu.Lock()
+			h.persistDesiredState()
+			h.connectMu.Unlock()
+		}
 		return
 	}
 
@@ -401,7 +432,15 @@ func (h *Helper) restoreDesiredTunnels() {
 				"tunnels", names,
 				"file_mtime", info.ModTime().Format(time.RFC3339),
 				"boot", boot.Format(time.RFC3339))
-			clearDesiredState(h.dataDir)
+			h.mu.Lock()
+			blocked := make([]string, 0, len(h.watchdogBlocked))
+			for name := range h.watchdogBlocked {
+				blocked = append(blocked, name)
+			}
+			h.mu.Unlock()
+			if err := saveDesiredIntent(h.dataDir, desiredStateJSON{WatchdogBlocked: blocked}); err != nil {
+				slog.Warn("desired-state: clearing pre-boot tunnels failed", "error", err)
+			}
 			return
 		}
 	} else {
@@ -419,7 +458,6 @@ func (h *Helper) restoreDesiredTunnels() {
 	}
 
 	restored, failed, missing, ruledOff := 0, 0, 0, 0
-	intent := loadDesiredIntent(h.dataDir)
 
 	// Same lock order as automation (reevalMu → connectMu): no rule pass
 	// can interleave with the restore, and one that ran before it already

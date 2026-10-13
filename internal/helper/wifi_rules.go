@@ -116,7 +116,7 @@ func (h *Helper) reevaluateAutomation(reason string) {
 		state := wifi.Evaluate(auto.PerTunnel[name], ctx)
 		switch state {
 		case wifi.StateConnect:
-			if !active[name] {
+			if !active[name] && !h.isWatchdogBlocked(name) {
 				h.automationConnect(name, reason, ctx.SSID)
 			}
 		case wifi.StateDisconnect:
@@ -189,8 +189,13 @@ func (h *Helper) automationConnect(name, reason, ssid string) {
 		slog.Warn("automation: cannot load tunnel config", "tunnel", name, "error", err)
 		return
 	}
-	slog.Info("automation: rule connect", "tunnel", name, "reason", reason, "ssid", ssid)
 	h.connectMu.Lock()
+	if h.isWatchdogBlocked(name) {
+		h.connectMu.Unlock()
+		slog.Warn("automation: tunnel needs a manual reconnect after watchdog trip", "tunnel", name)
+		return
+	}
+	slog.Info("automation: rule connect", "tunnel", name, "reason", reason, "ssid", ssid)
 	err = h.doConnectHeld(cfg)
 	if err == nil {
 		// Same firewall follow-up a manual connect does — otherwise a

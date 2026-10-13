@@ -15,8 +15,9 @@ package tunnel
 // hypothetical kernel bug, a third-party WFP sublayer overriding ours,
 // or some future routing-table mutation we didn't anticipate. It samples
 // the tunnel adapter's OutOctets at a slow cadence and forces a
-// disconnect when sustained TX exceeds a "no plausible user workload"
-// ceiling.
+// disconnect when sustained TX is high with asymmetric RX. This is a
+// safety heuristic, not proof of a loop: sustained one-way traffic can
+// also meet the threshold.
 //
 // Threshold rationale:
 //   - 50 MiB/s ≈ 400 Mbps. Above what consumer connections can sustain
@@ -127,20 +128,14 @@ const (
 	// within 15-20 s of the loop starting.
 	loopWatchdogSampleInterval = 5 * time.Second
 
-	// loopWatchdogThresholdBytesPerSec — 50 MiB/s. Sustained TX above
-	// this is implausible for organic VPN workload but trivially
-	// exceeded by a routing loop (saturates the underlay link's line
-	// rate, typically ~120 MiB/s on gigabit).
+	// loopWatchdogThresholdBytesPerSec — 50 MiB/s. A routing loop can
+	// exceed this, but so can a fast legitimate upload.
 	loopWatchdogThresholdBytesPerSec uint64 = 50 * 1024 * 1024
 
 	// loopWatchdogTxToRxRatio — the ratio of OutBps to InBps that
-	// distinguishes a loop (TX vastly exceeds RX because handshake
-	// responses never arrive) from a legitimate heavy upload-skewed
-	// workload (e.g. iperf3 -R, Resilio share). A loop sees TX:RX of
-	// effectively infinity; a healthy ackful upload settles around
-	// 50:1 because TCP ACKs / WireGuard keepalives flow back. 10:1
-	// is the conservative split: it tolerates any plausible legit
-	// workload and still trips on a real loop.
+	// detects the asymmetric traffic of a loop. It can also match
+	// legitimate upload-heavy traffic; this is an emergency cutoff,
+	// not a positive route-loop diagnosis.
 	loopWatchdogTxToRxRatio uint64 = 10
 
 	// loopWatchdogSustainedSamples — consecutive over-threshold samples
@@ -209,12 +204,9 @@ func loopWatchdogPoll(ctx context.Context, ifaceName string, luid uint64, onTrip
 		inRate := dIn / seconds
 
 		// Trip condition: high absolute TX rate AND grossly asymmetric
-		// TX:RX. A routing loop has effectively no RX (handshake
-		// responses never arrive because the encrypted packets never
-		// escape the local kernel). A heavy upload — even a maxed-out
-		// iperf3 -R — has TCP ACKs flowing back that keep the ratio
-		// well under 10:1. See loopWatchdogTxToRxRatio for the
-		// rationale on the chosen factor.
+		// TX:RX. A routing loop may have effectively no RX because
+		// encrypted packets never escape the local kernel. One-way
+		// uploads can also be asymmetric enough to meet this threshold.
 		highOut := outRate >= loopWatchdogThresholdBytesPerSec
 		// "inRate == 0" tripping at high TX is the canonical loop
 		// signature (no inbound at all). Avoid divide-by-zero by

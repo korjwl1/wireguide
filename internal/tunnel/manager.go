@@ -32,7 +32,7 @@ type tunnelEntry struct {
 
 	// watchdogCancel stops the runaway-TX watchdog goroutine started
 	// after a successful full-tunnel connect. nil for split-tunnel and
-	// non-Windows where the watchdog is a no-op.
+	// Linux, where the watchdog is a no-op.
 	watchdogCancel context.CancelFunc
 
 	// socketBindCancel stops the IP_UNICAST_IF re-pin monitor goroutine.
@@ -102,7 +102,8 @@ type Manager struct {
 }
 
 // ForcedDisconnect is a teardown the Manager decided on without a caller
-// asking for it: the runaway-TX watchdog saw a routing loop (issue #49).
+// asking for it: the runaway-TX watchdog saw traffic consistent with a
+// routing loop (issue #49).
 type ForcedDisconnect struct {
 	TunnelName string
 	Interface  string
@@ -192,7 +193,7 @@ func (m *Manager) loopWatchdogTripped(name, iface string, engine *Engine, bytesP
 	ev := ForcedDisconnect{
 		TunnelName: name,
 		Interface:  iface,
-		Reason: fmt.Sprintf("routing loop detected: %d MiB/s sent with almost nothing received",
+		Reason: fmt.Sprintf("possible routing loop: %d MiB/s sent with almost nothing received",
 			bytesPerSec/(1<<20)),
 		current: func() bool { return m.isSession(name, engine) },
 	}

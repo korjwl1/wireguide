@@ -138,6 +138,9 @@ type Helper struct {
 
 	mu         sync.Mutex
 	activeCfgs map[string]*domain.WireGuardConfig // cached for reconnect, keyed by tunnel name
+	// watchdogBlocked prevents automation from bringing a tunnel back after
+	// its loop watchdog forced it down. A manual Connect clears the block.
+	watchdogBlocked map[string]struct{}
 
 	// pendingDesired holds tunnels that are still wanted but not up: the
 	// desired-state restore tried and failed to connect them (issue #44).
@@ -270,6 +273,7 @@ func Run(addr string, ownerUID int, ownerSID, dataDir string, restoreDesired boo
 		manager:         manager,
 		firewall:        fw,
 		activeCfgs:      make(map[string]*domain.WireGuardConfig),
+		watchdogBlocked: loadWatchdogBlocked(dataDir),
 		pendingDesired:  make(map[string]struct{}),
 		latencyByTunnel: make(map[string]float64),
 		autoConnectedBy: make(map[string]string),
@@ -860,13 +864,20 @@ func (h *Helper) cleanup() {
 			"connected", h.manager.IsConnected(),
 			"call_stack", string(debug.Stack()))
 		close(h.done)
-		// Clean shutdown means every tunnel is about to be torn down by
-		// user intent — the desired-state file must not survive to
-		// resurrect them on the next helper start (issue #44 semantics:
-		// restore is for crashes, not for clean quits). persistDesiredState
-		// checks h.done under desiredMu, so no write can land after this.
+		h.mu.Lock()
+		blocked := make([]string, 0, len(h.watchdogBlocked))
+		for name := range h.watchdogBlocked {
+			blocked = append(blocked, name)
+		}
+		h.mu.Unlock()
+		// Clean shutdown withdraws all wanted tunnels, but preserves
+		// watchdog blocks so automation cannot resurrect a suspected loop
+		// when the helper starts again. persistDesiredState checks h.done
+		// under desiredMu, so no later write can restore wanted tunnels.
 		h.desiredMu.Lock()
-		clearDesiredState(h.dataDir)
+		if err := saveDesiredIntent(h.dataDir, desiredStateJSON{WatchdogBlocked: blocked}); err != nil {
+			slog.Warn("desired-state: preserve watchdog blocks during shutdown failed", "error", err)
+		}
 		h.desiredMu.Unlock()
 		h.mu.Lock()
 		t := h.shutdownTimer
