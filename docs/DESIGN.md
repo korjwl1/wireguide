@@ -352,6 +352,9 @@ binding is applied before the first handshake and reapplied when sockets
 reopen. Route notifications and a periodic fallback retry failed bindings;
 callbacks use a fixed pair of native trampolines across reconnects. Endpoint
 bypass routes and WFP filters remain additional protection.
+The bind serializes socket reopen with close, but close interrupts the native
+socket before waiting for guarded sends to finish. Windows RIO sends can wait
+for completion; waiting for them before closing the socket would deadlock.
 
 On macOS, endpoint host routes are maintained along the lines of
 [wg-quick](https://git.zx2c4.com/wireguard-tools/tree/src/wg-quick/darwin.bash).
@@ -360,6 +363,9 @@ changed. Outer sends are paused during route replacement and resume only
 after kernel forwarding decisions are verified. This also covers transitions
 to and from blackhole routes: Darwin's RTM_CHANGE does not change those flags,
 so a blackhole must be replaced while sends are paused.
+The network manager owns reopening the send gate under its route lock,
+including initial verification. Connection completion must not reopen it
+independently: a subsequent route repair may already have paused traffic.
 
 A separate macOS watchdog queries RTM_GET every five seconds using live
 peer endpoints from the engine, including roaming. This uses the same
@@ -380,6 +386,12 @@ Regression tests cover deleted endpoint routes with an unchanged gateway,
 blackhole promotion while sends are paused, failed repair remaining blocked,
 socket reopen, failed binding and recovery, and concurrent send/rebind. The
 macOS RTM_GET reader is also checked against live IPv4/IPv6 loopback routes.
+Integration tests run two wireguard-go devices over real loopback UDP sockets
+to verify handshakes, bidirectional encrypted traffic, gate pause/recovery,
+and socket recreation. They simulate interface-binding syscalls. Additional
+tests cover connect/repair gate ownership, close interrupting a stalled send,
+verification failure rolling back before DNS, and independent tunnel gates
+with DNS union, endpoint firewall cleanup and reconnect.
 Before release, verify a real peer on both OSes: sustained high-rate uploads,
 Wi-Fi/Ethernet handoff, endpoint bypass deletion, missing underlay recovery,
 and helper restart after a forced disconnect. Cross-builds do not validate

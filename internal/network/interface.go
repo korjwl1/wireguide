@@ -10,7 +10,10 @@ type EndpointLoopChecker interface {
 
 // EndpointTrafficGuardSetter coordinates route replacements with the
 // engine's outer UDP sender. false drops sends until forwarding is safe.
+// Its route checker owns reopening the gate under the same lock as route
+// replacement; callers must not override that decision after verification.
 type EndpointTrafficGuardSetter interface {
+	EndpointLoopChecker
 	SetEndpointTrafficGuard(allow func(bool))
 }
 

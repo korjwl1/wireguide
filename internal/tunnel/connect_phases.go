@@ -171,10 +171,12 @@ func (m *Manager) connectPhases(ctx context.Context, cfg *domain.WireGuardConfig
 	// via the `wg` tool BEFORE touching the route table.
 	endpointIPs := engine.ResolvedEndpointIPs()
 	var allowEndpointTraffic func(bool)
+	networkOwnsTrafficGate := false
 	if guard, ok := engine.bind.(interface{ SetEndpointTrafficAllowed(bool) }); ok {
 		allowEndpointTraffic = guard.SetEndpointTrafficAllowed
 		if setter, ok := netMgr.(network.EndpointTrafficGuardSetter); ok {
 			setter.SetEndpointTrafficGuard(allowEndpointTraffic)
+			networkOwnsTrafficGate = true
 		}
 		allowEndpointTraffic(false)
 	}
@@ -190,7 +192,9 @@ func (m *Manager) connectPhases(ctx context.Context, cfg *domain.WireGuardConfig
 			return nil, rollback(newTunnelError(ErrNetwork, reason, nil))
 		}
 	}
-	if allowEndpointTraffic != nil {
+	// A network-owned gate is reopened by its checker while holding the
+	// route lock. Reopening it here could override a subsequent repair.
+	if allowEndpointTraffic != nil && !networkOwnsTrafficGate {
 		allowEndpointTraffic(true)
 	}
 	if err := checkCtx(); err != nil {
