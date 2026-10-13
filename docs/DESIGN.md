@@ -77,6 +77,16 @@ propagate to the caller; startup removes stale kernel DNS tables even without
 a tunnel crash journal. Linux kernel integration tests run in an isolated
 container namespace with CAP_NET_ADMIN and WIREGUIDE_TEST_NFT=1.
 
+On macOS, WireGuide holds its own PF enable reference (`pfctl -E`) and
+releases only that token (`-X`). The atomically written recovery journal
+includes the boot-session UUID; tokens from an earlier boot are never used.
+Legacy enabled/disabled snapshots do not authorize globally disabling PF.
+Failed flush/release operations retain state for retry. Existing main rules
+with the required anchor are preserved, and DNS remains installed when the
+kill switch is replaced or disabled. Token lifecycle and operation failures
+are tested through a PF execution seam; live PF coexistence still requires
+target-machine verification.
+
 ### Full-Tunnel Conflict Detection
 
 Only one full-tunnel (`0.0.0.0/0`) can be active at a time. `Connect()` rejects a new full-tunnel config if any existing connected tunnel is already routing all traffic, returning `ErrFullTunnelConflict`.
