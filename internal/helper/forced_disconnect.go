@@ -28,8 +28,8 @@ func (h *Helper) clearWatchdogBlockHeld(name string) {
 }
 
 // handleForcedDisconnect runs the teardown for a tunnel the Manager's
-// runaway-TX watchdog tripped on (issue #49). The trip is consistent with
-// a routing loop, so the tunnel is dropped from every cache
+// endpoint-route watchdog tripped on (issue #49). The endpoint routes
+// back into this tunnel, so it is dropped from every cache
 // and the desired state: neither the wake reconnect nor a crash restore
 // may bring it back. The user reconnects by hand once the network is sane.
 func (h *Helper) handleForcedDisconnect(ev tunnel.ForcedDisconnect) {

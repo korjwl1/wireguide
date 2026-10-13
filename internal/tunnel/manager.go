@@ -30,9 +30,8 @@ type tunnelEntry struct {
 	connectedAt time.Time
 	netMgr      network.NetworkManager // per-tunnel network state (routes, DNS, monitor)
 
-	// watchdogCancel stops the runaway-TX watchdog goroutine started
-	// after a successful full-tunnel connect. nil for split-tunnel and
-	// Linux, where the watchdog is a no-op.
+	// watchdogCancel stops the endpoint-route watchdog, when the platform
+	// supplies a forwarding-decision checker (macOS).
 	watchdogCancel context.CancelFunc
 
 	// socketBindCancel stops the IP_UNICAST_IF re-pin monitor goroutine.
@@ -94,7 +93,7 @@ type Manager struct {
 	endpointProtector EndpointProtector
 
 	// onForcedDisconnect receives teardowns the Manager decides on by
-	// itself (the runaway-TX watchdog). Set by the helper via
+	// itself (the endpoint-route watchdog). Set by the helper via
 	// SetOnForcedDisconnect so the teardown runs through its disconnect
 	// path; nil → the Manager disconnects the tunnel directly. Guarded by
 	// m.mu.
@@ -102,8 +101,7 @@ type Manager struct {
 }
 
 // ForcedDisconnect is a teardown the Manager decided on without a caller
-// asking for it: the runaway-TX watchdog saw traffic consistent with a
-// routing loop (issue #49).
+// asking for it: a peer endpoint routes back through its own tunnel (#49).
 type ForcedDisconnect struct {
 	TunnelName string
 	Interface  string
@@ -182,20 +180,19 @@ func (m *Manager) SetOnForcedDisconnect(fn func(ForcedDisconnect)) {
 	m.mu.Unlock()
 }
 
-// loopWatchdogTripped handles a runaway-TX watchdog trip for the session
+// loopWatchdogTripped handles a verified endpoint routing loop for the session
 // running engine. It never blocks the watchdog goroutine.
-func (m *Manager) loopWatchdogTripped(name, iface string, engine *Engine, bytesPerSec uint64) {
+func (m *Manager) loopWatchdogTripped(name, iface string, engine *Engine, reason string) {
 	slog.Error("loop watchdog tripped — initiating forced disconnect",
-		"tunnel", name, "interface", iface, "bytes_per_sec", bytesPerSec)
+		"tunnel", name, "interface", iface, "reason", reason)
 	m.mu.Lock()
 	hook := m.onForcedDisconnect
 	m.mu.Unlock()
 	ev := ForcedDisconnect{
 		TunnelName: name,
 		Interface:  iface,
-		Reason: fmt.Sprintf("possible routing loop: %d MiB/s sent with almost nothing received",
-			bytesPerSec/(1<<20)),
-		current: func() bool { return m.isSession(name, engine) },
+		Reason:     reason,
+		current:    func() bool { return m.isSession(name, engine) },
 	}
 	go func() {
 		if hook != nil {
@@ -231,12 +228,17 @@ func (m *Manager) getOrCreateEntry(name string) *tunnelEntry {
 }
 
 // removeEntry deletes a tunnel entry from the map. Caller MUST hold m.mu.
-// Also cancels any per-entry background goroutine (the runaway-TX
-// watchdog) so we never leak a poll loop pointing at a stale entry.
+// Also cancels per-entry monitors so they cannot act on a stale session.
 func (m *Manager) removeEntry(name string) {
-	if e := m.tunnels[name]; e != nil && e.watchdogCancel != nil {
-		e.watchdogCancel()
-		e.watchdogCancel = nil
+	if e := m.tunnels[name]; e != nil {
+		if e.watchdogCancel != nil {
+			e.watchdogCancel()
+			e.watchdogCancel = nil
+		}
+		if e.socketBindCancel != nil {
+			e.socketBindCancel()
+			e.socketBindCancel = nil
+		}
 	}
 	delete(m.tunnels, name)
 }
@@ -379,35 +381,28 @@ func (m *Manager) ConnectWithContext(ctx context.Context, cfg *domain.WireGuardC
 	entry.connectedAt = time.Now()
 	entry.state = domain.StateConnected
 
-	// Start the runaway-TX watchdog for full-tunnel connects only (the
-	// loop class needs routes that capture the endpoint). It is a no-op
-	// on Linux, where fwmark keeps WireGuard's own packets out of the
-	// tunnel; Windows and macOS run it. We launch it under a child context so
-	// DisconnectTunnel's cancel reliably stops it without depending on
-	// the Manager's lifetime.
-	if cfg.IsFullTunnel() {
+	ifaceName := engine.InterfaceName()
+	if checker, ok := netMgr.(network.EndpointLoopChecker); ok {
 		watchdogCtx, cancel := context.WithCancel(context.Background())
 		entry.watchdogCancel = cancel
-		ifaceName := engine.InterfaceName()
 		tunnelName := name
-		startLoopWatchdog(watchdogCtx, ifaceName, func(bps uint64) {
-			m.loopWatchdogTripped(tunnelName, ifaceName, engine, bps)
+		go loopWatchdogPoll(watchdogCtx, 5*time.Second, func() (string, error) {
+			endpoints, err := engine.CurrentEndpointIPs()
+			if err != nil {
+				return "", err
+			}
+			return checker.EndpointRoutingLoop(endpoints)
+		}, func(reason string) {
+			m.loopWatchdogTripped(tunnelName, ifaceName, engine, reason)
 		})
-
-		// Start the IP_UNICAST_IF re-pin monitor (Windows-only, no-op
-		// elsewhere). Hooks off the same context-lifetime pattern as the
-		// watchdog so DisconnectTunnel cleanly stops both without
-		// depending on Manager lifetime. The initial v4/v6 ifIndex
-		// values came from the connectPhases pin call; the monitor
-		// compares against them and only re-pins when the underlay
-		// actually moves (Wi-Fi → Ethernet handoff, DHCP gateway change,
-		// VPN-over-VPN etc.).
-		sbCtx, sbCancel := context.WithCancel(context.Background())
-		entry.socketBindCancel = sbCancel
-		entry.socketBindInitialV4 = engine.SocketPinV4
-		entry.socketBindInitialV6 = engine.SocketPinV6
-		startSocketBindMonitor(sbCtx, engine.bind, ifaceName, engine.SocketPinV4, engine.SocketPinV6)
 	}
+	// Windows protects split and full tunnels at the outer socket, with
+	// notification-driven rebinding plus a periodic recovery fallback.
+	sbCtx, sbCancel := context.WithCancel(context.Background())
+	entry.socketBindCancel = sbCancel
+	entry.socketBindInitialV4 = engine.SocketPinV4
+	entry.socketBindInitialV6 = engine.SocketPinV6
+	startSocketBindMonitor(sbCtx, engine.bind, ifaceName, engine.SocketPinV4, engine.SocketPinV6)
 	m.mu.Unlock()
 	return nil
 }
@@ -490,8 +485,7 @@ func (m *Manager) DisconnectTunnel(name string) error {
 	entry.socketBindCancel = nil
 	m.mu.Unlock()
 
-	// Cancel the watchdog BEFORE the slow teardown so it can't trip on
-	// the disconnect-phase TX burst (DNS flush, route deletes, etc.).
+	// Cancel the watchdog before teardown changes the routes it checks.
 	if watchdogCancel != nil {
 		watchdogCancel()
 	}

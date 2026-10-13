@@ -18,7 +18,7 @@ func TestLoopWatchdogTrip_HandsTeardownToHook(t *testing.T) {
 	got := make(chan ForcedDisconnect, 1)
 	mgr.SetOnForcedDisconnect(func(ev ForcedDisconnect) { got <- ev })
 
-	mgr.loopWatchdogTripped("vpn1", "utun42", tunnelEngine(mgr, "vpn1"), 60<<20)
+	mgr.loopWatchdogTripped("vpn1", "utun42", tunnelEngine(mgr, "vpn1"), "endpoint routes back through utun42")
 
 	select {
 	case ev := <-got:
@@ -46,7 +46,7 @@ func TestForcedDisconnect_CurrentFalseAfterReconnect(t *testing.T) {
 	}
 	got := make(chan ForcedDisconnect, 1)
 	mgr.SetOnForcedDisconnect(func(ev ForcedDisconnect) { got <- ev })
-	mgr.loopWatchdogTripped("vpn1", "utun42", tunnelEngine(mgr, "vpn1"), 60<<20)
+	mgr.loopWatchdogTripped("vpn1", "utun42", tunnelEngine(mgr, "vpn1"), "endpoint routes back through utun42")
 	ev := <-got
 
 	if err := mgr.DisconnectTunnel("vpn1"); err != nil {
@@ -70,7 +70,7 @@ func TestLoopWatchdogTrip_NoHookDisconnects(t *testing.T) {
 	if err := mgr.Connect(testConfig("vpn1")); err != nil {
 		t.Fatalf("Connect: %v", err)
 	}
-	mgr.loopWatchdogTripped("vpn1", "utun42", tunnelEngine(mgr, "vpn1"), 60<<20)
+	mgr.loopWatchdogTripped("vpn1", "utun42", tunnelEngine(mgr, "vpn1"), "endpoint routes back through utun42")
 
 	deadline := time.Now().Add(2 * time.Second)
 	for tunnelState(mgr, "vpn1") != domain.StateDisconnected {

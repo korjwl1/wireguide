@@ -146,25 +146,16 @@ func (m *Manager) connectPhases(ctx context.Context, cfg *domain.WireGuardConfig
 		return nil, err
 	}
 
-	// 5.8 Pin the WG UDP socket to the physical underlay's ifIndex
-	// (IP_UNICAST_IF on Windows). This is the source-side loop firewall:
-	// once pinned, the kernel skips its routing lookup for sends on
-	// these sockets and goes straight out the chosen interface — so even
-	// if wintun is the longest-prefix match for the peer endpoint in
-	// the route table (loop scenario), the encrypted UDP never crosses
-	// into wintun. Mirrors what wireguard-windows does in
-	// tunnel/defaultroutemonitor.go.
-	//
-	// We do this here, AFTER engine.Start opened the sockets, AFTER
-	// EnableEndpointProtection installed the per-flow/per-packet WFP
-	// blocks, but BEFORE AddRoutes installs the /1 split. Order matters
-	// because the bind picks "best non-tunnel default" — if /1 split is
-	// already in, the lookup still correctly returns the physical NIC
-	// (because /1 is via the tunnel adapter LUID, which we exclude),
-	// but if the physical default was missing AND /1 isn't in yet,
-	// pinning would blackhole. Doing it post-Start, pre-AddRoutes is
-	// the safest window.
-	engine.SocketPinV4, engine.SocketPinV6 = pinSocketToPhysical(engine.bind, ifaceName)
+	// 5.8 Re-evaluate Windows socket binding before installing routes.
+	// The guarded bind applies the initial interface during Open, before
+	// the first handshake. IP_UNICAST_IF constrains outer-packet routing
+	// to that underlay; no underlay means dropped sends. A failed bind
+	// fails Connect, rather than leaving an unprotected socket running.
+	var pinErr error
+	engine.SocketPinV4, engine.SocketPinV6, pinErr = pinSocketToPhysical(engine.bind, ifaceName)
+	if pinErr != nil {
+		return nil, rollback(newTunnelError(ErrNetwork, "protecting WireGuard UDP sockets", pinErr))
+	}
 
 	// 6. Routes + endpoint bypass.
 	//
@@ -179,8 +170,28 @@ func (m *Manager) connectPhases(ctx context.Context, cfg *domain.WireGuardConfig
 	// the chicken-and-egg that wg-quick sidesteps by resolving endpoints
 	// via the `wg` tool BEFORE touching the route table.
 	endpointIPs := engine.ResolvedEndpointIPs()
+	var allowEndpointTraffic func(bool)
+	if guard, ok := engine.bind.(interface{ SetEndpointTrafficAllowed(bool) }); ok {
+		allowEndpointTraffic = guard.SetEndpointTrafficAllowed
+		if setter, ok := netMgr.(network.EndpointTrafficGuardSetter); ok {
+			setter.SetEndpointTrafficGuard(allowEndpointTraffic)
+		}
+		allowEndpointTraffic(false)
+	}
 	if err := netMgr.AddRoutes(ifaceName, allAllowedIPs, fullTunnel, endpointIPs, cfg.Interface.Table, cfg.Interface.FwMark); err != nil {
 		return nil, rollback(newTunnelError(ErrNetwork, "adding routes", err))
+	}
+	if checker, ok := netMgr.(network.EndpointLoopChecker); ok {
+		reason, err := checker.EndpointRoutingLoop(endpointIPs)
+		if err != nil {
+			return nil, rollback(newTunnelError(ErrNetwork, "verifying endpoint routes", err))
+		}
+		if reason != "" {
+			return nil, rollback(newTunnelError(ErrNetwork, reason, nil))
+		}
+	}
+	if allowEndpointTraffic != nil {
+		allowEndpointTraffic(true)
 	}
 	if err := checkCtx(); err != nil {
 		return nil, err

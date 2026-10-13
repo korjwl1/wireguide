@@ -24,7 +24,9 @@ const cmdTimeout = 30 * time.Second
 // DarwinManager implements NetworkManager for macOS, modeled after wg-quick's
 // darwin.bash script (github.com/WireGuard/wireguard-tools/src/wg-quick/darwin.bash).
 type DarwinManager struct {
-	mu sync.Mutex
+	mu                   sync.Mutex
+	routeMu              sync.Mutex // serialize route repair with teardown
+	endpointTrafficGuard func(bool) // configured before AddRoutes
 
 	// DNS state — saved per service (matches wg-quick collect_new_service_dns).
 	// wg-quick sets DNS on EVERY network service, not just the primary one,
@@ -377,6 +379,8 @@ func (m *DarwinManager) AddRoutes(ifaceName string, allowedIPs []string, fullTun
 // connection appears dead. Comparing against lastGatewayV4/V6 turns those
 // spurious firings into cheap no-ops.
 func (m *DarwinManager) reapply() {
+	m.routeMu.Lock()
+	defer m.routeMu.Unlock()
 	// Single-shot snapshot of every field reapply will reference.
 	// Slices are copied (append) so a concurrent RemoveRoutes that
 	// nils m.lastDNS or m.lastEndpoints can't yank them out from
@@ -426,7 +430,22 @@ func (m *DarwinManager) reapply() {
 	// changed entries; we do the same.
 	endpointsChanged := !stringSetEqual(oldEndpoints, liveEndpoints)
 
-	needBypassUpdate := (hasV4 || hasV6) && (gatewayChanged || endpointsChanged)
+	// Gateway equality does not prove that our host routes still exist.
+	// Another route manager may have removed one, leaving /1 -> utun.
+	repair := make(map[string]bool)
+	if ifaceInfo, err := net.InterfaceByName(iface); err == nil {
+		for _, endpoint := range liveEndpoints {
+			r, err := lookupEndpointRoute(endpoint)
+			gatewayAvailable := currentV4Err == nil && currentV4 != ""
+			if strings.Contains(endpoint, ":") {
+				gatewayAvailable = currentV6Err == nil && currentV6 != ""
+			}
+			if endpointRouteMissing(err) || (err == nil && (r.loopsThrough(ifaceInfo.Index) || (r.blocksTraffic() && gatewayAvailable))) {
+				repair[endpoint] = true
+			}
+		}
+	}
+	needBypassUpdate := (hasV4 || hasV6) && (gatewayChanged || endpointsChanged || len(repair) > 0)
 
 	if !needBypassUpdate {
 		// No bypass work needed, but DNS may still need attention — macOS
@@ -438,6 +457,17 @@ func (m *DarwinManager) reapply() {
 			}
 		}
 		return
+	}
+	if m.endpointTrafficGuard != nil {
+		m.endpointTrafficGuard(false)
+		defer func() {
+			reason, err := m.endpointRoutingLoop(liveEndpoints)
+			if reason == "" && err == nil {
+				m.endpointTrafficGuard(true)
+			} else {
+				slog.Error("endpoint route repair not verified; outer packets remain blocked", "reason", reason, "error", err)
+			}
+		}()
 	}
 
 	slog.Info("route monitor: reapplying bypass routes",
@@ -458,39 +488,28 @@ func (m *DarwinManager) reapply() {
 		newSet[ep] = true
 	}
 
-	// If gateway changed, delete ALL old bypass routes (wg-quick: remove_all_old=1).
-	// If only endpoints changed, delete only endpoints no longer in the live set.
+	// Keep live endpoint routes installed while changing their gateway.
+	// addBypassForIP uses route change for an existing host route, avoiding
+	// a delete-then-add interval in which /1 would point back at utun.
 	m.mu.Lock()
-	oldBypass := m.bypassEndpoints
-	m.bypassEndpoints = nil
+	oldBypass := append([]string(nil), m.bypassEndpoints...)
 	m.mu.Unlock()
-
-	for _, ip := range oldBypass {
-		shouldDelete := gatewayChanged || !newSet[ip]
-		if !shouldDelete {
-			// Still current — keep it in the bypass list without re-adding.
-			m.mu.Lock()
-			m.bypassEndpoints = append(m.bypassEndpoints, ip)
-			m.mu.Unlock()
-			continue
-		}
-		family := "-inet"
-		if strings.Contains(ip, ":") {
-			family = "-inet6"
-		}
-		if err := run("route", "-q", "-n", "delete", family, ip); err != nil {
-			slog.Debug("bypass route delete failed (may already be gone)", "ip", ip, "error", err)
-		}
-	}
 
 	// Reuse the gateways already probed above — no need for a second pair
 	// of netstat calls. If the gateway changed between the probe and now
 	// (extremely unlikely), the next RTM event will trigger another reapply.
 	newGwV4, newGwV4Err := currentV4, currentV4Err
 	newGwV6, newGwV6Err := currentV6, currentV6Err
+	newUpstreamIface := ""
+	if pinIface {
+		newUpstreamIface = getDefaultInterface()
+	}
+	m.mu.Lock()
+	m.lastUpstreamIface = newUpstreamIface
+	m.mu.Unlock()
 
 	// Add bypass routes for endpoints that need (re-)installation:
-	// - If gateway changed: all live endpoints (they were all deleted above).
+	// - If gateway changed: update all live endpoints in place.
 	// - If only endpoints changed: only newly appeared endpoints.
 	//
 	// Reapply is the network-state-change handler, NOT a fresh connect.
@@ -507,7 +526,7 @@ func (m *DarwinManager) reapply() {
 		if ipStr == "" {
 			continue
 		}
-		if !gatewayChanged && oldSet[ipStr] {
+		if !gatewayChanged && oldSet[ipStr] && !repair[ipStr] {
 			// Gateway didn't change and this endpoint already had a valid
 			// bypass route (preserved above). Skip.
 			continue
@@ -529,16 +548,34 @@ func (m *DarwinManager) reapply() {
 			m.installBlackholeBypass(ipStr, isV6)
 		}
 	}
+	// Retire old endpoints only after the current set has been protected.
+	for _, ip := range oldBypass {
+		if newSet[ip] {
+			continue
+		}
+		family := "-inet"
+		if strings.Contains(ip, ":") {
+			family = "-inet6"
+		}
+		if err := run("route", "-q", "-n", "delete", family, ip); err != nil {
+			slog.Debug("bypass route delete failed (may already be gone)", "ip", ip, "error", err)
+		}
+	}
+	m.mu.Lock()
+	kept := m.bypassEndpoints[:0]
+	for _, ip := range m.bypassEndpoints {
+		if newSet[ip] {
+			kept = append(kept, ip)
+		}
+	}
+	m.bypassEndpoints = kept
+	m.mu.Unlock()
 
 	// Update cached state including upstream interface for bypass -ifscope.
 	// Resolve interface outside the lock to avoid blocking on netstat.
 	// pinInterface was snapshotted at function entry — use that value
 	// rather than re-reading the field, otherwise a concurrent
 	// SetPinInterface flip mid-reapply could leave us with mixed state.
-	newUpstreamIface := ""
-	if pinIface {
-		newUpstreamIface = getDefaultInterface()
-	}
 	m.mu.Lock()
 	m.lastEndpoints = append([]string(nil), liveEndpoints...)
 	m.lastGatewayV4 = newGwV4
@@ -618,10 +655,13 @@ func stringSetEqual(a, b []string) bool {
 // gateway probe fails — the alternative is leaving the /1 split route
 // in force without a /32 bypass, which loops encrypted UDP through
 // utun. Records the IP in m.bypassEndpoints so RemoveRoutes /
-// disconnect can sweep it. Errors are best-effort: if even the
-// blackhole install fails, we've exhausted defenses in this code path
-// and the next RTM event has to clean up.
+// disconnect can sweep it. If installation fails, reapply keeps outer
+// sends blocked and the route watchdog reports the unsafe endpoint.
 func (m *DarwinManager) installBlackholeBypass(ipStr string, isV6 bool) {
+	if existing, err := lookupEndpointRoute(ipStr); err == nil && existing.blocksTraffic() {
+		m.recordBypass(ipStr)
+		return // don't generate new route events for an unchanged safe outage
+	}
 	family := "-inet"
 	loopback := "127.0.0.1"
 	if isV6 {
@@ -629,12 +669,26 @@ func (m *DarwinManager) installBlackholeBypass(ipStr string, isV6 bool) {
 		loopback = "::1"
 	}
 	if err := run("route", "-q", "-n", "add", family, ipStr, loopback, "-blackhole"); err != nil {
-		slog.Warn("blackhole bypass install failed", "ip", ipStr, "error", err)
-		return
+		// RTM_CHANGE cannot change BLACKHOLE/REJECT flags on Darwin.
+		// reapply has paused outer sends before this replacement.
+		_ = run("route", "-q", "-n", "delete", family, ipStr)
+		if addErr := run("route", "-q", "-n", "add", family, ipStr, loopback, "-blackhole"); addErr != nil {
+			slog.Error("blackhole bypass install failed", "ip", ipStr, "error", addErr)
+			return
+		}
 	}
+	m.recordBypass(ipStr)
+}
+
+func (m *DarwinManager) recordBypass(ipStr string) {
 	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, existing := range m.bypassEndpoints {
+		if existing == ipStr {
+			return
+		}
+	}
 	m.bypassEndpoints = append(m.bypassEndpoints, ipStr)
-	m.mu.Unlock()
 }
 
 // addBypassForIP installs a host route for one already-resolved peer endpoint
@@ -669,14 +723,15 @@ func (m *DarwinManager) addBypassForIP(ipStr, gwV4, gwV6 string, gwV4Err, gwV6Er
 		gwErr = gwV4Err
 	}
 
-	recordBypass := func() {
-		m.mu.Lock()
-		m.bypassEndpoints = append(m.bypassEndpoints, ipStr)
-		m.mu.Unlock()
-	}
-
 	if gwErr != nil || gw == "" {
 		return fmt.Errorf("no usable upstream gateway for %s (family=%s, err=%v)", ipStr, family, gwErr)
+	}
+	// A blackhole's flags survive RTM_CHANGE. Replace it with sends
+	// paused, rather than leaving the tunnel permanently blackholed.
+	if existing, err := lookupEndpointRoute(ipStr); err == nil && existing.blocksTraffic() {
+		if err := run("route", "-q", "-n", "delete", family, ipStr); err != nil {
+			return fmt.Errorf("remove blocked endpoint route %s: %w", ipStr, err)
+		}
 	}
 
 	// Use the cached upstream interface to pin the bypass route with
@@ -707,7 +762,7 @@ func (m *DarwinManager) addBypassForIP(ipStr, gwV4, gwV6 string, gwV4Err, gwV6Er
 			}
 		}
 	}
-	recordBypass()
+	m.recordBypass(ipStr)
 	return nil
 }
 
@@ -727,6 +782,8 @@ func (m *DarwinManager) RemoveRoutes(ifaceName string, allowedIPs []string, full
 	if key != "" {
 		rmMgr.Unsubscribe(key)
 	}
+	m.routeMu.Lock()
+	defer m.routeMu.Unlock()
 
 	// Remove all routes via this interface (both IPv4 and IPv6)
 	m.deleteInterfaceRoutes(ifaceName, "inet")
@@ -1456,7 +1513,7 @@ func runOut(name string, args ...string) ([]byte, error) {
 
 // getDefaultGatewayFor returns the IPv4 or IPv6 default gateway, skipping
 // link-local entries (link#N) per wg-quick's collect_gateways.
-func getDefaultGatewayFor(ipv6 bool) (string, error) {
+var getDefaultGatewayFor = func(ipv6 bool) (string, error) {
 	family := "inet"
 	if ipv6 {
 		family = "inet6"

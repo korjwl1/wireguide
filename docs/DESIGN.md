@@ -341,11 +341,33 @@ Wake detected (all tunnels)
 
 ### Loop watchdog and forced disconnect
 
-Windows and macOS full tunnels have a traffic watchdog as a last-resort guard
-against an endpoint routing loop. The primary protections are the endpoint
-bypass route and, on Windows, socket binding plus WFP endpoint filters. The
-watchdog's high outbound traffic and low inbound traffic are evidence of a
-possible loop, not proof; legitimate one-way traffic can have that shape.
+Loop protection never uses a traffic-rate cutoff: a fast one-way upload
+is valid traffic.
+
+On Windows, every tunnel's outer UDP sender is guarded. The native
+`BindSocketToInterface` API constrains packets to a non-tunnel default-route
+interface, following the [official userspace client](https://github.com/WireGuard/wireguard-windows/blob/v0.1.1/tunnel/defaultroutemonitor.go).
+No underlay or a failed bind drops sends until protection succeeds. The
+binding is applied before the first handshake and reapplied when sockets
+reopen. Route notifications and a periodic fallback retry failed bindings;
+callbacks use a fixed pair of native trampolines across reconnects. Endpoint
+bypass routes and WFP filters remain additional protection.
+
+On macOS, endpoint host routes are maintained along the lines of
+[wg-quick](https://git.zx2c4.com/wireguard-tools/tree/src/wg-quick/darwin.bash).
+The route monitor checks for removed bypasses even if the gateway has not
+changed. Outer sends are paused during route replacement and resume only
+after kernel forwarding decisions are verified. This also covers transitions
+to and from blackhole routes: Darwin's RTM_CHANGE does not change those flags,
+so a blackhole must be replaced while sends are paused.
+
+A separate macOS watchdog queries RTM_GET every five seconds using live
+peer endpoints from the engine, including roaming. This uses the same
+[native route-query approach as Tailscale](https://github.com/tailscale/tailscale/blob/main/net/netns/netns_darwin.go).
+A route through the same tunnel immediately blocks outer sends and triggers
+forced disconnect. Missing routes and blackholes are safe outages, not loop
+evidence. Unknown query results pause sends and retry; they do not claim a
+loop. Initial route verification also rolls back unsafe connects.
 
 On a trip, `tunnel.Manager` sends the session identity to the helper. The
 helper checks that the same session is still connected, records a durable
@@ -353,6 +375,15 @@ automation block, and tears the tunnel down through its normal state path:
 reconnect cache, desired-tunnel list, retry, kill-switch permit, and DNS rules.
 The block survives a helper restart. A successful manual Connect clears it;
 automatic rules and crash restore cannot bring the tunnel back first.
+
+Regression tests cover deleted endpoint routes with an unchanged gateway,
+blackhole promotion while sends are paused, failed repair remaining blocked,
+socket reopen, failed binding and recovery, and concurrent send/rebind. The
+macOS RTM_GET reader is also checked against live IPv4/IPv6 loopback routes.
+Before release, verify a real peer on both OSes: sustained high-rate uploads,
+Wi-Fi/Ethernet handoff, endpoint bypass deletion, missing underlay recovery,
+and helper restart after a forced disconnect. Cross-builds do not validate
+Windows kernel behavior.
 
 ## Helper Version Sync
 

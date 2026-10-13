@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"golang.zx2c4.com/wireguard/conn"
+
 	"github.com/korjwl1/wireguide/internal/domain"
 	"github.com/korjwl1/wireguide/internal/network"
 )
@@ -106,7 +108,9 @@ func (m *mockNetworkManager) Cleanup(string) error {
 // because the Manager never talks to the engine directly — it only passes
 // it to the NetworkManager methods (which are also mocked).
 func fakeEngine(name string) *Engine {
+	base := &testInterfaceBind{Bind: conn.NewStdNetBind()}
 	return &Engine{
+		bind:                &guardedBind{Bind: base, binder: base},
 		ifaceName:           name,
 		resolvedEndpointIPs: []string{"1.2.3.4"},
 		resolvedEndpoints:   []string{"1.2.3.4:51820"},

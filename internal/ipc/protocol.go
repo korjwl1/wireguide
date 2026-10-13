@@ -152,7 +152,7 @@ const (
 	EventWifiSSID    = "event.wifi_ssid"
 	EventAutoConnect = "event.auto_connect"
 	// EventForcedDisconnect tells the GUI the helper tore a tunnel down on
-	// its own — the runaway-TX watchdog saw a routing loop (issue #49) —
+	// its own — the endpoint-route watchdog found a routing loop (#49) —
 	// so the user learns why it went down and that it won't come back by
 	// itself.
 	EventForcedDisconnect = "event.forced_disconnect"

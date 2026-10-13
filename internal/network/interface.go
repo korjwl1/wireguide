@@ -1,6 +1,19 @@
 // Package network provides OS-specific IP, routing, and DNS configuration.
 package network
 
+// EndpointLoopChecker verifies that a peer's outer packets do not route
+// back through their own tunnel. A nonempty reason is positive evidence of
+// a loop; an error means the route could not be checked.
+type EndpointLoopChecker interface {
+	EndpointRoutingLoop(endpoints []string) (reason string, err error)
+}
+
+// EndpointTrafficGuardSetter coordinates route replacements with the
+// engine's outer UDP sender. false drops sends until forwarding is safe.
+type EndpointTrafficGuardSetter interface {
+	SetEndpointTrafficGuard(allow func(bool))
+}
+
 // NetworkManager handles OS-level network configuration for WireGuard tunnels.
 type NetworkManager interface {
 	// AssignAddress assigns an IP address to the named interface.
