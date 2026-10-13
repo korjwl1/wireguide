@@ -145,6 +145,14 @@ carry across it there (unchanged from before this branch).
 
 ## Not addressed here
 
+Follow-up (2026-10-13): RPC deadlines previously bounded only response
+waiting. A blocked request write or a wait behind another writer could
+outlive the context indefinitely. Tests using a real stalled net.Pipe
+reproduced both failures. Request writes now use context-aware serialization,
+write deadlines and cancellation; a partial-frame failure closes the stream
+instead of reusing corrupted framing. This removes a concrete recovery/Quit
+hang path, but does not establish the cause of the reporter's native GUI hang.
+
 - **P2 (the hang)**: static review found no main-thread blocker (event
   bridge, SSID reporter and tray paths all run off the main thread; helper
   busy-ness delays GUI RPCs at 10 s per call but does not beachball). The

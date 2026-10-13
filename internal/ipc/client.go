@@ -31,7 +31,7 @@ const DefaultCallTimeout = 10 * time.Second
 // Client is an IPC client with a control connection and optional event stream.
 type Client struct {
 	addr        string
-	controlMu   sync.Mutex
+	controlGate chan struct{}
 	controlConn net.Conn
 
 	nextID uint64
@@ -103,6 +103,7 @@ func newClient(ctx context.Context, addr string, transient bool) (*Client, error
 
 	c := &Client{
 		addr:        addr,
+		controlGate: make(chan struct{}, 1),
 		controlConn: conn,
 		pending:     make(map[uint64]chan *Response),
 		closed:      make(chan struct{}),
@@ -193,9 +194,7 @@ func (c *Client) CallWithContext(ctx context.Context, method string, params inte
 		c.pendingMu.Unlock()
 	}()
 
-	c.controlMu.Lock()
-	err = WriteFrame(c.controlConn, req)
-	c.controlMu.Unlock()
+	err = c.writeRequest(ctx, req)
 	if err != nil {
 		return fmt.Errorf("write request: %w", err)
 	}
@@ -217,6 +216,50 @@ func (c *Client) CallWithContext(ctx context.Context, method string, params inte
 		}
 		return nil
 	}
+}
+
+// writeRequest bounds both the serialization wait and socket write by ctx.
+// A peer that has stopped reading must not trap recovery, Quit or another
+// request behind a mutex after their advertised deadlines have expired.
+func (c *Client) writeRequest(ctx context.Context, req *Request) error {
+	select {
+	case c.controlGate <- struct{}{}:
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-c.closed:
+		return ErrClientClosed
+	}
+	defer func() { <-c.controlGate }()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	deadline, hasDeadline := ctx.Deadline()
+	if err := c.controlConn.SetWriteDeadline(deadline); err != nil {
+		return err
+	}
+	woken := make(chan struct{})
+	stop := context.AfterFunc(ctx, func() {
+		_ = c.controlConn.SetWriteDeadline(time.Now())
+		close(woken)
+	})
+	err := WriteFrame(c.controlConn, req)
+	if !stop() {
+		<-woken
+	}
+	resetErr := c.controlConn.SetWriteDeadline(time.Time{})
+	if err != nil || resetErr != nil {
+		// An interrupted frame may have been only partly written. Reusing
+		// this byte stream would corrupt framing for the next request.
+		_ = c.Close()
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if hasDeadline && !time.Now().Before(deadline) {
+			return context.DeadlineExceeded
+		}
+		return errors.Join(err, resetErr)
+	}
+	return nil
 }
 
 // Subscribe opens a second connection and subscribes to events.
