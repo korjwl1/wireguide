@@ -153,13 +153,34 @@ write deadlines and cancellation; a partial-frame failure closes the stream
 instead of reusing corrupted framing. This removes a concrete recovery/Quit
 hang path, but does not establish the cause of the reporter's native GUI hang.
 
-- **P2 (the hang)**: static review found no main-thread blocker (event
-  bridge, SSID reporter and tray paths all run off the main thread; helper
-  busy-ness delays GUI RPCs at 10 s per call but does not beachball). The
-  crash report's Thread 0 backtrace is required; requested on the issue.
+- **P2 (the hang)**: the linked PrivateBin report was decrypted on
+  2026-10-13. It records a 113.75-second hang on macOS 27.0, 982 seconds
+  after wake. The official v0.5.2 arm64 executable has the same Mach-O UUID
+  as the report (`8EA3AD6B-A30B-39AB-E7DF-A7A4F259B761`). Symbolication of
+  offsets 515496 / 521144 / 521196 maps to runtime.asmcgocall,
+  runtime.pthread_cond_wait_trampoline and the timed-wait trampoline.
+  The main thread was parked in Go runtime synchronization, but the report
+  has patched/truncated Go backtraces. It cannot establish which goroutine,
+  mutex or main-queue callback caused the wait. RPC write bounds and native
+  tray ownership remove concrete risky paths; the exact reported hang is
+  not yet reproduced or claimed fixed. The raw system-wide report stays
+  private and is not committed.
 - Whether the reporter's helper actually died during sleep (vs. the trigger
   failing to fire on macOS 27) — the diagnostic questions separate the two;
   the fix covers the first, the answers will confirm.
+
+### Capturing the missing evidence
+
+On macOS, a background heartbeat now detects a main-queue stall lasting ten
+seconds after normal startup. It keeps only one outstanding heartbeat,
+allows a fresh grace period after sleep/scheduler gaps, and reports once per
+stall. It writes both Go goroutine stacks and a bounded native `sample` of
+the same process to the user's LogsDir/hang-diagnostics (directory 0700,
+files 0600, at most six files). Files stay local and survive a forced quit.
+This is diagnostic collection, not an automatic restart or a substitute for
+fixing the originating deadlock. The combination supplies the Go frames
+missing from Apple's stackshot. Native Cocoa heartbeat and state-machine
+tests cover acknowledgement, startup, sustained stall, recovery and sleep.
 
 ## Verification checklist (macOS, per the live-verification convention)
 

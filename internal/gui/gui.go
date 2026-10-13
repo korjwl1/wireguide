@@ -305,6 +305,7 @@ func Run(assetsHandler http.Handler, dataDir string) error {
 
 	healthDone := make(chan struct{})
 	var healthWg sync.WaitGroup
+	startGUIHangMonitor(paths.LogsDir, healthDone, &healthWg)
 	healthWg.Add(1)
 	startHelperHealthMonitor(app, clients, dataDir, bridge, healthDone, &healthWg)
 	// SSID reporter shares the same shutdown channel + WaitGroup so app

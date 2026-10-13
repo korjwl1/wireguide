@@ -1,6 +1,7 @@
 #import <Cocoa/Cocoa.h>
 #include <stdio.h>
 #include "../native_tray_darwin.m"
+#include "../mainthread_probe_darwin.m"
 
 static NSString *selected = nil;
 void wgNativeTrayAction(char *action) { selected = [NSString stringWithUTF8String:action]; }
@@ -14,8 +15,10 @@ int main(int argc, char **argv) {
         wgNativeTrayCreate(icon.bytes, icon.length);
         wgNativeTraySetMenu("[{\"title\":\"WireGuide\",\"enabled\":false},{\"title\":\"Test tunnel\",\"action\":\"tunnel:test\",\"enabled\":true}]");
         wgNativeTraySetConnected(true);
+        wgMainThreadPing(42);
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 300*NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
             if (wgTray == nil || wgTray.item.menu != wgTray.menu || wgTray.menu.numberOfItems != 2) exit(3);
+            if (wgMainThreadAck() != 42) exit(13);
             if (!wgTray.item.button.image.isTemplate || wgTray.badge.hidden || wgTray.badge.isOpaque) exit(9);
             if ([wgTray.badge hitTest:NSMakePoint(2,2)] != nil) exit(10);
             wgTray.item.button.appearsDisabled = YES;
