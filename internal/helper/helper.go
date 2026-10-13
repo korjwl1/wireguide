@@ -252,6 +252,12 @@ type Helper struct {
 // pipe ACL and per-connection peer checks to that user (issue #20).
 // dataDir: persistent data dir for crash recovery state.
 func Run(addr string, ownerUID int, ownerSID, dataDir string, restoreDesired bool) (runErr error) {
+	finished := make(chan struct{})
+	shutdownReady := make(chan func(), 1)
+	stopSignals := watchHelperSignals(shutdownReady, finished)
+	defer stopSignals()
+	defer close(finished)
+
 	// wireguard-go allocates sizeable per-Device transient buffer pools. With
 	// the runtime default GOGC=100, repeated connect/disconnect on a long-lived
 	// helper retained hundreds of MiB of reclaimable heap before GC caught up
@@ -513,6 +519,7 @@ func Run(addr string, ownerUID int, ownerSID, dataDir string, restoreDesired boo
 	}()
 
 	slog.Info("helper listening", "addr", addr, "pid", "daemon")
+	shutdownReady <- h.shutdown
 
 	// Serve (blocks until shutdown)
 	err = h.server.Serve()

@@ -39,6 +39,7 @@ type Server struct {
 	mu           sync.Mutex
 	eventSubs    map[*subscriber]struct{} // active event subscribers
 	shutdownCh   chan struct{}
+	shutdownOnce sync.Once
 	onConnect    func() // called when a control conn attaches (any)
 	onDisconnect func() // called when the last control conn closes
 	controlConns map[net.Conn]struct{}
@@ -176,21 +177,19 @@ func (s *Server) safeHandleConn(conn net.Conn) {
 // helper exit hostage — at that point we log and return anyway, letting
 // the process exit and launchd respawn handle the wedged state.
 func (s *Server) Shutdown() {
-	select {
-	case <-s.shutdownCh:
-	default:
+	s.shutdownOnce.Do(func() {
 		close(s.shutdownCh)
-	}
-	s.listener.Close()
+		s.listener.Close()
 
-	s.mu.Lock()
-	for sub := range s.eventSubs {
-		sub.conn.Close()
-	}
-	for c := range s.controlConns {
-		c.Close()
-	}
-	s.mu.Unlock()
+		s.mu.Lock()
+		for sub := range s.eventSubs {
+			sub.conn.Close()
+		}
+		for c := range s.controlConns {
+			c.Close()
+		}
+		s.mu.Unlock()
+	})
 
 	// Wait for in-flight handlers with a hard ceiling so a wedged handler
 	// can't deadlock helper shutdown indefinitely.

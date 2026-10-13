@@ -87,6 +87,43 @@ kill switch is replaced or disabled. Token lifecycle and operation failures
 are tested through a PF execution seam; live PF coexistence still requires
 target-machine verification.
 
+#### Coverage of the detailed #48 contributor report
+
+The [bitworks-io comment](https://github.com/korjwl1/wireguide/issues/48#issuecomment-6102386212)
+and [PR #50](https://github.com/korjwl1/wireguide/pull/50) were checked against
+this branch again on 2026-10-13. Reading the report did not mean every item
+had been implemented: the second audit found missing signal handling,
+journal-independent PF startup cleanup, PF activation rollback, and immediate
+firewall reconciliation on disconnect errors. These are now implemented.
+
+| Report item | Implementation / verification |
+|---|---|
+| Helper-owned wanted DNS state; ignore legacy GUI server list | `dns_protection.go`; handler and multi-tunnel tests |
+| Reconcile connect, disconnect, automation, watchdog, restore and resume | Serialized helper transitions plus periodic DNS retry; error returns now also rebuild rules immediately |
+| Retry failures without removing a surviving tunnel's permits | Failed kill-switch removals are queued with bounded backoff; interface reuse cancels obsolete removals |
+| Per-resolver tunnel/physical permits; DNS-less/no protected tunnel | Longest prefix across connected configs; physical address permits; empty sets remove rules |
+| PF ordered anchor updates and rollback | DNS sub-anchor prepared before main replacement; failed activation restores the committed main rules; rollback failure is returned |
+| PF reference ownership and existing main rules | Same-boot `-E`/`-X` token; existing required wildcard preserved |
+| Flush both PF anchors at every helper start | `RecoverSavedRules` sweeps owned anchors even without a journal; no global PF disable |
+| Linux table replacement, `oifname`, stale-table cleanup and deletion errors | Implemented; replacement also verified against real nftables in an isolated kernel namespace |
+| Bounded SIGTERM/SIGINT graceful cleanup | Registered before initialization; normal helper cleanup, three-second deadline even during an already-running cleanup; real macOS and isolated Linux subprocess signal tests |
+
+The implementation retains the current separate kill-switch and DNS models
+under serialized firewall operations, rather than importing PR #50's entire
+unified reconciler. `/1` route pairs participate in resolver routing but do
+not change `/0`-specific automatic firewall policy, preserving the documented
+WireGuard distinction linked above.
+
+The comment also links separate feature PRs. [#51](https://github.com/korjwl1/wireguide/pull/51)
+(`~domain` split DNS), [#52](https://github.com/korjwl1/wireguide/pull/52)
+(negated automation, settle/manual-override and LAN-overlap policy), and
+[#53](https://github.com/korjwl1/wireguide/pull/53) (launchd socket activation)
+have **not** been imported. They change user-facing DNS, automation or helper
+startup contracts and require their own design/compatibility work. Existing
+multi-tunnel retry and watchdog recovery fixes do not imply these features
+are present. Native macOS PF coexistence, Linux systemd-resolved and Windows
+full/split coexistence still require target-machine execution.
+
 ### Full-Tunnel Conflict Detection
 
 Only one full-tunnel (`0.0.0.0/0`) can be active at a time. `Connect()` rejects a new full-tunnel config if any existing connected tunnel is already routing all traffic, returning `ErrFullTunnelConflict`.
