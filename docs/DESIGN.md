@@ -430,6 +430,17 @@ Windows kernel behavior.
 
 ## Helper Version Sync
 
+### macOS menu bar (issue #45)
+
+The macOS tray uses a small Cocoa bridge with its own NSStatusItem and a
+permanently attached NSMenu. AppKit owns click/keyboard menu tracking and
+dismissal; no event monitor, synthesized mouse-down or private Wails handle
+is required. Menu mutations are dispatched to the main queue. Selected
+actions return to a Go goroutine before any helper RPC or shutdown work.
+Windows/Linux continue to use Wails' platform tray. A standalone Cocoa
+integration fixture validates menu persistence, action dispatch and cleanup
+with WIREGUIDE_TEST_TRAY=1; macOS 27 still requires reproduction testing.
+
 GUI and helper share the same binary (`wireguide` / `wireguide --helper`). On startup, `ensureHelper` pings the helper and compares `AppVersion`:
 
 - Match -> use existing helper

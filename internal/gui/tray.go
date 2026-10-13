@@ -220,10 +220,18 @@ func trimAndSquare(src image.Image) *image.NRGBA {
 		for x := b.Min.X; x < b.Max.X; x++ {
 			_, _, _, a := src.At(x, y).RGBA()
 			if a > 0 {
-				if x < minX { minX = x }
-				if y < minY { minY = y }
-				if x > maxX { maxX = x }
-				if y > maxY { maxY = y }
+				if x < minX {
+					minX = x
+				}
+				if y < minY {
+					minY = y
+				}
+				if x > maxX {
+					maxX = x
+				}
+				if y > maxY {
+					maxY = y
+				}
 			}
 		}
 	}
@@ -234,7 +242,9 @@ func trimAndSquare(src image.Image) *image.NRGBA {
 	cropH := maxY - minY + 1
 	// Square canvas: use the larger dimension
 	side := cropW
-	if cropH > side { side = cropH }
+	if cropH > side {
+		side = cropH
+	}
 	dst := image.NewNRGBA(image.Rect(0, 0, side, side))
 	offX := (side - cropW) / 2
 	offY := (side - cropH) / 2
@@ -278,7 +288,9 @@ func buildTrayOnIcon(wColor color.NRGBA) []byte {
 	// Green badge: bottom-left corner.
 	w, h := bounds.Dx(), bounds.Dy()
 	cx, cy, r := w/5, h-h/5, h/8
-	if r < 3 { r = 3 }
+	if r < 3 {
+		r = 3
+	}
 	green := color.NRGBA{52, 199, 89, 255} // macOS systemGreen
 	for y := cy - r; y <= cy+r; y++ {
 		for x := cx - r; x <= cx+r; x++ {
@@ -417,9 +429,9 @@ func (t *trayManager) startAppearanceWatch() {
 			t.mu.Unlock()
 			on, off := t.macIcons()
 			if anyConnected {
-				t.tray.SetIcon(on)
+				setNativeTrayIcon(on)
 			} else {
-				t.tray.SetIcon(off)
+				setNativeTrayIcon(off)
 			}
 		}()
 	})
@@ -447,7 +459,11 @@ func (t *trayManager) quitApp() {
 	}
 	t.mu.Unlock()
 	t.doShutdown()
-	t.tray.Destroy()
+	if runtime.GOOS == "darwin" {
+		destroyNativeTray()
+	} else {
+		t.tray.Destroy()
+	}
 	t.app.Quit()
 }
 
@@ -475,6 +491,9 @@ func newTrayManager(app *application.App, win *application.WebviewWindow, tray *
 // the status-driven scheduleRebuild path, and each item's OnClick reads
 // live state at click time, so a ≤1s-stale glyph is the worst case.
 func (t *trayManager) initialBuild() {
+	if runtime.GOOS == "darwin" {
+		createNativeTray(trayOffIconDark, t.handleNativeTrayAction)
+	}
 	t.rebuildMenu()
 	t.startAppearanceWatch()
 }
@@ -483,8 +502,8 @@ func (t *trayManager) initialBuild() {
 // state, and updates the tooltip. Called from the status event stream, so
 // it must stay O(1) — no IPC, no disk I/O.
 //
-//   disconnected → W glyph (white on dark menu bars, black on light)
-//   connected    → same W with a green dot badge
+//	disconnected → W glyph (white on dark menu bars, black on light)
+//	connected    → same W with a green dot badge
 func (t *trayManager) setIconState(activeNames []string, handshakeMap map[string]bool) {
 	newSet := make(map[string]bool, len(activeNames))
 	for _, n := range activeNames {
@@ -523,14 +542,22 @@ func (t *trayManager) setIconState(activeNames []string, handshakeMap map[string
 			onIcon, offIcon = trayOnIconWindows, trayOffIconWindows
 		}
 		if anyConnected {
-			t.tray.SetIcon(onIcon)
+			if runtime.GOOS == "darwin" {
+				setNativeTrayIcon(onIcon)
+			} else {
+				t.tray.SetIcon(onIcon)
+			}
 			tooltip := "WireGuide — " + strings.Join(activeNames, ", ")
-			t.tray.SetTooltip(tooltip)
+			t.setTooltip(tooltip)
 		} else {
 			if runtime.GOOS == "darwin" || ((runtime.GOOS == "windows" || runtime.GOOS == "linux") && len(offIcon) > 0) {
-				t.tray.SetIcon(offIcon)
+				if runtime.GOOS == "darwin" {
+					setNativeTrayIcon(offIcon)
+				} else {
+					t.tray.SetIcon(offIcon)
+				}
 			}
-			t.tray.SetTooltip("WireGuide")
+			t.setTooltip("WireGuide")
 		}
 		if runtime.GOOS != "darwin" {
 			if anyConnected {
@@ -543,7 +570,7 @@ func (t *trayManager) setIconState(activeNames []string, handshakeMap map[string
 		// Active names may have reordered without count changing.
 		// Refresh tooltip only when names differ from last broadcast.
 		newTooltip := "WireGuide — " + strings.Join(activeNames, ", ")
-		t.tray.SetTooltip(newTooltip)
+		t.setTooltip(newTooltip)
 	}
 
 	// Rebuild menu if active set changed OR if handshake state changed for
@@ -613,6 +640,22 @@ func (t *trayManager) rebuildMenu() {
 	hsMap := t.hasHandshake
 	t.mu.Unlock()
 
+	if runtime.GOOS == "darwin" {
+		rows := []nativeTrayItem{{Title: "WireGuide"}, {Separator: true}}
+		for _, tun := range tunnels {
+			glyph := "○ "
+			if activeSet[tun.Name] {
+				glyph = "◐ "
+				if hsMap[tun.Name] {
+					glyph = "● "
+				}
+			}
+			rows = append(rows, nativeTrayItem{Title: glyph + tun.Name, Action: "tunnel:" + tun.Name, Enabled: true})
+		}
+		rows = append(rows, nativeTrayItem{Separator: true}, nativeTrayItem{Title: "Show Window", Action: "show", Enabled: true}, nativeTrayItem{Separator: true}, nativeTrayItem{Title: "Quit", Action: "quit", Enabled: true})
+		setNativeTrayMenu(rows)
+		return
+	}
 	// Refill the single persistent Menu in place (see the menu field
 	// doc): Wails reuses its NSMenu on Update(), and AppKit live-updates
 	// an NSMenu that is currently open — creating a fresh Menu here left
@@ -670,5 +713,42 @@ func (t *trayManager) rebuildMenu() {
 		// macOS: in-place refresh of the same NSMenu — live even while
 		// open, and repeated SetMenu there leaked the replaced NSMenu.
 		m.Update()
+	}
+}
+
+func (t *trayManager) setTooltip(text string) {
+	if runtime.GOOS == "darwin" {
+		setNativeTrayTooltip(text)
+	} else {
+		t.tray.SetTooltip(text)
+	}
+}
+
+func (t *trayManager) handleNativeTrayAction(action string) {
+	if t.quitting.Load() {
+		return
+	}
+	switch action {
+	case "show":
+		showDock()
+	case "quit":
+		t.quitApp()
+	default:
+		name, ok := strings.CutPrefix(action, "tunnel:")
+		if !ok {
+			return
+		}
+		t.mu.Lock()
+		active := t.activeTunnels[name]
+		t.mu.Unlock()
+		var err error
+		if active {
+			err = t.svc.DisconnectTunnel(name)
+		} else {
+			err = t.svc.Connect(name)
+		}
+		if err != nil {
+			slog.Warn("tray tunnel action failed", "tunnel", name, "error", err)
+		}
 	}
 }

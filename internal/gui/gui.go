@@ -217,38 +217,19 @@ func Run(assetsHandler http.Handler, dataDir string) error {
 		app.Event.Emit("files-dropped", map[string]any{"files": files})
 	})
 
-	// 6. System tray. macOS uses non-template coloured icons (the
-	// connected badge must stay green; template images are alpha-only),
-	// with the W glyph colour following the menu bar's actual rendered
-	// appearance via the KVO observer the tray manager installs. Never
-	// call SetTemplateIcon: Wails's sticky isTemplateIcon flag would
-	// render every later SetIcon monochrome.
-	tray := app.SystemTray.New()
-	if runtime.GOOS == "darwin" {
-		// White W first (historical default); the appearance observer
-		// swaps in the black set only if the menu bar is really light.
-		tray.SetIcon(trayOffIconDark)
-	} else {
+	// macOS owns a native status item with a permanently attached menu.
+	var tray *application.SystemTray
+	if runtime.GOOS != "darwin" {
+		tray = app.SystemTray.New()
 		tray.SetLabel("WireGuide")
-		// Windows and Linux need an explicit icon at startup. Without it,
-		// Linux StatusNotifier hosts display their own fallback icon and
-		// Windows falls back to Wails' embedded template. setIconState only
-		// runs on connection transitions, so it cannot initialise the icon.
-		if (runtime.GOOS == "windows" || runtime.GOOS == "linux") && len(trayOffIconWindows) > 0 {
+		if len(trayOffIconWindows) > 0 {
 			tray.SetIcon(trayOffIconWindows)
 		}
-		// Windows convention: left-click is the primary action and shows
-		// the main window; the context menu remains on right-click.
-		// Registered only here: on macOS any click opens the NSStatusItem
-		// menu natively, and an OnClick handler would fight it. On Linux,
-		// Wails' StatusNotifier fires the click handler for the dbusmenu
-		// "opened" event too, so registering it would raise the window on
-		// every right-click; Linux users get the "Show Window" menu item.
 		if runtime.GOOS == "windows" {
 			tray.OnClick(showDock)
 		}
+		tray.SetTooltip("WireGuide")
 	}
-	tray.SetTooltip("WireGuide")
 
 	// 7. Shutdown coordination (declared upfront so closures can reference it)
 	var (
@@ -300,7 +281,7 @@ func Run(assetsHandler http.Handler, dataDir string) error {
 	if runtime.GOOS == "darwin" {
 		app.Event.OnApplicationEvent(events.Mac.ApplicationWillTerminate, func(_ *application.ApplicationEvent) {
 			doShutdown()
-			tray.Destroy()
+			destroyNativeTray()
 		})
 	}
 
