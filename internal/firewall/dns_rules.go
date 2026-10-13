@@ -8,10 +8,9 @@ import (
 	"strings"
 )
 
-// DNSAllow permits DNS (port 53) to Servers through one tunnel interface.
-// DNS protection takes one entry per connected tunnel, because the system
-// resolver is given the union of every tunnel's servers and a query to any
-// of them must still go out through that tunnel (issue #48).
+// DNSAllow permits DNS (port 53) to Servers through Interface. An empty
+// interface permits those specific servers through normal system routing:
+// split-tunnel configurations can intentionally use an off-tunnel resolver.
 type DNSAllow struct {
 	Interface string
 	Servers   []string
@@ -26,7 +25,7 @@ func normalizeDNSAllow(allow []DNSAllow, validIface func(string) bool) []DNSAllo
 	byIface := make(map[string][]string)
 	seen := make(map[string]map[string]bool)
 	for _, a := range allow {
-		if a.Interface == "" || !validIface(a.Interface) {
+		if a.Interface != "" && !validIface(a.Interface) {
 			if a.Interface != "" {
 				slog.Warn("DNS protection: skipping invalid interface name", "interface", a.Interface)
 			}
@@ -50,6 +49,7 @@ func normalizeDNSAllow(allow []DNSAllow, validIface func(string) bool) []DNSAllo
 	}
 	out := make([]DNSAllow, 0, len(byIface))
 	for iface, servers := range byIface {
+		sort.Strings(servers)
 		out = append(out, DNSAllow{Interface: iface, Servers: servers})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Interface < out[j].Interface })
@@ -80,7 +80,11 @@ func pfDNSRules(allow []DNSAllow) string {
 	b.WriteString("pass out quick on lo0 proto {tcp, udp} to any port 53\n")
 	for _, a := range allow {
 		for _, s := range a.Servers {
-			fmt.Fprintf(&b, "pass out quick on %s proto {tcp, udp} to %s port 53\n", a.Interface, s)
+			scope := ""
+			if a.Interface != "" {
+				scope = " on " + a.Interface
+			}
+			fmt.Fprintf(&b, "pass out quick%s proto {tcp, udp} to %s port 53\n", scope, s)
 		}
 	}
 	b.WriteString("block drop out quick proto {tcp, udp} to any port 53\n")
@@ -100,9 +104,13 @@ func nftDNSRules(table string, allow []DNSAllow) string {
 			if strings.Contains(s, ":") {
 				family = "ip6"
 			}
+			scope := ""
+			if a.Interface != "" {
+				scope = fmt.Sprintf(" oifname %q", a.Interface)
+			}
 			allowed = append(allowed,
-				fmt.Sprintf("%s daddr %s tcp dport 53 oif %s accept", family, s, a.Interface),
-				fmt.Sprintf("%s daddr %s udp dport 53 oif %s accept", family, s, a.Interface))
+				fmt.Sprintf("%s daddr %s tcp dport 53%s accept", family, s, scope),
+				fmt.Sprintf("%s daddr %s udp dport 53%s accept", family, s, scope))
 		}
 	}
 	return fmt.Sprintf(`add table inet %[1]s_dns

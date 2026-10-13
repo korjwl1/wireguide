@@ -61,7 +61,7 @@ type FirewallManager interface {
 	DisableEndpointProtection(tunnelInterfaceName string) error
 
 	// EnableDNSProtection blocks DNS (port 53) except to each entry's
-	// servers through that entry's tunnel interface, replacing whatever DNS
+	// servers through that entry's interface (or normal routing if empty), replacing whatever DNS
 	// rules were installed before. Non-IP entries (search domains) are
 	// skipped. When nothing valid remains — no tunnel with DNS servers is
 	// up — the DNS rules are removed instead, the same state as

@@ -170,6 +170,13 @@ type Helper struct {
 	// dnsMu serializes reapplyDNSProtection so each call renders a fresh
 	// snapshot and the last one to run reflects the latest tunnel set.
 	dnsMu sync.Mutex
+	// Reconciliation journal, guarded by dnsMu. Only successful applies
+	// advance dnsApplied; a failed OS operation remains pending for retry.
+	dnsApplied    string
+	dnsPending    string
+	dnsRetryAt    time.Time
+	dnsRetryDelay time.Duration
+	dnsSuspended  bool
 
 	// shutdownTimer is a singleton grace-window timer. When the control
 	// connection drops we Reset it; when the GUI reconnects we Stop it. This
@@ -367,6 +374,7 @@ func Run(addr string, ownerUID int, ownerSID, dataDir string, restoreDesired boo
 	// helper background task.
 	h.goSafe("latencyLoop", h.latencyLoop)
 	h.goSafe("pingHealthLoop", h.pingHealthLoop)
+	h.goSafe("dnsReconcileLoop", h.dnsReconcileLoop)
 
 	// Start Wi-Fi SSID monitor. On change we broadcast the event for
 	// any GUI listener AND evaluate the user's wifi rules right here
@@ -780,6 +788,10 @@ func (h *Helper) suspendFirewall() error {
 		slog.Debug("suspendFirewall: no firewall rules active, nothing to suspend")
 		return nil
 	}
+	h.dnsMu.Lock()
+	h.dnsSuspended = true
+	h.dnsApplied = ""
+	h.dnsMu.Unlock()
 
 	slog.Info("suspending firewall rules for reconnect",
 		"kill_switch", ksEnabled, "dns_protection", dnsEnabled)
@@ -793,12 +805,19 @@ func (h *Helper) suspendFirewall() error {
 		h.dnsMu.Unlock()
 		if err != nil {
 			slog.Warn("suspendFirewall: failed to disable DNS protection", "error", err)
+			h.dnsMu.Lock()
+			h.dnsSuspended = false
+			h.dnsMu.Unlock()
+			return fmt.Errorf("suspendFirewall: disable DNS protection: %w", err)
 		} else {
 			dnsDisabled = true
 		}
 	}
 	if ksEnabled {
 		if err := h.firewall.DisableKillSwitch(); err != nil {
+			h.dnsMu.Lock()
+			h.dnsSuspended = false
+			h.dnsMu.Unlock()
 			// We just turned DNS protection off but the kill switch
 			// is still on — that's an inconsistent state. Try to
 			// re-enable DNS protection so the system goes back to
@@ -827,6 +846,10 @@ func (h *Helper) resumeFirewall() error {
 	// the flag under connectMu) can't be undone here (issue #44).
 	h.connectMu.Lock()
 	defer h.connectMu.Unlock()
+	h.dnsMu.Lock()
+	h.dnsSuspended = false
+	h.dnsApplied = ""
+	h.dnsMu.Unlock()
 	h.mu.Lock()
 	restoreKS := h.fwSavedKillSwitch
 	// Clear saved state so a second resume is a no-op.

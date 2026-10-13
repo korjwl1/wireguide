@@ -1,8 +1,10 @@
 package helper
 
 import (
+	"encoding/json"
 	"log/slog"
 	"runtime"
+	"time"
 
 	"github.com/korjwl1/wireguide/internal/domain"
 	"github.com/korjwl1/wireguide/internal/firewall"
@@ -27,27 +29,13 @@ var tunnelStatuses = func(h *Helper) []*tunnel.ConnectionStatus {
 // Every transition that changes the connected set calls
 // reapplyDNSProtection, which renders the rules from scratch.
 
-// dnsAllowList pairs each connected tunnel's interface with its configured
-// DNS entries. The firewall drops non-IP entries (search domains).
+// dnsAllowList computes resolver permits from all connected routes, rather
+// than assuming every configured resolver is inside its owner's tunnel.
 func (h *Helper) dnsAllowList() []firewall.DNSAllow {
 	h.mu.Lock()
 	cfgs := h.copyActiveCfgs()
 	h.mu.Unlock()
-	var allow []firewall.DNSAllow
-	for _, st := range tunnelStatuses(h) {
-		if st == nil || st.State != domain.StateConnected || st.InterfaceName == "" {
-			continue
-		}
-		cfg := cfgs[st.TunnelName]
-		if cfg == nil || len(cfg.Interface.DNS) == 0 {
-			continue
-		}
-		allow = append(allow, firewall.DNSAllow{
-			Interface: st.InterfaceName,
-			Servers:   append([]string(nil), cfg.Interface.DNS...),
-		})
-	}
-	return allow
+	return resolverPermits(cfgs, tunnelStatuses(h))
 }
 
 // dnsProtectionNeeded reports whether DNS rules should be installed: the
@@ -82,6 +70,13 @@ func (h *Helper) dnsProtectionNeeded() bool {
 // connected tunnel that has DNS servers, the firewall removes its rules;
 // the next connect installs them again.
 func (h *Helper) reapplyDNSProtection() error {
+	return h.reconcileDNSProtection(true, time.Now())
+}
+
+// reconcileDNSProtection records only successful OS changes. The periodic
+// pass retries a failed transition, with bounded backoff, without reloading
+// healthy rules on every tick. Explicit user transitions are immediate.
+func (h *Helper) reconcileDNSProtection(force bool, now time.Time) error {
 	h.dnsMu.Lock()
 	defer h.dnsMu.Unlock()
 	select {
@@ -91,13 +86,59 @@ func (h *Helper) reapplyDNSProtection() error {
 		return nil
 	default:
 	}
-	if !h.dnsProtectionNeeded() {
-		if h.firewall.IsDNSProtectionEnabled() {
-			return h.firewall.DisableDNSProtection()
-		}
+	if !force && h.dnsSuspended {
 		return nil
 	}
+	needed := h.dnsProtectionNeeded()
 	allow := h.dnsAllowList()
-	slog.Debug("DNS protection: applying", "tunnels", len(allow))
-	return h.firewall.EnableDNSProtection(allow)
+	encoded, _ := json.Marshal(struct {
+		Needed bool
+		Allow  []firewall.DNSAllow
+	}{needed, allow})
+	signature := string(encoded)
+	if signature != h.dnsPending {
+		h.dnsPending = signature
+		h.dnsRetryDelay = 0
+		h.dnsRetryAt = time.Time{}
+	}
+	if !force && (signature == h.dnsApplied || now.Before(h.dnsRetryAt)) {
+		return nil
+	}
+	var err error
+	if !needed {
+		if h.firewall.IsDNSProtectionEnabled() {
+			err = h.firewall.DisableDNSProtection()
+		}
+	} else {
+		slog.Debug("DNS protection: applying", "tunnels", len(allow))
+		err = h.firewall.EnableDNSProtection(allow)
+	}
+	if err != nil {
+		h.dnsApplied = ""
+		h.dnsRetryDelay = min(30*time.Second, max(time.Second, h.dnsRetryDelay*2))
+		h.dnsRetryAt = now.Add(h.dnsRetryDelay)
+		return err
+	}
+	h.dnsApplied = signature
+	h.dnsRetryDelay = 0
+	h.dnsRetryAt = time.Time{}
+	return nil
+}
+
+func (h *Helper) dnsReconcileLoop() {
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-h.done:
+			return
+		case now := <-ticker.C:
+			h.connectMu.Lock()
+			err := h.reconcileDNSProtection(false, now)
+			h.connectMu.Unlock()
+			if err != nil {
+				slog.Warn("DNS protection reconciliation failed; will retry", "error", err)
+			}
+		}
+	}
 }

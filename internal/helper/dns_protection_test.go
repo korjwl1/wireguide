@@ -2,6 +2,7 @@ package helper
 
 import (
 	"encoding/json"
+	"net/netip"
 	"slices"
 	"testing"
 
@@ -23,6 +24,11 @@ func stubConnected(t *testing.T, h *Helper, tunnels ...struct {
 	for _, tn := range tunnels {
 		cfg := &domain.WireGuardConfig{Name: tn.name}
 		cfg.Interface.DNS = tn.dns
+		for _, raw := range tn.dns {
+			if ip, err := netip.ParseAddr(raw); err == nil {
+				cfg.Peers = append(cfg.Peers, domain.PeerConfig{AllowedIPs: []string{netip.PrefixFrom(ip, ip.BitLen()).String()}})
+			}
+		}
 		h.activeCfgs[tn.name] = cfg
 		statuses = append(statuses, &tunnel.ConnectionStatus{
 			TunnelName: tn.name, InterfaceName: tn.iface, State: domain.StateConnected,
@@ -57,7 +63,7 @@ func TestReapplyDNSProtection_CoversEveryConnectedTunnel(t *testing.T) {
 	}
 	want := []firewall.DNSAllow{
 		{Interface: "utun4", Servers: []string{"10.0.0.1"}},
-		{Interface: "utun5", Servers: []string{"10.1.0.1", "corp.example"}},
+		{Interface: "utun5", Servers: []string{"10.1.0.1"}},
 	}
 	if got := dnsFW(h).dnsAllow; !slices.EqualFunc(got, want, func(a, b firewall.DNSAllow) bool {
 		return a.Interface == b.Interface && slices.Equal(a.Servers, b.Servers)

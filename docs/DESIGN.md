@@ -56,6 +56,27 @@ Each tunnel gets its **own `NetworkManager` instance** created via `netMgrFactor
 
 When multiple tunnels are active, DNS servers are merged into a **union set**. On connect, the new tunnel's DNS is merged with all existing tunnels' DNS via `AllDNSServers()`. On disconnect, if other tunnels remain, their combined DNS is re-applied through one of the remaining tunnels' `NetworkManager` instances.
 
+DNS protection derives per-resolver permits from the longest matching
+AllowedIPs prefix across all connected tunnels. A resolver outside every
+managed tunnel is permitted by address through normal system routing, so a
+split tunnel with a public resolver is usable. Table=off does not imply a
+managed route. Equal-prefix tunnel paths permit both interfaces; OS metrics
+choose between them. The kill switch remains an independent outer restriction.
+
+This adapts the per-resolver approach proposed in
+[PR #50](https://github.com/korjwl1/wireguide/pull/50), while retaining the
+existing helper, Windows address-based DNS permits and wg-quick routing model.
+Unlike that PR, a resolver's route is checked against all connected tunnel
+configs, and /1 route pairs do not change /0-specific firewall auto-enable
+semantics ([WireGuard's documented distinction](https://git.zx2c4.com/wireguard-windows/tree/docs/netquirk.md)).
+
+A periodic helper reconciliation retries failed DNS rule changes with bounded
+backoff and skips successfully applied, unchanged sets. It respects reconnect
+suspension and shutdown. Linux deletion errors retain the active state and
+propagate to the caller; startup removes stale kernel DNS tables even without
+a tunnel crash journal. Linux kernel integration tests run in an isolated
+container namespace with CAP_NET_ADMIN and WIREGUIDE_TEST_NFT=1.
+
 ### Full-Tunnel Conflict Detection
 
 Only one full-tunnel (`0.0.0.0/0`) can be active at a time. `Connect()` rejects a new full-tunnel config if any existing connected tunnel is already routing all traffic, returning `ErrFullTunnelConflict`.

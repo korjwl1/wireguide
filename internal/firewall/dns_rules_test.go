@@ -18,6 +18,7 @@ func TestNormalizeDNSAllow(t *testing.T) {
 	}, testIface)
 
 	want := []DNSAllow{
+		{Interface: "", Servers: []string{"10.8.8.8"}},
 		{Interface: "utun4", Servers: []string{"10.0.0.1", "fd00::53"}},
 		{Interface: "utun5", Servers: []string{"10.1.0.1"}},
 	}
@@ -69,15 +70,27 @@ func TestNftDNSRules_ReplacesTableAtomically(t *testing.T) {
 		t.Fatalf("batch must be add, delete, then define:\n%s", got)
 	}
 	for _, line := range []string{
-		"ip daddr 10.0.0.1 udp dport 53 oif wg0 accept",
-		"ip daddr 10.0.0.1 tcp dport 53 oif wg0 accept",
-		"ip6 daddr fd00::53 udp dport 53 oif wg1 accept",
+		"ip daddr 10.0.0.1 udp dport 53 oifname \"wg0\" accept",
+		"ip daddr 10.0.0.1 tcp dport 53 oifname \"wg0\" accept",
+		"ip6 daddr fd00::53 udp dport 53 oifname \"wg1\" accept",
 	} {
 		if !strings.Contains(got, line) {
 			t.Fatalf("missing %q in:\n%s", line, got)
 		}
 	}
-	if strings.Index(got, "oif wg1 accept") > strings.Index(got, "udp dport 53 drop") {
+	if strings.Index(got, "oifname \"wg1\" accept") > strings.Index(got, "udp dport 53 drop") {
 		t.Fatalf("allows must come before the drops:\n%s", got)
+	}
+}
+
+func TestDNSRulesPermitPhysicalResolverByAddressOnly(t *testing.T) {
+	allow := normalizeDNSAllow([]DNSAllow{{Servers: []string{"1.1.1.1"}}}, testIface)
+	pf, nft := pfDNSRules(allow), nftDNSRules("wireguide", allow)
+	if !strings.Contains(pf, "pass out quick proto {tcp, udp} to 1.1.1.1 port 53") ||
+		!strings.Contains(nft, "ip daddr 1.1.1.1 udp dport 53 accept") {
+		t.Fatalf("physical resolver was blocked: pf=%s nft=%s", pf, nft)
+	}
+	if !strings.Contains(pf, "block drop out quick") || !strings.Contains(nft, "udp dport 53 drop") {
+		t.Fatal("other resolvers must remain blocked")
 	}
 }
