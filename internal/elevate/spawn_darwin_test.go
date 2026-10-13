@@ -72,7 +72,13 @@ func TestLaunchdDemandLifecycle(t *testing.T) {
 	if os.Getenv("WIREGUIDE_TEST_LAUNCHD") != "1" {
 		t.Skip("set WIREGUIDE_TEST_LAUNCHD=1 in a logged-in macOS session")
 	}
-	dir := t.TempDir()
+	// launchd must be able to read the fixture independently of this
+	// process's TMPDIR (which can live on a privacy-protected volume).
+	dir, err := os.MkdirTemp("/tmp", "wireguide-launchd-fixture-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 	marker := filepath.Join(dir, "runs")
 	fixture := filepath.Join(dir, "helper")
 	script := "#!/bin/sh\nif [ ! -f " + shellQuote(marker) + " ]; then echo first > " + shellQuote(marker) + "; exit 1; fi\necho restarted >> " + shellQuote(marker) + "\n"

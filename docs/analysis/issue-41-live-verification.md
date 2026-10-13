@@ -202,6 +202,13 @@ The immediate RPC probe failed during the restart; all probes from 5.1 to
 
 ## Checks and limits
 
+2026-10-13 follow-up: the native launchd demand/crash/clean-exit and disabled
+state tests pass again on macOS 26.3.1 under `-race`. The first rerun failed
+at bootstrap while its fixture lived beneath an external-volume TMPDIR;
+placing the disposable launchd fixture under `/tmp` made the same generated
+plist lifecycle pass. Build scratch remains on the SSD. This is a test
+fixture correction, not evidence of the reporter's authorization-loop cause.
+
 `go test ./... -count=1` and `go vet ./...` pass. The explicitly enabled
 native launchd integration test also passes under `-race` together with the
 GUI lifecycle tests. Removing AfterInitialDemand makes the native regression
