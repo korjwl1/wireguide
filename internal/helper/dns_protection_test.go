@@ -92,6 +92,62 @@ func TestDisconnect_RebuildsDNSProtectionForRemainingTunnels(t *testing.T) {
 	}
 }
 
+type disconnectFirewall struct {
+	*pendingTestFirewall
+	removed []string
+}
+
+func (f *disconnectFirewall) RemoveKillSwitchTunnel(iface string) error {
+	f.removed = append(f.removed, iface)
+	return nil
+}
+
+func TestDisconnectErrorStillReconcilesDNSAndOnlyRemovesDeadPermits(t *testing.T) {
+	h := newPendingTestHelper(t)
+	h.dnsProtectionWanted = true
+	stubConnected(t, h, tn{"alpha", "utun4", []string{"10.0.0.1"}}, tn{"bravo", "utun5", []string{"10.1.0.1"}})
+	if err := h.reapplyDNSProtection(); err != nil {
+		t.Fatal(err)
+	}
+	fw := &disconnectFirewall{pendingTestFirewall: dnsFW(h)}
+	fw.killSwitch = true
+	h.firewall = fw
+	// The manager has already lost alpha, so named teardown returns an
+	// error. Its old permit snapshot still needs cleaning; bravo survives.
+	delete(h.activeCfgs, "alpha")
+	firstSnapshot := true
+	tunnelStatuses = func(*Helper) []*tunnel.ConnectionStatus {
+		live := []*tunnel.ConnectionStatus{{TunnelName: "bravo", InterfaceName: "utun5", State: domain.StateConnected}}
+		if firstSnapshot {
+			firstSnapshot = false
+			return append(live, &tunnel.ConnectionStatus{TunnelName: "alpha", InterfaceName: "utun4", State: domain.StateConnected})
+		}
+		return live
+	}
+	if _, err := h.handleDisconnect(json.RawMessage(`{"tunnel_name":"alpha"}`)); err == nil {
+		t.Fatal("original disconnect error was swallowed")
+	}
+	if !slices.Equal(fw.removed, []string{"utun4"}) {
+		t.Fatalf("removed permits = %v, want only the dead interface", fw.removed)
+	}
+	if len(fw.dnsAllow) != 1 || fw.dnsAllow[0].Interface != "utun5" {
+		t.Fatalf("DNS after failed teardown = %+v", fw.dnsAllow)
+	}
+}
+
+func TestPartialDisconnectFirewallReconcilePreservesSurvivor(t *testing.T) {
+	h := newPendingTestHelper(t)
+	h.dnsProtectionWanted = true
+	stubConnected(t, h, tn{"bravo", "utun5", []string{"10.1.0.1"}})
+	fw := &disconnectFirewall{pendingTestFirewall: dnsFW(h)}
+	fw.killSwitch = true
+	h.firewall = fw
+	h.reconcileDisconnectFirewall([]string{"utun4", "utun5"})
+	if !slices.Equal(fw.removed, []string{"utun4"}) || len(fw.dnsAllow) != 1 || fw.dnsAllow[0].Interface != "utun5" {
+		t.Fatalf("partial teardown lost survivor: removed=%v DNS=%+v", fw.removed, fw.dnsAllow)
+	}
+}
+
 // The GUI/CLI used to send one tunnel's DNS list; the helper now derives the
 // list itself and ignores the request's.
 func TestHandleSetDNSProtection_IgnoresRequestServers(t *testing.T) {

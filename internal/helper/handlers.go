@@ -479,7 +479,7 @@ func (h *Helper) handleDisconnect(params json.RawMessage) (interface{}, error) {
 	// engine pointer (and its ifaceName) is gone.
 	var ifaceSnapshot []string
 	if h.firewall.IsKillSwitchEnabled() {
-		for _, st := range h.manager.AllStatuses() {
+		for _, st := range tunnelStatuses(h) {
 			if st == nil || st.InterfaceName == "" {
 				continue
 			}
@@ -489,6 +489,9 @@ func (h *Helper) handleDisconnect(params json.RawMessage) (interface{}, error) {
 			ifaceSnapshot = append(ifaceSnapshot, st.InterfaceName)
 		}
 	}
+	// Some teardowns can succeed before a sibling fails. Reconcile on
+	// every exit while connectMu is still held, including error returns.
+	defer h.reconcileDisconnectFirewall(ifaceSnapshot)
 
 	if tunnelName != "" {
 		if err := h.manager.DisconnectTunnel(tunnelName); err != nil {
@@ -575,11 +578,24 @@ func (h *Helper) handleDisconnect(params json.RawMessage) (interface{}, error) {
 	// teardowns returned early above, so this snapshot exactly matches
 	// what remains wanted (issue #44 desired state).
 	h.persistDesiredState()
+	return ipc.Empty{}, nil
+}
 
-	// Strip the just-torn-down tunnels from the kill-switch filter set.
-	// Best-effort: log failures but never block the disconnect response.
+// reconcileDisconnectFirewall preserves permits for surviving tunnels and
+// immediately removes obsolete DNS/kill-switch rules after partial teardown.
+// Caller holds connectMu. Errors remain pending in the DNS reconcile worker.
+func (h *Helper) reconcileDisconnectFirewall(ifaceSnapshot []string) {
+	live := make(map[string]bool)
+	for _, st := range tunnelStatuses(h) {
+		if st != nil && st.State != domain.StateDisconnected && st.InterfaceName != "" {
+			live[st.InterfaceName] = true
+		}
+	}
 	for _, iface := range ifaceSnapshot {
-		if err := h.firewall.RemoveKillSwitchTunnel(iface); err != nil {
+		if live[iface] {
+			continue
+		}
+		if err := h.removeKillSwitchPermit(iface, time.Now()); err != nil {
 			slog.Warn("RemoveKillSwitchTunnel after disconnect failed",
 				"interface", iface, "error", err)
 		}
@@ -590,7 +606,6 @@ func (h *Helper) handleDisconnect(params json.RawMessage) (interface{}, error) {
 		slog.Warn("DNS protection after disconnect failed", "error", err)
 	}
 	h.maybeArmShutdownAfterTeardown("tunnel disconnected, no GUI attached")
-	return ipc.Empty{}, nil
 }
 
 func (h *Helper) handleStatus(params json.RawMessage) (interface{}, error) {

@@ -130,6 +130,9 @@ type Helper struct {
 	// concurrent GUI connections could race on activeCfg, with the loser's
 	// rollback overwriting the winner's config.
 	connectMu sync.Mutex
+	// Failed teardown exceptions, guarded by connectMu and retried by the
+	// firewall safety net. They do not survive startup's anchor cleanup.
+	permitRemovalRetries map[string]permitRemovalRetry
 
 	// logLevel is the runtime-mutable slog level. Helper.SetLogLevel (and
 	// the Settings UI) writes to this; the broadcast handler reads it for

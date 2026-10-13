@@ -134,6 +134,7 @@ func (h *Helper) dnsReconcileLoop() {
 			return
 		case now := <-ticker.C:
 			h.connectMu.Lock()
+			h.retryKillSwitchPermitRemovals(now)
 			err := h.reconcileDNSProtection(false, now)
 			h.connectMu.Unlock()
 			if err != nil {

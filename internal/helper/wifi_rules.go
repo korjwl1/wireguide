@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/korjwl1/wireguide/internal/ipc"
 	"github.com/korjwl1/wireguide/internal/storage"
@@ -256,7 +257,7 @@ func (h *Helper) teardownTunnelHeld(name, shutdownReason string) {
 		slog.Warn("tunnel teardown failed", "tunnel", name, "error", err)
 	}
 	if iface != "" {
-		if err := h.firewall.RemoveKillSwitchTunnel(iface); err != nil {
+		if err := h.removeKillSwitchPermit(iface, time.Now()); err != nil {
 			slog.Warn("RemoveKillSwitchTunnel after teardown failed",
 				"interface", iface, "error", err)
 		}
