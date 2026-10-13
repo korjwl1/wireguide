@@ -441,6 +441,16 @@ Windows/Linux continue to use Wails' platform tray. A standalone Cocoa
 integration fixture validates menu persistence, action dispatch and cleanup
 with WIREGUIDE_TEST_TRAY=1; macOS 27 still requires reproduction testing.
 
+The macOS glyph is an NSImage template (issue #46), allowing AppKit to apply
+the correct per-display appearance and inactive emphasis. A separate
+transparent, non-interactive view draws the green connection badge and
+follows the button's appearsDisabled state. Accessibility exposes the
+connection state as text, and menu glyphs retain the existing connected /
+handshake distinction. No private status-window search or guessed icon
+color is required. The Cocoa fixture checks template mode, badge visibility,
+inactive emphasis and click passthrough; physical multi-monitor testing
+remains necessary.
+
 GUI and helper share the same binary (`wireguide` / `wireguide --helper`). On startup, `ensureHelper` pings the helper and compares `AppVersion`:
 
 - Match -> use existing helper

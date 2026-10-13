@@ -95,3 +95,17 @@ native Windows interface binding, or physical network changes.
       reconnect; a successful manual connect must clear the block.
 - [ ] Disconnect the last tunnel and exit the helper. Verify system DNS,
       endpoint routes and firewall rules are restored to their prior state.
+
+## macOS menu bar (issues #45 and #46)
+
+The standalone Cocoa fixture passes on macOS 26.3.1: persistent menu,
+action dispatch, template image, badge click passthrough, disabled emphasis
+and cleanup. These target scenarios still need hardware verification:
+
+- [ ] On macOS 27, open the menu with left/right click and keyboard; repeat
+      after selecting a tunnel and after dismissing the menu.
+- [ ] On two displays with different light/dark wallpapers, change the
+      focused display. Compare glyph contrast and inactive emphasis with
+      Apple's menu-bar icons in both connected and disconnected states.
+- [ ] Verify the green connected badge, absence of a persistent background
+      box, and VoiceOver's connection-state announcement.

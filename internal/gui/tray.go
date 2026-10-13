@@ -19,19 +19,8 @@ import (
 	"golang.org/x/image/draw"
 )
 
-// Tray icon variants. macOS uses plain (non-template) coloured icons so
-// the connected state can keep its GREEN dot badge — template images are
-// alpha-only masks and cannot carry colour, which is why this design was
-// chosen originally. Legibility across menu-bar appearances (issue #18:
-// a fixed white W is invisible on a light menu bar) is handled the way
-// native colour-icon apps do it: a KVO observation of the status-item
-// button's effectiveAppearance (menubar_appearance_darwin.go), which
-// tracks the menu bar's ACTUAL rendered appearance — wallpaper-driven,
-// not the system theme — and swaps between the white-W and black-W
-// sets. The default is white (historical behaviour); black is used only
-// when the observer verifiably reports a light menu bar. We never call
-// SetTemplateIcon, so the Wails v3 sticky-isTemplateIcon bug (once set,
-// later SetIcon calls render monochrome) is never triggered.
+// macOS uses an AppKit template glyph and a separate green connection
+// badge, so inactive displays and menu-bar appearance are rendered natively.
 // appQuitting latches once the user picks Quit from the tray. Package-level
 // (unlike trayManager.quitting, which is per-instance) so the window-show
 // retry goroutines in the dock_* files can observe teardown without holding
@@ -386,55 +375,6 @@ type trayManager struct {
 	// set, so a late-firing timer can't call SetMenu on a tray that
 	// has already been Destroy()'d.
 	quitting atomic.Bool
-	// darkMenuBar tracks the menu bar's current rendered appearance
-	// (macOS only) so setIconState can pick the icon variant whose W
-	// glyph contrasts with the menu bar. Initialised to true (white W —
-	// the app's historical behaviour, correct on the common dark menu
-	// bar) and updated by the KVO observer in startAppearanceWatch; it
-	// only ever becomes false when the menu bar is verifiably light.
-	darkMenuBar atomic.Bool
-}
-
-// macIcons returns the on/off icon pair matching the current menu-bar
-// appearance.
-func (t *trayManager) macIcons() (on, off []byte) {
-	if t.darkMenuBar.Load() {
-		return trayOnIconDark, trayOffIconDark
-	}
-	return trayOnIconLight, trayOffIconLight
-}
-
-// startAppearanceWatch installs the KVO-based menu-bar appearance
-// observer (menubar_appearance_darwin.go). The callback delivers the
-// exact appearance the menu bar is rendering us with — initial value
-// included — so the icon flips to the black-W set only when the menu
-// bar is genuinely light, and stays white everywhere else.
-func (t *trayManager) startAppearanceWatch() {
-	if runtime.GOOS != "darwin" {
-		return
-	}
-	watchMenuBarAppearance(func(dark bool) {
-		// KVO delivers on the AppKit main thread; hop to a goroutine so
-		// SetIcon's own main-thread dispatch can't deadlock against it.
-		go func() {
-			if t.quitting.Load() {
-				return
-			}
-			if t.darkMenuBar.Swap(dark) == dark {
-				return
-			}
-			slog.Debug("menubar appearance changed", "dark", dark)
-			t.mu.Lock()
-			anyConnected := len(t.activeTunnels) > 0
-			t.mu.Unlock()
-			on, off := t.macIcons()
-			if anyConnected {
-				setNativeTrayIcon(on)
-			} else {
-				setNativeTrayIcon(off)
-			}
-		}()
-	})
 }
 
 // quitApp is the single, platform-independent app teardown: stop the tray
@@ -475,27 +415,16 @@ func newTrayManager(app *application.App, win *application.WebviewWindow, tray *
 		svc:        svc,
 		doShutdown: doShutdown,
 	}
-	// White W until the appearance observer proves the menu bar is light.
-	t.darkMenuBar.Store(true)
 	return t
 }
 
-// initialBuild draws the menu once at startup. No OnClick handler is
-// registered — with no custom click handler, Wails lets AppKit run its
-// native status-item menu tracking (the pre-click event monitor attaches
-// the cached menu before the mouse-down is processed). The previous
-// design intercepted the click and called OpenMenu, which synthesizes a
-// fake NSEvent mouseDown — an unsupported trick that needed two clicks
-// on some systems and stopped opening the menu at all on macOS 26
-// (Tahoe reworked NSStatusItem internals). Menu freshness is covered by
-// the status-driven scheduleRebuild path, and each item's OnClick reads
-// live state at click time, so a ≤1s-stale glyph is the worst case.
+// initialBuild creates the native macOS status item before filling its
+// persistent menu; other platforms use the Wails tray.
 func (t *trayManager) initialBuild() {
 	if runtime.GOOS == "darwin" {
-		createNativeTray(trayOffIconDark, t.handleNativeTrayAction)
+		createNativeTray(trayOffIconLight, t.handleNativeTrayAction)
 	}
 	t.rebuildMenu()
-	t.startAppearanceWatch()
 }
 
 // setIconState swaps the tray ICON (not a text label) based on connection
@@ -535,7 +464,7 @@ func (t *trayManager) setIconState(activeNames []string, handshakeMap map[string
 	}
 
 	if activeChanged {
-		onIcon, offIcon := t.macIcons()
+		onIcon, offIcon := trayOnIconDark, trayOffIconDark
 		if (runtime.GOOS == "windows" || runtime.GOOS == "linux") && len(trayOnIconWindows) > 0 {
 			// Use the rounded-red app-icon variants on Windows and Linux so
 			// the tray icon stands out against light system-tray backgrounds.
@@ -543,7 +472,7 @@ func (t *trayManager) setIconState(activeNames []string, handshakeMap map[string
 		}
 		if anyConnected {
 			if runtime.GOOS == "darwin" {
-				setNativeTrayIcon(onIcon)
+				setNativeTrayConnected(true)
 			} else {
 				t.tray.SetIcon(onIcon)
 			}
@@ -552,7 +481,7 @@ func (t *trayManager) setIconState(activeNames []string, handshakeMap map[string
 		} else {
 			if runtime.GOOS == "darwin" || ((runtime.GOOS == "windows" || runtime.GOOS == "linux") && len(offIcon) > 0) {
 				if runtime.GOOS == "darwin" {
-					setNativeTrayIcon(offIcon)
+					setNativeTrayConnected(false)
 				} else {
 					t.tray.SetIcon(offIcon)
 				}
