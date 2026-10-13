@@ -4,6 +4,7 @@ package firewall
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -218,15 +219,8 @@ func (f *DarwinFirewall) EnableKillSwitch(interfaceName string, _ []string, endp
 		return fmt.Errorf("loading kill switch rules into anchor: %w", err)
 	}
 
-	// If DNS protection was enabled before this call, the previous
-	// invocation wrote rules to the MAIN anchor (in EnableDNSProtection's
-	// no-kill-switch branch). The loadAnchorRules call above just
-	// overwrote those rules — leaving the `com.apple.wireguide/dns`
-	// sub-anchor empty even though dnsProtectionEnabled==true. Re-
-	// populate the sub-anchor here so DNS leaks don't silently start.
-
 	// Enable pf if not already.
-	if err := enablePf(); err != nil {
+	if err := f.activatePfWithRollback(); err != nil {
 		return fmt.Errorf("enable pf: %w", err)
 	}
 
@@ -237,6 +231,39 @@ func (f *DarwinFirewall) EnableKillSwitch(interfaceName string, _ []string, endp
 	f.mu.Unlock()
 	slog.Info("kill switch enabled", "interface", interfaceName, "endpoints", len(endpoints))
 	return nil
+}
+
+// A main-anchor load can succeed before PF activation/persistence fails.
+// Restore the last committed model so an error never leaves new, untracked
+// rules active under another owner's PF reference. Caller holds opMu.
+func (f *DarwinFirewall) activatePfWithRollback() error {
+	activationErr := enablePf()
+	if activationErr == nil {
+		return nil
+	}
+	f.mu.Lock()
+	ks := f.killSwitchEnabled
+	dns := f.dnsProtectionEnabled
+	tunnels := cloneTunnelEndpoints(f.killSwitchTunnels)
+	allow := append([]DNSAllow(nil), f.savedDNSAllow...)
+	f.mu.Unlock()
+	var rules string
+	if ks {
+		var err error
+		rules, err = buildKillSwitchRulesForTunnels(tunnels)
+		if err != nil {
+			return errors.Join(activationErr, fmt.Errorf("PF rollback model: %w", err))
+		}
+	} else if dns {
+		rules = pfDNSRules(allow)
+	}
+	if err := loadAnchorRules(anchorName, rules); err != nil {
+		return errors.Join(activationErr, fmt.Errorf("PF main-anchor rollback: %w", err))
+	}
+	if !ks && !dns {
+		removePfStateFile()
+	}
+	return activationErr
 }
 
 // reapplyDNSSubAnchorIfActive re-loads the DNS sub-anchor under
@@ -443,7 +470,7 @@ func (f *DarwinFirewall) EnableDNSProtection(allow []DNSAllow) error {
 			if err := loadAnchorRules(anchorName, rules); err != nil {
 				return fmt.Errorf("loading DNS rules into anchor: %w", err)
 			}
-			if err := enablePf(); err != nil {
+			if err := f.activatePfWithRollback(); err != nil {
 				return err
 			}
 		} else {
@@ -461,7 +488,7 @@ func (f *DarwinFirewall) EnableDNSProtection(allow []DNSAllow) error {
 				return fmt.Errorf("loading DNS rules into anchor: %w", err)
 			}
 
-			if err := enablePf(); err != nil {
+			if err := f.activatePfWithRollback(); err != nil {
 				return err
 			}
 
@@ -639,17 +666,6 @@ func persistPfEnabledState(enabled bool) error {
 	return writePfLease(pfLease.state)
 }
 
-// readPersistedPfState reads the persisted pf enabled state from disk.
-// Returns true (enabled) as the safe default if the file can't be read.
-func readPersistedPfState() bool {
-	data, err := os.ReadFile(savedPfStateFile)
-	if err != nil {
-		// Default to "was enabled" so we don't accidentally disable pf.
-		return true
-	}
-	return strings.TrimSpace(string(data)) == "1"
-}
-
 // removePfStateFile removes the persisted pf state file.
 func removePfStateFile() {
 	pfLease.Lock()
@@ -669,19 +685,18 @@ func (f *DarwinFirewall) RecoverFromCrash() bool {
 	return RecoverSavedRules()
 }
 
-// RecoverSavedRules checks for a persisted pf state file left behind by a
-// crash and restores the original pf state by flushing all anchors and
-// restoring the pf enabled/disabled state.  Returns true if recovery was
-// performed.
+// RecoverSavedRules flushes both owned anchors on every helper start, even
+// when a crash lost the recovery journal. Only a recorded same-boot token
+// authorizes releasing a PF reference; missing metadata never authorizes
+// globally disabling PF. Call before installing any new tunnel rules.
 func RecoverSavedRules() bool {
-	pfWasEnabled := readPersistedPfState()
-
-	// Check if the state file exists — if not, nothing to recover.
-	if _, err := os.Stat(savedPfStateFile); err != nil {
+	_, statErr := os.Stat(savedPfStateFile)
+	if statErr != nil && !os.IsNotExist(statErr) {
+		slog.Warn("recovery: cannot inspect pf lease journal", "error", statErr)
 		return false
 	}
-
-	slog.Info("recovering pf state from crash-recovery file", "pfWasEnabled", pfWasEnabled)
+	hasJournal := statErr == nil
+	slog.Info("cleaning stale WireGuide pf anchors", "recovery_journal", hasJournal)
 
 	// Flush all anchor rules.
 	if err := flushAllAnchors(); err != nil {
@@ -690,12 +705,13 @@ func RecoverSavedRules() bool {
 	}
 
 	// Restore pf enabled/disabled state.
-	if err := disablePf(); err != nil {
-		slog.Warn("recovery: failed to release pf reference", "error", err)
-		return false
+	if hasJournal {
+		if err := disablePf(); err != nil {
+			slog.Warn("recovery: failed to release pf reference", "error", err)
+			return false
+		}
+		removePfStateFile()
 	}
-
-	removePfStateFile()
 	slog.Info("pf state restored successfully from crash-recovery file")
 	return true
 }

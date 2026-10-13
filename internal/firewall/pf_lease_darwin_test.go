@@ -81,6 +81,41 @@ func TestPFLegacyStateNeverGloballyDisablesFirewall(t *testing.T) {
 	}
 }
 
+func TestPFStartupFlushesBothAnchorsWithoutRecoveryJournal(t *testing.T) {
+	calls := stubPF(t)
+	if !RecoverSavedRules() {
+		t.Fatal("startup skipped stale rules when the journal was missing")
+	}
+	want := "-a com.apple/wireguide/dns -F rules,-a com.apple/wireguide -Fa"
+	if got := strings.Join(*calls, ","); got != want {
+		t.Fatalf("startup calls = %s, want %s", got, want)
+	}
+}
+
+func TestPFStartupFlushFailureKeepsLeaseForRecovery(t *testing.T) {
+	stubPF(t)
+	if err := writePfLease(pfLeaseState{Token: "42", Boot: "boot-a"}); err != nil {
+		t.Fatal(err)
+	}
+	goodRun := runPfctl
+	released := false
+	runPfctl = func(args ...string) ([]byte, error) {
+		if args[0] == "-X" {
+			released = true
+		}
+		if args[0] == "-a" {
+			return nil, errors.New("flush failed")
+		}
+		return goodRun(args...)
+	}
+	if RecoverSavedRules() || released {
+		t.Fatal("failed flush was reported recovered or released the PF lease")
+	}
+	if _, err := os.Stat(savedPfStateFile); err != nil {
+		t.Fatal("failed flush lost the recovery journal")
+	}
+}
+
 func TestDarwinDNSFlushFailureRetainsProtectionForRetry(t *testing.T) {
 	stubPF(t)
 	f := &DarwinFirewall{dnsProtectionEnabled: true, savedDNSAllow: []DNSAllow{{Interface: "utun4", Servers: []string{"10.0.0.1"}}}}
@@ -107,6 +142,44 @@ func TestDarwinDNSActivationFailureIsReported(t *testing.T) {
 	f := NewPlatformFirewall()
 	if err := f.EnableDNSProtection([]DNSAllow{{Servers: []string{"1.1.1.1"}}}); err == nil || f.IsDNSProtectionEnabled() {
 		t.Fatal("failed PF activation was reported as protected")
+	}
+}
+
+func TestPFActivationFailureRollsBackMainAnchor(t *testing.T) {
+	for _, mode := range []string{"dns", "kill-switch", "kill-switch-over-dns"} {
+		t.Run(mode, func(t *testing.T) {
+			stubPF(t)
+			goodRun := runPfctl
+			runPfctl = func(args ...string) ([]byte, error) {
+				if args[0] == "-E" {
+					return nil, errors.New("activation failed")
+				}
+				return goodRun(args...)
+			}
+			f := &DarwinFirewall{}
+			want := ""
+			if mode == "kill-switch-over-dns" {
+				f.dnsProtectionEnabled = true
+				f.savedDNSAllow = []DNSAllow{{Servers: []string{"1.1.1.1"}}}
+				want = pfDNSRules(f.savedDNSAllow)
+			}
+			var mainLoads []string
+			loadAnchorRules = func(anchor, rules string) error {
+				if anchor == anchorName {
+					mainLoads = append(mainLoads, rules)
+				}
+				return nil
+			}
+			var err error
+			if mode == "dns" {
+				err = f.EnableDNSProtection([]DNSAllow{{Servers: []string{"9.9.9.9"}}})
+			} else {
+				err = f.EnableKillSwitch("utun4", nil, nil)
+			}
+			if err == nil || len(mainLoads) != 2 || mainLoads[1] != want {
+				t.Fatalf("failed activation left uncommitted rules: loads=%q error=%v", mainLoads, err)
+			}
+		})
 	}
 }
 
