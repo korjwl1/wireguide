@@ -41,6 +41,7 @@ http_ok() { curl --connect-timeout 5 --max-time 12 --silent --fail "$1" >/dev/nu
 cleanup() {
   rc=$?
   trap - EXIT INT TERM
+  [[ -n "${keepalive_pid:-}" ]] && kill "$keepalive_pid" 2>/dev/null || true
   # Product OFF is the primary recovery path. These are best-effort here
   # because the helper may already have been killed by a failure.
   cli set dns-protection off >>"$test_log" 2>&1 || true
@@ -73,6 +74,31 @@ for _ in {1..100}; do [[ -S "$socket" ]] && break; sleep 0.1; done
 main_pid=$(sudo -n systemctl show -p MainPID --value wireguide-fulltest-helper.service)
 [[ "$main_pid" =~ ^[1-9][0-9]*$ ]]
 printf '%s\n' "$main_pid" >"$helper_pidfile"
+
+# The CLI refuses to act on a helper with no GUI attached (Ping.GUIAttached),
+# so hold ONE non-transient control connection as a GUI stand-in for the
+# duration. It also keeps the helper from self-exiting after its startup grace.
+start_keepalive() {
+  python3 - "$socket" <<'PYKEEPALIVE' &
+import json, socket, struct, sys, time
+s = socket.socket(socket.AF_UNIX)
+s.connect(sys.argv[1])
+body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "Helper.Ping"}).encode()
+s.sendall(struct.pack(">I", len(body)) + body)
+hdr = s.recv(4)
+if len(hdr) == 4:
+    n = struct.unpack(">I", hdr)[0]
+    while n > 0:
+        chunk = s.recv(min(n, 65536))
+        if not chunk:
+            break
+        n -= len(chunk)
+while True:
+    time.sleep(30)
+PYKEEPALIVE
+  keepalive_pid=$!
+}
+start_keepalive
 
 cli connect "$name" >>"$test_log" 2>&1
 http_ok https://www.google.com/generate_204

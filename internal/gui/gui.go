@@ -231,6 +231,11 @@ func Run(assetsHandler http.Handler, dataDir string) error {
 		tray.SetTooltip("WireGuide")
 	}
 
+	// Stop all socket probes before asking the helper to exit: a later dial
+	// would activate it again through launchd.
+	healthDone := make(chan struct{})
+	var stopHealthOnce sync.Once
+	stopHealth := func() { stopHealthOnce.Do(func() { close(healthDone) }) }
 	// 7. Shutdown coordination (declared upfront so closures can reference it)
 	var (
 		shutdownOnce sync.Once
@@ -238,6 +243,7 @@ func Run(assetsHandler http.Handler, dataDir string) error {
 	)
 	doShutdown = func() {
 		shutdownOnce.Do(func() {
+			stopHealth()
 			slog.Info("shutting down GUI + helper")
 			// Close any in-flight history sessions BEFORE the helper goes
 			// away — snapshotActiveStats needs the helper alive to fetch
@@ -303,7 +309,6 @@ func Run(assetsHandler http.Handler, dataDir string) error {
 		}
 	}
 
-	healthDone := make(chan struct{})
 	var healthWg sync.WaitGroup
 	startGUIHangMonitor(paths.LogsDir, healthDone, &healthWg)
 	healthWg.Add(1)
@@ -364,7 +369,7 @@ func Run(assetsHandler http.Handler, dataDir string) error {
 
 	// 9. Run (blocks)
 	err = app.Run()
-	close(healthDone)
+	stopHealth()
 	healthWg.Wait()
 	return err
 }

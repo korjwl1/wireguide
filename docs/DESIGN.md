@@ -7,7 +7,23 @@ WireGuide is a **two-process** WireGuard VPN client:
 - **GUI process** (unprivileged) — Wails v3 + Svelte webview, system tray, config editor
 - **Helper process** (root) — wireguard-go TUN, routing, DNS, firewall, reconnect
 
-They communicate over **JSON-RPC 2.0** on a Unix domain socket (`/var/run/wireguide/wireguide.sock`). The helper is installed as a macOS LaunchDaemon with `RunAtLoad=false` and `KeepAlive={AfterInitialDemand:true, SuccessfulExit:false}`: launchd never starts it at boot (a running GUI is what signals the user wants WireGuide active) and only restarts it after a crash. The helper's lifetime is tied to the GUI — a 60 s startup grace covers a helper whose GUI never attaches, and it exits shortly after the last GUI connection drops if no tunnels remain (CLI control connections are transient and don't extend its life).
+They communicate over **JSON-RPC 2.0**. On macOS, launchd owns
+`/var/run/com.wireguide.helper.sock` (0600, installing user as owner), and
+starts the root helper on contact. `RunAtLoad=false` prevents boot execution;
+`KeepAlive={AfterInitialDemand:true, SuccessfulExit:false}` restarts crashes
+after demand. The helper adopts the listener without unlinking it, verifies
+peer credentials, and gates automation until the first GUI control connection.
+A transient CLI probe does not grant that control lease. With no GUI or desired
+tunnels it exits after 15 seconds when activated (60 seconds for a direct
+start); after GUI detachment the grace is 10 seconds. Same-boot crash recovery
+retains existing desired tunnel intent. Clean quit cancels GUI probes before
+shutting down the helper, so they cannot activate it again.
+
+Installation, upgrades and repair can require administrator authorization;
+a healthy installed job starts through its socket. Legacy socket migration
+asks the old helper to shut down before replacing it. Temporary disappearance
+of the app bundle never deletes the helper or its recovery state. Uninstall
+is explicit; removing only the app can leave a dormant launchd registration.
 
 ```
 ┌──────────────────────────────┐     ┌──────────────────────────────┐
@@ -118,11 +134,15 @@ The comment also links separate feature PRs. [#51](https://github.com/korjwl1/wi
 (`~domain` split DNS), [#52](https://github.com/korjwl1/wireguide/pull/52)
 (negated automation, settle/manual-override and LAN-overlap policy), and
 [#53](https://github.com/korjwl1/wireguide/pull/53) (launchd socket activation)
-have **not** been imported. They change user-facing DNS, automation or helper
-startup contracts and require their own design/compatibility work. Existing
-multi-tunnel retry and watchdog recovery fixes do not imply these features
-are present. Native macOS PF coexistence, Linux systemd-resolved and Windows
-full/split coexistence still require target-machine execution.
+are integrated on this branch with the compatibility corrections documented
+in the review below. Split DNS keeps ordinary system resolvers available for
+unmatched names and preserves per-domain ownership in diagnostics. Negated
+rules wait for known, settled input; session manual overrides use the underlying
+network identity as well as the SSID. Transport recovery continues for manual
+On. Socket activation preserves the current shutdown, watchdog and crash
+recovery paths; automatic orphan self-uninstall is excluded. Native macOS
+resolver/PF coexistence, Linux systemd-resolved and Windows full/split
+coexistence still require target-machine execution.
 
 The [review of PRs #51, #52 and #53](analysis/pr-51-52-53-review.md) records
 merge conflicts, product fit, behavioral counterexamples and an integration

@@ -275,8 +275,8 @@ helper was replaced, and root-owned socket permissions were not exercised.
 
 Native supplemental DNS routing, systemd-resolved integration, Windows DNS,
 physical sleep/roaming and destructive uninstall remain target-machine gates.
-The review changes documentation and supplies repro patches; it does not merge
-the three PRs or claim those runtime features are installed.
+The original review only supplied documentation and repro patches. Integration
+status is recorded below; local code changes do not install the system helper.
 
 ## Suggested integration sequence
 
@@ -319,3 +319,20 @@ Automatic connects skip LAN conflicts; manual routes are never silently removed.
 Fresh helper, reconnect, wifi, storage and network race tests passed, including
 the corrected counterexamples. Frontend build, vet and Windows core build passed.
 Physical roaming and sleep remain target-machine checks.
+
+### Socket activation (#53)
+
+Integrated launchd descriptor adoption, private socket ownership, installation
+and legacy socket migration, longer activation contact budgets, CLI GUI-presence
+checks, dormant automation before GUI attachment and cancellation at quit.
+The existing bounded signals, IPC write cancellation, durable watchdog blocks,
+macOS native tray and desired-state recovery remain in place. Automatic orphan
+self-uninstall is excluded: transient app replacement must not erase the only
+recovery binary. Explicit uninstall metadata includes the new socket and actual
+PF journal path.
+
+Fresh full-repository race tests and vet passed. Windows amd64 and Linux arm64
+core builds passed. Real per-user launchd fixtures passed for generated plist
+demand/crash behavior and descriptor adoption across clean exits. No system
+helper was replaced. Root-owned system-domain migration, reboot and target
+network coexistence remain native release gates.

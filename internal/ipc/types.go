@@ -7,10 +7,14 @@ type Empty struct{}
 
 // PingResponse is returned from Helper.Ping.
 type PingResponse struct {
-	Version    string `json:"version"`     // IPC protocol version
-	AppVersion string `json:"app_version"` // Application version (e.g. "0.1.5")
-	PID        int    `json:"pid"`
+	Version     string `json:"version"`     // IPC protocol version
+	AppVersion  string `json:"app_version"` // Application version (e.g. "0.1.5")
+	PID         int    `json:"pid"`
+	GUIAttached bool   `json:"gui_attached"`
 }
+
+// GUIKnown distinguishes absent metadata in older helpers.
+func (p PingResponse) GUIKnown() bool { return MinorOf(p.Version) >= 2 }
 
 // ConnectRequest is the parameter for Tunnel.Connect.
 type ConnectRequest struct {

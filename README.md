@@ -98,6 +98,7 @@ That means most of WireGuide runs silently in the background.
 WireGuide ships fewer knobs than most desktop VPN clients on purpose. The trade is that the few it does ship are meant to be boring and reliable.
 
 - **Privilege separation.** A single binary runs in two modes. The GUI runs unprivileged. A small helper runs as root / Administrator. They talk over a local Unix socket (macOS/Linux) or named pipe (Windows). Nothing is exposed over HTTP or the network.
+- **macOS helper activation.** After installation, launchd starts the helper on socket contact. Administrator authorization is reserved for installation, upgrades or repair. A CLI probe cannot activate automation.
 - **OS-native firewall.** The kill switch uses `pf` (macOS), WFP (Windows), or `nftables` (Linux) — not a userspace packet filter that fails open.
 - **Up-to-date crypto.** Built on a May 2026 build of [wireguard-go](https://git.zx2c4.com/wireguard-go) — years ahead of the engine inside the official macOS app, which hasn't been updated since Feb 2023.
 - **Manual QA per release.** Every tagged release is exercised on macOS (Apple Silicon), Windows 11 (amd64), and Linux (Debian 13 / Raspberry Pi OS ARM64) before it goes out, on top of a 3-OS `go test` matrix that gates every PR.

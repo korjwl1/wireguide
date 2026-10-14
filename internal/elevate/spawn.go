@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"github.com/korjwl1/wireguide/internal/ipc"
 )
 
 // ErrBackgroundDisabled requires a user decision in macOS settings, not another
@@ -138,6 +140,10 @@ func KillProcess(pid int) error {
 // fresh helper can listen on the same address. No-op on Windows where named
 // pipes don't have a filesystem path the GUI can unlink.
 func RemoveStaleSocket(addr string) {
+	// launchd owns this path across process exits.
+	if addr == ipc.DarwinSocketPath {
+		return
+	}
 	if addr == "" {
 		return
 	}

@@ -55,7 +55,8 @@ func (h *Helper) handleSetLogLevel(params json.RawMessage) (interface{}, error) 
 }
 
 func (h *Helper) handlePing(params json.RawMessage) (interface{}, error) {
-	return ipc.PingResponse{Version: ipc.ProtocolVersion, AppVersion: update.CurrentVersion(), PID: os.Getpid()}, nil
+	return ipc.PingResponse{Version: ipc.ProtocolVersion, AppVersion: update.CurrentVersion(), GUIAttached: h.server != nil && h.server.HasControlConn(),
+		PID: os.Getpid()}, nil
 }
 
 func (h *Helper) handleShutdown(params json.RawMessage) (interface{}, error) {

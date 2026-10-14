@@ -22,9 +22,12 @@ import (
 // (treating a CLI client as a control connection, i.e. the pre-1.1
 // behaviour) and answers RequestQuit with method-not-found, which the
 // CLI reports as "this helper is too old to stop from the CLI".
+// Minor 2 added PingResponse.GUIAttached. With launchd socket activation a
+// successful dial no longer proves the app is running (the dial itself starts
+// the helper), so the CLI needs the helper to say whether a GUI is attached.
 const (
 	ProtocolMajor = 1
-	ProtocolMinor = 1
+	ProtocolMinor = 2
 )
 
 // ProtocolVersion is the canonical "major.minor" string used in
@@ -38,6 +41,24 @@ var ProtocolVersion = fmt.Sprintf("%d.%d", ProtocolMajor, ProtocolMinor)
 // (backward-compatible with the legacy "1" wire format from old helpers).
 func MajorVersionMatches(a, b string) bool {
 	return majorOf(a) == majorOf(b)
+}
+
+// MinorOf returns the numeric minor of a "major.minor" version string, or 0
+// when there is none (legacy "1" wire format) or it is not a number.
+func MinorOf(v string) int {
+	for i := 0; i < len(v); i++ {
+		if v[i] == '.' {
+			n := 0
+			for _, c := range v[i+1:] {
+				if c < '0' || c > '9' {
+					break
+				}
+				n = n*10 + int(c-'0')
+			}
+			return n
+		}
+	}
+	return 0
 }
 
 func majorOf(v string) string {
@@ -93,13 +114,13 @@ const (
 	ErrCodeMethodNotFound = -32601
 	ErrCodeInvalidParams  = -32602
 	ErrCodeInternalError  = -32603
-	ErrCodeAppError = -32000
+	ErrCodeAppError       = -32000
 )
 
 // RPC method names
 const (
-	MethodPing             = "Helper.Ping"
-	MethodShutdown         = "Helper.Shutdown"
+	MethodPing     = "Helper.Ping"
+	MethodShutdown = "Helper.Shutdown"
 	// MethodForceShutdown is the escalation when MethodShutdown is ignored
 	// or replied to with an error. The helper handler immediately
 	// terminates the process (os.Exit) without running the graceful
@@ -107,15 +128,15 @@ const (
 	// must be cleared. The GUI cannot kill the helper from outside
 	// because the helper runs as root/SYSTEM and the GUI is a normal
 	// user, so cross-privilege kill is the helper's job.
-	MethodForceShutdown    = "Helper.ForceShutdown"
-	MethodSubscribe        = "Helper.Subscribe"
-	MethodSetLogLevel      = "Helper.SetLogLevel"
-	MethodConnect          = "Tunnel.Connect"
-	MethodDisconnect       = "Tunnel.Disconnect"
-	MethodStatus           = "Tunnel.Status"
-	MethodIsConnected      = "Tunnel.IsConnected"
-	MethodActiveName       = "Tunnel.ActiveName"
-	MethodActiveTunnels    = "Tunnel.ActiveTunnels"
+	MethodForceShutdown = "Helper.ForceShutdown"
+	MethodSubscribe     = "Helper.Subscribe"
+	MethodSetLogLevel   = "Helper.SetLogLevel"
+	MethodConnect       = "Tunnel.Connect"
+	MethodDisconnect    = "Tunnel.Disconnect"
+	MethodStatus        = "Tunnel.Status"
+	MethodIsConnected   = "Tunnel.IsConnected"
+	MethodActiveName    = "Tunnel.ActiveName"
+	MethodActiveTunnels = "Tunnel.ActiveTunnels"
 	// MethodRename runs inside the helper because it has to take connectMu
 	// to make "is the tunnel active?" + file rename atomic with respect to
 	// Connect / Disconnect / wifi-rule auto-connect. Splitting it into
@@ -123,7 +144,7 @@ const (
 	// window the helper-only design avoids. The architectural cost
 	// (helper imports storage) is accepted; the helper's storage usage is
 	// confined to this single method + read-only Load for wifi rules.
-	MethodRename = "Tunnel.Rename"
+	MethodRename           = "Tunnel.Rename"
 	MethodSetKillSwitch    = "Firewall.SetKillSwitch"
 	MethodSetDNSProtection = "Firewall.SetDNSProtection"
 	MethodSetHealthCheck   = "Monitor.SetHealthCheck"
@@ -136,8 +157,8 @@ const (
 	// MethodRequestQuit asks the helper to bring the WHOLE app down —
 	// this is `wireguide ctl stop`. It is deliberately NOT the same as
 	// MethodShutdown: shutting the helper down while the GUI is still
-	// running just makes the GUI's health monitor respawn it (and prompt
-	// for an admin password on macOS). Instead the helper broadcasts
+	// running just makes the GUI's health monitor bring it back (on macOS
+	// the reconnect itself re-activates it via launchd). Instead the helper broadcasts
 	// EventQuit so a connected GUI terminates itself, and the GUI's own
 	// shutdown path then stops the helper. With no GUI attached the
 	// helper simply shuts itself down.
