@@ -207,6 +207,10 @@ func (h *Helper) handleRename(params json.RawMessage) (interface{}, error) {
 		delete(h.autoConnectedBy, req.OldName)
 		h.autoConnectedBy[req.NewName] = owner
 	}
+	if latch, ok := h.manualOverride[req.OldName]; ok {
+		delete(h.manualOverride, req.OldName)
+		h.manualOverride[req.NewName] = latch
+	}
 	h.wifiMu.Unlock()
 
 	// Move the cached latency under the new key so the old name doesn't
@@ -383,6 +387,7 @@ func (h *Helper) handleConnect(params json.RawMessage) (interface{}, error) {
 	h.clearWatchdogBlockHeld(req.Config.Name)
 
 	h.applyPostConnectFirewall(req.Config)
+	h.recordManualOverride(req.Config.Name, false)
 	return ipc.Empty{}, nil
 }
 
@@ -443,6 +448,26 @@ func (h *Helper) handleDisconnect(params json.RawMessage) (interface{}, error) {
 			tunnelName = req.TunnelName
 		}
 		// If unmarshal fails (e.g. empty params), disconnect first tunnel (backward compat).
+	}
+
+	if tunnelName != "" {
+		h.recordManualOverride(tunnelName, true)
+	} else {
+		h.mu.Lock()
+		names := make(map[string]bool)
+		for name := range h.activeCfgs {
+			names[name] = true
+		}
+		for name := range h.pendingDesired {
+			names[name] = true
+		}
+		h.mu.Unlock()
+		for _, name := range h.manager.ActiveTunnels() {
+			names[name] = true
+		}
+		for name := range names {
+			h.recordManualOverride(name, true)
+		}
 	}
 
 	// A disconnect also withdraws any pending restore for the same
@@ -741,6 +766,7 @@ func (h *Helper) handleReportSSID(params json.RawMessage) (interface{}, error) {
 	gw := wifi.GatewayMAC()
 	h.wifiMu.Lock()
 	h.ssidStampGW = gw
+	h.ssidFromGUI = true
 	h.wifiMu.Unlock()
 	h.wifiMon.ReportExternalSSID(req.SSID)
 	return ipc.Empty{}, nil

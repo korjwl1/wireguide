@@ -1131,3 +1131,34 @@ func TestRetryCancelledDuringSuspendDoesNotDisconnect(t *testing.T) {
 		t.Fatalf("cancelled retry tore the tunnel down %d times", n)
 	}
 }
+
+func TestWakeRetryDoesNotBounceRestoredSiblings(t *testing.T) {
+	var attempts, disconnects atomic.Int32
+	mon, mgr, _ := newTestMonitor(testConfig(), func(context.Context, string) error {
+		if attempts.Add(1) == 1 {
+			return errors.New("one sibling unavailable")
+		}
+		return nil
+	})
+	mgr.setConnected(true, "alpha")
+	mgr.allStatuses = []*tunnel.ConnectionStatus{{TunnelName: "alpha", State: domain.StateConnected}, {TunnelName: "bravo", State: domain.StateConnected}}
+	mgr.disconnectFn = func() error { disconnects.Add(1); return nil }
+	mon.Start()
+	defer mon.Stop()
+	mon.triggerReconnect()
+	waitFor(t, 2*time.Second, "second restore attempt", func() bool { return attempts.Load() >= 2 })
+	if n := disconnects.Load(); n != 2 {
+		t.Fatalf("bounced recovered siblings: %d disconnects", n)
+	}
+}
+
+func TestNamedRetryAfterFailedConnectAllowsAlreadyDown(t *testing.T) {
+	var attempts atomic.Int32
+	mon, mgr, _ := newTestMonitor(testConfig(), func(context.Context, string) error { attempts.Add(1); return nil })
+	mgr.setConnected(true, "alpha")
+	mgr.disconnectFn = func() error { return &tunnel.TunnelError{Kind: tunnel.ErrNotConnected} }
+	mon.Start()
+	defer mon.Stop()
+	mon.ReconnectTunnelIfIdle("alpha", nil)
+	waitFor(t, time.Second, "restore already down tunnel", func() bool { return attempts.Load() > 0 })
+}

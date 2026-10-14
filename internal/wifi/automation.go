@@ -46,7 +46,12 @@ const (
 // Condition is a single match predicate. Only the field relevant to Type
 // is used.
 type Condition struct {
-	Type   string `json:"type"`
+	Type string `json:"type"`
+	// Negate inverts an ssid/subnet/network condition ("is not"). A negated
+	// rule matches only when its input is KNOWN and different; when the input
+	// is unknown (blank SSID during a roam, unsettled network) Evaluate holds
+	// instead of falling through. Not valid on none_match.
+	Negate bool   `json:"negate,omitempty"`
 	SSID   string `json:"ssid,omitempty"`
 	Subnet string `json:"subnet,omitempty"` // CIDR, e.g. "10.0.0.0/24"
 	// GatewayMAC fingerprints a SPECIFIC network by its default-gateway
@@ -69,6 +74,19 @@ type NetworkContext struct {
 	// GatewayMAC is the current default gateway's MAC ("" if unknown).
 	// Used for network conditions.
 	GatewayMAC string
+	// Settled is true once the network fingerprint (SSID, primary interface,
+	// gateway MAC, subnets) has been unchanged for NegationSettleWindow.
+	// Negated rules are undecidable until then, so a roam blip can't flip
+	// them. The zero value is false, so a caller that forgets it fails closed.
+	Settled bool
+	// PrimaryIface is the default-route interface ("" when unknown).
+	PrimaryIface string
+	// PrimaryIsWiFi reports whether PrimaryIface is a Wi-Fi device. An empty
+	// SSID on a Wi-Fi primary interface is "unknown" (roam blip, missing
+	// Location permission); on a non-Wi-Fi primary it is a real "no SSID".
+	PrimaryIsWiFi bool
+	// Online is true when a default route exists.
+	Online bool
 }
 
 // DefaultAutomation returns an empty Automation with the map initialised
@@ -88,6 +106,16 @@ const (
 	StateDisconnect
 )
 
+// EvalInfo describes how EvaluateDetailed reached its decision.
+type EvalInfo struct {
+	// RuleIndex is the index of the rule that decided the outcome, or the
+	// negated rule that could not be decided (Held). -1 when no rule applied.
+	RuleIndex int
+	// Held is true when a negated rule's input was unknown and evaluation
+	// stopped with StateUnmanaged rather than falling through.
+	Held bool
+}
+
 // Evaluate decides the desired state for a single tunnel given the
 // current network context. Semantics:
 //
@@ -97,19 +125,32 @@ const (
 //   - none_match ("else") is an unconditional match at its own position,
 //     so it acts as a fallback when placed last and as an unconditional
 //     override if dragged to the top — no special end-of-list handling.
-//   - A rule with a malformed condition (bad CIDR/MAC, empty SSID) or an
-//     unknown action never fires; it is skipped rather than defaulting to
-//     connect. So an invalid rule fails closed (leaves the tunnel alone),
-//     it doesn't silently connect.
+//   - A rule with a malformed condition (bad CIDR/MAC, empty SSID,
+//     negated none_match) or an unknown action never fires; it is skipped
+//     rather than defaulting to connect. So an invalid rule fails closed
+//     (leaves the tunnel alone), it doesn't silently connect.
+//   - Positive rules never match unknown (empty) input and fall through.
+//   - A NEGATED rule matches only when its input is known, the network is
+//     settled and online, and the value differs. If it cannot be decided,
+//     evaluation STOPS and returns StateUnmanaged (hold): falling through
+//     would let a trailing else-rule act on a roam blip. One exception: an
+//     empty SSID on a settled, online, non-Wi-Fi primary interface is a
+//     known "no SSID", so a negated SSID rule matches.
 //   - If nothing matches, the tunnel is Unmanaged (untouched).
 //
 // This lets the canonical workflow — "disconnect on the office network,
 // connect everywhere else" — be expressed as
 //
 //	{when: ssid=corp,        do: disconnect}
-//	{when: subnet=10/8,      do: disconnect}
-//	{when: none_match,       do: connect}
+//	{when: ssid!=corp,       do: connect}
 func Evaluate(rules []Rule, ctx NetworkContext) DesiredState {
+	state, _ := EvaluateDetailed(rules, ctx)
+	return state
+}
+
+// EvaluateDetailed is Evaluate plus the decision's provenance (which rule
+// fired, or whether a negated rule held evaluation).
+func EvaluateDetailed(rules []Rule, ctx NetworkContext) (DesiredState, EvalInfo) {
 	for i := range rules {
 		r := rules[i]
 		state, ok := actionState(r.Do)
@@ -119,11 +160,74 @@ func Evaluate(rules []Rule, ctx NetworkContext) DesiredState {
 		if r.When.Validate() != nil {
 			continue // malformed condition → rule can't fire
 		}
+		if r.When.Negate {
+			match, decidable := negatedMatches(r.When, ctx)
+			if !decidable {
+				return StateUnmanaged, EvalInfo{RuleIndex: i, Held: true}
+			}
+			if match {
+				return state, EvalInfo{RuleIndex: i}
+			}
+			continue
+		}
 		if ruleMatches(r.When, ctx) {
-			return state
+			return state, EvalInfo{RuleIndex: i}
 		}
 	}
-	return StateUnmanaged
+	return StateUnmanaged, EvalInfo{RuleIndex: -1}
+}
+
+// HasNegated reports whether any rule uses a negated condition.
+func HasNegated(rules []Rule) bool {
+	for _, r := range rules {
+		if r.When.Negate {
+			return true
+		}
+	}
+	return false
+}
+
+// negatedMatches evaluates a (pre-validated) negated condition. decidable
+// is false when the answer can't be known yet: network not settled or
+// offline, or the required input is empty.
+func negatedMatches(c Condition, ctx NetworkContext) (match, decidable bool) {
+	if !ctx.Settled || !ctx.Online {
+		return false, false
+	}
+	switch c.Type {
+	case CondSSID:
+		got := strings.TrimSpace(ctx.SSID)
+		if got == "" {
+			// Known "no SSID" only off Wi-Fi (Ethernet / USB tethering).
+			if !ctx.PrimaryIsWiFi && ctx.PrimaryIface != "" {
+				return true, true
+			}
+			return false, false
+		}
+		return !ssidEqual(strings.TrimSpace(c.SSID), got), true
+	case CondSubnet:
+		if len(ctx.PhysicalIPs) == 0 {
+			return false, false
+		}
+		_, network, err := net.ParseCIDR(strings.TrimSpace(c.Subnet))
+		if err != nil {
+			return false, false
+		}
+		for _, ip := range ctx.PhysicalIPs {
+			if network.Contains(ip) {
+				return false, true
+			}
+		}
+		return true, true
+	case CondNetwork:
+		want := canonicalMAC(c.GatewayMAC)
+		got := canonicalMAC(ctx.GatewayMAC)
+		if want == "" || got == "" {
+			return false, false
+		}
+		return want != got, true
+	}
+	return false, false
 }
 
 // actionState maps an action to its desired state, reporting ok=false for
@@ -152,6 +256,9 @@ func ruleMatches(c Condition, ctx NetworkContext) bool {
 // condition can never match, so save paths reject it (issue #12) and
 // Evaluate skips it.
 func (c Condition) Validate() error {
+	if c.Negate && c.Type == CondNoneMatch {
+		return fmt.Errorf("none_match cannot be negated")
+	}
 	switch c.Type {
 	case CondSSID:
 		if strings.TrimSpace(c.SSID) == "" {
@@ -187,7 +294,7 @@ func ValidateRule(r Rule) error {
 func conditionMatches(c Condition, ctx NetworkContext) bool {
 	switch c.Type {
 	case CondSSID:
-		return ctx.SSID != "" && ssidEqual(c.SSID, ctx.SSID)
+		return strings.TrimSpace(ctx.SSID) != "" && ssidEqual(strings.TrimSpace(c.SSID), strings.TrimSpace(ctx.SSID))
 	case CondSubnet:
 		_, network, err := net.ParseCIDR(strings.TrimSpace(c.Subnet))
 		if err != nil {

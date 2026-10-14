@@ -84,6 +84,17 @@ export class Condition {
         }
         if (/** @type {any} */(false)) {
             /**
+             * Negate inverts an ssid/subnet/network condition ("is not"). A negated
+             * rule matches only when its input is KNOWN and different; when the input
+             * is unknown (blank SSID during a roam, unsettled network) Evaluate holds
+             * instead of falling through. Not valid on none_match.
+             * @member
+             * @type {boolean | undefined}
+             */
+            this["negate"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
              * @member
              * @type {string | undefined}
              */

@@ -306,3 +306,16 @@ Fresh race tests passed for helper, network, tunnel and diagnostics; vet, fronte
 build and Windows core build passed. Linux arm64 resolvectl command/rollback
 fixtures passed in an isolated container. Native resolver routing still needs
 target-machine validation.
+
+### Automation (#52)
+
+Integrated negated predicates, settle tracking, rule-edit detection, preview
+provenance and session manual overrides. Identity includes the gateway and
+subnets even with an unchanged SSID. Entire lists containing negation use a
+separate JSON map so old engines cannot run inverse conditions or fallbacks.
+Manual On continues to permit transport recovery, while manual Off vetoes it.
+Wake retries do not bounce siblings already restored after the initial teardown.
+Automatic connects skip LAN conflicts; manual routes are never silently removed.
+Fresh helper, reconnect, wifi, storage and network race tests passed, including
+the corrected counterexamples. Frontend build, vet and Windows core build passed.
+Physical roaming and sleep remain target-machine checks.

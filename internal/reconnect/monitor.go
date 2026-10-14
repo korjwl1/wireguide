@@ -3,6 +3,7 @@ package reconnect
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"runtime/debug"
@@ -50,6 +51,8 @@ type State struct {
 	MaxAttempts  int    `json:"max_attempts"`
 	NextRetry    string `json:"next_retry"`
 }
+
+var ErrNothingToReconnect = errors.New("nothing to reconnect")
 
 // ReconnectFunc is called to perform the actual reconnection of a specific
 // tunnel identified by name. The ctx is the same ctx the monitor created for
@@ -548,6 +551,7 @@ func (m *Monitor) reconnectWithBackoff(ctx context.Context, tunnelName string, e
 	entry.delay = m.cfg.InitialDelay
 	m.mu.Unlock()
 
+	legacyTornDown := false
 	for {
 		m.mu.Lock()
 		if !m.running {
@@ -648,8 +652,12 @@ func (m *Monitor) reconnectWithBackoff(ctx context.Context, tunnelName string, e
 		switch {
 		case tunnelName != "":
 			disconnectErr = m.manager.DisconnectTunnel(tunnelName)
-		case !nothingUp:
+		case !nothingUp && !legacyTornDown:
 			disconnectErr = m.disconnectAll()
+		}
+		var te *tunnel.TunnelError
+		if errors.As(disconnectErr, &te) && te.Kind == tunnel.ErrNotConnected {
+			disconnectErr = nil
 		}
 		if disconnectErr != nil {
 			slog.Warn("pre-reconnect disconnect failed; will retry after backoff",
@@ -669,6 +677,10 @@ func (m *Monitor) reconnectWithBackoff(ctx context.Context, tunnelName string, e
 			continue
 		}
 
+		if tunnelName == "" {
+			legacyTornDown = true
+		}
+
 		// One more cancellation check before the actual reconnect — manager
 		// Disconnect can take a moment and the user's cancel may land here.
 		if ctx.Err() != nil || m.cancelInvalidRetry(tunnelName, entry) {
@@ -686,6 +698,18 @@ func (m *Monitor) reconnectWithBackoff(ctx context.Context, tunnelName string, e
 		// Attempt reconnection — pass tunnel name so only the specific
 		// tunnel is reconnected when doing per-tunnel health recovery.
 		if err := m.reconnectFn(ctx, tunnelName); err != nil {
+			if errors.Is(err, ErrNothingToReconnect) {
+				if firewallWasSuspended && m.fwResumeFn != nil {
+					_ = m.fwResumeFn()
+				}
+				m.notifyStatus(State{Reconnecting: false})
+				m.mu.Lock()
+				if cur, ok := m.retries[tunnelName]; ok && cur == entry {
+					delete(m.retries, tunnelName)
+				}
+				m.mu.Unlock()
+				return
+			}
 			slog.Warn("reconnection failed", "attempt", attempt, "tunnel", tunnelName, "error", err)
 			// Re-enable firewall after failed attempt so the system stays
 			// protected between retries.
