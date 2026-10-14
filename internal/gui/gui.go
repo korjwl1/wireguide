@@ -18,6 +18,7 @@ import (
 
 	wgapp "github.com/korjwl1/wireguide/internal/app"
 	"github.com/korjwl1/wireguide/internal/domain"
+	"github.com/korjwl1/wireguide/internal/guiinstance"
 	"github.com/korjwl1/wireguide/internal/ipc"
 	"github.com/korjwl1/wireguide/internal/storage"
 	"github.com/korjwl1/wireguide/internal/update"
@@ -55,6 +56,16 @@ func init() {
 
 // Run starts the GUI process. Blocks until the Wails app exits.
 func Run(assetsHandler http.Handler, dataDir string) error {
+	// Reserve the Windows GUI before touching history, helper/UAC or tray.
+	instance, err := guiinstance.Acquire()
+	if err != nil {
+		return err
+	}
+	if instance == nil {
+		return nil // Existing GUI accepted the activation.
+	}
+	defer instance.Close()
+
 	// 0. Install the slog handler that broadcasts to the LogViewer. Do this
 	// first so every subsequent log call (path init, helper spawn, etc.) is
 	// captured. The Wails app isn't built yet; bindAppToLogHandler wires
@@ -210,6 +221,9 @@ func Run(assetsHandler http.Handler, dataDir string) error {
 
 	// Wire the window reference so showDock() can retry showing it.
 	dockWindow = win
+	// Activation can arrive during UAC or WebView startup. Do not call Show
+	// before the native window/runtime exists, or Wails may create it twice.
+	startInstanceActivation(instance, win)
 
 	// Native file drop forwarded to frontend
 	win.OnWindowEvent(events.Common.WindowFilesDropped, func(event *application.WindowEvent) {
@@ -243,6 +257,8 @@ func Run(assetsHandler http.Handler, dataDir string) error {
 	)
 	doShutdown = func() {
 		shutdownOnce.Do(func() {
+			instance.BeginShutdown()
+			appQuitting.Store(true)
 			stopHealth()
 			slog.Info("shutting down GUI + helper")
 			// Close any in-flight history sessions BEFORE the helper goes
@@ -369,6 +385,8 @@ func Run(assetsHandler http.Handler, dataDir string) error {
 
 	// 9. Run (blocks)
 	err = app.Run()
+	appQuitting.Store(true)
+	instance.BeginShutdown()
 	stopHealth()
 	healthWg.Wait()
 	return err
