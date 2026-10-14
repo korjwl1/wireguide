@@ -138,5 +138,9 @@ jobs:
       - name: Test and vet
         shell: pwsh
         run: |
+          # PowerShell otherwise reports only the last native command's exit
+          # code: a passing vet must never hide a failing test run.
           go test ./...
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           go vet ./...
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

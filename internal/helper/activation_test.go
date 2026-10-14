@@ -152,6 +152,9 @@ func TestAcquireListenerDarwin(t *testing.T) {
 // Ping reports GUIAttached from the server's control-connection count: a
 // transient CLI probe does not count, a GUI-style client does.
 func TestPingReportsGUIAttached(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix socket fixture; Windows named-pipe transport is tested in internal/ipc")
+	}
 	dir, err := os.MkdirTemp("/tmp", "wg-ping-")
 	if err != nil {
 		t.Fatal(err)

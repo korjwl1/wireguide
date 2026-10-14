@@ -55,15 +55,16 @@ func TestQuitComplete(t *testing.T) {
 // at it. The returned pointers let a test change what the helper reports.
 func serveFakeHelper(t *testing.T) (attached *bool, active *[]string) {
 	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("unix socket test")
+	}
+
 	dir, err := os.MkdirTemp("/tmp", "wg-cli-")
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { os.RemoveAll(dir) })
 	addr := filepath.Join(dir, "h.sock")
-	if runtime.GOOS == "windows" {
-		t.Skip("unix socket test")
-	}
 	l, err := ipc.Listen(addr, -1, "")
 	if err != nil {
 		t.Skipf("cannot listen on %s: %v", filepath.Base(addr), err)

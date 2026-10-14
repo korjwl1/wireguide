@@ -56,11 +56,15 @@ execution or foreground behavior on a user's desktop.
 
 ### Recorded results (2026-10-14)
 
-Implementation commit `3f14ba31c4c0db04b249243f135a982658238cdc` passed
-[CI run 38534283629](https://github.com/korjwl1/wireguide/actions/runs/38534283629):
+The first [CI run 38534283629](https://github.com/korjwl1/wireguide/actions/runs/38534283629)
+reported success, but its Windows log showed three failing Unix socket fixtures.
+PowerShell returned the subsequent successful vet exit code, hiding the failed
+`go test`. The fixture platform checks and Windows CI exit handling are corrected
+in the follow-up commit (refs #25, #41). Results from that first run were:
 
-- Windows: native `go test ./...` and `go vet ./...`, including the five
-  Windows-only reservation/process tests above.
+- Windows: GUI and GUI-instance packages passed, including the five native
+  reservation/process tests above. Full tests failed in CLI/helper Unix fixtures;
+  the workflow's green status was not evidence of full test success.
 - macOS: full repository race tests and vet.
 - Linux: full repository race tests, vet, native build/link check and DEB packaging.
 - Local macOS: focused GUI/instance race tests; a deliberate removal of the
