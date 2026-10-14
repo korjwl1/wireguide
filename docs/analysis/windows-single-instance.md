@@ -54,6 +54,25 @@ exit without Close, and relaunch during shutdown. These tests belong to the
 existing Windows CI job; cross-compilation alone does not establish native
 execution or foreground behavior on a user's desktop.
 
+### Recorded results (2026-10-14)
+
+Implementation commit `3f14ba31c4c0db04b249243f135a982658238cdc` passed
+[CI run 38534283629](https://github.com/korjwl1/wireguide/actions/runs/38534283629):
+
+- Windows: native `go test ./...` and `go vet ./...`, including the five
+  Windows-only reservation/process tests above.
+- macOS: full repository race tests and vet.
+- Linux: full repository race tests, vet, native build/link check and DEB packaging.
+- Local macOS: focused GUI/instance race tests; a deliberate removal of the
+  duplicate-launch guard made the counterexample fail, and restoring it passed.
+- Local cross checks: Windows GUI/instance build and vet, native test executable
+  compilation, and Linux arm64 instance package build.
+
+Foreground permission is requested through the Windows API; desktop policy can
+still deny focus. The native process tests do not create a Wails window or prove
+foreground behavior under every desktop policy. The checks below remain the
+release verification for visible, minimized and hidden installed-app windows.
+
 Manual Windows release checks:
 
 1. Launch the installed app, close to tray, then launch it again: one GUI and
