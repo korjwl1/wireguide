@@ -278,7 +278,7 @@ physical sleep/roaming and destructive uninstall remain target-machine gates.
 The original review only supplied documentation and repro patches. Integration
 status is recorded below; local code changes do not install the system helper.
 
-## Suggested integration sequence
+## Original suggested integration sequence (superseded by integration below)
 
 1. Extract #51's DNS-less recovery correction and JSON field fixes, and the
    remaining #52 retry/rules-change fixes into focused issue-linked commits.
@@ -336,3 +336,13 @@ core builds passed. Real per-user launchd fixtures passed for generated plist
 demand/crash behavior and descriptor adoption across clean exits. No system
 helper was replaced. Root-owned system-domain migration, reboot and target
 network coexistence remain native release gates.
+
+### Interface reuse follow-up
+
+A failed split-DNS removal now blocks reuse of that interface until its former
+resolver keys are removed, before the new tunnel configures networking. This
+prevents stale supplemental DNS on a replacement global/DNS-less tunnel and
+prevents delayed cleanup from deleting the new owner's keys. A regression test
+covers failed cleanup, failed reuse, retained journal, successful reuse and an
+empty subsequent retry. Fresh tunnel/helper/diagnostics race tests, affected
+package vet and Windows/Linux core builds passed after this correction.

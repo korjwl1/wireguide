@@ -266,3 +266,39 @@ func TestRecoverFromCrashSweepsSplitKeysWithoutJournal(t *testing.T) {
 		t.Fatalf("sweep calls = %d, want 1", calls)
 	}
 }
+
+func TestRecycledInterfaceCannotInheritPendingSplitDNS(t *testing.T) {
+	old := &splitMock{mockNetworkManager: &mockNetworkManager{}}
+	mgr := newSplitManager(old, t.TempDir())
+	if err := mgr.Connect(splitCfg("old")); err != nil {
+		t.Fatal(err)
+	}
+	old.removeErr = errors.New("dynamic store unavailable")
+	_ = mgr.DisconnectTunnel("old")
+	replacement := &splitMock{mockNetworkManager: &mockNetworkManager{}}
+	mgr.netMgrFactory = func() network.NetworkManager { return replacement }
+	// The factory reuses utun42, just as the OS can recycle utun names.
+	if err := mgr.Connect(globalCfg("new")); err == nil {
+		t.Fatal("new owner inherited unresolved split DNS")
+	}
+	if len(replacement.dnsArgs) != 0 {
+		t.Fatal("configured new DNS before resolving former ownership")
+	}
+	if len(LoadActiveState(mgr.dataDir)) != 1 {
+		t.Fatal("former owner's recovery journal lost")
+	}
+	old.removeErr = nil
+	if err := mgr.Connect(globalCfg("new")); err != nil {
+		t.Fatal(err)
+	}
+	before := old.removedCount()
+	mgr.RetryPendingDNSCleanup()
+	if old.removedCount() != before {
+		t.Fatal("late retry ran against the replacement owner")
+	}
+	states := LoadActiveState(mgr.dataDir)
+	if len(states) != 1 || states[0].TunnelName != "new" {
+		t.Fatalf("stale journal: %+v", states)
+	}
+	_ = mgr.DisconnectTunnel("new")
+}

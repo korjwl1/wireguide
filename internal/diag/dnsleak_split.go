@@ -56,8 +56,7 @@ func parseScutilDNS(out string) []scutilResolver {
 }
 
 // evaluateSplitDNS checks, for every split-DNS match domain, that an
-// unscoped supplemental resolver exists whose nameservers include one of the
-// tunnel's servers. It returns the domains lacking one. Pure.
+// unscoped supplemental resolver exists whose nameservers belong to the domain's configured servers. It returns the domains lacking one. Pure.
 func evaluateSplitDNS(blocks []scutilResolver, p domain.DNSEntries) []string {
 	return evaluateSplitDNSPlans(blocks, []domain.DNSEntries{p})
 }
@@ -106,7 +105,7 @@ func evaluateSplitDNSPlans(blocks []scutilResolver, plans []domain.DNSEntries) (
 // names, so probing them proves nothing and reporting them as leaks would be
 // a false positive. Instead verify a supplemental resolver exists for each
 // match domain. Only macOS exposes that via `scutil --dns`; elsewhere the
-// check is skipped (never reported as a leak).
+// check reports verification unavailable.
 //
 // Note that the Go resolver, dig and nslookup read /etc/resolv.conf and
 // never see supplemental resolvers; only getaddrinfo callers do.

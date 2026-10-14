@@ -7,7 +7,7 @@ import "github.com/korjwl1/wireguide/internal/domain"
 // servers, a routing-only domain list, and no default route. Match domains
 // keep their "~" (routing only); plain split domains are passed bare so they
 // also act as search domains. The catch-all "~." is deliberately never added.
-// The last command (default-route) is best-effort: older systemd lacks it.
+// Every command is required; callers revert a partially applied setup.
 // Pure so it can be tested on any platform.
 func resolvectlSplitCommands(iface string, p domain.DNSEntries) [][]string {
 	dns := append([]string{"dns", iface}, p.Servers...)

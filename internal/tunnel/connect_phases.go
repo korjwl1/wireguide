@@ -19,7 +19,7 @@ import (
 //  3. Assign address
 //  4. Bring interface up
 //  5. Install routes (incl. endpoint bypass for every peer)
-//  6. Apply DNS (best-effort)
+//  6. Apply explicitly configured DNS (failure rolls back)
 //  7. Persist crash-recovery state (only after everything else succeeds)
 //
 // Note: Pre/PostUp/Down script execution was removed as a security hardening
@@ -44,6 +44,12 @@ func (m *Manager) connectPhases(ctx context.Context, cfg *domain.WireGuardConfig
 		return nil, newTunnelError(ErrEngineCreation, "creating engine", err)
 	}
 	ifaceName := engine.InterfaceName()
+	if err := m.prepareInterfaceDNS(ifaceName); err != nil {
+		// Nothing has been configured yet. Preserve the former owner's
+		// journal and retry entry; rollback of the new owner could erase it.
+		engine.Close()
+		return nil, newTunnelError(ErrNetwork, "removing previous interface DNS", err)
+	}
 
 	// rollback helper closes the engine and restores network state if any
 	// later phase fails. Best-effort — we log rather than propagate cleanup

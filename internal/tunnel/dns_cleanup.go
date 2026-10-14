@@ -1,8 +1,9 @@
 package tunnel
 
 import (
-	"github.com/korjwl1/wireguide/internal/network"
 	"log/slog"
+
+	"github.com/korjwl1/wireguide/internal/network"
 )
 
 type pendingDNSCleanup struct {
@@ -45,4 +46,30 @@ func (m *Manager) RetryPendingDNSCleanup() {
 			}
 		}
 	}
+}
+
+// prepareInterfaceDNS clears a former owner's supplemental resolver before
+// a recycled interface is used. A new global-DNS or DNS-less tunnel must not
+// inherit stale split resolvers, and a retry must not delete the new owner's
+// keys after SetDNS. Called before any network configuration is installed.
+func (m *Manager) prepareInterfaceDNS(iface string) error {
+	m.mu.Lock()
+	entry, pending := m.pendingDNSCleanup[iface]
+	m.mu.Unlock()
+	if !pending {
+		return nil
+	}
+	if err := entry.remover.RemoveSplitDNS(iface); err != nil {
+		return err
+	}
+	m.mu.Lock()
+	delete(m.pendingDNSCleanup, iface)
+	_, sameNameActive := m.tunnels[entry.name]
+	m.mu.Unlock()
+	if !sameNameActive {
+		if err := ClearActiveState(m.dataDir, entry.name); err != nil {
+			slog.Warn("old DNS journal removal failed", "tunnel", entry.name, "error", err)
+		}
+	}
+	return nil
 }
