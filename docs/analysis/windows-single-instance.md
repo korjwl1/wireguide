@@ -72,6 +72,12 @@ in the follow-up commit (refs #25, #41). Results from that first run were:
 - Local cross checks: Windows GUI/instance build and vet, native test executable
   compilation, and Linux arm64 instance package build.
 
+The corrected [CI run 38535604928](https://github.com/korjwl1/wireguide/actions/runs/38535604928)
+on `f4de9b791863ce53cfeb4e2a6e25867e184f2508` passed all three jobs. The Windows
+log was checked separately: GUI, GUI-instance, CLI and helper packages report
+success and no test failures remain. Windows now stops immediately if test or
+vet exits nonzero. macOS race/vet and Linux race/vet/build/package also passed.
+
 Foreground permission is requested through the Windows API; desktop policy can
 still deny focus. The native process tests do not create a Wails window or prove
 foreground behavior under every desktop policy. The checks below remain the
