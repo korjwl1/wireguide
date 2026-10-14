@@ -102,6 +102,20 @@ export class DNSLeakResult {
              */
             this["error"] = undefined;
         }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {boolean | undefined}
+             */
+            this["split_mode"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {string[] | undefined}
+             */
+            this["missing_match_domains"] = undefined;
+        }
 
         Object.assign(this, $$source);
     }
@@ -113,9 +127,13 @@ export class DNSLeakResult {
      */
     static createFrom($$source = {}) {
         const $$createField1_0 = $$createType1;
+        const $$createField5_0 = $$createType2;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("dns_servers" in $$parsedSource) {
             $$parsedSource["dns_servers"] = $$createField1_0($$parsedSource["dns_servers"]);
+        }
+        if ("missing_match_domains" in $$parsedSource) {
+            $$parsedSource["missing_match_domains"] = $$createField5_0($$parsedSource["missing_match_domains"]);
         }
         return new DNSLeakResult(/** @type {Partial<DNSLeakResult>} */($$parsedSource));
     }

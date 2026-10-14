@@ -14,6 +14,8 @@ import (
 	"time"
 
 	"golang.zx2c4.com/wireguard/wgctrl"
+
+	"github.com/korjwl1/wireguide/internal/domain"
 )
 
 // cmdTimeout bounds every external command. Without this, a hung
@@ -31,9 +33,10 @@ type DarwinManager struct {
 	// DNS state — saved per service (matches wg-quick collect_new_service_dns).
 	// wg-quick sets DNS on EVERY network service, not just the primary one,
 	// because macOS can switch primary between Wi-Fi and Ethernet mid-session.
-	savedDNS    map[string][]string // service name → original DNS list
-	savedSearch map[string][]string // service name → original search domains
-	dnsActive   bool
+	savedDNS       map[string][]string // service name → original DNS list
+	savedSearch    map[string][]string // service name → original search domains
+	dnsActive      bool
+	splitDNSActive bool
 
 	// Endpoint bypass route state — tracked for cleanup.
 	bypassEndpoints []string // IPs we added host routes for
@@ -914,6 +917,16 @@ func (m *DarwinManager) SetDNS(ifaceName string, entries []string) error {
 		return nil
 	}
 
+	// Mode decision is made once, before any splitting: a "~name" token
+	// means split DNS, which installs a supplemental resolver in the
+	// dynamic store and never touches the system's own DNS. Everything
+	// below (snapshot, networksetup, lastDNS/dnsActive, verifyDNS, the
+	// reapply drift loop) is the global-override machinery and must not run.
+	parsed := domain.ParseDNSEntries(entries)
+	if len(parsed.Match) > 0 {
+		return m.setSplitDNS(ifaceName, parsed)
+	}
+
 	services := getAllNetworkServices()
 	if len(services) == 0 {
 		return fmt.Errorf("no network services found")
@@ -995,6 +1008,9 @@ func (m *DarwinManager) SetDNS(ifaceName string, entries []string) error {
 // M5: Also captures original DNS for any new network services that weren't
 // present when SetDNS was first called, so they can be properly restored.
 func (m *DarwinManager) applyDNS(entries []string) error {
+	if hasSplitDNSToken(entries) {
+		return fmt.Errorf("refusing to apply split-DNS entries to network services")
+	}
 	services := getAllNetworkServices()
 	m.captureNewServices(services)
 	m.applyDNSToServices(entries, services)
@@ -1010,6 +1026,9 @@ func (m *DarwinManager) applyDNS(entries []string) error {
 // cache — per event. Reads are parallel networksetup queries; the resolver
 // flush runs only when at least one service actually needed a rewrite.
 func (m *DarwinManager) applyDNSIfDrifted(entries []string) error {
+	if hasSplitDNSToken(entries) {
+		return fmt.Errorf("refusing to apply split-DNS entries to network services")
+	}
 	services := getAllNetworkServices()
 	m.captureNewServices(services)
 
@@ -1104,6 +1123,10 @@ func (m *DarwinManager) captureNewServices(services []string) {
 // `networksetup -listallnetworkservices` calls) and fans out one goroutine
 // per service.
 func (m *DarwinManager) applyDNSToServices(entries []string, services []string) {
+	if hasSplitDNSToken(entries) {
+		slog.Error("applyDNSToServices: refusing split-DNS entries")
+		return
+	}
 	servers, search := splitDNSEntries(entries)
 	if len(services) == 0 {
 		return
@@ -1138,7 +1161,7 @@ func (m *DarwinManager) applyDNSToServices(entries []string, services []string) 
 // Connect over — but we now log the outcome at debug so a flaky
 // mDNSResponder ("operation not permitted" under SIP, MDM blocks) leaves
 // a breadcrumb in helper.log instead of vanishing.
-func flushDNSCache() {
+var flushDNSCache = func() {
 	ctx, cancel := context.WithTimeout(context.Background(), cmdTimeout)
 	defer cancel()
 	if out, err := exec.CommandContext(ctx, "dscacheutil", "-flushcache").CombinedOutput(); err != nil {
@@ -1258,6 +1281,18 @@ func (m *DarwinManager) ResetDNSToSystemDefault() error {
 // consistent system snapshot once we've started mutating, and re-running
 // RestoreDNS with the same stale map would just repeat the same failed call.
 func (m *DarwinManager) RestoreDNS(ifaceName string) error {
+	// Split-DNS keys are derived from the interface name alone and must go
+	// even when dnsActive is false (split mode never sets it, and
+	// RestoreDNSFromSnapshot clears it before Cleanup runs RestoreDNS).
+	m.mu.Lock()
+	splitActive := m.splitDNSActive
+	m.mu.Unlock()
+	if splitActive {
+		if err := m.removeSplitDNS(ifaceName); err != nil {
+			return err
+		}
+	}
+
 	// Snapshot saved state under the lock. We deliberately keep dnsActive=true
 	// during the restore: a concurrent SetDNS racing in here would otherwise
 	// re-snapshot the *partially-restored* system DNS as if it were the
@@ -1456,9 +1491,8 @@ func (m *DarwinManager) Cleanup(ifaceName string) error {
 	if key != "" {
 		rmMgr.Unsubscribe(key)
 	}
-	if err := m.RestoreDNS(ifaceName); err != nil {
-		slog.Warn("Cleanup: RestoreDNS failed", "iface", ifaceName, "error", err)
-	}
+	// RestoreDNS removes the split-DNS keys first, even when dnsActive is false.
+	dnsErr := m.RestoreDNS(ifaceName)
 	// Defensive: remove any remaining routes via this interface
 	m.deleteInterfaceRoutes(ifaceName, "inet")
 	m.deleteInterfaceRoutes(ifaceName, "inet6")
@@ -1477,7 +1511,7 @@ func (m *DarwinManager) Cleanup(ifaceName string) error {
 			slog.Debug("bypass route delete failed (may already be gone)", "ip", ip, "error", err)
 		}
 	}
-	return nil
+	return dnsErr
 }
 
 // --- helpers ---

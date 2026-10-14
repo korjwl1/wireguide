@@ -189,4 +189,3 @@ func TestRecoverFromCrashNilFirewall(t *testing.T) {
 		t.Errorf("expected 1 recovered tunnel, got %d", len(names))
 	}
 }
-

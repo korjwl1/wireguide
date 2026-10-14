@@ -51,15 +51,14 @@ func (h *Helper) dnsProtectionNeeded() bool {
 	autoOff := h.dnsAutoOff
 	cfgs := h.copyActiveCfgs()
 	h.mu.Unlock()
-	if wanted || autoOff || !fullTunnelForcesDNSProtection {
-		return wanted
-	}
 	for _, st := range tunnelStatuses(h) {
 		if st == nil || st.State != domain.StateConnected {
 			continue
 		}
-		if cfg := cfgs[st.TunnelName]; cfg != nil && cfg.IsFullTunnel() && len(cfg.Interface.DNS) > 0 {
-			return true
+		if cfg := cfgs[st.TunnelName]; cfg != nil && !cfg.Interface.IsSplitDNS() && len(cfg.Interface.ParseDNS().Servers) > 0 {
+			if wanted || (!autoOff && fullTunnelForcesDNSProtection && cfg.IsFullTunnel()) {
+				return true
+			}
 		}
 	}
 	return false
@@ -134,6 +133,7 @@ func (h *Helper) dnsReconcileLoop() {
 			return
 		case now := <-ticker.C:
 			h.connectMu.Lock()
+			h.manager.RetryPendingDNSCleanup()
 			h.retryKillSwitchPermitRemovals(now)
 			err := h.reconcileDNSProtection(false, now)
 			h.connectMu.Unlock()

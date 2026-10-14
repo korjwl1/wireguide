@@ -62,7 +62,8 @@ type tunnelEntry struct {
 type Manager struct {
 	mu sync.Mutex
 
-	tunnels map[string]*tunnelEntry // keyed by tunnel name
+	tunnels           map[string]*tunnelEntry // keyed by tunnel name
+	pendingDNSCleanup map[string]pendingDNSCleanup
 
 	dataDir string
 
@@ -357,6 +358,10 @@ func (m *Manager) ConnectWithContext(ctx context.Context, cfg *domain.WireGuardC
 		if err := netMgr.RemoveRoutes(ifaceName, nil, fullTunnel); err != nil {
 			slog.Warn("connect race: RemoveRoutes failed", "iface", ifaceName, "error", err)
 		}
+		var splitCleanupErr error
+		if cfg.Interface.IsSplitDNS() {
+			splitCleanupErr = m.removeSplitDNS(cfg.Name, netMgr, ifaceName)
+		}
 		if err := netMgr.RestoreDNS(ifaceName); err != nil {
 			slog.Warn("connect race: RestoreDNS failed", "iface", ifaceName, "error", err)
 		}
@@ -367,8 +372,10 @@ func (m *Manager) ConnectWithContext(ctx context.Context, cfg *domain.WireGuardC
 		// connectPhases saved the crash-recovery state file before this
 		// raced Disconnect. Without ClearActiveState here, the file
 		// remains on disk and triggers spurious recovery on next launch.
-		if err := ClearActiveState(m.dataDir, name); err != nil {
-			slog.Warn("connect race: ClearActiveState failed", "tunnel", name, "error", err)
+		if splitCleanupErr == nil {
+			if err := ClearActiveState(m.dataDir, name); err != nil {
+				slog.Warn("connect race: ClearActiveState failed", "tunnel", name, "error", err)
+			}
 		}
 
 		// Re-acquire only to mutate the entry map.

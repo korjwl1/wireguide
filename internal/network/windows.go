@@ -16,6 +16,7 @@ import (
 
 	"golang.org/x/sys/windows"
 
+	"github.com/korjwl1/wireguide/internal/domain"
 	"github.com/korjwl1/wireguide/internal/sysexec"
 )
 
@@ -426,6 +427,17 @@ func (m *WindowsManager) RemoveRoutes(ifaceName string, allowedIPs []string, ful
 }
 
 func (m *WindowsManager) SetDNS(ifaceName string, servers []string) error {
+	if len(servers) == 0 {
+		return nil
+	}
+	// Windows has no per-domain resolver routing here (that needs NRPT).
+	// Bail out before any netsh call so split mode cannot become a global
+	// override; global mode only ever passes IP servers to netsh.
+	parsed := domain.ParseDNSEntries(servers)
+	if len(parsed.Match) > 0 {
+		return ErrSplitDNSUnsupported
+	}
+	servers = parsed.Servers
 	if len(servers) == 0 {
 		return nil
 	}

@@ -2,6 +2,7 @@ package app
 
 import (
 	"github.com/korjwl1/wireguide/internal/diag"
+	"github.com/korjwl1/wireguide/internal/ipc"
 )
 
 // DNSLeakResult mirrors diag.DNSLeakResult for Wails JSON serialisation.
@@ -10,6 +11,9 @@ type DNSLeakResult struct {
 	DNSServers []DNSServer `json:"dns_servers"`
 	TestDomain string      `json:"test_domain"`
 	Error      string      `json:"error,omitempty"`
+
+	SplitMode           bool     `json:"split_mode,omitempty"`
+	MissingMatchDomains []string `json:"missing_match_domains,omitempty"`
 }
 
 // DNSServer mirrors diag.DNSServer.
@@ -34,18 +38,24 @@ func (s *TunnelService) RunDNSLeakTest() (*DNSLeakResult, error) {
 	// Best-effort: find the active tunnel's DNS config to know which resolvers
 	// are expected to be in use. Ignore IPC errors — an empty expected set is
 	// still a valid (conservative) test.
-	var expectedDNS []string
-	if status, err := s.GetStatus(); err == nil && status != nil && status.TunnelName != "" {
-		if cfg, err := s.tunnelStore.Load(status.TunnelName); err == nil && cfg != nil {
-			expectedDNS = cfg.Interface.DNS
+	var perTunnel [][]string
+	var resp ipc.ActiveTunnelsResponse
+	if err := s.call(ipc.MethodActiveTunnels, nil, &resp); err == nil {
+		for _, name := range resp.Names {
+			if cfg, err := s.tunnelStore.Load(name); err == nil && cfg != nil {
+				perTunnel = append(perTunnel, cfg.Interface.DNS)
+			}
 		}
 	}
 
-	r := diag.RunDNSLeakTest(expectedDNS)
+	r := diag.RunDNSLeakTestForTunnels(perTunnel)
 	out := &DNSLeakResult{
 		Leaked:     r.Leaked,
 		TestDomain: r.TestDomain,
 		Error:      r.Error,
+
+		SplitMode:           r.SplitMode,
+		MissingMatchDomains: r.MissingMatchDomains,
 	}
 	for _, srv := range r.DNSServers {
 		out.DNSServers = append(out.DNSServers, DNSServer{

@@ -49,8 +49,10 @@ func (m *Manager) connectPhases(ctx context.Context, cfg *domain.WireGuardConfig
 	// later phase fails. Best-effort — we log rather than propagate cleanup
 	// errors because we already have a primary failure to report.
 	rollback := func(primary error) error {
+		cleaned := true
 		// Undo routes that may have been installed before the failure.
 		if err := netMgr.RemoveRoutes(ifaceName, allAllowedIPs, fullTunnel); err != nil {
+			cleaned = false
 			slog.Warn("rollback: RemoveRoutes failed", "error", err)
 		}
 		// Strip any endpoint loop protection filters we installed before
@@ -63,8 +65,20 @@ func (m *Manager) connectPhases(ctx context.Context, cfg *domain.WireGuardConfig
 				slog.Warn("rollback: DisableEndpointProtection failed", "iface", ifaceName, "error", err)
 			}
 		}
+		var splitCleanupErr error
+		if cfg.Interface.IsSplitDNS() {
+			splitCleanupErr = m.removeSplitDNS(cfg.Name, netMgr, ifaceName)
+		}
 		if err := netMgr.Cleanup(ifaceName); err != nil {
+			cleaned = false
 			slog.Warn("rollback: network Cleanup failed", "iface", ifaceName, "error", err)
+		}
+		// A rolled-back connect must not leave a journal that crash
+		// recovery would later act on (and misread as a live tunnel).
+		if cleaned && splitCleanupErr == nil {
+			if err := ClearActiveState(m.dataDir, cfg.Name); err != nil {
+				slog.Warn("rollback: ClearActiveState failed", "tunnel", cfg.Name, "error", err)
+			}
 		}
 		engine.Close()
 		return primary
@@ -211,8 +225,13 @@ func (m *Manager) connectPhases(ctx context.Context, cfg *domain.WireGuardConfig
 	//
 	// When multiple tunnels are active, we apply the UNION of all tunnels'
 	// DNS servers so a second tunnel doesn't overwrite the first's DNS.
+	//
+	// Split-DNS tunnels (any "~domain" token) never take part in the union:
+	// they install their own supplemental resolver and leave system DNS alone.
+	splitDNS := cfg.Interface.IsSplitDNS()
+	dnsMode := dnsModeFor(cfg)
 	dnsServers := cfg.Interface.DNS
-	if len(dnsServers) > 0 {
+	if len(dnsServers) > 0 && !splitDNS {
 		// Collect DNS from already-connected tunnels and merge.
 		existingDNS := m.AllDNSServers()
 		if len(existingDNS) > 0 {
@@ -247,6 +266,7 @@ func (m *Manager) connectPhases(ctx context.Context, cfg *domain.WireGuardConfig
 		TunnelName:     cfg.Name,
 		InterfaceName:  ifaceName,
 		DNSServers:     cfg.Interface.DNS,
+		DNSMode:        dnsMode,
 		FullTunnel:     fullTunnel,
 		Table:          cfg.Interface.Table,
 		FwMark:         cfg.Interface.FwMark,
@@ -282,6 +302,7 @@ func (m *Manager) connectPhases(ctx context.Context, cfg *domain.WireGuardConfig
 		TunnelName:     cfg.Name,
 		InterfaceName:  ifaceName,
 		DNSServers:     cfg.Interface.DNS,
+		DNSMode:        dnsMode,
 		FullTunnel:     fullTunnel,
 		Table:          cfg.Interface.Table,
 		FwMark:         cfg.Interface.FwMark,
@@ -361,6 +382,14 @@ func (m *Manager) disconnectPhases(cfg *domain.WireGuardConfig, engine *Engine, 
 	engine.Close()
 	logStep("engine.Close", tsEngine)
 
+	// Split-DNS keys live in the dynamic store, outside Cleanup's
+	// RestoreDNS path when other global-DNS tunnels remain (Cleanup is
+	// skipped entirely then), so remove them for THIS tunnel unconditionally.
+	var splitCleanupErr error
+	if cfg.Interface.IsSplitDNS() {
+		splitCleanupErr = m.removeSplitDNS(cfg.Name, netMgr, ifaceName)
+	}
+
 	// Check if other tunnels remain connected BEFORE cleanup.
 	remainingDNS := m.AllDNSServers()
 	hasOtherTunnels := len(remainingDNS) > 0
@@ -393,12 +422,14 @@ func (m *Manager) disconnectPhases(cfg *domain.WireGuardConfig, engine *Engine, 
 
 	// If other tunnels remain, re-apply their DNS union via one of the
 	// remaining tunnels' netMgr instances.
-	if hasOtherTunnels {
+	// A split tunnel never contributed to that union, so its disconnect
+	// changes nothing for the others.
+	if hasOtherTunnels && !cfg.Interface.IsSplitDNS() {
 		m.mu.Lock()
 		var remainingNetMgr network.NetworkManager
 		var remainingIface string
 		for _, e := range m.tunnels {
-			if e.state == domain.StateConnected && e.engine != nil && e.cfg != nil && e.cfg.Name != cfg.Name && e.netMgr != nil {
+			if e.state == domain.StateConnected && e.engine != nil && e.cfg != nil && e.cfg.Name != cfg.Name && e.netMgr != nil && !e.cfg.Interface.IsSplitDNS() {
 				remainingNetMgr = e.netMgr
 				remainingIface = e.engine.InterfaceName()
 				break
@@ -413,10 +444,45 @@ func (m *Manager) disconnectPhases(cfg *domain.WireGuardConfig, engine *Engine, 
 	}
 
 	// Clear crash-recovery state for this specific tunnel
-	if err := ClearActiveState(m.dataDir, cfg.Name); err != nil {
-		slog.Warn("disconnect: ClearActiveState failed", "tunnel", cfg.Name, "error", err)
+	if splitCleanupErr == nil {
+		if err := ClearActiveState(m.dataDir, cfg.Name); err != nil {
+			slog.Warn("disconnect: ClearActiveState failed", "tunnel", cfg.Name, "error", err)
+		}
 	}
 
 	slog.Info("tunnel disconnected", "name", cfg.Name,
 		"total_ms", time.Since(t0).Milliseconds())
+}
+
+// dnsModeFor classifies a config's DNS handling for the crash-recovery
+// journal: "split" (supplemental resolver only), "global" (system DNS
+// override) or "" (the tunnel never touches DNS).
+func dnsModeFor(cfg *domain.WireGuardConfig) string {
+	switch {
+	case cfg.Interface.IsSplitDNS():
+		return DNSModeSplit
+	case len(cfg.Interface.DNS) > 0:
+		return DNSModeGlobal
+	}
+	return ""
+}
+
+// removeSplitDNS removes a tunnel's split-DNS state if the platform manager
+// keeps any. Idempotent and best-effort.
+func (m *Manager) removeSplitDNS(name string, netMgr network.NetworkManager, ifaceName string) error {
+	r, ok := netMgr.(network.SplitDNSRemover)
+	if !ok {
+		return nil
+	}
+	if err := r.RemoveSplitDNS(ifaceName); err != nil {
+		slog.Warn("RemoveSplitDNS failed", "iface", ifaceName, "error", err)
+		m.mu.Lock()
+		if m.pendingDNSCleanup == nil {
+			m.pendingDNSCleanup = make(map[string]pendingDNSCleanup)
+		}
+		m.pendingDNSCleanup[ifaceName] = pendingDNSCleanup{name, r}
+		m.mu.Unlock()
+		return err
+	}
+	return nil
 }

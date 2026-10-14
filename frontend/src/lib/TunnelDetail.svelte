@@ -152,19 +152,34 @@
   // once — which froze this on the first tunnel's endpoint forever.
   function autoLatencyTarget(det, sel) {
     if (!det) return { label: sel?.endpoint || '—', fallback: true };
-    for (const peer of det.Peers || []) {
-      for (const allowed of peer.AllowedIPs || []) {
+    for (const peer of det.peers || []) {
+      for (const allowed of peer.allowed_ips || []) {
         if (allowed.endsWith('/32')) return { label: allowed.slice(0, -3), fallback: false };
         if (allowed.endsWith('/128')) return { label: allowed.slice(0, -4), fallback: false };
       }
     }
-    const fullTunnel = (det.Peers || []).some(peer =>
-      (peer.AllowedIPs || []).some(ip => ip === '0.0.0.0/0' || ip === '::/0')
+    const fullTunnel = (det.peers || []).some(peer =>
+      (peer.allowed_ips || []).some(ip => ip === '0.0.0.0/0' || ip === '::/0')
     );
     if (fullTunnel) return { label: '8.8.8.8', fallback: false };
     return { label: sel?.endpoint || '—', fallback: true };
   }
 
+  // Splits an [Interface] DNS= list into servers, search domains and
+  // "~domain" split-DNS (routing-only) domains, mirroring domain.ParseDNSEntries.
+  function parseDnsEntries(list) {
+    const out = { servers: [], search: [], match: [] };
+    for (const raw of list || []) {
+      const tok = String(raw).trim();
+      if (!tok) continue;
+      if (tok.startsWith('~')) out.match.push(tok.slice(1));
+      else if (tok.includes(':') || /^[0-9.]+$/.test(tok)) out.servers.push(tok);
+      else out.search.push(tok);
+    }
+    return out;
+  }
+
+  $: dnsInfo = parseDnsEntries(detail?.interface?.dns);
   $: autoLatency = autoLatencyTarget(detail, $selectedTunnel);
   $: latencyTargetDisplay = latencyTargetSaved
     ? latencyTargetSaved
@@ -552,20 +567,36 @@
         {/if}
         {#if detail}
           <div class="info-card detail-info-card">
-            {#each detail.Peers || [] as peer}
+            {#each detail.peers || [] as peer}
               <div class="info-row">
                 <span class="info-label">{$t('tunnel.allowed_ips')}</span>
-                <span class="info-value">{(peer.AllowedIPs || []).join(', ') || '—'}</span>
+                <span class="info-value">{(peer.allowed_ips || []).join(', ') || '—'}</span>
               </div>
               <div class="info-row">
                 <span class="info-label">{$t('tunnel.public_key')}</span>
-                <span class="info-value mono">{peer.PublicKey?.substring(0, 20)}…</span>
+                <span class="info-value mono">{peer.public_key?.substring(0, 20)}…</span>
               </div>
             {/each}
-            {#if detail.Interface?.DNS?.length}
+            {#if dnsInfo.servers.length}
               <div class="info-row">
-                <span class="info-label">DNS</span>
-                <span class="info-value">{detail.Interface.DNS.join(', ')}</span>
+                <span class="info-label">{$t('tunnel.dns_servers')}</span>
+                <span class="info-value">{dnsInfo.servers.join(', ')}</span>
+              </div>
+            {/if}
+            {#if dnsInfo.search.length}
+              <div class="info-row">
+                <span class="info-label">{$t('tunnel.dns_search')}</span>
+                <span class="info-value">{dnsInfo.search.join(', ')}</span>
+              </div>
+            {/if}
+            {#if dnsInfo.match.length}
+              <div class="info-row">
+                <span class="info-label">{$t('tunnel.dns_split')}</span>
+                <span class="info-value">{dnsInfo.match.join(', ')}</span>
+              </div>
+              <div class="info-row">
+                <span class="info-label"></span>
+                <span class="info-value dns-split-note">{$t('tunnel.dns_split_note')}</span>
               </div>
             {/if}
           </div>
@@ -1029,6 +1060,11 @@
     border-radius: 12px;
     overflow: hidden;
   }
+  .dns-split-note {
+    color: var(--text-muted);
+    font-size: 0.85em;
+  }
+
   .detail-info-card {
     border: 0;
     background: transparent;

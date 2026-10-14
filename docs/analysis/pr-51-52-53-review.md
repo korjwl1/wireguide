@@ -289,3 +289,20 @@ the three PRs or claim those runtime features are installed.
    keep current global DNS behavior for configs without routing domains.
 4. Add negated automation and manual overrides after fixing identity,
    downgrade handling and the distinction between user intent and repair.
+
+## Integration following adversarial reassessment
+
+All three features are suitable for integration with the corrections above.
+The wake counterexample establishes a change to recovery policy, not a measured
+physical sleep failure. Manual On must still allow transport repair.
+
+### Split DNS (#51)
+
+Integrated with per-domain resolver ownership, explicit unsupported-platform
+errors, mixed-tunnel firewall permits, and retained/retried cleanup journals.
+Split-only connections preserve ordinary system DNS. Diagnostics distinguish
+configuration checks from packet leak tests and report unavailable verification.
+Fresh race tests passed for helper, network, tunnel and diagnostics; vet, frontend
+build and Windows core build passed. Linux arm64 resolvectl command/rollback
+fixtures passed in an isolated container. Native resolver routing still needs
+target-machine validation.

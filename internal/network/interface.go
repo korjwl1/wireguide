@@ -1,6 +1,16 @@
 // Package network provides OS-specific IP, routing, and DNS configuration.
 package network
 
+import "errors"
+
+// ErrSplitDNSUnsupported rejects an explicit domain-routing request when
+// the platform cannot honor it. Connect must not silently use system DNS.
+var ErrSplitDNSUnsupported = errors.New("split DNS is not supported on this platform")
+
+type SplitDNSRemover interface {
+	RemoveSplitDNS(ifaceName string) error
+}
+
 // EndpointLoopChecker verifies that a peer's outer packets do not route
 // back through their own tunnel. A nonempty reason is positive evidence of
 // a loop; an error means the route could not be checked.

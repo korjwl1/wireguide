@@ -67,6 +67,11 @@ func (m *Manager) ClearPreModDNS() {
 // (issue #34 gap 4) — without this a helper upgrade while connected left
 // tunnel DNS behind until crash recovery ran.
 func (m *Manager) RestoreDNSBestEffort() {
+	// Split-DNS keys outlive the process (dynamic store), so sweep them
+	// whether or not a global snapshot was captured.
+	if err := cleanupStaleSplitDNS(); err != nil {
+		slog.Warn("RestoreDNSBestEffort: split DNS sweep failed", "error", err)
+	}
 	pre, captured := m.PreModDNSSnapshot()
 	if !captured {
 		return
@@ -109,7 +114,8 @@ func (m *Manager) allDNSServersLocked() []string {
 	seen := make(map[string]struct{})
 	var all []string
 	for _, e := range m.tunnels {
-		if e.state == domain.StateConnected && e.cfg != nil {
+		// Split-DNS tunnels own a supplemental resolver, not system DNS.
+		if e.state == domain.StateConnected && e.cfg != nil && !e.cfg.Interface.IsSplitDNS() {
 			for _, dns := range e.cfg.Interface.DNS {
 				if _, ok := seen[dns]; !ok {
 					seen[dns] = struct{}{}
