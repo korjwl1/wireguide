@@ -124,6 +124,10 @@ multi-tunnel retry and watchdog recovery fixes do not imply these features
 are present. Native macOS PF coexistence, Linux systemd-resolved and Windows
 full/split coexistence still require target-machine execution.
 
+The [review of PRs #51, #52 and #53](analysis/pr-51-52-53-review.md) records
+merge conflicts, product fit, behavioral counterexamples and an integration
+sequence against the current branch.
+
 ### Full-Tunnel Conflict Detection
 
 Only one full-tunnel (`0.0.0.0/0`) can be active at a time. `Connect()` rejects a new full-tunnel config if any existing connected tunnel is already routing all traffic, returning `ErrFullTunnelConflict`.
