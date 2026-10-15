@@ -58,29 +58,32 @@ Baseline copies reproduced the DNS/KS override, idle-lifetime and CLI failures;
 the corrected integrated tests are rerun before commit. The first review and
 follow-up review remain historical records, not claims about the final head.
 
-### Remaining follow-up findings
+### Subsequent follow-up corrections
 
-The second review also records lower-priority and inherited limitations. They
-are not represented as fixed by the N-1–N-5 changes:
+The lower-priority implementation findings were initially left unfinished.
+The [remaining-logic follow-up](remaining-logic-20261015.md) records their
+correction through **f5fc9f1**, including tests and verification limits:
 
-- LAN overlap skips lack a dedicated event; auto ownership is not persisted
-  across helper restart (N-6).
-- Windows platform rejection can occur after temporary KS suspension (P-1).
-- Signal fallback is best-effort; its normal cleanup budget may expire (P-2).
-- Scoped resolver badges, IPv6 zone parsing and Linux systemd-resolved stub
-  attribution still need diagnostic improvements (D-1/D-2).
-- Backup error/replacement behavior and GUI visibility remain limited (L4-x).
-- PF live token membership, transient status reads and repair backoff remain
-  B-6/B-7/B-5; a cached lease with PF running is not independently proven to
-  be a live reference. B-1's periodic wiring gap is covered by the earlier
-  native test that stops PF and observes the real helper loop reacquire it;
-  that test's historical scope is recorded below.
+| ID | Current implementation |
+|---|---|
+| N-6 | Automatic ownership is journaled with wanted intent, restored before LAN checks, retained during pending deferral and removed on withdrawal/manual ownership. LAN deferrals emit a deduplicated event and localized GUI explanation. |
+| P-1 | Helper runs read-only platform DNS preflight before relaxing the kill switch. A Windows regression asserts no disable or intent mutation for unsupported split DNS. |
+| P-2 | Normal cleanup keeps the remaining signal grace even if fallback finishes early. Forced exits report failure; completed cleanup retains clean exit behavior. External calls can still exhaust the bounded budget. |
+| D-1 | Scoped IPv6 zone addresses survive parsing; resolver scope and individual observed-leak flags reach the GUI, which no longer marks every non-VPN supplemental/scoped row as a leak. |
+| D-2 | Linux stub discovery uses structured systemd-resolved DNS/domain/default-route properties to attribute eligible upstreams. An unknown local proxy or failed inspection returns an incomplete check. |
+| L4-x | Unchanged automation avoids backup writes; new post-downgrade rules archive the old recovery copy before replacement. Settings exposes backup errors and recovery copies without activating them. |
+| B-6/B-7 | Cached PF references are checked against the exact token column of `pfctl -s References`. Query failure preserves the journal; another owner's running PF is not accepted as our live lease. |
+| B-5/B-1 | Failed repair has bounded backoff. The production tick body is extracted and tested through its real repair call; the earlier native PF stop test remains historical native evidence. |
+
 - Windows B-8/B-9 were resolved by the subsequent
   [code-quality review](code-quality-review-20261015.md): pinned DNS matches
   LUID; failed tunnel/endpoint deletes abort and retain IDs. Kill-switch Off
   also keeps independent protection in the same session. Windows CI at
   `1a78e39` covers the added filter lifecycle tests.
 - Old IPC 1.2 clients cannot observe new headless pending intent (C-1).
+  The bundled current CLI uses 1.3 metadata. Updating the helper cannot
+  change an already-distributed old CLI's decision to exit before sending
+  a stop request; use the CLI supplied with the installed version.
 
 P-3's startup restore lifetime gap is covered by the added restore lease and
 `TestRecovery_StartupRestoreOwnsLifetimeBeforePendingRegistration`. Native
@@ -113,10 +116,12 @@ ran on that exact SHA and passed Windows, macOS and Linux, including native
 Linux build/DEB packaging. Linux/macOS ran the full race suite; Windows ran
 the native suite without race. All jobs also ran vet.
 
-The records added after this CI change documentation only. The corrections
-are committed with issue references (#44, #48 and #12) and pushed to
-`fix/windows-single-instance`. Low-priority follow-ups above and native OS
-checks below are still open. No main merge or original PR closure occurred.
+At that independent-review cutoff the following records changed documentation
+only. Subsequent code-quality and remaining-logic corrections are recorded
+separately above. The corrections are committed with issue references (#44, #48 and #12) and pushed to
+`fix/windows-single-instance`. The later implementation corrections are
+listed above; native OS checks below retain their stated scope.
+No main merge or original PR closure occurred.
 
 ## macOS native follow-up
 
@@ -128,7 +133,7 @@ and normal DNS/route/PF cleanup. The fixtures invoke production packages with
 controlled local peers, not a mocked client network stack. They do not cover
 remote full-tunnel routing or the complete GUI installation flow.
 Actual sleep/wake was explicitly deferred by the user. Windows native checks,
-physical network changes and the listed lower-priority findings remain open.
+physical network changes and the compatibility limits above remain open.
 
 ## Verification limits
 
