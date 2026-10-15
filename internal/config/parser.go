@@ -5,8 +5,11 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/korjwl1/wireguide/internal/domain"
 )
 
 // MaxConfigSize is the hard cap on a single .conf file. A legitimate
@@ -65,6 +68,9 @@ func Parse(content string) (*WireGuardConfig, error) {
 		if strings.ContainsRune(line, 0) {
 			return nil, fmt.Errorf("line %d: NUL byte in value", lineNum)
 		}
+
+		line, _, _ = strings.Cut(line, "#")
+		line = strings.TrimSpace(line)
 
 		// Skip empty lines and comments
 		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, ";") {
@@ -162,6 +168,7 @@ func parseInterfaceKey(iface *InterfaceConfig, key, value string, lineNum int) e
 			iface.ExtraKeys = make(map[string]string)
 		}
 		iface.ExtraKeys[key] = value
+		iface.ExtraEntries = append(iface.ExtraEntries, domain.ConfigKey{Key: key, Value: value})
 	}
 	return nil
 }
@@ -194,6 +201,7 @@ func parsePeerKey(peer *PeerConfig, key, value string, lineNum int) error {
 			peer.ExtraKeys = make(map[string]string)
 		}
 		peer.ExtraKeys[key] = value
+		peer.ExtraEntries = append(peer.ExtraEntries, domain.ConfigKey{Key: key, Value: value})
 	}
 	return nil
 }
@@ -228,9 +236,7 @@ func Serialize(cfg *WireGuardConfig) string {
 	writeScriptLines(&b, "PostUp", cfg.Interface.PostUp)
 	writeScriptLines(&b, "PreDown", cfg.Interface.PreDown)
 	writeScriptLines(&b, "PostDown", cfg.Interface.PostDown)
-	for k, v := range cfg.Interface.ExtraKeys {
-		b.WriteString(k + " = " + v + "\n")
-	}
+	writeExtraKeys(&b, cfg.Interface.ExtraKeys, cfg.Interface.ExtraEntries)
 
 	for _, peer := range cfg.Peers {
 		b.WriteString("\n[Peer]\n")
@@ -247,9 +253,7 @@ func Serialize(cfg *WireGuardConfig) string {
 		if peer.PersistentKeepalive > 0 {
 			b.WriteString("PersistentKeepalive = " + strconv.Itoa(peer.PersistentKeepalive) + "\n")
 		}
-		for k, v := range peer.ExtraKeys {
-			b.WriteString(k + " = " + v + "\n")
-		}
+		writeExtraKeys(&b, peer.ExtraKeys, peer.ExtraEntries)
 	}
 
 	return b.String()
@@ -291,4 +295,23 @@ func splitAndTrim(s string) []string {
 		}
 	}
 	return result
+}
+
+// writeExtraKeys keeps exported configs stable across runs.
+func writeExtraKeys(b *strings.Builder, keys map[string]string, entries []domain.ConfigKey) {
+	seen := map[string]bool{}
+	for _, entry := range entries {
+		b.WriteString(entry.Key + " = " + entry.Value + "\n")
+		seen[entry.Key] = true
+	}
+	names := make([]string, 0, len(keys))
+	for key := range keys {
+		if !seen[key] {
+			names = append(names, key)
+		}
+	}
+	sort.Strings(names)
+	for _, key := range names {
+		b.WriteString(key + " = " + keys[key] + "\n")
+	}
 }

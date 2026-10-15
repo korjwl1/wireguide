@@ -5,7 +5,6 @@ import (
 	"bytes"
 	"fmt"
 	"io"
-	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -19,13 +18,22 @@ type ZipImportResult struct {
 
 // zipUniqueName returns a tunnel name that doesn't conflict with existing ones.
 func (s *TunnelService) zipUniqueName(base string) string {
-	if !s.tunnelStore.Exists(base) {
+	names, _ := s.tunnelStore.List()
+	exists := func(name string) bool {
+		for _, existing := range names {
+			if strings.EqualFold(existing, name) {
+				return true
+			}
+		}
+		return false
+	}
+	if !exists(base) {
 		return base
 	}
 	for i := 1; i < 1000; i++ {
 		suffix := fmt.Sprintf("-%d", i)
 		candidate := base[:min(len(base), 64-len(suffix))] + suffix
-		if !s.tunnelStore.Exists(candidate) {
+		if !exists(candidate) {
 			return candidate
 		}
 	}
@@ -36,7 +44,7 @@ func (s *TunnelService) zipUniqueName(base string) string {
 // ImportZip extracts all .conf files from a zip archive and imports each one.
 // Returns per-file results; an error is only returned for zip-level failures.
 func (s *TunnelService) ImportZip(path string) ([]ZipImportResult, error) {
-	f, err := os.Open(path)
+	f, err := openImportFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("opening zip: %w", err)
 	}

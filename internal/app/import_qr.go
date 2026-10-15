@@ -7,7 +7,6 @@ import (
 	_ "image/jpeg" // Register supported QR image decoders.
 	_ "image/png"
 	"io"
-	"os"
 	"strings"
 
 	"github.com/korjwl1/wireguide/internal/config"
@@ -96,7 +95,7 @@ func (s *TunnelService) ReadFile(path string) (string, error) {
 // Read through a limit even after Stat: the file can grow between the two.
 // Reject devices and directories rather than consuming an unbounded stream.
 func readImportFile(path string, limit int64) ([]byte, error) {
-	f, err := os.Open(path)
+	f, err := openImportFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("reading %s: %w", path, err)
 	}
