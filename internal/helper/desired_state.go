@@ -303,6 +303,7 @@ func (h *Helper) pendingDesiredCfgs() map[string]*domain.WireGuardConfig {
 		h.mu.Unlock()
 		// Rewrite so the same failures aren't re-logged on every trigger.
 		h.persistDesiredState()
+		h.maybeArmShutdownAfterTeardown("pending configs removed, no GUI attached")
 	}
 	return cfgs
 }
@@ -317,6 +318,7 @@ func (h *Helper) withdrawPendingDesired(name string) {
 	if ok {
 		slog.Info("automation: rule says off, withdrawing pending restore", "tunnel", name)
 		h.persistDesiredState()
+		h.maybeArmShutdownAfterTeardown("pending restore withdrawn, no GUI attached")
 	}
 }
 
@@ -354,7 +356,7 @@ var restoreConnect = func(h *Helper, cfg *domain.WireGuardConfig) error {
 	if err := h.doConnectHeld(cfg); err != nil {
 		return err
 	}
-	h.applyPostConnectFirewall(cfg)
+	h.applyConnectedFirewall(cfg, false)
 	h.server.Broadcast(ipc.EventAutoConnect, ipc.AutoConnectPayload{TunnelName: cfg.Name})
 	return nil
 }
@@ -400,6 +402,14 @@ var systemBootTimeNow = systemBootTime
 // desired-state rewrite. The helper only just started, so the blocking
 // window is a fresh session's first seconds.
 func (h *Helper) restoreDesiredTunnels() {
+	h.mu.Lock()
+	h.restoreInProgress = true
+	h.mu.Unlock()
+	defer func() {
+		h.mu.Lock()
+		h.restoreInProgress = false
+		h.mu.Unlock()
+	}()
 	intent := loadDesiredIntent(h.dataDir)
 	names := make([]string, 0, len(intent.Tunnels))
 	for _, name := range intent.Tunnels {
@@ -478,21 +488,22 @@ func (h *Helper) restoreDesiredTunnels() {
 	h.connectMu.Lock()
 	defer h.connectMu.Unlock()
 
-	// DNS protection was on before the crash: applyPostConnectFirewall
-	// installs it for each tunnel restored below (issue #48).
-	if intent.DNSProtection {
-		h.mu.Lock()
+	// The user settings and any live update are authoritative. The crash
+	// journal is only a fallback when neither is available.
+	h.mu.Lock()
+	if !h.dnsIntentKnown && intent.DNSProtection {
 		h.dnsProtectionWanted = true
-		h.mu.Unlock()
 	}
 
 	// Kill switch first: the user had the blockade up, and the crash
 	// recovery above removed it. doConnectHeld handles connecting under it.
-	if intent.KillSwitch {
-		h.mu.Lock()
+	restoreKillSwitch := intent.KillSwitch && !h.ksIntentKnown
+	if restoreKillSwitch {
 		h.killSwitchWanted = true
 		h.ksIntentKnown = true
-		h.mu.Unlock()
+	}
+	h.mu.Unlock()
+	if restoreKillSwitch {
 		if err := h.reconcileKillSwitch(true, time.Now()); err != nil {
 			slog.Error("desired-state: restore kill switch failed", "error", err)
 		}

@@ -199,7 +199,7 @@ func newPendingTestHelper(t *testing.T, names ...string) *Helper {
 	t.Cleanup(func() { ln.Close() })
 	// An empty Manager never touches the network: AllStatuses and
 	// DisconnectTunnel only consult its in-memory tunnel map.
-	return &Helper{
+	h := &Helper{
 		server:          ipc.NewServer(ln),
 		dataDir:         t.TempDir(),
 		manager:         tunnel.NewManager(t.TempDir()),
@@ -209,6 +209,8 @@ func newPendingTestHelper(t *testing.T, names ...string) *Helper {
 		userTunnelStore: store,
 		restoreOnStart:  true,
 	}
+	t.Cleanup(h.cancelShutdownTimer)
+	return h
 }
 
 // stubRestoreConnect fails the listed tunnels and records the rest as
@@ -285,9 +287,10 @@ func TestHandleDisconnect_WithdrawsPendingTunnel(t *testing.T) {
 	h.persistDesiredState()
 
 	params, _ := json.Marshal(ipc.DisconnectRequest{TunnelName: "alpha"})
-	// alpha isn't up, so the teardown itself reports not-connected; the
-	// pending withdrawal must still reach disk.
-	_, _ = h.handleDisconnect(params)
+	// Withdrawing a wanted pending tunnel is a successful disconnect.
+	if _, err := h.handleDisconnect(params); err != nil {
+		t.Fatal(err)
+	}
 	assertDesiredState(t, h, "bravo")
 
 	_, _ = h.handleDisconnect(nil)

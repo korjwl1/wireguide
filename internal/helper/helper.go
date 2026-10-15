@@ -195,6 +195,9 @@ type Helper struct {
 	guiSeenCh   chan struct{}
 	guiSeenOnce sync.Once
 	armedGrace  time.Duration
+	// Startup restore owns a lifetime lease until its first attempts finish.
+	// Guarded by mu; connect rollback and pending registration are separate.
+	restoreInProgress bool
 
 	manager  *tunnel.Manager
 	firewall firewall.FirewallManager
@@ -249,6 +252,9 @@ type Helper struct {
 	// themselves are derived from it plus every connected tunnel by
 	// reapplyDNSProtection (issue #48). Guarded by mu.
 	dnsProtectionWanted bool
+	// A loaded user setting or live IPC update takes precedence over a
+	// potentially older crash journal. Guarded by mu.
+	dnsIntentKnown bool
 	// dnsAutoOff records an explicit "off" from the user while a Windows
 	// full tunnel had DNS protection on automatically: it stays off until
 	// the next full-tunnel connect, as before issue #48. Guarded by mu.
@@ -514,6 +520,9 @@ func Run(addr string, ownerUID int, ownerSID, dataDir string, restoreDesired boo
 	// a GUI connection must not run forever (see startupGrace). The
 	// first OnConnect cancels it; the fire-time active-tunnel check
 	// keeps a crash-recovered tunnel alive even with no GUI.
+	h.mu.Lock()
+	h.restoreInProgress = true
+	h.mu.Unlock()
 	h.armStartupGrace()
 
 	// Start event emitter (diff loop)
@@ -904,6 +913,11 @@ func (h *Helper) armShutdownTimer(grace time.Duration, reason string) {
 
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	select {
+	case <-h.done:
+		return
+	default:
+	}
 
 	// A tunnel waiting on a restore retry is still wanted (issue #44): exit
 	// now and nothing retries it until the GUI next starts the helper.
@@ -935,27 +949,26 @@ func (h *Helper) armShutdownTimer(grace time.Duration, reason string) {
 		// so re-check under the lock that we are still the current timer —
 		// otherwise a cancel racing with the fire still shuts the helper
 		// down right after a GUI attached.
-		h.mu.Lock()
-		current := h.shutdownTimer
-		pending := len(h.pendingDesired) + len(h.activeCfgs)
-		h.mu.Unlock()
-		if current != t {
-			return
-		}
-		if pending > 0 {
-			slog.Info("shutdown timer fired but a restore is pending — aborting shutdown",
-				"pending", pending)
-			return
-		}
 		// Double-check at fire time: a tunnel may have been activated between
 		// timer start and fire (e.g., reconnect monitor brought it back up).
+		activeNow := ""
 		if h.manager != nil {
-			if tn := h.manager.ActiveTunnel(); tn != "" {
-				slog.Info("shutdown timer fired but tunnel is now active — aborting shutdown",
-					"active_tunnel", tn)
-				return
-			}
+			activeNow = h.manager.ActiveTunnel()
 		}
+		h.mu.Lock()
+		if h.shutdownTimer != t {
+			h.mu.Unlock()
+			return
+		}
+		pending := len(h.pendingDesired) + len(h.activeCfgs)
+		if pending > 0 || activeNow != "" || h.restoreInProgress {
+			// Keep a future idle check when a connect temporarily owns the
+			// timer. A later failure/withdrawal must not strand the helper.
+			t.Reset(grace)
+			h.mu.Unlock()
+			return
+		}
+		h.mu.Unlock()
 		slog.Info("no reconnect within grace window, shutting down")
 		h.shutdown()
 	})
@@ -971,7 +984,7 @@ func (h *Helper) armShutdownTimer(grace time.Duration, reason string) {
 // makes this a no-op while any tunnel is still up, and a GUI that IS attached
 // keeps its normal lifecycle (its later disconnect arms the window).
 func (h *Helper) maybeArmShutdownAfterTeardown(reason string) {
-	if h.server.HasControlConn() {
+	if h.server == nil || h.server.HasControlConn() {
 		return
 	}
 	h.armShutdownTimer(shutdownGrace, reason)
@@ -1149,6 +1162,8 @@ func (h *Helper) restoreUserSettings() {
 	if settings, err := h.loadUserSettings(); err == nil {
 		h.mu.Lock()
 		h.dnsProtectionWanted = settings.DNSProtection
+		h.dnsIntentKnown = true
+		h.dnsAutoOff = !settings.DNSProtection
 		h.mu.Unlock()
 		h.monitor.SetHealthCheck(settings.HealthCheck)
 		if settings.PinInterface {

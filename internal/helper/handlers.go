@@ -264,6 +264,7 @@ func (h *Helper) doConnectHeld(cfg *domain.WireGuardConfig) error {
 			h.activeCfgs[cfg.Name] = prev
 		}
 		h.mu.Unlock()
+		h.maybeArmShutdownAfterTeardown("connect failed, no GUI attached")
 		if restoreKillSwitch {
 			if restoreErr := h.reconcileKillSwitch(true, time.Now()); restoreErr != nil {
 				return fmt.Errorf("connect: %v; restore kill switch: %w", err, restoreErr)
@@ -435,10 +436,16 @@ func (h *Helper) handleConnect(params json.RawMessage) (interface{}, error) {
 // already-enabled kill switch never learned its endpoints (issue #12).
 // Best-effort: logs and continues on error, exactly like manual connect.
 func (h *Helper) applyPostConnectFirewall(cfg *domain.WireGuardConfig) {
+	h.applyConnectedFirewall(cfg, true)
+}
+
+// Recovery repairs transport without treating it as a new user request.
+// In particular, it must preserve a DNS Off received during the restore.
+func (h *Helper) applyConnectedFirewall(cfg *domain.WireGuardConfig, newConnect bool) {
 	// DNS protection covers every connected tunnel, this one included
 	// (issue #48); on Windows a full tunnel also turns it on by itself,
 	// overriding an earlier explicit "off" as it always did.
-	if cfg.IsFullTunnel() {
+	if newConnect && cfg.IsFullTunnel() {
 		h.mu.Lock()
 		h.dnsAutoOff = false
 		h.mu.Unlock()
@@ -547,7 +554,7 @@ func (h *Helper) handleDisconnect(params json.RawMessage) (interface{}, error) {
 			_, cached := h.activeCfgs[tunnelName]
 			h.mu.Unlock()
 			var te *tunnel.TunnelError
-			if !cached || !errors.As(err, &te) || te.Kind != tunnel.ErrNotConnected {
+			if (!cached && !withdrew) || !errors.As(err, &te) || te.Kind != tunnel.ErrNotConnected {
 				return nil, err
 			}
 			slog.Info("disconnect: tunnel already down (retry pending); dropping it", "tunnel", tunnelName)
@@ -701,6 +708,7 @@ func (h *Helper) handleSetDNSProtection(params json.RawMessage) (interface{}, er
 	// the next connect installs the rules.
 	h.mu.Lock()
 	h.dnsProtectionWanted = req.Enabled
+	h.dnsIntentKnown = true
 	h.dnsAutoOff = !req.Enabled
 	h.mu.Unlock()
 	h.persistDesiredState()
