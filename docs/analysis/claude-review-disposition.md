@@ -81,6 +81,22 @@ P-3's startup restore lifetime gap is covered by the added restore lease and
 `TestRecovery_StartupRestoreOwnsLifetimeBeforePendingRegistration`. Native
 packet-path and OS lifecycle validation below remains separate from CI.
 
+## Final targeted review of 6dcc6d5
+
+The [targeted review](claude-final-review-20261015.md) reproduced two
+regressions in the N corrections and one remaining settings contract gap.
+They were corrected with the reproductions moved into repository tests:
+
+| ID | Correction / evidence |
+|---|---|
+| F-1 | A default DNS false no longer sets the automatic-DNS Off latch. Explicit Off is stored separately as `dns_auto_off` in the crash journal. Live updates and new full connects veto stale replay; a new full connect also persists clearing that latch. Tests cover Windows auto protection, journal Off, live On, and new-connect versus snapshotted Off. |
+| F-2 | A completely empty unknown manual latch adopts its first settled positive evidence even when SSID never becomes available. Later MAC/subnet moves release it. Tests cover offline Windows wired and permission-denied Wi-Fi; partial known evidence remains conservative for A→B→A. |
+| F-3 | Only firewall keys actually present in a readable config are authoritative. Missing files or missing keys retain journal fallback. Config KS On is enforced before restore connect; config KS Off vetoes journal On. `firewall_settings_recovery_test.go` covers all directions. |
+| D3 | Only appended pending rows say waiting to reconnect; active transitions say connecting. The real IPC status test covers text and JSON with an active transition and a pending sibling. |
+
+The earlier CI success at 6dcc6d5 did not cover these scenarios. Its report
+and findings remain preserved as historical evidence, not a final pass claim.
+
 ## Verification limits
 
 Local full race suite, vet and frontend build are rerun on the integrated
