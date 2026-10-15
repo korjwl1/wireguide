@@ -92,12 +92,7 @@ func NewStateStore(dir string) (*StateStore, error) {
 func (s *StateStore) Get() State {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	// Copy the slice so the caller cannot mutate our internal one.
-	out := s.state
-	if len(s.state.DismissedVersions) > 0 {
-		out.DismissedVersions = append([]string(nil), s.state.DismissedVersions...)
-	}
-	return out
+	return s.state.clone()
 }
 
 // Update applies the given function to the state under the lock and
@@ -106,8 +101,7 @@ func (s *StateStore) Get() State {
 func (s *StateStore) Update(fn func(*State)) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	previous := s.state
-	previous.DismissedVersions = append([]string(nil), previous.DismissedVersions...)
+	previous := s.state.clone()
 	fn(&s.state)
 	if err := s.save(); err != nil {
 		s.state = previous
@@ -176,4 +170,10 @@ func (s *StateStore) LastCheckTime() time.Time {
 		return time.Time{}
 	}
 	return time.Unix(st.LastCheckUnix, 0)
+}
+
+// clone owns every reference field; extend it when adding slices or maps to State.
+func (state State) clone() State {
+	state.DismissedVersions = append([]string(nil), state.DismissedVersions...)
+	return state
 }
