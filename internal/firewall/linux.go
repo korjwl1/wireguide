@@ -175,7 +175,7 @@ table inet %s {
 	if replace {
 		// nft commits a complete batch atomically, retaining the old blockade
 		// if parsing or installation of its replacement fails.
-		rules = "delete table inet " + nftTable + "\n" + rules
+		rules = "add table inet " + nftTable + "\ndelete table inet " + nftTable + "\n" + rules
 	}
 	if err := nftApply(rules); err != nil {
 		return err

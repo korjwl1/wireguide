@@ -4,6 +4,8 @@ package firewall
 
 import (
 	"errors"
+	"os"
+	"os/exec"
 	"strings"
 	"testing"
 )
@@ -28,7 +30,7 @@ func TestLinuxKillSwitchReplacementIsOneTransactionAndFailureKeepsModel(t *testi
 	if err := f.AddKillSwitchTunnel("wg1", nil, nil); err != nil {
 		t.Fatal(err)
 	}
-	if len(batches) != 2 || !strings.HasPrefix(batches[1], "delete table inet wireguide\n") {
+	if len(batches) != 2 || !strings.HasPrefix(batches[1], "add table inet wireguide\ndelete table inet wireguide\n") {
 		t.Fatalf("replacement not atomic: %v", batches)
 	}
 	fail = true
@@ -69,5 +71,30 @@ func TestLinuxRecoveryRemovesStaleKillSwitch(t *testing.T) {
 	f := NewPlatformFirewall().(*LinuxFirewall)
 	if !f.RecoverFromCrash() || !deleted {
 		t.Fatal("startup recovery left stale kill switch")
+	}
+}
+
+// Executed only inside CI's isolated network namespace, with no host rules.
+func TestLinuxKillSwitchInKernel(t *testing.T) {
+	if os.Getenv("WIREGUIDE_TEST_NFT") != "1" {
+		t.Skip("requires isolated nftables namespace")
+	}
+	firewall := NewPlatformFirewall().(*LinuxFirewall)
+	t.Cleanup(func() { _ = firewall.Cleanup() })
+	if err := firewall.EnableKillSwitch("wg0", nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if output, err := exec.Command("nft", "delete", "table", "inet", "wireguide").CombinedOutput(); err != nil {
+		t.Fatalf("external flush: %v %s", err, output)
+	}
+	if err := firewall.AddKillSwitchTunnel("wg1", nil, nil); err != nil {
+		t.Fatalf("replacement after external flush: %v", err)
+	}
+	if err := firewall.RemoveKillSwitchTunnel("wg0"); err != nil {
+		t.Fatal(err)
+	}
+	output, err := exec.Command("nft", "list", "table", "inet", "wireguide").CombinedOutput()
+	if err != nil || !strings.Contains(string(output), "wg1") || strings.Contains(string(output), "wg0") {
+		t.Fatalf("kernel replacement: %v %s", err, output)
 	}
 }

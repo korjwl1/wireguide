@@ -31,7 +31,7 @@ jobs:
       - name: Install Linux build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev xvfb
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev xvfb nftables
 
       - name: Install pinned build tools
         run: |
@@ -60,6 +60,11 @@ jobs:
         run: |
           go test -race ./...
           go vet ./...
+
+      - name: Isolated nftables recovery
+        run: |
+          go test -c -o "$RUNNER_TEMP/wireguide-firewall.test" ./internal/firewall
+          sudo unshare --net env WIREGUIDE_TEST_NFT=1 "$RUNNER_TEMP/wireguide-firewall.test" -test.run 'InKernel$' -test.v
 
       - name: Build native Linux binary
         run: task linux:build ARCH=amd64
