@@ -288,10 +288,27 @@ func cmdStatus(args []string) int {
 	if len(rows) == 0 {
 		rows = []domain.ConnectionStatus{st}
 	}
+	seen := make(map[string]bool, len(rows)+len(active.Names))
+	for _, name := range active.Names {
+		seen[name] = true
+	}
+	for _, row := range rows {
+		seen[row.TunnelName] = true
+	}
+	for _, name := range ping.WantedTunnels {
+		if !seen[name] {
+			rows = append(rows, domain.ConnectionStatus{TunnelName: name, State: domain.StateConnecting})
+			seen[name] = true
+		}
+	}
 	if jsonOut {
 		return printJSON(rows)
 	}
 	for _, r := range rows {
+		if r.State == domain.StateConnecting {
+			fmt.Printf("○ %s  waiting to reconnect\n", r.TunnelName)
+			continue
+		}
 		hs := r.LastHandshake
 		if hs == "" {
 			hs = "—"
