@@ -20,7 +20,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.25.12'
+          go-version: '1.26.9'
 
       - uses: actions/setup-node@v4
         with:
@@ -45,6 +45,7 @@ jobs:
         working-directory: frontend
         run: |
           npm ci
+          npm test
           npm run build
 
       - name: Test and vet
@@ -90,7 +91,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.25.12'
+          go-version: '1.26.9'
 
       - uses: actions/setup-node@v4
         with:
@@ -102,6 +103,7 @@ jobs:
         working-directory: frontend
         run: |
           npm ci
+          npm test
           npm run build
 
       - name: Test and vet
@@ -117,7 +119,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.25.12'
+          go-version: '1.26.9'
 
       - uses: actions/setup-node@v4
         with:
@@ -130,6 +132,9 @@ jobs:
         shell: pwsh
         run: |
           npm ci
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm test
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           npm run build
 
       # No -race on Windows: the race detector needs cgo + a C toolchain,
