@@ -16,7 +16,12 @@ func testSocketPath(t *testing.T) string {
 	// Listen deliberately rejects sockets placed directly in a directory
 	// owned by another UID. /tmp is normally root-owned on Linux, so give
 	// each test a private, test-user-owned parent directory instead.
-	return filepath.Join(t.TempDir(), "wireguide.sock")
+	dir, err := os.MkdirTemp("", "wgi-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	return filepath.Join(dir, "s.sock")
 }
 
 // registerTestPing registers a Helper.Ping handler that returns the current

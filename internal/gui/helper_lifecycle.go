@@ -96,13 +96,15 @@ func ensureHelperWith(ctx context.Context, args elevate.Args, spawn func(context
 			// Without (2), a plist-only change would never reach existing users
 			// because version-matched helpers are otherwise reused as-is.
 			plistDrifted := plistNeedsReinstall(args)
-			if helperAppVersion == guiVersion && !plistDrifted {
+			if helperAppVersion == guiVersion && !plistDrifted && ipc.MinorOf(resp.Version) >= ipc.ProtocolMinor {
 				slog.Info("connected to existing helper", "version", helperAppVersion)
 				return client, nil
 			}
 			if plistDrifted {
 				slog.Warn("LaunchDaemon plist drift detected, forcing reinstall",
 					"helper", helperAppVersion, "gui", guiVersion)
+			} else if ipc.MinorOf(resp.Version) < ipc.ProtocolMinor {
+				slog.Warn("helper protocol update required", "helper", resp.Version, "gui", ipc.ProtocolVersion)
 			} else {
 				slog.Warn("helper version mismatch, upgrading",
 					"helper", helperAppVersion, "gui", guiVersion)
@@ -227,7 +229,7 @@ func spawnAndConnectHelper(ctx context.Context, args elevate.Args, spawn func(co
 		var resp ipc.PingResponse
 		if err := client.CallWithContext(ctx, ipc.MethodPing, nil, &resp); err == nil {
 			// After force reinstall, verify we connected to the NEW helper.
-			if args.ForceReinstall && resp.AppVersion != "" && resp.AppVersion != update.CurrentVersion() {
+			if ipc.MinorOf(resp.Version) < ipc.ProtocolMinor || (args.ForceReinstall && resp.AppVersion != "" && resp.AppVersion != update.CurrentVersion()) {
 				slog.Debug("polling: still old helper version", "got", resp.AppVersion)
 				client.Close()
 				select {
@@ -299,6 +301,10 @@ func startHelperHealthMonitor(app *application.App, clients *ipc.ClientHolder, d
 			if !alive && clients.HasInflight() {
 				slog.Debug("health ping timed out but RPC in-flight, skipping")
 				continue
+			}
+
+			if alive && wasAlive {
+				bridge.Resubscribe()
 			}
 
 			switch {
@@ -420,9 +426,9 @@ func reconnectHelper(ctx context.Context, addr string) (*ipc.Client, error) {
 		client.Close()
 		return nil, err
 	}
-	if ping.AppVersion != update.CurrentVersion() {
+	if ping.AppVersion != update.CurrentVersion() || ipc.MinorOf(ping.Version) < ipc.ProtocolMinor {
 		client.Close()
-		return nil, fmt.Errorf("helper version %q does not match app %q; reopen WireGuide to update it", ping.AppVersion, update.CurrentVersion())
+		return nil, fmt.Errorf("helper version %q (IPC %s) is incompatible with app %q (IPC %s); reopen WireGuide to update it", ping.AppVersion, ping.Version, update.CurrentVersion(), ipc.ProtocolVersion)
 	}
 	return client, nil
 }

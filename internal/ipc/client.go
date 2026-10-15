@@ -36,11 +36,10 @@ type Client struct {
 
 	nextID uint64
 
-	// eventMu guards both eventConn and onEvent so that Subscribe (writer),
-	// eventLoop (reader), and Close don't race on the event connection.
-	eventMu   sync.Mutex
-	eventConn net.Conn
-	onEvent   EventHandler
+	// Event stream setup and reads have separate lifetimes from control RPCs.
+	subscribeGate chan struct{}
+	eventMu       sync.Mutex
+	events        *eventSubscription
 
 	// Pending requests waiting for responses
 	pendingMu sync.Mutex
@@ -109,11 +108,12 @@ func newClient(ctx context.Context, addr string, transient bool) (*Client, error
 	}
 
 	c := &Client{
-		addr:        addr,
-		controlGate: make(chan struct{}, 1),
-		controlConn: conn,
-		pending:     make(map[uint64]chan *Response),
-		closed:      make(chan struct{}),
+		addr:          addr,
+		controlGate:   make(chan struct{}, 1),
+		subscribeGate: make(chan struct{}, 1),
+		controlConn:   conn,
+		pending:       make(map[uint64]chan *Response),
+		closed:        make(chan struct{}),
 		// Must be set before the initial Ping below: that Ping is the very
 		// request the server inspects to decide whether this connection is
 		// a control connection.
@@ -150,11 +150,11 @@ func (c *Client) Close() error {
 			c.controlConn.Close()
 		}
 		c.eventMu.Lock()
-		ec := c.eventConn
-		c.eventConn = nil
+		sub := c.events
+		c.events = nil
 		c.eventMu.Unlock()
-		if ec != nil {
-			ec.Close()
+		if sub != nil {
+			sub.conn.Close()
 		}
 	})
 	return nil
@@ -269,41 +269,6 @@ func (c *Client) writeRequest(ctx context.Context, req *Request) error {
 	return nil
 }
 
-// Subscribe opens a second connection and subscribes to events.
-// The handler is called for each event notification received.
-func (c *Client) Subscribe(handler EventHandler) error {
-	conn, err := Dial(c.addr)
-	if err != nil {
-		return fmt.Errorf("dial event conn: %w", err)
-	}
-
-	// Send subscribe request (use ID=1 on event conn)
-	req, _ := NewRequest(1, MethodSubscribe, nil)
-	if err := WriteFrame(conn, req); err != nil {
-		conn.Close()
-		return err
-	}
-
-	// Read ack
-	var resp Response
-	if err := ReadFrame(conn, &resp); err != nil {
-		conn.Close()
-		return err
-	}
-	if resp.Error != nil {
-		conn.Close()
-		return resp.Error
-	}
-
-	c.eventMu.Lock()
-	c.eventConn = conn
-	c.onEvent = handler
-	c.eventMu.Unlock()
-
-	go c.eventLoop()
-	return nil
-}
-
 func (c *Client) readLoop() {
 	var exitErr error
 	defer func() {
@@ -338,32 +303,6 @@ func (c *Client) readLoop() {
 			default:
 				// Receiver gave up (timeout); drop
 			}
-		}
-	}
-}
-
-func (c *Client) eventLoop() {
-	c.eventMu.Lock()
-	conn := c.eventConn
-	c.eventMu.Unlock()
-	if conn == nil {
-		return
-	}
-
-	for {
-		data, err := ReadFrameRaw(conn)
-		if err != nil {
-			return
-		}
-		var notif Request
-		if err := json.Unmarshal(data, &notif); err != nil {
-			continue
-		}
-		c.eventMu.Lock()
-		handler := c.onEvent
-		c.eventMu.Unlock()
-		if handler != nil {
-			handler(notif.Method, notif.Params)
 		}
 	}
 }
