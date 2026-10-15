@@ -1,5 +1,6 @@
 # 코드 구조·안정성·성능·보안 검토 — 2026-10-15
 
+> 최종 확인(2026-10-16): 기능·안내 코드 219d7a5의 Windows/macOS/Linux CI가 모두 통과했다. 프런트엔드 15개 테스트와 Chrome 반례 재검증, Claude 후속 검토도 완료했다. 재연결 중 방화벽 일시 해제는 기존 정책으로 남기고 노출 구간을 UI·README에 명시했다.
 검토 시작: `1ae75d5`, 브랜치: `fix/windows-single-instance`.
 첫 검토의 최종 기능 변경 검증 대상: `ef31b4f`.
 이후 [미완료 로직 후속 작업](remaining-logic-20261015.md)은 `f5fc9f1`까지
@@ -154,3 +155,199 @@ IPC는 지정한 로컬 사용자에게 VPN 작업을 허용하는 모델이다.
 
 커밋마다 관련 이슈 번호를 달아 같은 브랜치에 push했다. main 병합,
 기존 PR 닫기, 릴리스 발행은 이 검토의 결과에 포함되지 않는다.
+
+## 전체 재검토 후속 — `fc1c073` → `576ae84`
+
+사용자의 추가 코드 리뷰 요청으로 패키지 의존 관계, 최근 변경의 수명·동시성,
+저장소 변경, helper의 연결 전이, GUI 이력, 업데이트 캐시와 프런트엔드의
+이벤트·버퍼 수명을 다시 점검했다. 이전에 확인한 전체 프로그램 구조를
+바탕으로 오류가 재현되는 경계와 변경 책임을 정리했다.
+
+### 수정
+
+| 커밋 | 수정 |
+|---|---|
+| `b52f8b3` | 이벤트 구독의 dial/쓰기/응답/직렬화 대기에 context를 적용. 구독 교체와 종료 시 연결을 닫고, 이벤트 스트림만 끊겨도 기존 health tick에서 제어 연결을 유지하며 복구한다. 이전 client 콜백을 걸러내고 잘못된 Wi-Fi·종료 주석을 고쳤다. |
+| `6f727bf` | config·metadata 변경과 쌍 읽기에 같은 프로세스 간 파일 잠금을 적용. metadata 존재 확인을 잠금 안으로 옮기고, 새로운 프로필이 남은 sidecar를 상속하지 않게 했다. root가 최초로 만든 잠금은 사용자 디렉터리 소유자에게 돌려준다. metadata 책임은 별도 파일로 분리했다. |
+| `b4cebe5` | 공통 작업 오류를 `domain`으로 이동하고 엔진 API는 alias로 호환한다. `reconnect`는 도메인 상태·오류와 소비자 인터페이스에만 의존한다. default Off·열린 무신호 채널을 잘못 설명한 주석도 수정했다. |
+| `97f789b` | `Tunnel.Delete`에서 활성 상태 확인·복구 취소·파일 삭제를 helper의 `connectMu` 안에서 직렬화한다. GUI는 활성 삭제를 거부하고 CLI는 먼저 해제한다. headless helper도 사용하며 timeout/권한/프로토콜 오류를 offline으로 취급하지 않는다. IPC 1.4가 필요한 GUI는 같은 앱 버전의 오래된 helper도 setup에서 교체한다. 연결·해제·프로필 handler를 파일로 분리했다. |
+| `97f789b` | 목록 생성 중복을 제거하고 다중 활성 터널을 모두 표시한다. 목록과 이력을 파일로 분리하고, 이력 갱신·수동 해제 힌트·종료를 직렬화한다. 종료 뒤 늦게 받은 상태가 이력을 다시 열지 못한다. |
+| `674fd5b` | 수동·예약 업데이트 확인을 직렬화한다. 304 응답에도 마지막 정상 릴리스 정보를 유지하고, 새 프로세스는 body 없는 validator만으로 시작하지 않는다. 외부 호출자에게 결과/Latest의 내부 포인터를 노출하지 않는다. |
+| `576ae84` | 연결 배지의 brush와 색상 저장소를 픽셀마다 만들지 않고 재사용한다. |
+
+기존 GUI/helper 분리, 도메인의 표준 라이브러리 전용 의존성, OS suffix와
+build constraint를 유지했다. `helper`의 파일 구분은 연결·해제·프로필 변경의
+책임에 맞췄다. 이번 변경은 Wails/Svelte 화면이나 자동 연결의 제품 정책을
+개편하지 않는다. CLI의 오프라인 편집은 실제 absent/refused listener에서
+유지한다. 공통 타입의 alias는 기존 Go 호출자 호환을 위한 것이다.
+
+Go 공식 [모듈 구성](https://go.dev/doc/modules/layout)과
+[리뷰 지침](https://go.dev/wiki/CodeReviewComments)을 다시 확인했다.
+패키지 경계는 의존 방향과 응집도로 판단했다. 예를 들어 저장소의 Wi-Fi
+규칙 모델 의존은 현재 설정 JSON·마이그레이션 계약의 일부이며, 이를
+새 패키지로 옮기기만 하는 작업은 이번 오류 수정의 필수 조건이 아니다.
+
+### 재현과 검증
+
+- 원본에서 종료한 client의 Subscribe가 성공하고, 두 번째 Subscribe가
+  첫 스트림을 남기는 테스트가 실패했다. 수정 후 실제 소켓 테스트 통과.
+- 메타데이터 삭제 후 갱신 허용, 독립 저장소의 동시 필드 유실을 수정 전
+  재현했다. 수정 후 cross-store 쓰기·기존 저장소 테스트 통과.
+- 이력 종료 latch를 뺀 기준에서 늦은 status가 열린 이력을 만드는 테스트가
+  실패했다. 수정 후 종료 후 갱신 거부 테스트 통과.
+- helper 삭제의 cached recovery 취소·sibling 보존·연결 전이 대기,
+  CLI의 headless 요청과 helper 실패 보존, 다중 터널 목록 표시를 검사한다.
+- 업데이트의 200→실패→304, 재시작 첫 요청, 외부 snapshot 변경,
+  대기 중 취소를 per-instance fetch seam으로 검사한다.
+- 전체 `go test -race ./... -count=1` 성공. 최종 이벤트 콜백 순서/취소 보완
+  후 `ipc`/`gui` race 재검사도 성공. `go vet ./...` 성공.
+- macOS 12 deployment 설정, `production,requireSignedRelease` build 성공.
+  프런트엔드 Node 테스트 8개와 production build 성공. 기존 접근성 경고는
+  앞 절의 범위와 같다.
+
+Apple M4에서 같은 배지 입력으로 각 3회 측정:
+
+| 배지 그리기 함수 | 이전 | 이후 |
+|---|---|---|
+| 시간 | 151.9–152.8 µs/op | 85.0–85.1 µs/op |
+| 할당 | 74,400 B/op, 7,440 allocs/op | 20 B/op, 2 allocs/op |
+
+이 함수는 초기 아이콘 생성에 사용된다. 전체 앱 CPU·VPN 전송 성능을
+측정한 결과로 해석하지 않는다. 기존 픽셀·투명도·상태 전이 테스트도 통과했다.
+
+3-OS CI: [38727991141](https://github.com/korjwl1/wireguide/actions/runs/38727991141),
+정확한 코드 SHA `576ae8401015a67eaf6573638d4769550818b866`로 수동 실행했다.
+이 기록 작성 시 CI와 기존 Claude 세션의 독립 리뷰는 진행 중이며,
+최종 판정은 아래에 추가한다. 이번 후속 검토에서 OS 네트워크 설정이나
+실행 중인 설치 앱은 바꾸지 않았다. 실제 잠자기 시험은 계속 보류다.
+
+
+## 독립 리뷰 반영과 최종 검증
+
+2026-10-15~16 후속 검토는 기존 Claude Code 세션으로 진행했다.
+[최초 검토](claude-quality-review-20261015.md),
+[core 재검토](claude-quality-core-followup-20261015.md),
+[전체 후속 검토](claude-quality-final-review-20261015.md),
+[수정 후 최종 재검토](claude-quality-final-followup-20261015.md)를 보존했다.
+최종 재검토는 추가 worker 없이 진행했고, 새 blocker가 없다고 판정했다.
+리뷰 답변을 그대로 완료 근거로 쓰지 않고 직접 재현과 테스트를 대조했다.
+
+### 구조와 동작
+
+| 영역 | 반영한 내용 |
+|---|---|
+| 패키지 경계 | 자동화 규칙·판정·settle을 순수 `automation`으로 분리했다. storage/CLI는 OS Wi-Fi 감지에 의존하지 않는다. 버전은 `version`에서 공급한다. |
+| 파일·함수 경계 | helper의 저장/대기/복구, Windows·Linux의 DNS/라우팅을 나눴다. GUI 초기 helper 설정과 종료 수명, 연결 rollback을 분리했다. 재시도 슬롯 정리·backoff와 CLI 접속 정책을 공통 함수로 묶었다. |
+| 설정 | 선택 필드만 원자적으로 합친다. 읽기 실패 시 편집을 막고, 저장 또는 적용 실패는 필드별 오류·재시도로 표시한다. 다른 writer의 자동화 규칙을 덮어쓰지 않는다. |
+| 화면 상태 | 공통 터널 상태 판정, 실제 disconnecting 전달, 상세 응답 세대 검사, rename 중복 방지를 적용했다. 통계는 선택한 연결을 기준으로 집계한다. |
+| 프런트 공통 코드 | 프로필 필드 저장 순서와 중복 제거, 공통 모달 포커스·키보드 처리, 공통 오류·재시도 컴포넌트를 사용한다. 영어·한국어·일본어 알림과 native 메뉴를 정리했다. |
+| 재접속·종료 | Wi-Fi 콜백과 retry worker를 종료 대기에 포함했다. wall clock과 마지막 네트워크 변화 처리를 보완했다. GUI 정상 종료·tray 종료·시작 실패가 같은 정리 경로를 쓴다. |
+| DNS 복구 | 실패 시 원본과 journal을 보존한다. retired journal을 새 세션과 다른 파일로 옮겨 동명 재연결도 기록을 덮어쓰지 않는다. 실패한 시작 복구도 원본을 인계한다. 활성 터널이 없는 동안 재시도하고 사용자에게 경고한다. |
+| 방화벽 | Linux 교체를 add→delete→재정의 한 transaction으로 만들었다. 외부 ruleset 삭제 이후에도 복구한다. 삭제 실패 시 모델을 유지한다. macOS PF lease 증거를 보존하고 손상 파일을 격리한다. |
+| 파일·IPC | Windows의 열린 reader 충돌을 제한 시간 내 재시도한다. 종료한 ClientHolder의 재등록을 막고 drain을 즉시 취소한다. helper 접속 오류를 부재로 오인하지 않는다. |
+| 가져오기·모델 | FIFO를 거부하고 ZIP 이름 대소문자를 확인하며 목록 읽기 오류를 반환한다. inline 주석과 반복 unknown key를 보존하고 ordered entries 하나를 사용한다. |
+| 업데이트 | HTTP 실패를 업데이트 없음으로 숨기지 않는다. 저장 실패 시 메모리를 rollback하고 clone 계약을 공통화했다. |
+
+Go 파일은 formatter를 적용하고 CI gate를 추가했다.
+관례 판단은 [Go module layout](https://go.dev/doc/modules/layout)와
+[Go Code Review Comments](https://go.dev/wiki/CodeReviewComments)를 기준으로 했다.
+의존 순환은 세 OS 모두 없으며, 순수 모델은 OS나 GUI에 의존하지 않는다.
+긴 OS 절차와 composition root를 줄 수만 맞추려고 별도 추상화로 감싸지는 않았다.
+
+Windows 재시도는 실제 CI에서 열린 파일 교체의 `ACCESS_DENIED`를 재현한 뒤
+Go [robustio 구현](https://go.dev/src/cmd/internal/robustio/robustio_windows.go)과
+[Windows 파일 교체 제약](https://learn.microsoft.com/en-us/windows/win32/fileio/moving-and-replacing-files)을 확인해 보완했다.
+1초 상한 뒤에도 실패하는 실제 ACL 오류는 그대로 반환한다.
+
+### 검증 근거
+
+- 로컬 `go test -race -count=1 ./...`, `go vet ./...` 성공.
+- macOS 12 설정의 업데이트 서명 검증 활성 production build 성공. 설치 앱은 교체하지 않았다.
+- Windows/Linux 대상 package 교차 컴파일 성공. 실제 러너 검증은 아래 CI를 기준으로 한다.
+- 프런트엔드 Node **15개**와 production build 성공, 접근성 빌드 경고 **0건**.
+- 실제 headless Chrome + 가짜 backend로 설정/자동화 읽기 실패 후 쓰기 차단,
+  보안 설정 적용 오류·재시도, 모달 포커스 제한·복원, 키보드 규칙 재정렬을 확인했다.
+  브라우저 runtime 오류 0건. 화면의 오류와 재시도 표시도 캡처해 확인했다.
+- 수정 전 `632d7c4` 사본에서 DNS journal 유실, inline 주석,
+  종료한 holder 재등록·drain 테스트가 실제 실패했다. 수정 후에는 통과했다.
+- 영구 cleanup 실패 후 새 연결·동명 재연결, retired journal의 crash 삭제,
+  실패한 startup 복구의 원본 보존, 초기 연결 rollback journal을 fake OS로 검사했다.
+- `a55c345`의 [CI 38751771573](https://github.com/korjwl1/wireguide/actions/runs/38751771573):
+  Windows/macOS/Linux 모두 성공. Linux 격리 network namespace에서
+  `TestLinuxKillSwitchInKernel`, `TestLinuxDNSRulesInKernel` 실제 통과.
+  Windows에서는 reader handle을 연 채 path/root publication을 실제 검사했다.
+- 앞 CI `d39648a`의 Windows 실패는 무시하지 않았다. 오류 코드 누락과 테스트
+  shadow를 수정한 뒤 위 CI에서 재검증했다.
+
+프런트엔드 빌드와 Go embed 로딩은 순서대로 실행해야 한다.
+중간 검증에서 둘을 겹쳐 실행해 제거된 dist 파일을 찾던 실행은 완료 근거에서
+제외하고, 안정된 dist로 전체 race/vet/production build를 다시 성공시켰다.
+
+### 남긴 설계 판단과 실제 환경 범위
+
+- 기존 reconnect의 kill switch/DNS protection 일시 해제 정책(D-1)은 유지했다.
+  이 구간에는 물리 NIC로 일반 트래픽이 나갈 수 있다. README의 누출 없음 설명을
+  실제 동작에 맞게 수정했다. 차단을 유지하면서 bootstrap DNS와 endpoint UDP만
+  허용하는 동작은 별도의 cross-platform 정책 변경이며 이번 수정 완료 주장에 포함하지 않는다.
+- retired 작업은 새 세션을 보호하기 위해 활성 터널이 없을 때 정리한다.
+  장시간 연결을 유지하면 이전 정리가 지연될 수 있지만 journal과 baseline은 남는다.
+- `testing.Testing`으로 production 서명 키 override를 차단하는 기존 gate는 유지했다.
+- 실제 macOS 서비스 삭제·resolv.conf 소유 전환·UAC 취소 등의 현장 조합은
+  장치 시험으로 단정하지 않는다. 호스트 잠자기 시험은 사용자가 보류했다.
+- 설치된 앱, 현재 VPN, 사용자 프로필, OS 네트워크 설정은 이 리뷰 작업에서 변경하지 않았다.
+
+임시 바이너리 11개를 보존 이동한 주체는 Codex다. 이전 보고서의 사용자 이동
+표현은 정정했다. 사용자 파일이나 다른 프로젝트 파일을 이동한 것이 아니다.
+
+
+### 최종 표시 정리
+
+`ErrorNotice.svelte`로 설정·자동화의 오류·재시도 표시를 통합했다.
+Claude의 표시 계층 후속 검토도 차단 항목 없음으로 끝났다.
+권고한 오류 row key와 `applyField` 이름까지 반영했다.
+이 변경은 `a55c345`의 검증된 Go 코드와 비교해 프런트엔드 파일 3개뿐이며,
+최신 Node 14개·build·Chrome 시나리오는 다시 통과했다.
+당시 표시 정리 검증 SHA는 `55e4edaaf02f7d84894545459788d5ca5f34667b`다.
+
+현재 설정 화면의 킬 스위치 안내도 세 언어에서 같은 한계를 설명하도록
+수정했다. 이후 변경은 이 안내 문구와 문서이며 VPN 동작은 바꾸지 않았다.
+기능 코드 최종 [CI 38753259307](https://github.com/korjwl1/wireguide/actions/runs/38753259307)
+(`55e4edaaf02f7d84894545459788d5ca5f34667b`)는 세 OS 모두 성공했다.
+안내 문구도 최신 frontend 15개 테스트·build와 브라우저 검사로 확인했다.
+
+
+### 마지막 브라우저 반례 보완
+
+- 설정 창 밖에서 바꾼 목록 너비 저장이 실패한 뒤 Retry가
+  `settings[key]`의 undefined를 전송해 요청값을 잃는 경로를 실제 Chrome에서
+  재현했다(`undefined !== 333`). 공유 store가 필드별 마지막 요청값을
+  보존하게 하고, 재시도는 그 값을 쓰도록 수정했다. undefined patch는 RPC
+  전에 거부한다. 쓰기 직렬화와 다른 필드 오류 보존은 유지한다.
+- 늦은 설정 읽기 중 fieldset에서 상속된 비활성 상태가 `el.disabled`에
+  반영되지 않아 모달 초기 포커스가 밖에 남는 경로도 Chrome에서 실패했다.
+  `:disabled` 판정으로 수정하고 같은 시나리오가 통과하는 것을 확인했다.
+- Node **15개**, build 경고 0, read failure 후 쓰기 차단과 초기 포커스,
+  security apply 오류·retry, 포커스 순환·복원, 키보드 규칙 재정렬,
+  다른 화면의 목록 폭 retry를 다시 확인했다. browser runtime 오류 0건.
+- Claude는 이 네 파일을 추가로 읽고 두 수정이 원인에 맞으며 차단 항목은
+  없다고 판정했다. 전체 스캔이나 OS 실험을 반복한 결과로 표현하지 않는다.
+
+마지막 코드·설계 안내 커밋은
+`219d7a54cfc20d44bf06d1c68d5ccc96b20568c9`다.
+이후 최종 보고서 커밋은 분석 문서만 포함한다.
+
+
+### 최종 CI 판정
+
+[CI 38758226705](https://github.com/korjwl1/wireguide/actions/runs/38758226705),
+정확한 SHA `219d7a54cfc20d44bf06d1c68d5ccc96b20568c9`:
+
+- Windows (test): 성공
+- macOS (test): 성공
+- Linux (test + package): 성공
+- Linux 실제 격리 `TestLinuxKillSwitchInKernel`, `TestLinuxDNSRulesInKernel`: 성공
+- 원시 로그의 실패·data race·fatal error 표식: 0건
+
+최신 frontend dist로 macOS production build도 다시 성공했다.
+이 최종 보고서 이후 실행 중인 앱이나 환경을 바꾸지 않았으며,
+가짜 backend 검증용 localhost 서버만 종료했다.
