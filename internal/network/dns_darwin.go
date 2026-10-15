@@ -89,6 +89,8 @@ func (m *DarwinManager) SetDNS(ifaceName string, entries []string) error {
 			m.savedSearch[e.svc] = e.search
 		}
 		m.mu.Unlock()
+	} else if err := m.captureNewServices(services); err != nil {
+		return err
 	}
 
 	if err := m.checkpointDNS(); err != nil {

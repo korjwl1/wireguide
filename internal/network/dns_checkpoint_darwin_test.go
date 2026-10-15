@@ -18,17 +18,33 @@ func TestNativeDNSCheckpointBeforeOSWrite(t *testing.T) {
 	run = func(string, ...string) error { writes++; return errors.New("native test forbids OS writes") }
 	t.Cleanup(func() { run = previousRun })
 	stop := errors.New("checkpoint stops before mutation")
-	services := 0
-	m := NewPlatformManager().(*DarwinManager)
-	m.SetDNSCheckpoint(func(snapshot DNSSnapshot) error {
-		services = len(snapshot.Servers)
-		return stop
-	})
-	err := m.SetDNS("wireguide-readonly-check", []string{"198.18.255.53", "wg-checkpoint.invalid"})
-	if !errors.Is(err, stop) || services == 0 || writes != 0 {
-		t.Fatalf("native checkpoint ordering: error=%v captured_services=%d writes=%d", err, services, writes)
+	services := getAllNetworkServices()
+	if len(services) == 0 {
+		t.Fatal("no native network services found")
 	}
-	t.Logf("captured native DNS/search preferences for %d services before any OS write", services)
+	for _, active := range []bool{false, true} {
+		m := NewPlatformManager().(*DarwinManager)
+		if active {
+			// A surviving tunnel may first see a new service when the union
+			// is reapplied after a sibling disconnect, without a route event.
+			m.dnsActive = true
+			m.savedDNS[services[0]] = []string{"8.8.8.8"}
+		}
+		captured := 0
+		m.SetDNSCheckpoint(func(snapshot DNSSnapshot) error {
+			for _, service := range services {
+				if _, exists := snapshot.Servers[service]; exists {
+					captured++
+				}
+			}
+			return stop
+		})
+		err := m.SetDNS("wireguide-readonly-check", []string{"198.18.255.53", "wg-checkpoint.invalid"})
+		if !errors.Is(err, stop) || captured != len(services) || writes != 0 {
+			t.Fatalf("active=%v native checkpoint ordering: error=%v captured_services=%d writes=%d", active, err, captured, writes)
+		}
+	}
+	t.Logf("captured all %d native services before initial and already-active DNS writes", len(services))
 }
 
 func TestDNSCheckpointFailureRemainsPendingAndCleanChecksDoNotWrite(t *testing.T) {
