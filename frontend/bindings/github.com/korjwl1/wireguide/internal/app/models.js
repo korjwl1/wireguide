@@ -169,6 +169,20 @@ export class DNSServer {
              */
             this["is_vpn"] = false;
         }
+        if (!("leaked" in $$source)) {
+            /**
+             * @member
+             * @type {boolean}
+             */
+            this["leaked"] = false;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {string | undefined}
+             */
+            this["scope"] = undefined;
+        }
 
         Object.assign(this, $$source);
     }
@@ -362,15 +376,15 @@ export class TunnelInfo {
  * UpdateState is the frontend-facing snapshot of persisted check state.
  * Exposed so Settings → About can render the "Last checked …" line and
  * the first-check placeholder correctly.
- * 
+ *
  * IsDevBuild + AutoEnabled together let the UI distinguish three
  * "not-yet-checked" cases that look identical to a naive `last_check==0`
  * gate:
- * 
+ *
  * 	dev build  → scheduler is intentionally inert, show "Never checked"
  * 	auto off   → user disabled the scheduler, show "Never checked"
  * 	auto on    → first tick is 30–120 s away, show "scheduled" hint
- * 
+ *
  * CurrentVersion is duplicated here (also in GetVersion()) so the About
  * tab doesn't need two round-trips to render.
  */

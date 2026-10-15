@@ -27,43 +27,12 @@ export const Action = {
  * Each tunnel owns an ordered list of rules; evaluation decides, from the
  * current network context, whether that tunnel should be connected or
  * disconnected — independently of how it was brought up.
- * 
+ *
  * This type is additive: the legacy Rules (TrustedSSIDs / PerTunnel
  * AutoConnectSSIDs) still exist for migration. MigrateFromLegacy builds
  * an equivalent Automation from a legacy Rules value.
+ * @typedef {any} Automation
  */
-export class Automation {
-    /**
-     * Creates a new Automation instance.
-     * @param {Partial<Automation>} [$$source = {}] - The source object to create the Automation.
-     */
-    constructor($$source = {}) {
-        if (!("per_tunnel_rules" in $$source)) {
-            /**
-             * PerTunnel maps a tunnel name to its ordered rule list.
-             * @member
-             * @type {{ [_ in string]?: Rule[] }}
-             */
-            this["per_tunnel_rules"] = {};
-        }
-
-        Object.assign(this, $$source);
-    }
-
-    /**
-     * Creates a new Automation instance from a string or object.
-     * @param {any} [$$source = {}]
-     * @returns {Automation}
-     */
-    static createFrom($$source = {}) {
-        const $$createField0_0 = $$createType2;
-        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
-        if ("per_tunnel_rules" in $$parsedSource) {
-            $$parsedSource["per_tunnel_rules"] = $$createField0_0($$parsedSource["per_tunnel_rules"]);
-        }
-        return new Automation(/** @type {Partial<Automation>} */($$parsedSource));
-    }
-}
 
 /**
  * Condition is a single match predicate. Only the field relevant to Type
@@ -176,7 +145,7 @@ export class Rule {
      * @returns {Rule}
      */
     static createFrom($$source = {}) {
-        const $$createField0_0 = $$createType3;
+        const $$createField0_0 = $$createType0;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("when" in $$parsedSource) {
             $$parsedSource["when"] = $$createField0_0($$parsedSource["when"]);
@@ -223,8 +192,8 @@ export class Rules {
      * @returns {Rules}
      */
     static createFrom($$source = {}) {
-        const $$createField0_0 = $$createType4;
-        const $$createField1_0 = $$createType6;
+        const $$createField0_0 = $$createType1;
+        const $$createField1_0 = $$createType3;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("trusted_ssids" in $$parsedSource) {
             $$parsedSource["trusted_ssids"] = $$createField0_0($$parsedSource["trusted_ssids"]);
@@ -304,7 +273,7 @@ export class TunnelSSIDs {
      * @returns {TunnelSSIDs}
      */
     static createFrom($$source = {}) {
-        const $$createField0_0 = $$createType4;
+        const $$createField0_0 = $$createType1;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("auto_connect_ssids" in $$parsedSource) {
             $$parsedSource["auto_connect_ssids"] = $$createField0_0($$parsedSource["auto_connect_ssids"]);
@@ -314,10 +283,7 @@ export class TunnelSSIDs {
 }
 
 // Private type creation functions
-const $$createType0 = Rule.createFrom;
-const $$createType1 = $Create.Array($$createType0);
-const $$createType2 = $Create.Map($Create.Any, $$createType1);
-const $$createType3 = Condition.createFrom;
-const $$createType4 = $Create.Array($Create.Any);
-const $$createType5 = TunnelSSIDs.createFrom;
-const $$createType6 = $Create.Map($Create.Any, $$createType5);
+const $$createType0 = Condition.createFrom;
+const $$createType1 = $Create.Array($Create.Any);
+const $$createType2 = TunnelSSIDs.createFrom;
+const $$createType3 = $Create.Map($Create.Any, $$createType2);

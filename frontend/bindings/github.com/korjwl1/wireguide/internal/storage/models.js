@@ -257,13 +257,9 @@ export class Settings {
      */
     static createFrom($$source = {}) {
         const $$createField14_0 = $$createType0;
-        const $$createField15_0 = $$createType2;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("wifi_rules" in $$parsedSource) {
             $$parsedSource["wifi_rules"] = $$createField14_0($$parsedSource["wifi_rules"]);
-        }
-        if ("automation" in $$parsedSource) {
-            $$parsedSource["automation"] = $$createField15_0($$parsedSource["automation"]);
         }
         return new Settings(/** @type {Partial<Settings>} */($$parsedSource));
     }
@@ -271,5 +267,3 @@ export class Settings {
 
 // Private type creation functions
 const $$createType0 = wifi$0.Rules.createFrom;
-const $$createType1 = wifi$0.Automation.createFrom;
-const $$createType2 = $Create.Nullable($$createType1);

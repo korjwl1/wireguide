@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"net/netip"
 	"os/exec"
 	"runtime"
 	"sort"
@@ -50,7 +51,7 @@ func parseScutilDNS(out string) []scutilResolver {
 					blocks[cur].Scoped = true
 				}
 			case strings.HasPrefix(key, "nameserver["):
-				if net.ParseIP(val) != nil {
+				if _, err := netip.ParseAddr(val); err == nil {
 					blocks[cur].Nameservers = append(blocks[cur].Nameservers, val)
 				}
 			}
@@ -170,7 +171,13 @@ func evaluateSplitDNSResult(result *DNSLeakResult, plans []domain.DNSEntries, bl
 		for _, ns := range b.Nameservers {
 			if !seen[ns] {
 				seen[ns] = true
-				result.DNSServers = append(result.DNSServers, DNSServer{IP: ns, IsVPN: vpn[ns]})
+				scope := ""
+				if b.Scoped {
+					scope = "scoped"
+				} else if b.Domain != "" {
+					scope = "supplemental"
+				}
+				result.DNSServers = append(result.DNSServers, DNSServer{IP: ns, IsVPN: vpn[ns], Scope: scope})
 			}
 		}
 	}

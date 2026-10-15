@@ -12,7 +12,7 @@ import { Create as $Create } from "@wailsio/runtime";
  * JSON-tagged) that are sent to the frontend, and internal fields (time.Time,
  * `json:"-"`) that the reconnect monitor and other backend services use for
  * duration math.
- * 
+ *
  * Note that `LastHandshake` is the *formatted age string* (e.g. "5s", "2m 10s")
  * that the frontend displays, while `LastHandshakeTime` is the absolute
  * timestamp used internally. Wire callers see only the former.

@@ -4,10 +4,24 @@
 
 export {
     Action,
-    Automation,
     Condition,
     Rule,
     Rules,
     SSIDPermissionStatus,
     TunnelSSIDs
 } from "./models.js";
+
+import * as $models from "./models.js";
+
+/**
+ * Automation is the per-tunnel condition→action rule model that
+ * generalises the older TrustedSSIDs + AutoConnectSSIDs pair (issue #12).
+ * Each tunnel owns an ordered list of rules; evaluation decides, from the
+ * current network context, whether that tunnel should be connected or
+ * disconnected — independently of how it was brought up.
+ *
+ * This type is additive: the legacy Rules (TrustedSSIDs / PerTunnel
+ * AutoConnectSSIDs) still exist for migration. MigrateFromLegacy builds
+ * an equivalent Automation from a legacy Rules value.
+ * @typedef {$models.Automation} Automation
+ */

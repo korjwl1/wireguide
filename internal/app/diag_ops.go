@@ -21,6 +21,8 @@ type DNSServer struct {
 	IP       string `json:"ip"`
 	Hostname string `json:"hostname"`
 	IsVPN    bool   `json:"is_vpn"`
+	Leaked   bool   `json:"leaked"`
+	Scope    string `json:"scope,omitempty"`
 }
 
 // RouteEntry mirrors diag.RouteEntry for Wails JSON serialisation.
@@ -62,6 +64,8 @@ func (s *TunnelService) RunDNSLeakTest() (*DNSLeakResult, error) {
 			IP:       srv.IP,
 			Hostname: srv.Hostname,
 			IsVPN:    srv.IsVPN,
+			Leaked:   srv.Leaked,
+			Scope:    srv.Scope,
 		})
 	}
 	return out, nil

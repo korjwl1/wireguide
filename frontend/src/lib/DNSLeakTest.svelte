@@ -63,10 +63,10 @@
         <div class="section-label">{$t('tools.dns_servers_detected')}</div>
         <div class="server-list">
           {#each result.dns_servers || [] as server}
-            <div class="server" class:vpn={server.is_vpn} class:leak={!server.is_vpn && !result.split_mode}>
+            <div class="server" class:vpn={server.is_vpn} class:leak={server.leaked}>
               <span class="server-ip">{server.ip}</span>
               <span class="server-host">{server.hostname || ''}</span>
-              <span class="server-badge">{server.is_vpn ? 'VPN' : result.split_mode ? '' : '!'}</span>
+              <span class="server-badge">{server.is_vpn ? 'VPN' : server.leaked ? '!' : server.scope ? $t(`tools.dns_resolver_${server.scope}`) : ''}</span>
             </div>
           {/each}
         </div>

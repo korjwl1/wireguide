@@ -148,6 +148,8 @@
     "filter_all": "All"
   },
   "tools": {
+    "dns_resolver_scoped": "Interface",
+    "dns_resolver_supplemental": "Domain",
     "tab_dns_leak": "DNS Leak Test",
     "tab_routes": "Routes",
     "dns_leak_title": "DNS Leak Test",

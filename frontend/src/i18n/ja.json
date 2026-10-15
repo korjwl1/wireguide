@@ -148,6 +148,8 @@
     "copy": "コピー"
   },
   "tools": {
+    "dns_resolver_scoped": "インターフェース専用",
+    "dns_resolver_supplemental": "ドメイン専用",
     "tab_dns_leak": "DNS 漏洩テスト",
     "tab_routes": "ルート",
     "dns_leak_title": "DNS 漏洩テスト",

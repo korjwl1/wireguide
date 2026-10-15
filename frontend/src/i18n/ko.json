@@ -148,6 +148,8 @@
     "copy": "복사"
   },
   "tools": {
+    "dns_resolver_scoped": "인터페이스 전용",
+    "dns_resolver_supplemental": "도메인 전용",
     "tab_dns_leak": "DNS 유출 검사",
     "tab_routes": "라우트",
     "dns_leak_title": "DNS 유출 검사",

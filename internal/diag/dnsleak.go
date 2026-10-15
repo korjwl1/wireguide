@@ -33,7 +33,9 @@ type DNSLeakResult struct {
 type DNSServer struct {
 	IP       string `json:"ip"`
 	Hostname string `json:"hostname"`
-	IsVPN    bool   `json:"is_vpn"` // true if this is the expected VPN DNS
+	IsVPN    bool   `json:"is_vpn"`          // true if this is the expected VPN DNS
+	Leaked   bool   `json:"leaked"`          // this unexpected resolver actually answered
+	Scope    string `json:"scope,omitempty"` // scoped or supplemental; neither is a default resolver
 }
 
 // The expectedDNS arguments below are the tunnel's raw `DNS=` entries. Any
@@ -153,6 +155,7 @@ func runGlobalDNSCheck(ctx context.Context, expectedDNS []string, readResolvers 
 			}
 			result.DNSServers[p.idx].Hostname = p.hostname
 			if !result.DNSServers[p.idx].IsVPN && p.responds {
+				result.DNSServers[p.idx].Leaked = true
 				leaked = true
 			}
 		}
@@ -216,9 +219,12 @@ func readLinuxResolvers() ([]string, error) {
 	}
 	defer f.Close()
 
+	return linuxResolverUpstreams(f, readResolvedSnapshot)
+}
+
+func parseResolvConf(scanner *bufio.Scanner) ([]string, error) {
 	var servers []string
 	seen := make(map[string]bool)
-	scanner := bufio.NewScanner(f)
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		if strings.HasPrefix(line, "#") || line == "" {
