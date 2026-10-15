@@ -162,12 +162,7 @@ func fetchPrimaryInterface() (string, bool) {
 	return string(buf[:n]), true
 }
 
-// fireCooldown is the minimum interval between two sendChange()
-// calls. Without it, a rapid Wi-Fi flap (none→en0→none in <2s when
-// the user briefly toggles Wi-Fi) fires two reconnect cycles whose
-// backoffs pile up. With it, the second transition is logged as
-// "suppressed" and only the next stable change after the cooldown
-// triggers a fresh reconnect.
+// fireCooldown coalesces interface flaps while retaining the final transition.
 const fireCooldown = 2 * time.Second
 
 func (d *darwinNetworkChangeDetector) poll() {
@@ -178,10 +173,8 @@ func (d *darwinNetworkChangeDetector) poll() {
 	ticker := time.NewTicker(networkPollInterval)
 	defer ticker.Stop()
 
-	var lastIface string
-	var hasInitial bool
+	gate := interfaceChangeGate{cooldown: fireCooldown}
 	var heartbeat int
-	var lastFire time.Time
 
 	for {
 		select {
@@ -194,9 +187,8 @@ func (d *darwinNetworkChangeDetector) poll() {
 				slog.Warn("SCDynamicStoreCopyValue failed")
 				continue
 			}
-			if !hasInitial {
-				hasInitial = true
-				lastIface = iface
+			if !gate.initialized {
+				gate.observe(iface, time.Now())
 				slog.Info("network primary interface initial", "iface", iface)
 				continue
 			}
@@ -204,22 +196,11 @@ func (d *darwinNetworkChangeDetector) poll() {
 			if heartbeat%30 == 0 {
 				slog.Debug("network polling heartbeat", "iface", iface)
 			}
-			if iface == lastIface {
+			previous := gate.lastIface
+			if !gate.observe(iface, time.Now()) {
 				continue
 			}
-			prev := lastIface
-			lastIface = iface
-
-			if !lastFire.IsZero() && time.Since(lastFire) < fireCooldown {
-				slog.Info("network primary interface changed (suppressed by cooldown)",
-					"prev", prev, "now", iface,
-					"since_last_fire", time.Since(lastFire).Round(time.Millisecond))
-				continue
-			}
-
-			lastFire = time.Now()
-			slog.Info("network primary interface changed",
-				"prev", prev, "now", iface)
+			slog.Info("network primary interface changed", "prev", previous, "now", iface)
 			d.sendChange()
 		}
 	}

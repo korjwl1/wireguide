@@ -459,7 +459,7 @@ func (m *Monitor) cancelInvalidRetry(name string, entry *retryState) bool {
 
 func (m *Monitor) startReconnectTunnel(tunnelName string, onlyIfIdle bool, stillNeeded func() bool) {
 	m.mu.Lock()
-	if onlyIfIdle && (!m.running || m.retries[tunnelName] != nil || m.retries[""] != nil) {
+	if !m.running || (onlyIfIdle && (m.retries[tunnelName] != nil || m.retries[""] != nil)) {
 		m.mu.Unlock()
 		return
 	}
@@ -489,28 +489,12 @@ func (m *Monitor) startReconnectTunnel(tunnelName string, onlyIfIdle bool, still
 		stillNeeded: stillNeeded,
 	}
 	m.retries[tunnelName] = entry
+	stopCh := m.stopCh
+	m.wg.Add(1)
 	m.mu.Unlock()
 
-	// Cancel old goroutines outside the lock. Bound the wait by stopCh
-	// in addition to the 5-second timeout — Stop() needs to be able to
-	// preempt this so helper cleanup isn't blocked by a hung retry.
-	for _, old := range oldEntries {
-		if old.cancel != nil {
-			old.cancel()
-		}
-		if old.done != nil {
-			select {
-			case <-old.done:
-			case <-m.stopCh:
-				return
-			case <-time.After(5 * time.Second):
-				slog.Warn("timed out waiting for previous retry goroutine to exit",
-					"tunnel", tunnelName)
-			}
-		}
-	}
-
 	go func() {
+		defer m.wg.Done()
 		defer close(entry.done)
 		defer func() {
 			// A recovered panic must not permanently occupy a retry slot.
@@ -528,6 +512,29 @@ func (m *Monitor) startReconnectTunnel(tunnelName string, onlyIfIdle bool, still
 					"stack", string(debug.Stack()))
 			}
 		}()
+		for _, old := range oldEntries {
+			if old.cancel != nil {
+				old.cancel()
+			}
+		}
+		// Cancel old goroutines outside the lock. Bound the wait by stopCh
+		// in addition to the 5-second timeout — Stop() needs to be able to
+		// preempt this so helper cleanup isn't blocked by a hung retry.
+		for _, old := range oldEntries {
+			if old.done != nil {
+				select {
+				case <-ctx.Done():
+					return
+				case <-old.done:
+				case <-stopCh:
+					return
+				case <-time.After(5 * time.Second):
+					slog.Warn("timed out waiting for previous retry goroutine to exit",
+						"tunnel", tunnelName)
+				}
+			}
+		}
+
 		m.reconnectWithBackoff(ctx, tunnelName, entry)
 	}()
 }

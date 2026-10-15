@@ -3,12 +3,12 @@ package reconnect
 import (
 	"context"
 	"errors"
-	"github.com/korjwl1/wireguide/internal/domain"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/korjwl1/wireguide/internal/domain"
 	"github.com/korjwl1/wireguide/internal/tunnel"
 )
 
@@ -1232,4 +1232,50 @@ func TestCancelDuringNetworkWaitDoesNotTouchFirewallOrTunnel(t *testing.T) {
 	if suspends.Load() != 0 || disconnects.Load() != 0 || connects.Load() != 0 {
 		t.Fatal("cancelled network wait touched transport/protection")
 	}
+}
+
+// Stop includes retry workers, even when an OS callback needs a brief moment
+// to finish after cancellation. The helper must not tear down beneath it.
+func TestStopWaitsForRetryWorkerAndCanRestart(t *testing.T) {
+	started, release, exited := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	mon, mgr, _ := newTestMonitor(testConfig(), func(context.Context, string) error {
+		close(started)
+		<-release
+		close(exited)
+		return nil
+	})
+	mgr.setConnected(true, "alpha")
+	mon.Start()
+	mon.triggerReconnectTunnel("alpha")
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("retry never started")
+	}
+	stopped := make(chan struct{})
+	go func() { mon.Stop(); close(stopped) }()
+	select {
+	case <-stopped:
+		t.Fatal("Stop returned before retry worker")
+	case <-time.After(30 * time.Millisecond):
+	}
+	close(release)
+	select {
+	case <-stopped:
+	case <-time.After(time.Second):
+		t.Fatal("Stop failed to join retry")
+	}
+	select {
+	case <-exited:
+	default:
+		t.Fatal("worker still alive")
+	}
+	mon.Start()
+	mon.mu.Lock()
+	running, slots := mon.running, len(mon.retries)
+	mon.mu.Unlock()
+	if !running || slots != 0 {
+		t.Fatalf("restart: running=%v stale retries=%d", running, slots)
+	}
+	mon.Stop()
 }
