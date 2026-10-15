@@ -90,6 +90,13 @@ type RenameRequest struct {
 	NewName string `json:"new_name"`
 }
 
+// DeleteRequest serializes profile removal with connection/recovery work.
+// The GUI rejects active tunnels; the CLI may explicitly disconnect first.
+type DeleteRequest struct {
+	TunnelName string `json:"tunnel_name"`
+	Disconnect bool   `json:"disconnect,omitempty"`
+}
+
 // ActiveTunnelsResponse lists all currently active tunnel names.
 type ActiveTunnelsResponse struct {
 	Names []string `json:"names"`

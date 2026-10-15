@@ -2,10 +2,12 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/korjwl1/wireguide/internal/config"
@@ -308,45 +310,32 @@ func cmdDelete(args []string) int {
 		return 2
 	}
 	name := args[0]
-	// Disconnect first if it's active, so we don't delete a live tunnel's
-	// config out from under the helper. If it IS active and the disconnect
-	// fails, abort rather than orphaning a running tunnel with no config
-	// (issue #10).
-	if c, err := dialHelper(); err == nil {
-		var active ipc.ActiveTunnelsResponse
-		if err := c.Call(ipc.MethodActiveTunnels, nil, &active); err != nil {
-			c.Close()
-			fmt.Fprintf(os.Stderr, "delete: can't verify whether %q is active: %v\n", name, err)
+	c, _, contactErr := dialHelperRaw()
+	if contactErr == nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		err := c.CallWithContext(ctx, ipc.MethodDelete, ipc.DeleteRequest{TunnelName: name, Disconnect: true}, nil)
+		cancel()
+		c.Close()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "delete:", err)
 			return 1
 		}
-		isActive := false
-		for _, n := range active.Names {
-			if n == name {
-				isActive = true
-				break
-			}
+	} else {
+		// Offline editing remains available when no listener exists. A hung,
+		// incompatible or unauthorized helper is not proof that a tunnel is down.
+		if !errors.Is(contactErr, os.ErrNotExist) && !errors.Is(contactErr, syscall.ECONNREFUSED) {
+			fmt.Fprintln(os.Stderr, "delete: cannot verify helper state:", contactErr)
+			return 1
 		}
-		if isActive {
-			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-			err := c.CallWithContext(ctx, ipc.MethodDisconnect, ipc.DisconnectRequest{TunnelName: name}, nil)
-			cancel()
-			if err != nil {
-				c.Close()
-				fmt.Fprintf(os.Stderr, "delete: %q is connected and could not be disconnected: %v\n", name, err)
-				fmt.Fprintln(os.Stderr, "refusing to delete a live tunnel's config; disconnect it and retry.")
-				return 1
-			}
+		store, err := tunnelStore()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "delete:", err)
+			return 1
 		}
-		c.Close()
-	}
-	store, err := tunnelStore()
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "delete:", err)
-		return 1
-	}
-	if err := store.Delete(name); err != nil {
-		fmt.Fprintln(os.Stderr, "delete:", err)
-		return 1
+		if err := store.Delete(name); err != nil {
+			fmt.Fprintln(os.Stderr, "delete:", err)
+			return 1
+		}
 	}
 	// Drop the tunnel's automation rules so they don't linger and re-attach
 	// to a future same-named tunnel (issue #12). Best-effort.

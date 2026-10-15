@@ -52,12 +52,14 @@ type TunnelService struct {
 	// doesn't carry the gone tunnel's counters.
 	lastKnownStats sync.Map
 
-	// reconcileMu guards lastReconcileSig — used by ReconcileHistoryFromStatus
+	// reconcileMu serializes history reconciliation, reason hints and shutdown.
+	// lastReconcileSig is used by ReconcileHistoryFromStatus
 	// to fast-skip the active-set diff when nothing changed since the prior
 	// status event. The status stream is 1 Hz; without the skip every event
 	// would walk the activeSessions sync.Map even in the steady state.
 	reconcileMu      sync.Mutex
 	lastReconcileSig string
+	historyClosed    bool
 }
 
 // lastKnownTunnelStats is the value type for TunnelService.lastKnownStats.

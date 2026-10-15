@@ -685,3 +685,31 @@ are updated only after commit. Mixed DNS diagnostics evaluate default and
 supplemental resolvers separately and retain both leak and incomplete-check
 results. Manual overrides use positive evidence of a network change; missing
 ARP and IPv6 prefix churn do not clear an explicit Off.
+
+## Review follow-up: profile and event ownership (2026-10-15)
+
+IPC 1.4 adds `Tunnel.Delete`. Like rename, deletion executes under the
+helper's `connectMu`: checking the active set and removing the config cannot
+be interleaved by automation or recovery. GUI deletion rejects an active
+transport. CLI deletion explicitly disconnects first and withdraws pending
+recovery intent. It uses a reachable headless helper too. Offline local
+removal is permitted only when the socket/pipe is absent or refuses a
+connection; timeout, permission and protocol failures do not authorize it.
+The GUI setup path upgrades helpers with older protocol minors even when
+the app version string is unchanged. Background recovery requests reopening
+for setup instead of authorizing an upgrade itself.
+
+Config and metadata mutations share the existing `.imports.lock` across
+processes. A metadata update verifies the config inside that lock. Paired
+config/metadata reads use it too; individual atomic snapshots remain cheap
+reads. A lock first created by a Unix root helper belongs to the user profile
+directory's owner. New profiles start with fresh metadata rather than
+inheriting an orphan from an earlier deletion.
+
+IPC event setup has a separate bounded context and an immutable
+connection/handler pair per subscription. Replacement and client shutdown
+close the previous stream. The existing GUI health tick repairs an event-only
+failure while retaining the working control connection. GUI history changes
+are serialized and stop accepting status events once shutdown closes history.
+Shared status and operation error types live in `domain`; `reconnect` depends
+on those types and its consumer-owned manager interface, not the engine package.

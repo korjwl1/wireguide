@@ -27,9 +27,10 @@ import (
 // the helper), so the CLI needs the helper to say whether a GUI is attached.
 // Minor 3 adds wanted_tunnels so pending restore/backoff remains visible to
 // CLI status/disconnect/stop even when no GUI or transport is currently up.
+// Minor 4 adds serialized profile deletion in the helper.
 const (
 	ProtocolMajor = 1
-	ProtocolMinor = 3
+	ProtocolMinor = 4
 )
 
 // ProtocolVersion is the canonical "major.minor" string used in
@@ -139,14 +140,9 @@ const (
 	MethodIsConnected   = "Tunnel.IsConnected"
 	MethodActiveName    = "Tunnel.ActiveName"
 	MethodActiveTunnels = "Tunnel.ActiveTunnels"
-	// MethodRename runs inside the helper because it has to take connectMu
-	// to make "is the tunnel active?" + file rename atomic with respect to
-	// Connect / Disconnect / wifi-rule auto-connect. Splitting it into
-	// GUI-side file ops + helper-side lock/unlock IPC creates a TOCTOU
-	// window the helper-only design avoids. The architectural cost
-	// (helper imports storage) is accepted; the helper's storage usage is
-	// confined to this single method + read-only Load for wifi rules.
+	// Profile mutations that inspect live state run under helper connectMu.
 	MethodRename           = "Tunnel.Rename"
+	MethodDelete           = "Tunnel.Delete"
 	MethodSetKillSwitch    = "Firewall.SetKillSwitch"
 	MethodSetDNSProtection = "Firewall.SetDNSProtection"
 	MethodSetHealthCheck   = "Monitor.SetHealthCheck"
