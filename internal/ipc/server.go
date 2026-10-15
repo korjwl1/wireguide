@@ -18,12 +18,10 @@ type Handler func(params json.RawMessage) (interface{}, error)
 // exhaust the helper's goroutine + memory budget — which would in
 // practice take down the kill switch with the helper.
 //
-// We intentionally do NOT add per-method rate limiting. The threat model
-// is "same-UID local process" — that attacker already has access to far
-// more dangerous things (the user's WG configs on disk, the ability to
-// kill the helper directly, etc.). A per-method limiter would only
-// complicate the dispatch path without raising the security ceiling.
-// The 32-connection cap is the practical denial-of-service defense.
+// IPC trusts the configured local user for VPN operations; it does not attest
+// the caller's binary or isolate a compromised GUI from those same operations.
+// Peer credentials, frame bounds and connection/deadline limits restrict that
+// surface. They do not protect against malware running as the authorized user.
 const maxConcurrentConns = 32
 
 // A client that stops reading must not hold a connection slot indefinitely.

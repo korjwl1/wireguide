@@ -45,7 +45,7 @@ is provided. Removing only the app leaves a dormant launchd registration. See
 
 WireGuard requires root to create TUN devices and modify routing tables. Rather than running the entire GUI as root:
 
-- **GUI stays unprivileged** — a compromised webview can't touch the network stack
+- **GUI stays unprivileged** — it cannot modify the network stack directly. The helper authenticates the configured local user, who is authorized to request VPN operations over IPC; this is not binary attestation or a sandbox against a compromised GUI
 - **Helper does only privileged work** — smaller attack surface
 - **Helper survives GUI restarts** — closing the window doesn't kill the VPN
 - **LaunchDaemon KeepAlive (crash-only)** — helper auto-restarts on crash, but never runs at boot and exits on its own once no GUI and no tunnels remain
@@ -290,17 +290,22 @@ block drop in all
 
 ### Lifecycle: applied at connect time, not at boot
 
-The kill switch is a **connect-path state transition**, deliberately NOT
-restored when the helper (re)starts. With `kill_switch: true` in
-config.json, a reboot leaves the firewall open until the first tunnel
-comes up — at which point the connect path (GUI `applyFirewallSettings`,
-or helper-side `applyPostConnectFirewall` for automation connects)
-re-enables it. Auto-applying at boot would block ALL traffic on a machine
-with no tunnel up, which is "always-on VPN" semantics — a separate,
-opt-in feature if ever wanted, not a restore. (Other persisted
-helper-side settings — health check, pin-interface, log level — ARE
-restored at helper startup, because they only change behaviour while
-tunnels are up.)
+An idle helper start or reboot does not enable the kill switch from a saved
+setting alone. A subsequent manual or automation connect applies the setting.
+This preserves the user's normal connectivity when no VPN session is wanted.
+
+Same-boot crash recovery is different: eligible desired tunnel intent restores
+the previous kill-switch blockade **before** reconnecting. An explicit saved or
+live Off vetoes stale journal intent. Health check, pin-interface and log-level
+settings load at helper startup; they affect behavior while tunnels are up.
+
+On Windows, base and per-tunnel kill-switch filter IDs are tracked independently
+from DNS and endpoint-loop protection. Disabling the kill switch deletes only
+its filters and widens DNS permits in the same WFP transaction. It leaves
+endpoint protection installed in the existing dynamic session. DNS permits
+with an interface match that interface's LUID; normal-routing exceptions have
+no LUID condition and are excluded while the kill switch is on. A failed
+transaction preserves the previous filters and their tracked IDs for retry.
 
 ## Automation (per-tunnel connect/disconnect rules, issue #12)
 
