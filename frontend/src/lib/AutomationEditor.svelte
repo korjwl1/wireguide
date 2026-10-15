@@ -4,6 +4,7 @@
   import { afterUpdate, onMount, onDestroy } from 'svelte';
   import { Events } from '@wailsio/runtime';
   import Icon from './Icon.svelte';
+  import ErrorNotice from './ErrorNotice.svelte';
   import { t } from '../i18n/index.js';
   import { errText } from './errors.js';
   import SSIDPermissionBanner from './SSIDPermissionBanner.svelte';
@@ -370,7 +371,7 @@
 
       <SSIDPermissionBanner {TunnelService} />
 
-      {#if loadError}<div class="am-error" role="alert">{$t('settings.load_failed')} {loadError}<button class="btn btn-secondary" on:click={() => load(tunnelName)}>{$t('settings.retry')}</button></div>{/if}
+      {#if loadError}<ErrorNotice message={$t('settings.load_failed') + ' ' + loadError} onRetry={() => load(tunnelName)}/>{/if}
       <fieldset class="am-fields" disabled={!rulesLoaded}>
       <div class="am-rules-wrap">
         <div class="am-fade am-fade-top" class:show={canScrollUp}>
@@ -451,7 +452,7 @@
         {#if currentGatewayMAC}<option value={currentGatewayMAC}></option>{/if}
       </datalist>
 
-      {#if saveError}<div class="am-error">{saveError}</div>{/if}
+      {#if saveError}<ErrorNotice message={saveError}/>{/if}
 
       <button class="am-add" on:click={addRule} disabled={!rulesLoaded || rules.length >= MAX_RULES}>
         <Icon name="plus" size={13} strokeWidth={2.25} /> {$t('automation.add_rule')}
@@ -579,5 +580,4 @@
   }
   .am-add:hover:not(:disabled) { background: color-mix(in srgb, var(--accent) 10%, transparent); }
   .am-add:disabled { opacity: 0.45; cursor: not-allowed; }
-  .am-error { margin-top: 8px; font: 400 12px var(--font-sans); color: var(--error-text, #ff453a); flex-shrink: 0; }
 </style>

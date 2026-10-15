@@ -7,6 +7,7 @@
   import { connectionStatus, tunnels } from '../stores/tunnels.js';
   import { compactList } from '../stores/ui.js';
   import Icon from './Icon.svelte';
+  import ErrorNotice from './ErrorNotice.svelte';
   import { loadSettings, patchSettings, settingsErrors } from '../stores/settings.js';
   import { errText } from './errors.js';
 
@@ -326,8 +327,8 @@
   <div class="modal" use:modal={close} tabindex="-1" role="dialog" aria-modal="true" aria-labelledby="settings-title">
     <h3 id="settings-title">{$t('settings.title')}</h3>
 
-    {#if loadError}<div class="settings-error" role="alert">{$t('settings.load_failed')} {loadError}<button class="btn btn-secondary" on:click={load}>{$t('settings.retry')}</button></div>{/if}
-    {#each Object.entries($settingsErrors) as [key, failure]}<div class="settings-error" role="alert">{$t('settings.save_failed')} {failure}<button class="btn btn-secondary" disabled={busyFields[key]} on:click={() => applyToggle(key, settings[key])}>{$t('settings.retry')}</button></div>{/each}
+    {#if loadError}<ErrorNotice message={$t('settings.load_failed') + ' ' + loadError} onRetry={load}/>{/if}
+    {#each Object.entries($settingsErrors) as [key, failure]}<ErrorNotice message={$t('settings.save_failed') + ' ' + failure} busy={!loaded || busyFields[key]} onRetry={() => applyToggle(key, settings[key])}/>{/each}
     <fieldset disabled={!loaded} class="settings-fields">
     <div class="settings-layout">
       <div class="settings-sidebar" role="tablist" aria-orientation="vertical" aria-label={$t('settings.title')}>
@@ -579,7 +580,6 @@
 
 <style>
   .settings-fields { border: 0; padding: 0; margin: 0; min-width: 0; display: flex; flex-direction: column; flex: 1; min-height: 0; }
-  .settings-error { color: var(--danger, #e74c3c); padding: 8px 0; overflow-wrap: anywhere; }
   .modal-backdrop {
     position: fixed;
     inset: 0;
