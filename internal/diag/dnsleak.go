@@ -82,7 +82,15 @@ func RunDNSLeakTestContext(ctx context.Context, expectedDNS []string) *DNSLeakRe
 
 	// Check system resolver configuration
 	// On macOS: scutil --dns, on Linux: /etc/resolv.conf
-	systemDNS := getSystemDNSServers()
+	systemDNS, err := systemResolverReader()
+	if err != nil {
+		result.Error = fmt.Sprintf("cannot read system DNS resolvers: %v", err)
+		return result
+	}
+	if len(systemDNS) == 0 {
+		result.Error = "no system DNS resolvers found; cannot verify DNS leakage"
+		return result
+	}
 
 	expectedSet := make(map[string]bool)
 	for _, dns := range expectedDNS {
@@ -121,12 +129,13 @@ func RunDNSLeakTestContext(ctx context.Context, expectedDNS []string) *DNSLeakRe
 			if names, err := (&net.Resolver{}).LookupAddr(lookupCtx, dnsIP); err == nil && len(names) > 0 {
 				hn = names[0]
 			}
-			responds := testDNSServerCtx(lookupCtx, dnsIP, testDomain)
+			responds := probeDNSServer(lookupCtx, dnsIP, testDomain)
 			probes <- probeResult{idx: idx, hostname: hn, responds: responds}
 		}(i, dns)
 	}
 
 	leaked := false
+	responses := 0
 	for range systemDNS {
 		select {
 		case <-ctx.Done():
@@ -134,6 +143,9 @@ func RunDNSLeakTestContext(ctx context.Context, expectedDNS []string) *DNSLeakRe
 			result.Leaked = leaked
 			return result
 		case p := <-probes:
+			if p.responds {
+				responses++
+			}
 			result.DNSServers[p.idx].Hostname = p.hostname
 			if !result.DNSServers[p.idx].IsVPN && p.responds {
 				leaked = true
@@ -142,6 +154,9 @@ func RunDNSLeakTestContext(ctx context.Context, expectedDNS []string) *DNSLeakRe
 	}
 
 	result.Leaked = leaked
+	if responses == 0 {
+		result.Error = "no DNS server responded; cannot verify DNS leakage"
+	}
 	return result
 }
 
@@ -169,13 +184,10 @@ func testDNSServerCtx(ctx context.Context, server, domain string) bool {
 	return true
 }
 
-func getSystemDNSServers() []string {
-	servers, err := readSystemResolvers()
-	if err != nil {
-		return nil
-	}
-	return servers
-}
+// OS enumeration and packet probing are separate so tests can exercise
+// failure/empty/unresponsive results without changing host networking.
+var systemResolverReader = readSystemResolvers
+var probeDNSServer = testDNSServerCtx
 
 // readSystemResolvers detects configured DNS servers using OS-specific methods.
 func readSystemResolvers() ([]string, error) {
