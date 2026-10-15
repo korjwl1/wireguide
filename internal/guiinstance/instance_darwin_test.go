@@ -175,3 +175,28 @@ func TestMacOSLockDoesNotFollowSymlinks(t *testing.T) {
 		t.Fatal("modified an unrelated file")
 	}
 }
+
+func TestMacOSMigrationActivatesOldReservation(t *testing.T) {
+	dir := macInstanceDir(t)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	old, err := acquireDarwinAt(ctx, dir, noLegacyApplication)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer old.Close()
+	active, err := activateOldReservation(ctx, dir)
+	if err != nil || !active {
+		t.Fatalf("migration skipped running old binary: active=%v err=%v", active, err)
+	}
+	select {
+	case <-old.Requests():
+	case <-ctx.Done():
+		t.Fatal("old GUI was not activated")
+	}
+	old.Close()
+	active, err = activateOldReservation(ctx, dir)
+	if err != nil || active {
+		t.Fatalf("stale old lock prevented new primary: %v %v", active, err)
+	}
+}
