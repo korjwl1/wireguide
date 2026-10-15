@@ -8,7 +8,7 @@
   import { compactList } from '../stores/ui.js';
   import Icon from './Icon.svelte';
   import ErrorNotice from './ErrorNotice.svelte';
-  import { loadSettings, patchSettings, settingsErrors } from '../stores/settings.js';
+  import { loadSettings, patchSettings, settingsErrors, settingRetryValue } from '../stores/settings.js';
   import { errText } from './errors.js';
 
   export let TunnelService;
@@ -328,7 +328,7 @@
     <h3 id="settings-title">{$t('settings.title')}</h3>
 
     {#if loadError}<ErrorNotice message={$t('settings.load_failed') + ' ' + loadError} onRetry={load}/>{/if}
-    {#each Object.entries($settingsErrors) as [key, failure] (key)}<ErrorNotice message={$t('settings.save_failed') + ' ' + failure} busy={!loaded || busyFields[key]} onRetry={() => applyField(key, settings[key])}/>{/each}
+    {#each Object.entries($settingsErrors) as [key, failure] (key)}<ErrorNotice message={$t('settings.save_failed') + ' ' + failure} busy={!loaded || busyFields[key]} onRetry={() => applyField(key, settingRetryValue(key))}/>{/each}
     <fieldset disabled={!loaded} class="settings-fields">
     <div class="settings-layout">
       <div class="settings-sidebar" role="tablist" aria-orientation="vertical" aria-label={$t('settings.title')}>
