@@ -145,34 +145,14 @@ list, import, rename, delete and automation edits work against local files.
 // re-arm the helper's 10s "GUI disconnected" shutdown window — a status
 // query would cut the helper's life short. See ipc.Request.Transient.
 func dialHelper() (*ipc.Client, error) {
-	c, ping, err := dialHelperRaw()
-	if err != nil {
-		return nil, err
-	}
-	// A helper with no GUI but a tunnel still up (the GUI crashed; tunnels
-	// outlive the app, wg-quick style) is live state the CLI must act on:
-	// delete/rename/set/disconnect all guard against exactly that tunnel.
-	// This is the same exception cmdStatus and cmdStop make.
-	if !helperWorking(ping) && activeTunnelCount(c) <= 0 {
-		c.Close()
-		return nil, errAppNotRunning
-	}
-	return c, nil
+	client, _, err := contactHelper(requireWorkingHelper)
+	return client, err
 }
 
-// dialHelperStrict is dialHelper without the live-tunnel exception: it
-// succeeds only when a GUI is attached. cmdStart uses it, because a headless
-// helper holding a tunnel is not "the app is running".
+// dialHelperStrict requires an attached GUI for ctl start semantics.
 func dialHelperStrict() (*ipc.Client, error) {
-	c, ping, err := dialHelperRaw()
-	if err != nil {
-		return nil, err
-	}
-	if !appRunning(ping) {
-		c.Close()
-		return nil, errAppNotRunning
-	}
-	return c, nil
+	client, _, err := contactHelper(requireGUIHelper)
+	return client, err
 }
 
 var errAppNotRunning = fmt.Errorf("WireGuide is not running (open the app, or run 'wireguide ctl start')")
@@ -189,23 +169,46 @@ var helperSocketPath = ipc.DefaultSocketPath
 
 // dialHelperRaw connects and pings without judging whether a GUI is attached.
 func dialHelperRaw() (*ipc.Client, ipc.PingResponse, error) {
-	var ping ipc.PingResponse
-	addr := helperSocketPath()
-	// With launchd socket activation the connect succeeds immediately and
-	// the helper answers once it has started, so the dial's own initial
-	// ping gets the same budget as the explicit one below.
+	return contactHelper(anyHelper)
+}
+
+type helperPolicy uint8
+
+const (
+	anyHelper helperPolicy = iota
+	requireWorkingHelper
+	requireGUIHelper
+)
+
+func contactHelper(policy helperPolicy) (*ipc.Client, ipc.PingResponse, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), pingTimeout())
 	defer cancel()
-	c, err := ipc.NewTransientClientContext(ctx, addr)
+	client, err := ipc.NewTransientClientContext(ctx, helperSocketPath())
 	if err != nil {
-		return nil, ping, fmt.Errorf("cannot reach the WireGuide helper (is the app running?): %w", err)
+		return nil, ipc.PingResponse{}, fmt.Errorf("cannot reach the WireGuide helper: %w", err)
 	}
-	// Confirm it's actually alive, not just a stale socket.
-	if err := c.CallWithContext(ctx, ipc.MethodPing, nil, &ping); err != nil {
-		c.Close()
-		return nil, ping, fmt.Errorf("the WireGuide helper is not responding (is the app running?): %w", err)
+	ping := client.Handshake()
+	reject := func(err error) (*ipc.Client, ipc.PingResponse, error) {
+		client.Close()
+		return nil, ping, err
 	}
-	return c, ping, nil
+	switch policy {
+	case requireGUIHelper:
+		if !appRunning(ping) {
+			return reject(errAppNotRunning)
+		}
+	case requireWorkingHelper:
+		if !helperWorking(ping) {
+			active := activeTunnelCount(client)
+			if active < 0 {
+				return reject(errors.New("cannot verify the helper's active tunnels"))
+			}
+			if active == 0 {
+				return reject(errAppNotRunning)
+			}
+		}
+	}
+	return client, ping, nil
 }
 
 // pingTimeout is how long the CLI waits for a helper to answer. On macOS the

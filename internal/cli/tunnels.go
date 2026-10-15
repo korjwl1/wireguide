@@ -88,6 +88,10 @@ func cmdStatus(args []string) int {
 			fmt.Printf("○ %s  waiting to reconnect\n", r.TunnelName)
 			continue
 		}
+		if r.State == domain.StateDisconnecting {
+			fmt.Printf("○ %s  disconnecting\n", r.TunnelName)
+			continue
+		}
 		if r.State == domain.StateConnecting {
 			fmt.Printf("○ %s  connecting\n", r.TunnelName)
 			continue

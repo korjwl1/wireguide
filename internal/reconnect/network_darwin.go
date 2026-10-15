@@ -196,10 +196,11 @@ func (d *darwinNetworkChangeDetector) poll() {
 			if heartbeat%30 == 0 {
 				slog.Debug("network polling heartbeat", "iface", iface)
 			}
-			previous := gate.lastIface
+			previous := gate.deliveredIface
 			if !gate.observe(iface, time.Now()) {
 				continue
 			}
+			gate.deliveredIface = iface
 			slog.Info("network primary interface changed", "prev", previous, "now", iface)
 			d.sendChange()
 		}

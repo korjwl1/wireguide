@@ -498,12 +498,7 @@ func (m *Monitor) startReconnectTunnel(tunnelName string, onlyIfIdle bool, still
 		defer close(entry.done)
 		defer func() {
 			// A recovered panic must not permanently occupy a retry slot.
-			m.mu.Lock()
-			removed := m.retries[tunnelName] == entry
-			if removed {
-				delete(m.retries, tunnelName)
-			}
-			m.mu.Unlock()
+			m.clearRetryIfCurrent(tunnelName, entry)
 		}()
 		defer func() {
 			if r := recover(); r != nil {
@@ -548,7 +543,7 @@ func (m *Monitor) disconnectAll() error {
 	var names []string
 	for _, st := range m.manager.AllStatuses() {
 		if st != nil && st.TunnelName != "" &&
-			(st.State == domain.StateConnected || st.State == domain.StateConnecting) {
+			(st.State == domain.StateConnected || st.State == domain.StateConnecting || st.State == domain.StateDisconnecting) {
 			names = append(names, st.TunnelName)
 		}
 	}
@@ -610,11 +605,7 @@ func (m *Monitor) reconnectWithBackoff(ctx context.Context, tunnelName string, e
 				Attempt:      attempt - 1,
 				MaxAttempts:  m.cfg.MaxAttempts,
 			})
-			m.mu.Lock()
-			if cur, ok := m.retries[tunnelName]; ok && cur == entry {
-				delete(m.retries, tunnelName)
-			}
-			m.mu.Unlock()
+			m.clearRetryIfCurrent(tunnelName, entry)
 			return
 		}
 
@@ -655,11 +646,7 @@ func (m *Monitor) reconnectWithBackoff(ctx context.Context, tunnelName string, e
 		if preflight != nil {
 			if err := preflight(ctx, tunnelName); err != nil {
 				slog.Info("reconnect preparation stopped", "tunnel", tunnelName, "error", err)
-				m.mu.Lock()
-				if cur, ok := m.retries[tunnelName]; ok && cur == entry {
-					delete(m.retries, tunnelName)
-				}
-				m.mu.Unlock()
+				m.clearRetryIfCurrent(tunnelName, entry)
 				m.notifyStatus(State{Reconnecting: false})
 				return
 			}
@@ -684,9 +671,7 @@ func (m *Monitor) reconnectWithBackoff(ctx context.Context, tunnelName string, e
 		if m.fwSuspendFn != nil && !nothingUp && (tunnelName != "" || !legacyTornDown) {
 			if err := m.fwSuspendFn(); err != nil {
 				slog.Warn("failed to suspend firewall; keeping transport for retry", "error", err)
-				m.mu.Lock()
-				entry.delay = min(delay*2, m.cfg.MaxDelay)
-				m.mu.Unlock()
+				m.advanceRetryDelay(entry, delay)
 				continue
 			} else {
 				firewallWasSuspended = true
@@ -721,12 +706,7 @@ func (m *Monitor) reconnectWithBackoff(ctx context.Context, tunnelName string, e
 			slog.Warn("pre-reconnect disconnect failed; will retry after backoff",
 				"tunnel", tunnelName, "attempt", attempt, "error", disconnectErr)
 			resumeFirewall()
-			m.mu.Lock()
-			entry.delay = delay * 2
-			if entry.delay > m.cfg.MaxDelay {
-				entry.delay = m.cfg.MaxDelay
-			}
-			m.mu.Unlock()
+			m.advanceRetryDelay(entry, delay)
 			continue
 		}
 
@@ -750,11 +730,7 @@ func (m *Monitor) reconnectWithBackoff(ctx context.Context, tunnelName string, e
 			if errors.Is(err, ErrNothingToReconnect) {
 				resumeFirewall()
 				m.notifyStatus(State{Reconnecting: false})
-				m.mu.Lock()
-				if cur, ok := m.retries[tunnelName]; ok && cur == entry {
-					delete(m.retries, tunnelName)
-				}
-				m.mu.Unlock()
+				m.clearRetryIfCurrent(tunnelName, entry)
 				return
 			}
 			slog.Warn("reconnection failed", "attempt", attempt, "tunnel", tunnelName, "error", err)
@@ -766,12 +742,7 @@ func (m *Monitor) reconnectWithBackoff(ctx context.Context, tunnelName string, e
 			// can read it for an informative GetState snapshot, and so
 			// future reconnects of THIS tunnel don't reset to
 			// InitialDelay if the same goroutine is later reused.
-			m.mu.Lock()
-			entry.delay = delay * 2
-			if entry.delay > m.cfg.MaxDelay {
-				entry.delay = m.cfg.MaxDelay
-			}
-			m.mu.Unlock()
+			m.advanceRetryDelay(entry, delay)
 			continue
 		}
 
@@ -828,4 +799,18 @@ func (m *Monitor) notifyStatus(state State) {
 	if m.statusFn != nil {
 		m.statusFn(state)
 	}
+}
+
+func (m *Monitor) clearRetryIfCurrent(name string, entry *retryState) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.retries[name] == entry {
+		delete(m.retries, name)
+	}
+}
+
+func (m *Monitor) advanceRetryDelay(entry *retryState, previous time.Duration) {
+	m.mu.Lock()
+	entry.delay = min(previous*2, m.cfg.MaxDelay)
+	m.mu.Unlock()
 }
