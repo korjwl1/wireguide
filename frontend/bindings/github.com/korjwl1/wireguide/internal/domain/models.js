@@ -280,14 +280,6 @@ export class InterfaceConfig {
              */
             this["extra_entries"] = undefined;
         }
-        if (/** @type {any} */(false)) {
-            /**
-             * Unrecognized keys preserved for round-tripping
-             * @member
-             * @type {{ [_ in string]?: string } | undefined}
-             */
-            this["extra_keys"] = undefined;
-        }
 
         Object.assign(this, $$source);
     }
@@ -301,7 +293,6 @@ export class InterfaceConfig {
         const $$createField1_0 = $$createType0;
         const $$createField2_0 = $$createType0;
         const $$createField11_0 = $$createType4;
-        const $$createField12_0 = $$createType5;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("address" in $$parsedSource) {
             $$parsedSource["address"] = $$createField1_0($$parsedSource["address"]);
@@ -311,9 +302,6 @@ export class InterfaceConfig {
         }
         if ("extra_entries" in $$parsedSource) {
             $$parsedSource["extra_entries"] = $$createField11_0($$parsedSource["extra_entries"]);
-        }
-        if ("extra_keys" in $$parsedSource) {
-            $$parsedSource["extra_keys"] = $$createField12_0($$parsedSource["extra_keys"]);
         }
         return new InterfaceConfig(/** @type {Partial<InterfaceConfig>} */($$parsedSource));
     }
@@ -375,14 +363,6 @@ export class PeerConfig {
              */
             this["extra_entries"] = undefined;
         }
-        if (/** @type {any} */(false)) {
-            /**
-             * Unrecognized keys preserved for round-tripping
-             * @member
-             * @type {{ [_ in string]?: string } | undefined}
-             */
-            this["extra_keys"] = undefined;
-        }
 
         Object.assign(this, $$source);
     }
@@ -395,16 +375,12 @@ export class PeerConfig {
     static createFrom($$source = {}) {
         const $$createField3_0 = $$createType0;
         const $$createField5_0 = $$createType4;
-        const $$createField6_0 = $$createType5;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("allowed_ips" in $$parsedSource) {
             $$parsedSource["allowed_ips"] = $$createField3_0($$parsedSource["allowed_ips"]);
         }
         if ("extra_entries" in $$parsedSource) {
             $$parsedSource["extra_entries"] = $$createField5_0($$parsedSource["extra_entries"]);
-        }
-        if ("extra_keys" in $$parsedSource) {
-            $$parsedSource["extra_keys"] = $$createField6_0($$parsedSource["extra_keys"]);
         }
         return new PeerConfig(/** @type {Partial<PeerConfig>} */($$parsedSource));
     }
@@ -423,6 +399,7 @@ export const State = {
 
     StateDisconnected: "disconnected",
     StateConnecting: "connecting",
+    StateDisconnecting: "disconnecting",
     StateConnected: "connected",
     StateError: "error",
 };
@@ -470,8 +447,8 @@ export class WireGuardConfig {
      * @returns {WireGuardConfig}
      */
     static createFrom($$source = {}) {
-        const $$createField1_0 = $$createType6;
-        const $$createField2_0 = $$createType8;
+        const $$createField1_0 = $$createType5;
+        const $$createField2_0 = $$createType7;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("interface" in $$parsedSource) {
             $$parsedSource["interface"] = $$createField1_0($$parsedSource["interface"]);
@@ -489,7 +466,6 @@ const $$createType1 = ConnectionStatus.createFrom;
 const $$createType2 = $Create.Array($$createType1);
 const $$createType3 = ConfigKey.createFrom;
 const $$createType4 = $Create.Array($$createType3);
-const $$createType5 = $Create.Map($Create.Any, $Create.Any);
-const $$createType6 = InterfaceConfig.createFrom;
-const $$createType7 = PeerConfig.createFrom;
-const $$createType8 = $Create.Array($$createType7);
+const $$createType5 = InterfaceConfig.createFrom;
+const $$createType6 = PeerConfig.createFrom;
+const $$createType7 = $Create.Array($$createType6);

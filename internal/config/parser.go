@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"sort"
 	"strconv"
 	"strings"
 
@@ -164,10 +163,7 @@ func parseInterfaceKey(iface *InterfaceConfig, key, value string, lineNum int) e
 		iface.PostDown = appendScriptLine(iface.PostDown, value)
 	default:
 		slog.Warn("ignoring unknown [Interface] key", "line", lineNum, "key", key)
-		if iface.ExtraKeys == nil {
-			iface.ExtraKeys = make(map[string]string)
-		}
-		iface.ExtraKeys[key] = value
+
 		iface.ExtraEntries = append(iface.ExtraEntries, domain.ConfigKey{Key: key, Value: value})
 	}
 	return nil
@@ -197,10 +193,7 @@ func parsePeerKey(peer *PeerConfig, key, value string, lineNum int) error {
 		peer.PersistentKeepalive = n
 	default:
 		slog.Warn("ignoring unknown [Peer] key", "line", lineNum, "key", key)
-		if peer.ExtraKeys == nil {
-			peer.ExtraKeys = make(map[string]string)
-		}
-		peer.ExtraKeys[key] = value
+
 		peer.ExtraEntries = append(peer.ExtraEntries, domain.ConfigKey{Key: key, Value: value})
 	}
 	return nil
@@ -236,7 +229,7 @@ func Serialize(cfg *WireGuardConfig) string {
 	writeScriptLines(&b, "PostUp", cfg.Interface.PostUp)
 	writeScriptLines(&b, "PreDown", cfg.Interface.PreDown)
 	writeScriptLines(&b, "PostDown", cfg.Interface.PostDown)
-	writeExtraKeys(&b, cfg.Interface.ExtraKeys, cfg.Interface.ExtraEntries)
+	writeExtraEntries(&b, cfg.Interface.ExtraEntries)
 
 	for _, peer := range cfg.Peers {
 		b.WriteString("\n[Peer]\n")
@@ -253,7 +246,7 @@ func Serialize(cfg *WireGuardConfig) string {
 		if peer.PersistentKeepalive > 0 {
 			b.WriteString("PersistentKeepalive = " + strconv.Itoa(peer.PersistentKeepalive) + "\n")
 		}
-		writeExtraKeys(&b, peer.ExtraKeys, peer.ExtraEntries)
+		writeExtraEntries(&b, peer.ExtraEntries)
 	}
 
 	return b.String()
@@ -297,21 +290,9 @@ func splitAndTrim(s string) []string {
 	return result
 }
 
-// writeExtraKeys keeps exported configs stable across runs.
-func writeExtraKeys(b *strings.Builder, keys map[string]string, entries []domain.ConfigKey) {
-	seen := map[string]bool{}
+// writeExtraEntries preserves unknown fields and repeated entries verbatim.
+func writeExtraEntries(b *strings.Builder, entries []domain.ConfigKey) {
 	for _, entry := range entries {
 		b.WriteString(entry.Key + " = " + entry.Value + "\n")
-		seen[entry.Key] = true
-	}
-	names := make([]string, 0, len(keys))
-	for key := range keys {
-		if !seen[key] {
-			names = append(names, key)
-		}
-	}
-	sort.Strings(names)
-	for _, key := range names {
-		b.WriteString(key + " = " + keys[key] + "\n")
 	}
 }

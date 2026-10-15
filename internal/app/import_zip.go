@@ -17,8 +17,11 @@ type ZipImportResult struct {
 }
 
 // zipUniqueName returns a tunnel name that doesn't conflict with existing ones.
-func (s *TunnelService) zipUniqueName(base string) string {
-	names, _ := s.tunnelStore.List()
+func (s *TunnelService) zipUniqueName(base string) (string, error) {
+	names, err := s.tunnelStore.List()
+	if err != nil {
+		return "", err
+	}
 	exists := func(name string) bool {
 		for _, existing := range names {
 			if strings.EqualFold(existing, name) {
@@ -28,17 +31,17 @@ func (s *TunnelService) zipUniqueName(base string) string {
 		return false
 	}
 	if !exists(base) {
-		return base
+		return base, nil
 	}
 	for i := 1; i < 1000; i++ {
 		suffix := fmt.Sprintf("-%d", i)
 		candidate := base[:min(len(base), 64-len(suffix))] + suffix
 		if !exists(candidate) {
-			return candidate
+			return candidate, nil
 		}
 	}
 	suffix := fmt.Sprintf("-%d", time.Now().UnixMilli())
-	return base[:min(len(base), 64-len(suffix))] + suffix
+	return base[:min(len(base), 64-len(suffix))] + suffix, nil
 }
 
 // ImportZip extracts all .conf files from a zip archive and imports each one.
@@ -129,7 +132,11 @@ func (s *TunnelService) importZipReader(r *zip.Reader) ([]ZipImportResult, error
 			continue
 		}
 		baseName := strings.TrimSuffix(filepath.Base(f.Name), filepath.Ext(f.Name))
-		name := s.zipUniqueName(baseName)
+		name, err := s.zipUniqueName(baseName)
+		if err != nil {
+			results = append(results, ZipImportResult{Name: baseName, Error: err.Error()})
+			continue
+		}
 		if _, err := s.ImportConfig(name, string(data)); err != nil {
 			results = append(results, ZipImportResult{Name: baseName, Error: err.Error()})
 		} else {
