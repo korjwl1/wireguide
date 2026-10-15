@@ -151,15 +151,14 @@ func NewSettingsStore(configDir string) *SettingsStore {
 }
 
 // Load reads settings from disk. Returns defaults if file doesn't exist.
-func (s *SettingsStore) Load() (*Settings, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.loadLocked()
+func (s *SettingsStore) Load() (settings *Settings, err error) {
+	err = s.withWriteLock(func() error { var readErr error; settings, readErr = s.loadLocked(); return readErr })
+	return settings, err
 }
 
 // loadLocked is Load without the mutex, for callers (Update) that already
 // hold s.mu. Writes are atomic renames, so a concurrent writer never
-// exposes a torn file to a reader — no file lock is needed just to read.
+// exposes a torn file. The file lock also protects corrupt-file quarantine.
 func (s *SettingsStore) loadLocked() (*Settings, error) {
 	data, err := os.ReadFile(s.path)
 	if err != nil {

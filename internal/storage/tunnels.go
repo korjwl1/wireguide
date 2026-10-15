@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -14,8 +15,11 @@ import (
 
 // TunnelStore manages .conf files on disk.
 type TunnelStore struct {
-	mu  sync.RWMutex
-	dir string
+	mu       sync.RWMutex
+	dir      string
+	root     *os.Root // borrowed only while the local lock is held
+	ownerUID *int
+	ownerSID string
 }
 
 // NewTunnelStore creates a TunnelStore for the given directory.
@@ -50,11 +54,14 @@ func (s *TunnelStore) saveLocked(cfg *config.WireGuardConfig) error {
 	// A tunnel that doesn't exist yet is being created now — remember when,
 	// so the date-added sort survives later edits (issue #17).
 	isNew := !s.exists(cfg.Name)
+	if isNew {
+		if err := s.root.Remove(cfg.Name + ".meta.json"); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+	}
 
 	content := config.Serialize(cfg)
-	path := s.path(cfg.Name)
-
-	if err := atomicfile.WriteFile(path, []byte(content), 0600); err != nil {
+	if err := atomicfile.WriteInRoot(s.root, cfg.Name+".conf", []byte(content), 0600); err != nil {
 		return err
 	}
 
@@ -81,7 +88,12 @@ func (s *TunnelStore) Load(name string) (*config.WireGuardConfig, error) {
 
 // loadConfigLocked bounds config reads before parsing. Caller holds s.mu.
 func (s *TunnelStore) loadConfigLocked(name string) (*config.WireGuardConfig, error) {
-	f, err := os.Open(s.path(name))
+	root, release, err := s.borrowRoot()
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	f, err := s.openProfileFile(root, name+".conf")
 	if err != nil {
 		return nil, err
 	}
@@ -109,12 +121,11 @@ func (s *TunnelStore) Delete(name string) error {
 	}
 	defer unlock()
 
-	path := s.path(name)
-	err = os.Remove(path)
+	err = s.root.Remove(name + ".conf")
 	if err != nil && !os.IsNotExist(err) {
 		return err
 	}
-	_ = os.Remove(s.metaPath(name))
+	_ = s.root.Remove(name + ".meta.json")
 	return err
 }
 
@@ -136,29 +147,9 @@ func (s *TunnelStore) Rename(oldName, newName string) error {
 	}
 	defer unlock()
 
-	// Validate that oldName resolves to a path within the tunnels directory
-	// to prevent path traversal (e.g., oldName = "../../etc/shadow").
-	oldPath := s.path(oldName)
-	absOld, err := filepath.Abs(oldPath)
-	if err != nil {
-		return fmt.Errorf("invalid old name: %w", err)
+	if filepath.Base(oldName) != oldName || oldName == "." || oldName == ".." {
+		return fmt.Errorf("invalid old tunnel name %q", oldName)
 	}
-	absDir, err := filepath.Abs(s.dir)
-	if err != nil {
-		return fmt.Errorf("invalid directory: %w", err)
-	}
-	// Resolve symlinks so that a symlinked tunnels directory (or symlinked
-	// path components in oldName) cannot bypass the HasPrefix check.
-	if resolved, err := filepath.EvalSymlinks(absDir); err == nil {
-		absDir = resolved
-	}
-	if resolved, err := filepath.EvalSymlinks(absOld); err == nil {
-		absOld = resolved
-	}
-	if !strings.HasPrefix(absOld, absDir+string(filepath.Separator)) {
-		return fmt.Errorf("tunnel name %q escapes tunnels directory", oldName)
-	}
-
 	if !s.exists(oldName) {
 		return fmt.Errorf("tunnel %q does not exist", oldName)
 	}
@@ -174,71 +165,30 @@ func (s *TunnelStore) Rename(oldName, newName string) error {
 			return fmt.Errorf("tunnel %q conflicts with existing %q on case-insensitive filesystems; choose a distinct name", newName, variant)
 		}
 	}
-	// Check both destinations before moving the config and its metadata.
-	// The advisory checks cannot guarantee a later rename (especially with
-	// Windows sharing locks). If metadata rename fails, roll back the config
-	// and report any rollback failure so the split state is visible.
-	newPath := s.path(newName)
-	oldMeta := s.metaPath(oldName)
-	newMeta := s.metaPath(newName)
-	hasMeta := false
-	if _, err := os.Stat(oldMeta); err == nil {
-		hasMeta = true
+	oldPath, newPath := oldName+".conf", newName+".conf"
+	oldMeta, newMeta := oldName+".meta.json", newName+".meta.json"
+	_, err = s.root.Stat(oldMeta)
+	hasMeta := err == nil
+	if err != nil && !os.IsNotExist(err) {
+		return err
 	}
-
-	// Skip the writability pre-check for a pure case change: on a
-	// case-insensitive filesystem the destination "already exists"
-	// (it's the same file), which the probe would reject. os.Rename
-	// handles the case-only rename directly and surfaces any real error.
+	// An orphan belongs to an earlier profile, never to the renamed one.
 	if !pureCaseChange {
-		if err := preCheckWritable(oldPath, newPath); err != nil {
-			return fmt.Errorf("rename pre-check failed for .conf: %w", err)
-		}
-		if hasMeta {
-			if err := preCheckWritable(oldMeta, newMeta); err != nil {
-				return fmt.Errorf("rename pre-check failed for .meta: %w", err)
-			}
+		if err := s.root.Remove(newMeta); err != nil && !os.IsNotExist(err) {
+			return err
 		}
 	}
-
-	if err := os.Rename(oldPath, newPath); err != nil {
+	if err := s.root.Rename(oldPath, newPath); err != nil {
 		return err
 	}
 	if hasMeta {
-		if err := os.Rename(oldMeta, newMeta); err != nil {
-			// A pre-check cannot rule out sharing violations or later races.
-			// Roll back .conf and surface both errors if that also fails.
-			if rollbackErr := os.Rename(newPath, oldPath); rollbackErr != nil {
-				return fmt.Errorf("rename meta failed after pre-check (%w) AND .conf rollback also failed (%v) — manual fix required", err, rollbackErr)
+		if err := s.root.Rename(oldMeta, newMeta); err != nil {
+			if rollbackErr := s.root.Rename(newPath, oldPath); rollbackErr != nil {
+				return fmt.Errorf("rename metadata: %w; config rollback: %v", err, rollbackErr)
 			}
-			return fmt.Errorf("rename meta: %w (rolled back .conf rename)", err)
+			return fmt.Errorf("rename metadata: %w (config rolled back)", err)
 		}
 	}
-	return nil
-}
-
-// preCheckWritable checks source accessibility and destination absence. Its
-// hard-link probe is advisory: it does not prove rename permission or Windows
-// delete-sharing support. Actual rename failures still require rollback.
-func preCheckWritable(src, dst string) error {
-	if _, err := os.Stat(src); err != nil {
-		return fmt.Errorf("source not accessible: %w", err)
-	}
-	if _, err := os.Stat(dst); err == nil {
-		return fmt.Errorf("destination already exists: %s", dst)
-	} else if !os.IsNotExist(err) {
-		return fmt.Errorf("destination check failed: %w", err)
-	}
-	// Hardlink probe — same directory so EXDEV is impossible (TunnelStore
-	// keeps .conf and .meta in s.dir).
-	probe := src + ".rename-probe"
-	if err := os.Link(src, probe); err != nil {
-		// Hardlink failed — either filesystem doesn't support it (FAT)
-		// or permission. Fall through; the actual rename will surface
-		// the real error if it can't proceed.
-		return nil
-	}
-	os.Remove(probe)
 	return nil
 }
 
@@ -247,7 +197,20 @@ func (s *TunnelStore) List() ([]string, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	entries, err := os.ReadDir(s.dir)
+	root, release, err := s.borrowRoot()
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	dir, err := root.Open(".")
+	if err != nil {
+		return nil, err
+	}
+	defer dir.Close()
+	entries, err := dir.ReadDir(-1)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil
@@ -264,6 +227,7 @@ func (s *TunnelStore) List() ([]string, error) {
 			names = append(names, strings.TrimSuffix(name, ".conf"))
 		}
 	}
+	sort.Strings(names)
 	return names, nil
 }
 
@@ -281,7 +245,12 @@ func (s *TunnelStore) Exists(name string) bool {
 
 // exists is the internal lock-free version for use within already-locked methods.
 func (s *TunnelStore) exists(name string) bool {
-	_, err := os.Stat(s.path(name))
+	root, release, err := s.borrowRoot()
+	if err != nil {
+		return false
+	}
+	defer release()
+	_, err = root.Stat(name + ".conf")
 	return err == nil
 }
 
@@ -296,7 +265,12 @@ func (s *TunnelStore) ModTimeUnix(name string) int64 {
 	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	fi, err := os.Stat(s.path(name))
+	root, release, err := s.borrowRoot()
+	if err != nil {
+		return 0
+	}
+	defer release()
+	fi, err := root.Stat(name + ".conf")
 	if err != nil {
 		return 0
 	}
@@ -311,7 +285,17 @@ func (s *TunnelStore) ModTimeUnix(name string) int64 {
 // saving "work" over an existing "Work" would silently destroy the first
 // tunnel's private key. Detecting the variant lets callers refuse instead.
 func (s *TunnelStore) caseVariantLocked(name string) (string, bool) {
-	entries, err := os.ReadDir(s.dir)
+	root, release, err := s.borrowRoot()
+	if err != nil {
+		return "", false
+	}
+	defer release()
+	dir, err := root.Open(".")
+	if err != nil {
+		return "", false
+	}
+	defer dir.Close()
+	entries, err := dir.ReadDir(-1)
 	if err != nil {
 		return "", false
 	}

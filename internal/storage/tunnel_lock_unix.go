@@ -8,11 +8,11 @@ import (
 	"syscall"
 )
 
-func setTunnelLockOwner(f *os.File, dir string) error {
+func setTunnelLockOwner(f *os.File, root *os.Root) error {
 	if os.Geteuid() != 0 {
 		return nil
 	}
-	info, err := os.Stat(dir)
+	info, err := root.Stat(".")
 	if err != nil {
 		return err
 	}

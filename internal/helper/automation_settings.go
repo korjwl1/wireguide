@@ -3,8 +3,6 @@ package helper
 import (
 	"encoding/json"
 	"log/slog"
-	"os"
-	"path/filepath"
 
 	"github.com/korjwl1/wireguide/internal/domain"
 	"github.com/korjwl1/wireguide/internal/wifi"
@@ -93,7 +91,7 @@ func (h *Helper) restoreUserSettings() {
 			DNSProtection *bool `json:"dns_protection"`
 			KillSwitch    *bool `json:"kill_switch"`
 		}
-		if raw, err := os.ReadFile(filepath.Join(h.userAppSupport, "config.json")); err == nil && json.Unmarshal(raw, &persisted) == nil {
+		if raw, err := h.readUserSettingsBytes(); err == nil && json.Unmarshal(raw, &persisted) == nil {
 			h.mu.Lock()
 			if persisted.DNSProtection != nil {
 				h.dnsProtectionWanted = *persisted.DNSProtection

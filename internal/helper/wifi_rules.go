@@ -24,8 +24,7 @@ func (h *Helper) loadUserSettings() (*storage.Settings, error) {
 	if h.userAppSupport == "" {
 		return nil, fmt.Errorf("user app-support dir not derived")
 	}
-	path := filepath.Join(h.userAppSupport, "config.json")
-	data, err := os.ReadFile(path)
+	data, err := h.readUserSettingsBytes()
 	if err != nil {
 		if os.IsNotExist(err) {
 			return storage.DefaultSettings(), nil
@@ -130,15 +129,7 @@ func (h *Helper) reevaluateAutomation(reason string) {
 				h.automationConnect(name, reason, ctx.SSID)
 			}
 		case wifi.StateDisconnect:
-			if active[name] {
-				slog.Info("automation: rule disconnect", "tunnel", name, "reason", reason, "ssid", ctx.SSID)
-				h.disconnectAutoManaged(name)
-			} else {
-				if h.monitor != nil {
-					h.monitor.CancelRetryFor(name)
-				}
-				h.withdrawPendingDesired(name)
-			}
+			h.disconnectAutoManaged(name)
 		}
 	}
 
@@ -234,6 +225,12 @@ func (h *Helper) automationConnect(name, reason, ssid string) {
 	h.clearAutomationSkip(name)
 	slog.Info("automation: rule connect", "tunnel", name, "reason", reason, "ssid", ssid)
 	h.connectMu.Lock()
+	select {
+	case <-h.done:
+		h.connectMu.Unlock()
+		return
+	default:
+	}
 	// A manual connect/disconnect may have landed while we waited for
 	// connectMu (our own route churn re-triggers evaluation within
 	// milliseconds); its latch is recorded before it releases the lock.

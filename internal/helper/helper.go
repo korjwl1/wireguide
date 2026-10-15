@@ -230,6 +230,8 @@ type Helper struct {
 	// the user has never opened them via the GUI in this session.
 	userTunnelStore *storage.TunnelStore
 	userAppSupport  string
+	userFileUID     *int
+	userFileSID     string
 
 	// dataDir persists helper state (crash-recovery journal, desired-tunnel
 	// state). Stored on the Helper so user-intent transitions in handlers
@@ -331,11 +333,12 @@ func Run(addr string, ownerUID int, ownerSID, dataDir string, restoreDesired boo
 	// Derive the user's Application Support dir from the uid the
 	// LaunchDaemon plist passed in (`--uid=501` typically). Helper
 	// runs as root, so os.UserHomeDir() returns /var/root — useless.
-	// On platforms we haven't wired up (linux/windows), this returns
-	// empty and the wifi-rules helper-side path stays a no-op.
+	// Each platform derives the profile directory of the invoking user.
 	if appSupport, err := deriveUserAppSupport(ownerUID); err == nil && appSupport != "" {
 		h.userAppSupport = appSupport
-		h.userTunnelStore = storage.NewTunnelStore(filepath.Join(appSupport, "tunnels"))
+		h.userFileUID = &ownerUID
+		h.userFileSID = ownerSID
+		h.userTunnelStore = storage.NewUserTunnelStore(filepath.Join(appSupport, "tunnels"), ownerUID, ownerSID)
 	}
 
 	// Install the broadcast slog handler BEFORE the first log call so

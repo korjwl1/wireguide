@@ -2,6 +2,8 @@ package storage
 
 import (
 	"encoding/json"
+	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 
@@ -47,7 +49,23 @@ func (s *TunnelStore) LoadMeta(name string) (*TunnelMeta, error) {
 // loadMetaLocked reads the .meta.json sidecar without acquiring the lock.
 // Caller MUST hold s.mu (R or W).
 func (s *TunnelStore) loadMetaLocked(name string) (*TunnelMeta, error) {
-	data, err := os.ReadFile(s.metaPath(name))
+	root, release, err := s.borrowRoot()
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	f, err := s.openProfileFile(root, name+".meta.json")
+	if os.IsNotExist(err) {
+		return &TunnelMeta{}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	data, err := io.ReadAll(io.LimitReader(f, 1<<20+1))
+	if err == nil && len(data) > 1<<20 {
+		return nil, fmt.Errorf("metadata too large")
+	}
 	if err != nil {
 		if os.IsNotExist(err) {
 			return &TunnelMeta{}, nil
@@ -69,7 +87,7 @@ func (s *TunnelStore) LoadWithMeta(name string) (*config.WireGuardConfig, *Tunne
 	if err := ValidateTunnelName(name); err != nil {
 		return nil, nil, err
 	}
-	unlock, err := s.lockWrite()
+	unlock, err := s.lockRead()
 	if err != nil {
 		return nil, nil, err
 	}
@@ -98,7 +116,7 @@ func (s *TunnelStore) SaveMeta(name string, meta *TunnelMeta) error {
 		return err
 	}
 	defer unlock()
-	if _, err := os.Stat(s.path(name)); err != nil {
+	if _, err := s.root.Stat(name + ".conf"); err != nil {
 		return err
 	}
 	return s.saveMetaLocked(name, meta)
@@ -117,7 +135,7 @@ func (s *TunnelStore) UpdateMeta(name string, fn func(*TunnelMeta)) error {
 		return err
 	}
 	defer unlock()
-	if _, err := os.Stat(s.path(name)); err != nil {
+	if _, err := s.root.Stat(name + ".conf"); err != nil {
 		return err
 	}
 	meta, err := s.loadMetaLocked(name)
@@ -140,5 +158,5 @@ func (s *TunnelStore) saveMetaLocked(name string, meta *TunnelMeta) error {
 		return err
 	}
 
-	return atomicfile.WriteFile(s.metaPath(name), data, 0600)
+	return atomicfile.WriteInRoot(s.root, name+".meta.json", data, 0600)
 }

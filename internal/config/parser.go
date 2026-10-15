@@ -88,7 +88,7 @@ func Parse(content string) (*WireGuardConfig, error) {
 		// Key = Value pairs
 		parts := strings.SplitN(line, "=", 2)
 		if len(parts) != 2 {
-			return nil, fmt.Errorf("line %d: invalid syntax: %q", lineNum, line)
+			return nil, fmt.Errorf("line %d: expected key = value", lineNum)
 		}
 		key := strings.TrimSpace(parts[0])
 		value := strings.TrimSpace(parts[1])
@@ -100,13 +100,13 @@ func Parse(content string) (*WireGuardConfig, error) {
 			}
 		case "peer":
 			if currentPeer == nil {
-				return nil, fmt.Errorf("line %d: key %q outside of section", lineNum, key)
+				return nil, fmt.Errorf("line %d: key outside of section", lineNum)
 			}
 			if err := parsePeerKey(currentPeer, key, value, lineNum); err != nil {
 				return nil, err
 			}
 		default:
-			return nil, fmt.Errorf("line %d: key %q outside of any section", lineNum, key)
+			return nil, fmt.Errorf("line %d: key outside of any section", lineNum)
 		}
 	}
 
