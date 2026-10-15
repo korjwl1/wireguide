@@ -285,23 +285,12 @@ func startHelperHealthMonitor(app *application.App, clients *ipc.ClientHolder, d
 			}
 
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-			var resp ipc.PingResponse
-			err := c.CallWithContext(ctx, ipc.MethodPing, nil, &resp)
+			_, err := ipc.ProbeHelper(ctx, c.Address())
 			cancel()
-			alive := err == nil
-
-			// If a long-running RPC (Connect, Disconnect) is in-flight, the
-			// server processes requests sequentially per connection, so our
-			// ping won't be read until the RPC finishes. A timeout here does
-			// NOT mean the helper is dead — it just means it's busy. Treating
-			// this as a failure would trigger recoverHelper, which closes the
-			// old client (killing the in-flight RPC), creates a new client,
-			// and the server's onDisconnect fires the shutdown timer.
-			// This was the root cause of the "helper dies 22-30s after connect" bug.
-			if !alive && clients.HasInflight() {
-				slog.Debug("health ping timed out but RPC in-flight, skipping")
-				continue
+			if c.IsClosed() {
+				err = ipc.ErrClientClosed
 			}
+			alive := err == nil
 
 			if alive && wasAlive {
 				bridge.Resubscribe()
@@ -359,10 +348,7 @@ func startHelperHealthMonitor(app *application.App, clients *ipc.ClientHolder, d
 
 // recoveryDial is how recoverHelper reaches the helper; a seam for tests.
 var recoveryDial = func(ctx context.Context, dataDir string) (*ipc.Client, error) {
-	if runtime.GOOS == "darwin" {
-		return reconnectHelper(ctx, ipc.DefaultSocketPath())
-	}
-	return ensureHelper(ctx, dataDir, true)
+	return reconnectHelper(ctx, ipc.DefaultSocketPath())
 }
 
 // recoverHelper attempts to re-establish a working helper connection. Returns

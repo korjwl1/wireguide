@@ -118,6 +118,17 @@ func (s *TunnelService) call(method string, params interface{}, result interface
 	return c.Call(method, params, result)
 }
 
+func (s *TunnelService) callWithContext(ctx context.Context, method string, params, result interface{}) error {
+	if s.clients == nil {
+		return errHelperUnavailable
+	}
+	c := s.clients.Get()
+	if c == nil {
+		return errHelperUnavailable
+	}
+	return c.CallWithContext(ctx, method, params, result)
+}
+
 // callLong performs an RPC with a generous timeout for operations that may
 // take many seconds (Connect, Disconnect). The default 10-second timeout
 // is too short for Connect, which involves DNS resolution + route setup +

@@ -146,9 +146,19 @@ func Run(assetsHandler http.Handler, dataDir string) error {
 		})
 		defer connectionIndicator.Close()
 	}
+	var (
+		shutdownOnce sync.Once
+		doShutdown   func()
+	)
 	app := application.New(application.Options{
 		Name:        "WireGuide",
 		Description: "Cross-platform WireGuard desktop client",
+		ShouldQuit: func() bool {
+			if doShutdown != nil {
+				doShutdown()
+			}
+			return true
+		},
 		Services: []application.Service{
 			application.NewService(tunnelService),
 		},
@@ -272,10 +282,6 @@ func Run(assetsHandler http.Handler, dataDir string) error {
 	var stopHealthOnce sync.Once
 	stopHealth := func() { stopHealthOnce.Do(func() { close(healthDone) }) }
 	// 7. Shutdown coordination (declared upfront so closures can reference it)
-	var (
-		shutdownOnce sync.Once
-		doShutdown   func()
-	)
 	doShutdown = func() {
 		shutdownOnce.Do(func() {
 			instance.BeginShutdown()
@@ -327,7 +333,6 @@ func Run(assetsHandler http.Handler, dataDir string) error {
 
 	if runtime.GOOS == "darwin" {
 		app.Event.OnApplicationEvent(events.Mac.ApplicationWillTerminate, func(_ *application.ApplicationEvent) {
-			doShutdown()
 			destroyNativeTray()
 		})
 	}

@@ -1,9 +1,12 @@
 package app
 
 import (
+	"context"
 	"sort"
 	"strings"
+	"time"
 
+	"github.com/korjwl1/wireguide/internal/ipc"
 	"github.com/korjwl1/wireguide/internal/storage"
 )
 
@@ -246,7 +249,10 @@ func (s *TunnelService) CloseHistorySessions(reason string) {
 	}
 	rxByTunnel := make(map[string]int64)
 	txByTunnel := make(map[string]int64)
-	if status, err := s.GetStatus(); err == nil && status != nil {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	var status ConnectionStatus
+	if err := s.callWithContext(ctx, ipc.MethodStatus, nil, &status); err == nil {
 		if status.TunnelName != "" {
 			rxByTunnel[status.TunnelName] = status.RxBytes
 			txByTunnel[status.TunnelName] = status.TxBytes

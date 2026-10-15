@@ -49,6 +49,7 @@ type Client struct {
 	// Request.Transient, keeping the helper from treating it as a control
 	// connection. Set by NewTransientClient; see Request.Transient.
 	transient bool
+	handshake PingResponse
 
 	// Lifecycle
 	closeOnce sync.Once
@@ -96,9 +97,7 @@ func ProbeHelper(ctx context.Context, addr string) (PingResponse, error) {
 		return PingResponse{}, err
 	}
 	defer c.Close()
-	var ping PingResponse
-	err = c.CallWithContext(ctx, MethodPing, nil, &ping)
-	return ping, err
+	return c.Handshake(), nil
 }
 
 func newClient(ctx context.Context, addr string, transient bool) (*Client, error) {
@@ -136,8 +135,18 @@ func newClient(ctx context.Context, addr string, transient bool) (*Client, error
 		return nil, fmt.Errorf("protocol major-version mismatch: helper=%q client=%q", ping.Version, ProtocolVersion)
 	}
 
+	c.handshake = ping
 	return c, nil
 }
+
+// Handshake returns the verified initial Ping without another round trip.
+func (c *Client) Handshake() PingResponse {
+	out := c.handshake
+	out.WantedTunnels = append([]string(nil), out.WantedTunnels...)
+	return out
+}
+
+func (c *Client) Address() string { return c.addr }
 
 // Close terminates all connections. Safe to call multiple times.
 func (c *Client) Close() error {
