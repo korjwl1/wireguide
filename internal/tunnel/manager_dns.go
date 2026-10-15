@@ -7,6 +7,46 @@ import (
 	"github.com/korjwl1/wireguide/internal/network"
 )
 
+// persistDNSCheckpoint uses one pre-VPN baseline for every global-DNS journal.
+// Later tunnels see earlier tunnels' overrides; only newly discovered services
+// may extend the baseline. Publish the journal before changing the cached model.
+func (m *Manager) persistDNSCheckpoint(state ActiveTunnelState, snapshot network.DNSSnapshot) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	base := network.DNSSnapshot{Servers: map[string][]string{}, Search: map[string][]string{}}
+	if m.globalPreModDNS != nil {
+		base.Servers = copyServiceMap(m.globalPreModDNS.Servers)
+		base.Search = copyServiceMap(m.globalPreModDNS.Search)
+	}
+	if base.Servers == nil {
+		base.Servers = map[string][]string{}
+	}
+	if base.Search == nil {
+		base.Search = map[string][]string{}
+	}
+	services := map[string]struct{}{}
+	for service := range snapshot.Servers {
+		services[service] = struct{}{}
+	}
+	for service := range snapshot.Search {
+		services[service] = struct{}{}
+	}
+	for service := range services {
+		_, knownDNS := base.Servers[service]
+		_, knownSearch := base.Search[service]
+		if !knownDNS && !knownSearch {
+			base.Servers[service] = append([]string(nil), snapshot.Servers[service]...)
+			base.Search[service] = append([]string(nil), snapshot.Search[service]...)
+		}
+	}
+	state.PreModDNS, state.PreModSearch = base.Servers, base.Search
+	if err := SaveActiveState(m.dataDir, &state); err != nil {
+		return err
+	}
+	m.globalPreModDNS = &base
+	return nil
+}
+
 // AllDNSServers returns the union of DNS servers from all connected tunnels'
 // configs. Used to re-apply the combined DNS when a tunnel connects or
 // disconnects, preventing one tunnel from overwriting another's DNS settings.

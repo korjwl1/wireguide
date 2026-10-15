@@ -28,10 +28,14 @@ type DarwinManager struct {
 	// DNS state — saved per service (matches wg-quick collect_new_service_dns).
 	// wg-quick sets DNS on EVERY network service, not just the primary one,
 	// because macOS can switch primary between Wi-Fi and Ethernet mid-session.
-	savedDNS       map[string][]string // service name → original DNS list
-	savedSearch    map[string][]string // service name → original search domains
-	dnsActive      bool
-	splitDNSActive bool
+	savedDNS             map[string][]string // service name → original DNS list
+	savedSearch          map[string][]string // service name → original search domains
+	dnsActive            bool
+	splitDNSActive       bool
+	dnsCheckpoint        func(DNSSnapshot) error
+	dnsCheckpointMu      sync.Mutex
+	dnsCheckpointVersion uint64
+	dnsCheckpointSaved   uint64
 
 	// Endpoint bypass route state — tracked for cleanup.
 	bypassEndpoints []string // IPs we added host routes for

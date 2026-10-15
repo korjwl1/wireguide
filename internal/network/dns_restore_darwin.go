@@ -138,12 +138,16 @@ func (m *DarwinManager) RestoreDNS(ifaceName string) error {
 }
 
 // SavedDNSSnapshot returns the current per-service DNS snapshot (servers
-// AND search domains) for persistence to the crash recovery journal.
-// Thread-safe.
+// AND search domains), including the prepared snapshot before DNS is applied.
+// Thread-safe; the owner checkpoints this before persistent system changes.
 func (m *DarwinManager) SavedDNSSnapshot() DNSSnapshot {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if !m.dnsActive || len(m.savedDNS) == 0 {
+	return m.savedDNSSnapshotLocked()
+}
+
+func (m *DarwinManager) savedDNSSnapshotLocked() DNSSnapshot {
+	if len(m.savedDNS) == 0 {
 		return DNSSnapshot{}
 	}
 	snap := DNSSnapshot{

@@ -4,6 +4,7 @@ package network
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -61,6 +62,7 @@ func (m *DarwinManager) SetDNS(ifaceName string, entries []string) error {
 			svc    string
 			dns    []string
 			search []string
+			err    error
 		}
 		saved := make([]savedEntry, len(services))
 		var wg sync.WaitGroup
@@ -69,13 +71,19 @@ func (m *DarwinManager) SetDNS(ifaceName string, entries []string) error {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				dns, _ := getCurrentDNS(svc)
-				search, _ := getCurrentSearchDomains(svc)
-				saved[i] = savedEntry{svc: svc, dns: dns, search: search}
+				dns, dnsErr := getCurrentDNS(svc)
+				search, searchErr := getCurrentSearchDomains(svc)
+				saved[i] = savedEntry{svc: svc, dns: dns, search: search, err: errors.Join(dnsErr, searchErr)}
 			}()
 		}
 		wg.Wait()
+		for _, e := range saved {
+			if e.err != nil {
+				return fmt.Errorf("capture DNS for %s: %w", e.svc, e.err)
+			}
+		}
 		m.mu.Lock()
+		m.dnsCheckpointVersion++
 		for _, e := range saved {
 			m.savedDNS[e.svc] = e.dns
 			m.savedSearch[e.svc] = e.search
@@ -83,7 +91,10 @@ func (m *DarwinManager) SetDNS(ifaceName string, entries []string) error {
 		m.mu.Unlock()
 	}
 
-	// Push the new DNS to every service in parallel.
+	if err := m.checkpointDNS(); err != nil {
+		return fmt.Errorf("persist original DNS: %w", err)
+	}
+	// Push the new DNS to every service only after its recovery snapshot.
 	m.applyDNSToServices(entries, services)
 
 	// Commit state BEFORE verification: once applyDNSToServices ran, the
@@ -120,14 +131,16 @@ func (m *DarwinManager) SetDNS(ifaceName string, entries []string) error {
 }
 
 // applyDNS pushes DNS servers and search domains to every network service.
-// M5: Also captures original DNS for any new network services that weren't
+// Captures original DNS for new network services that were not
 // present when SetDNS was first called, so they can be properly restored.
 func (m *DarwinManager) applyDNS(entries []string) error {
 	if hasSplitDNSToken(entries) {
 		return fmt.Errorf("refusing to apply split-DNS entries to network services")
 	}
 	services := getAllNetworkServices()
-	m.captureNewServices(services)
+	if err := m.captureNewServices(services); err != nil {
+		return err
+	}
 	m.applyDNSToServices(entries, services)
 	flushDNSCache()
 	return nil
@@ -145,7 +158,9 @@ func (m *DarwinManager) applyDNSIfDrifted(entries []string) error {
 		return fmt.Errorf("refusing to apply split-DNS entries to network services")
 	}
 	services := getAllNetworkServices()
-	m.captureNewServices(services)
+	if err := m.captureNewServices(services); err != nil {
+		return err
+	}
 
 	servers, search := splitDNSEntries(entries)
 	drifted := make([]bool, len(services))
@@ -189,7 +204,7 @@ func (m *DarwinManager) applyDNSIfDrifted(entries []string) error {
 // appeared after SetDNS was first called, so they can be restored too.
 // Collect the list needing capture under the lock, release it for the
 // network calls, and re-lock once to store.
-func (m *DarwinManager) captureNewServices(services []string) {
+func (m *DarwinManager) captureNewServices(services []string) error {
 	var newServices []string
 	m.mu.Lock()
 	if m.dnsActive {
@@ -202,12 +217,13 @@ func (m *DarwinManager) captureNewServices(services []string) {
 	m.mu.Unlock()
 
 	if len(newServices) == 0 {
-		return
+		return m.checkpointDNS()
 	}
 	type savedEntry struct {
 		svc    string
 		dns    []string
 		search []string
+		err    error
 	}
 	fetched := make([]savedEntry, len(newServices))
 	var wg sync.WaitGroup
@@ -215,22 +231,29 @@ func (m *DarwinManager) captureNewServices(services []string) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			dns, _ := getCurrentDNS(svc)
-			search, _ := getCurrentSearchDomains(svc)
-			fetched[i] = savedEntry{svc: svc, dns: dns, search: search}
+			dns, dnsErr := getCurrentDNS(svc)
+			search, searchErr := getCurrentSearchDomains(svc)
+			fetched[i] = savedEntry{svc: svc, dns: dns, search: search, err: errors.Join(dnsErr, searchErr)}
 		}()
 	}
 	wg.Wait()
+	for _, e := range fetched {
+		if e.err != nil {
+			return fmt.Errorf("capture DNS for new service %s: %w", e.svc, e.err)
+		}
+	}
 
 	m.mu.Lock()
 	for _, e := range fetched {
 		if _, exists := m.savedDNS[e.svc]; !exists {
+			m.dnsCheckpointVersion++
 			m.savedDNS[e.svc] = e.dns
 			m.savedSearch[e.svc] = e.search
 			slog.Info("discovered new network service, saving DNS", "service", e.svc)
 		}
 	}
 	m.mu.Unlock()
+	return m.checkpointDNS()
 }
 
 // applyDNSToServices is the shared hot path used by both SetDNS and applyDNS.
@@ -287,7 +310,7 @@ var flushDNSCache = func() {
 	}
 }
 
-// validHostnameChars matches RFC 1123 hostname characters plus '.'.
+// validHostnameRegex matches RFC 1123 hostname characters plus '.'.
 // Reject anything else so a malicious DNS entry like `foo;rm -rf ~`
 // can't end up in `networksetup -setsearchdomains` arguments (even
 // though Go's exec.Command isn't shell-interpreting, the string still

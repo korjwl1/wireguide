@@ -92,6 +92,9 @@ func (m *Manager) connectPhases(ctx context.Context, cfg *domain.WireGuardConfig
 				slog.Warn("rollback: ClearActiveState failed", "tunnel", cfg.Name, "error", err)
 			}
 		}
+		if len(m.AllDNSServers()) == 0 {
+			m.ClearPreModDNS()
+		}
 		engine.Close()
 		return primary
 	}
@@ -265,16 +268,7 @@ func (m *Manager) connectPhases(ctx context.Context, cfg *domain.WireGuardConfig
 			dnsServers = merged
 		}
 	}
-	// Pre-DNS crash recovery checkpoint. The DNS modification phase
-	// is the first step that leaves persistent state on disk (the
-	// per-service DNS overrides written by `networksetup` survive a
-	// helper crash). If the helper dies between SetDNS and the
-	// FINAL state write below, the user is stuck on the tunnel's
-	// DNS — this checkpoint guarantees crash recovery sees a state
-	// file and falls back to ResetDNSToSystemDefault (which clears
-	// the per-service overrides to DHCP defaults). Empty PreModDNS
-	// triggers the fallback path in RecoverFromCrash.
-	if err := SaveActiveState(m.dataDir, &ActiveTunnelState{
+	state := ActiveTunnelState{
 		TunnelName:     cfg.Name,
 		InterfaceName:  ifaceName,
 		DNSServers:     cfg.Interface.DNS,
@@ -283,8 +277,16 @@ func (m *Manager) connectPhases(ctx context.Context, cfg *domain.WireGuardConfig
 		Table:          cfg.Interface.Table,
 		FwMark:         cfg.Interface.FwMark,
 		EndpointRoutes: endpointRoutes,
-	}); err != nil {
-		slog.Warn("failed to persist pre-DNS crash recovery state", "error", err)
+	}
+	// The adapter checkpoints its captured original DNS before its first
+	// write, including services discovered later during route repair.
+	if setter, ok := netMgr.(network.DNSCheckpointSetter); ok && dnsMode == DNSModeGlobal {
+		setter.SetDNSCheckpoint(func(snapshot network.DNSSnapshot) error {
+			return m.persistDNSCheckpoint(state, snapshot)
+		})
+	}
+	if err := SaveActiveState(m.dataDir, &state); err != nil {
+		return nil, rollback(newTunnelError(ErrNetwork, "persisting pre-DNS recovery state", err))
 	}
 
 	if err := netMgr.SetDNS(ifaceName, dnsServers); err != nil {
@@ -305,9 +307,12 @@ func (m *Manager) connectPhases(ctx context.Context, cfg *domain.WireGuardConfig
 	// deliberately ignore them via CapturePreModDNS's first-write-
 	// wins guard.
 	var preMod network.DNSSnapshot
-	if provider, ok := netMgr.(network.DNSSnapshotProvider); ok {
+	if provider, ok := netMgr.(network.DNSSnapshotProvider); ok && dnsMode == DNSModeGlobal {
 		preMod = provider.SavedDNSSnapshot()
 		m.CapturePreModDNS(preMod)
+		if original, captured := m.PreModDNSSnapshot(); captured {
+			preMod = original
+		}
 	}
 
 	if err := SaveActiveState(m.dataDir, &ActiveTunnelState{

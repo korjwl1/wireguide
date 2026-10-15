@@ -3,6 +3,12 @@ package network
 
 import "errors"
 
+// DNSCheckpointSetter lets the tunnel owner persist exact original DNS before
+// an adapter changes system preferences. A checkpoint error must prevent writes.
+type DNSCheckpointSetter interface {
+	SetDNSCheckpoint(func(DNSSnapshot) error)
+}
+
 // ErrSplitDNSUnsupported rejects an explicit domain-routing request when
 // the platform cannot honor it. Connect must not silently use system DNS.
 var ErrSplitDNSUnsupported = errors.New("split DNS is not supported on this platform")
