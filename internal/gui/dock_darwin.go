@@ -42,8 +42,7 @@ func showDock() {
 			if dockWindow == nil || appQuitting.Load() {
 				return
 			}
-			dockWindow.Show()
-			dockWindow.Focus()
+			restoreMainWindow(dockWindow, false)
 			C.dockShowAndActivate()
 
 			// Check if the window actually became visible.

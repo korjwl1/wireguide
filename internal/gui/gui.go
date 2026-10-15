@@ -56,7 +56,7 @@ func init() {
 
 // Run starts the GUI process. Blocks until the Wails app exits.
 func Run(assetsHandler http.Handler, dataDir string) error {
-	// Reserve the Windows GUI before touching history, helper/UAC or tray.
+	// Reserve the GUI before touching history, helper authorization or tray.
 	instance, err := guiinstance.Acquire()
 	if err != nil {
 		return err

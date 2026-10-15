@@ -1,4 +1,4 @@
-// Package guiinstance reserves the Windows GUI before any helper or tray work.
+// Package guiinstance reserves the GUI before any helper or tray work.
 package guiinstance
 
 import (
@@ -21,6 +21,7 @@ const (
 )
 
 var errClosing = errors.New("existing GUI is shutting down")
+var errActivated = errors.New("existing application was activated")
 
 // Instance owns the activation listener for the entire GUI lifetime. Requests
 // are coalesced and buffered, including while helper authorization is pending.
@@ -151,6 +152,9 @@ func acquire(ctx context.Context, listen func() (net.Listener, error), dial func
 			return nil, fmt.Errorf("cannot activate existing WireGuide window: %w (%v)", err, lastErr)
 		}
 		l, err := listen()
+		if errors.Is(err, errActivated) {
+			return nil, nil
+		}
 		if err == nil {
 			return newInstance(l), nil
 		}
