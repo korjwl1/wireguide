@@ -48,6 +48,11 @@ bundle is ad-hoc signed, not a notarized release.
   callers reserving exactly one GUI, actual subprocess SIGKILL and stale
   socket recovery, legacy activation lock release, symlink refusal — PASS.
 - Full repository `go test -race ./... -count=1` and `go vet ./...` — PASS.
+- [CI 38715125793](https://github.com/korjwl1/wireguide/actions/runs/38715125793)
+  on `0b2f4b1622d7493d87273b4f73fe19ea4d4dad58` — Windows, macOS and Linux
+  all PASS. This revision's production code is identical to `aff22e9`.
+  Raw test logs were checked for failures; GUI, instance, firewall and helper
+  packages passed on all three runners. Linux build/link/DEB checks passed.
 - Production build and `codesign --verify --deep --strict` — PASS.
 - Actual cold setup/upgrade installed the matching helper and rendered the
   Wails/Svelte window; native helper RPC returned an empty connected set.
@@ -90,6 +95,9 @@ rules; no existing VPN profile was connected by this test.
 Private evidence: `/private/tmp/wg-gui-native-5bce6aoi/evidence`.
 The current installed GUI/helper remain running, with one GUI reservation.
 The old app backup is deliberately not registered as a second `.app` install.
+The ignored workspace `bin/wireguide.app` was also updated from the same
+tested bundle, with its old bundle backed up privately. Launching that
+executable activated PID 60410 and did not start another GUI/helper.
 
 ## Scope limits
 
