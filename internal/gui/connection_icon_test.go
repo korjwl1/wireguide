@@ -98,16 +98,23 @@ func TestConnectionIconRefreshesAfterShellRecreation(t *testing.T) {
 }
 
 func TestConnectionIconShutdownDropsPendingUpdate(t *testing.T) {
-	var queued func()
-	i := newConnectionIcon(func(f func()) { queued = f }, func(bool) error {
-		t.Error("icon updated after shutdown")
+	var queued []func()
+	var applied []bool
+	i := newConnectionIcon(func(f func()) { queued = append(queued, f) }, func(connected bool) error {
+		applied = append(applied, connected)
 		return nil
 	})
 	i.Ready()
 	i.SetConnected(true)
 	i.Close()
-	queued()
+	i.Close()
 	i.Refresh()
+	for _, callback := range queued {
+		callback()
+	}
+	if !reflect.DeepEqual(applied, []bool{false}) {
+		t.Fatalf("shutdown must only reset the icon once: %v", applied)
+	}
 }
 
 func TestConnectionIconDoesNotLoseStateDuringNativeApply(t *testing.T) {

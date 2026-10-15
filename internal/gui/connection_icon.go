@@ -119,8 +119,20 @@ func (i *connectionIcon) Refresh() {
 
 func (i *connectionIcon) Close() {
 	i.mu.Lock()
+	if i.closed {
+		i.mu.Unlock()
+		return
+	}
 	i.closed = true
+	ready := i.ready
 	i.mu.Unlock()
+	if ready {
+		i.dispatch(func() {
+			if err := i.apply(false); err != nil {
+				slog.Debug("cannot reset application icon during shutdown", "error", err)
+			}
+		})
+	}
 }
 
 func (i *connectionIcon) update(change func()) {
