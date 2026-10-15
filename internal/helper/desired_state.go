@@ -321,18 +321,62 @@ func (h *Helper) pendingDesiredCfgs() map[string]*domain.WireGuardConfig {
 // withdrawPendingDesired drops a pending (restore-failed) tunnel that an
 // Automation rule now wants off, so a later wake retry won't bring it back.
 func (h *Helper) withdrawPendingDesired(name string) {
-	h.mu.Lock()
-	_, ok := h.pendingDesired[name]
-	delete(h.pendingDesired, name)
-	h.mu.Unlock()
-	if ok {
-		h.wifiMu.Lock()
-		delete(h.autoConnectedBy, name)
-		h.wifiMu.Unlock()
+	if h.dropPendingRestore(name) {
 		slog.Info("automation: rule says off, withdrawing pending restore", "tunnel", name)
 		h.persistDesiredState()
 		h.maybeArmShutdownAfterTeardown("pending restore withdrawn, no GUI attached")
 	}
+}
+
+func (h *Helper) dropPendingRestore(name string) bool {
+	h.mu.Lock()
+	_, ok := h.pendingDesired[name]
+	delete(h.pendingDesired, name)
+	_, active := h.activeCfgs[name]
+	h.mu.Unlock()
+	if ok && !active {
+		h.wifiMu.Lock()
+		delete(h.autoConnectedBy, name)
+		h.wifiMu.Unlock()
+	}
+	return ok
+}
+
+// Register wanted work before slow startup probes, including when a client's
+// Disconnect arrives first. Caller holds connectMu. Never re-adopt a withdrawn
+// snapshot: read the current journal and preserve already-active manual intent.
+func (h *Helper) registerPendingRestore() {
+	h.mu.Lock()
+	restoring := h.restoreInProgress && h.restoreOnStart
+	h.mu.Unlock()
+	if !restoring {
+		return
+	}
+	intent := loadDesiredIntent(h.dataDir)
+	adopted := make(map[string]bool)
+	h.mu.Lock()
+	for _, name := range intent.Tunnels {
+		_, active := h.activeCfgs[name]
+		_, blocked := h.watchdogBlocked[name]
+		if !active && !blocked {
+			if h.pendingDesired == nil {
+				h.pendingDesired = make(map[string]struct{})
+			}
+			h.pendingDesired[name] = struct{}{}
+			adopted[name] = true
+		}
+	}
+	h.mu.Unlock()
+	h.wifiMu.Lock()
+	for _, name := range intent.Automatic {
+		if adopted[name] {
+			if h.autoConnectedBy == nil {
+				h.autoConnectedBy = make(map[string]string)
+			}
+			h.autoConnectedBy[name] = ""
+		}
+	}
+	h.wifiMu.Unlock()
 }
 
 // connectPendingDesired connects one pending tunnel through the same path as
@@ -424,7 +468,14 @@ func (h *Helper) restoreDesiredTunnels() {
 	defer func() {
 		h.mu.Lock()
 		h.restoreInProgress = false
+		grace := h.armedGrace
 		h.mu.Unlock()
+		if h.server != nil && !h.server.HasControlConn() {
+			if grace == 0 {
+				grace = startupGraceFor(h.activated)
+			}
+			h.armShutdownTimer(grace, "startup restore completed, no GUI attached")
+		}
 	}()
 	intent := loadDesiredIntent(h.dataDir)
 	names := make([]string, 0, len(intent.Tunnels))
@@ -481,6 +532,9 @@ func (h *Helper) restoreDesiredTunnels() {
 		slog.Warn("desired-state: boot time unavailable, skipping reboot check", "error", err)
 	}
 
+	h.connectMu.Lock()
+	h.registerPendingRestore()
+	h.connectMu.Unlock()
 	if h.userTunnelStore == nil {
 		slog.Warn("desired-state: no tunnel store available; leaving file for later triggers",
 			"tunnels", names)
@@ -488,10 +542,6 @@ func (h *Helper) restoreDesiredTunnels() {
 	}
 
 	restored, failed, missing, ruledOff := 0, 0, 0, 0
-	automatic := make(map[string]bool, len(intent.Automatic))
-	for _, name := range intent.Automatic {
-		automatic[name] = true
-	}
 
 	// Same lock order as automation (reevalMu → connectMu): no rule pass
 	// can interleave with the restore, and one that ran before it already
@@ -546,26 +596,27 @@ func (h *Helper) restoreDesiredTunnels() {
 			restored++
 			continue
 		}
+		h.mu.Lock()
+		_, stillPending := h.pendingDesired[name]
+		h.mu.Unlock()
+		if !stillPending || h.isWatchdogBlocked(name) {
+			h.dropPendingRestore(name)
+			continue
+		}
 		cfg, err := h.userTunnelStore.Load(name)
 		if err != nil {
+			h.dropPendingRestore(name)
 			missing++
 			slog.Warn("desired-state: tunnel config missing, dropping",
 				"tunnel", name, "error", err)
 			continue
 		}
 		if ruleOff[name] {
+			h.dropPendingRestore(name)
 			ruledOff++
 			slog.Info("desired-state: automation rule says off on this network, not restoring",
 				"tunnel", name)
 			continue
-		}
-		if automatic[name] {
-			h.wifiMu.Lock()
-			if h.autoConnectedBy == nil {
-				h.autoConnectedBy = make(map[string]string)
-			}
-			h.autoConnectedBy[name] = ""
-			h.wifiMu.Unlock()
 		}
 		if h.automaticLANConflict(cfg) {
 			h.mu.Lock()

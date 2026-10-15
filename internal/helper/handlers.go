@@ -492,6 +492,7 @@ func (h *Helper) applyConnectedFirewall(cfg *domain.WireGuardConfig, newConnect 
 func (h *Helper) handleDisconnect(params json.RawMessage) (interface{}, error) {
 	h.connectMu.Lock()
 	defer h.connectMu.Unlock()
+	h.registerPendingRestore()
 
 	// Parse optional tunnel name from request. len() on a nil slice
 	// returns 0, so the previous explicit `params != nil` check was

@@ -51,6 +51,7 @@ func (h *Helper) armShutdownTimer(grace time.Duration, reason string) {
 		return
 	default:
 	}
+	h.armedGrace = grace
 
 	// A tunnel waiting on a restore retry is still wanted (issue #44): exit
 	// now and nothing retries it until the GUI next starts the helper.
@@ -70,7 +71,6 @@ func (h *Helper) armShutdownTimer(grace time.Duration, reason string) {
 		return
 	}
 
-	h.armedGrace = grace
 	slog.Info("no active tunnel — starting shutdown grace window",
 		"reason", reason, "grace", grace)
 	if h.shutdownTimer != nil {
