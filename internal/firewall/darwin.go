@@ -255,7 +255,7 @@ func (f *DarwinFirewall) activatePfWithRollback() error {
 			return errors.Join(activationErr, fmt.Errorf("PF rollback model: %w", err))
 		}
 	} else if dns {
-		rules = pfDNSRules(allow)
+		rules = pfDNSRules(allow, false)
 	}
 	if err := loadAnchorRules(anchorName, rules); err != nil {
 		return errors.Join(activationErr, fmt.Errorf("PF main-anchor rollback: %w", err))
@@ -279,7 +279,9 @@ func (f *DarwinFirewall) reapplyDNSSubAnchorIfActive() error {
 	if !dnsActive || len(allow) == 0 {
 		return nil
 	}
-	if err := loadAnchorRules(dnsAnchorName, pfDNSRules(allow)); err != nil {
+	// Only reached on kill-switch paths: the sub-anchor is evaluated before
+	// the block-all, so it must not carry unpinned exceptions.
+	if err := loadAnchorRules(dnsAnchorName, pfDNSRules(allow, true)); err != nil {
 		return fmt.Errorf("re-loading DNS sub-anchor: %w", err)
 	}
 	return nil
@@ -403,7 +405,7 @@ func (f *DarwinFirewall) DisableKillSwitch() error {
 	if dnsActive && len(dnsAllow) > 0 {
 		// Replace the main anchor atomically. Flushing it first would remove
 		// both protections if the subsequent DNS reload failed.
-		if err := loadAnchorRules(anchorName, pfDNSRules(dnsAllow)); err != nil {
+		if err := loadAnchorRules(anchorName, pfDNSRules(dnsAllow, false)); err != nil {
 			return fmt.Errorf("retaining DNS while disabling kill switch: %w", err)
 		}
 		// The old sub-anchor is now unreferenced. Its cleanup is harmless to
@@ -435,12 +437,11 @@ func (f *DarwinFirewall) EnableDNSProtection(allow []DNSAllow) error {
 	if len(allow) == 0 {
 		return f.disableDNSProtection()
 	}
-	rules := pfDNSRules(allow)
-
 	f.mu.Lock()
 	ksEnabled := f.killSwitchEnabled
 	alreadyOn := f.dnsProtectionEnabled
 	f.mu.Unlock()
+	rules := pfDNSRules(allow, ksEnabled)
 
 	if ksEnabled {
 		// Kill switch is active — its anchor rules already contain
@@ -646,7 +647,7 @@ func loadDefaultPfRuleset() error {
 	if err != nil {
 		return fmt.Errorf("reading pf main ruleset: %w", err)
 	}
-	if strings.Contains(string(current), `anchor "com.apple/*"`) {
+	if mainRulesetEvaluatesAppleAnchors(string(current)) {
 		return nil
 	}
 	out, err := runPfctl("-f", "/etc/pf.conf")
@@ -656,7 +657,64 @@ func loadDefaultPfRuleset() error {
 	return nil
 }
 
-// enablePf enables the pf firewall.
+// mainRulesetEvaluatesAppleAnchors reports whether `pfctl -sr` output has a
+// FILTER anchor rule for com.apple/*. scrub-/nat-/rdr-/dummynet-anchor lines
+// contain the same quoted name but do not evaluate filter rules in our
+// anchors, so the match is per line and prefix-anchored.
+func mainRulesetEvaluatesAppleAnchors(out string) bool {
+	for _, line := range strings.Split(out, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), `anchor "com.apple/*"`) {
+			return true
+		}
+	}
+	return false
+}
+
+// RepairEnforcement restores the committed model when PF stopped enforcing it
+// outside WireGuide (an external `pfctl -d` stops PF and invalidates every
+// reference; the anchors keep their rules). It does nothing while PF runs, so
+// another tool's main ruleset is never reloaded behind its back.
+func (f *DarwinFirewall) RepairEnforcement() (bool, error) {
+	f.opMu.Lock()
+	defer f.opMu.Unlock()
+	f.mu.Lock()
+	ks, dns := f.killSwitchEnabled, f.dnsProtectionEnabled
+	tunnels := cloneTunnelEndpoints(f.killSwitchTunnels)
+	allow := append([]DNSAllow(nil), f.savedDNSAllow...)
+	f.mu.Unlock()
+	if !ks && !dns {
+		return false, nil
+	}
+	running, err := pfRunning()
+	if err != nil || running {
+		return false, err
+	}
+	if err := loadDefaultPfRuleset(); err != nil {
+		return false, fmt.Errorf("preparing pf anchor: %w", err)
+	}
+	var mainRules string
+	if ks {
+		if mainRules, err = buildKillSwitchRulesForTunnels(tunnels); err != nil {
+			return false, err
+		}
+		if dns && len(allow) > 0 {
+			if err := loadAnchorRules(dnsAnchorName, pfDNSRules(allow, true)); err != nil {
+				return false, fmt.Errorf("re-loading DNS sub-anchor: %w", err)
+			}
+		}
+	} else {
+		mainRules = pfDNSRules(allow, false)
+	}
+	if err := loadAnchorRules(anchorName, mainRules); err != nil {
+		return false, fmt.Errorf("re-loading main anchor: %w", err)
+	}
+	if err := enablePf(); err != nil {
+		return false, fmt.Errorf("re-enable pf: %w", err)
+	}
+	slog.Warn("PF was stopped outside WireGuide; protection restored", "kill_switch", ks, "dns_protection", dns)
+	return true, nil
+}
+
 // persistPfEnabledState writes whether pf was enabled to disk for crash
 // recovery.  The file contains "1" if enabled, "0" if disabled.
 func persistPfEnabledState(enabled bool) error {

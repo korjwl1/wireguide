@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -39,7 +40,21 @@ func enablePf() error {
 		return err
 	}
 	if pfLease.state.Token != "" && pfLease.state.Boot == boot {
-		return nil
+		// `pfctl -d` (another VPN, the user) stops PF and invalidates every
+		// reference, ours included (xnu DIOCSTOP: invalidate_all_tokens).
+		// A cached token therefore proves nothing about enforcement.
+		running, err := pfRunning()
+		if err != nil {
+			return fmt.Errorf("verify PF is running: %w", err)
+		}
+		if running {
+			return nil
+		}
+		slog.Warn("PF is stopped although a reference is held; taking a new one", "token", pfLease.state.Token)
+		pfLease.state.Token, pfLease.state.Boot = "", ""
+		if err := writePfLease(pfLease.state); err != nil {
+			slog.Warn("failed to drop stale PF token from journal", "error", err)
+		}
 	}
 	out, err := runPfctl("-E")
 	if err != nil {
@@ -95,11 +110,42 @@ func disablePf() error {
 	}
 	if state.Boot == boot {
 		if out, err := runPfctl("-X", state.Token); err != nil {
-			return fmt.Errorf("pfctl -X: %w (%s)", err, strings.TrimSpace(string(out)))
+			if !pfTokenGone(out) {
+				return fmt.Errorf("pfctl -X: %w (%s)", err, strings.TrimSpace(string(out)))
+			}
+			// Nothing left to release: PF was stopped (all references
+			// invalidated) or the kernel no longer knows this token.
+			slog.Warn("PF reference already invalid; dropping it", "token", state.Token,
+				"error", err, "output", strings.TrimSpace(string(out)))
 		}
 	}
 	pfLease.state = pfLeaseState{}
 	return nil
+}
+
+// pfRunning reports whether PF is enabled. A failed query is an error, not
+// "stopped": callers must not discard a live reference on a pfctl hiccup.
+func pfRunning() (bool, error) {
+	out, err := runPfctl("-si")
+	if err != nil {
+		return false, fmt.Errorf("pfctl -si: %w (%s)", err, strings.TrimSpace(string(out)))
+	}
+	return strings.Contains(string(out), "Status: Enabled"), nil
+}
+
+// pfTokenGone reports whether a failed `pfctl -X` means the token can no
+// longer be live. xnu DIOCSTOPREF fails with ENOENT when PF is not running
+// and EINVAL for an unknown token; pfctl reports these as "pf not enabled"
+// and "pf: token invalid". The text is matched as a hint only, and PF being
+// verifiably stopped is independent proof. Any other failure (timeout,
+// unreadable status) keeps the token for a later retry.
+func pfTokenGone(out []byte) bool {
+	text := string(out)
+	if strings.Contains(text, "pf not enabled") || strings.Contains(text, "token invalid") {
+		return true
+	}
+	running, err := pfRunning()
+	return err == nil && !running
 }
 
 func writePfLease(state pfLeaseState) error {

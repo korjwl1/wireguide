@@ -45,7 +45,7 @@ func TestPfDNSRules(t *testing.T) {
 	got := pfDNSRules([]DNSAllow{
 		{Interface: "utun4", Servers: []string{"10.0.0.1"}},
 		{Interface: "utun5", Servers: []string{"10.1.0.1", "fd00::53"}},
-	})
+	}, false)
 	want := "pass out quick on lo0 proto {tcp, udp} to any port 53\n" +
 		"pass out quick on utun4 proto {tcp, udp} to 10.0.0.1 port 53\n" +
 		"pass out quick on utun5 proto {tcp, udp} to 10.1.0.1 port 53\n" +
@@ -85,12 +85,27 @@ func TestNftDNSRules_ReplacesTableAtomically(t *testing.T) {
 
 func TestDNSRulesPermitPhysicalResolverByAddressOnly(t *testing.T) {
 	allow := normalizeDNSAllow([]DNSAllow{{Servers: []string{"1.1.1.1"}}}, testIface)
-	pf, nft := pfDNSRules(allow), nftDNSRules("wireguide", allow)
+	pf, nft := pfDNSRules(allow, false), nftDNSRules("wireguide", allow)
 	if !strings.Contains(pf, "pass out quick proto {tcp, udp} to 1.1.1.1 port 53") ||
 		!strings.Contains(nft, "ip daddr 1.1.1.1 udp dport 53 accept") {
 		t.Fatalf("physical resolver was blocked: pf=%s nft=%s", pf, nft)
 	}
 	if !strings.Contains(pf, "block drop out quick") || !strings.Contains(nft, "udp dport 53 drop") {
 		t.Fatal("other resolvers must remain blocked")
+	}
+}
+
+func TestPfDNSRulesKillSwitchKeepsOnlyPinnedPermits(t *testing.T) {
+	allow := normalizeDNSAllow([]DNSAllow{
+		{Servers: []string{"1.1.1.1"}},
+		{Interface: "utun4", Servers: []string{"10.0.0.1"}},
+	}, testIface)
+	got := pfDNSRules(allow, true)
+	if strings.Contains(got, "to 1.1.1.1") || !strings.Contains(got, "on utun4 proto {tcp, udp} to 10.0.0.1") ||
+		!strings.Contains(got, "block drop out quick") {
+		t.Fatalf("kill-switch DNS rules:\n%s", got)
+	}
+	if only := pfDNSRules(normalizeDNSAllow([]DNSAllow{{Servers: []string{"1.1.1.1"}}}, testIface), true); strings.Contains(only, "1.1.1.1") {
+		t.Fatalf("unpinned-only set still punched a hole:\n%s", only)
 	}
 }

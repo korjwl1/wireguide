@@ -66,7 +66,9 @@ type FirewallManager interface {
 	// skipped. When nothing valid remains — no tunnel with DNS servers is
 	// up — the DNS rules are removed instead, the same state as
 	// DisableDNSProtection: blocking every resolver with no tunnel to
-	// route around it would just break name resolution.
+	// route around it would just break name resolution. While the kill
+	// switch is on, entries without an interface are not installed: an
+	// off-tunnel resolver exception would bypass the kill switch.
 	EnableDNSProtection(allow []DNSAllow) error
 
 	// DisableDNSProtection removes DNS protection rules.
@@ -87,4 +89,13 @@ type FirewallManager interface {
 	// state exists. Called once during helper startup, before any tunnel
 	// brings new rules up.
 	RecoverFromCrash() bool
+}
+
+// EnforcementRepairer is implemented by backends whose enforcement can be
+// lost outside WireGuide while the in-memory model still reports it active.
+// RepairEnforcement re-applies the committed model in that case and reports
+// whether it changed anything; it is a no-op while enforcement is intact.
+// The helper's periodic reconciliation calls it before comparing models.
+type EnforcementRepairer interface {
+	RepairEnforcement() (bool, error)
 }

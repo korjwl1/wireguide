@@ -72,13 +72,31 @@ func dnsAllowServers(allow []DNSAllow) []string {
 	return out
 }
 
+// effectiveDNSAllow is the permit set a backend may install. With the kill
+// switch on, an unpinned permit (resolver reached over the physical network)
+// would be an exception to the kill switch's block-all, so only permits bound
+// to a tunnel interface survive. Without the kill switch every permit stays.
+func effectiveDNSAllow(allow []DNSAllow, killSwitch bool) []DNSAllow {
+	if !killSwitch {
+		return allow
+	}
+	out := make([]DNSAllow, 0, len(allow))
+	for _, a := range allow {
+		if a.Interface != "" {
+			out = append(out, a)
+		}
+	}
+	return out
+}
+
 // pfDNSRules renders normalized entries as pf rules: each tunnel's servers
 // pass on that tunnel's interface, loopback resolvers (dnsmasq, local
 // filters) pass as they do on Linux, everything else on port 53 drops.
-func pfDNSRules(allow []DNSAllow) string {
+// killSwitch selects the kill-switch permit set (see effectiveDNSAllow).
+func pfDNSRules(allow []DNSAllow, killSwitch bool) string {
 	var b strings.Builder
 	b.WriteString("pass out quick on lo0 proto {tcp, udp} to any port 53\n")
-	for _, a := range allow {
+	for _, a := range effectiveDNSAllow(allow, killSwitch) {
 		for _, s := range a.Servers {
 			scope := ""
 			if a.Interface != "" {

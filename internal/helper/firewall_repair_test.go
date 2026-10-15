@@ -1,0 +1,88 @@
+package helper
+
+import (
+	"errors"
+	"testing"
+	"time"
+)
+
+type repairingFirewall struct {
+	*pendingTestFirewall
+	calls int
+	err   error
+}
+
+func (f *repairingFirewall) RepairEnforcement() (bool, error) {
+	f.calls++
+	return f.err == nil, f.err
+}
+
+// Review H-1: enforcement lost outside WireGuide (external `pfctl -d`) is
+// invisible to the model comparison, so the periodic pass must ask the
+// backend to repair it, and keep asking after a failure.
+func TestPeriodicPassRepairsLostFirewallEnforcement(t *testing.T) {
+	h := newPendingTestHelper(t)
+	fw := &repairingFirewall{pendingTestFirewall: dnsFW(h), err: errors.New("pfctl -E failed")}
+	h.firewall = fw
+	h.repairFirewallEnforcement()
+	fw.err = nil
+	h.repairFirewallEnforcement()
+	if fw.calls != 2 {
+		t.Fatalf("repair calls = %d, want a retry after failure", fw.calls)
+	}
+}
+
+func TestRepairSkippedWhileReconnectSuspendsFirewall(t *testing.T) {
+	h := newPendingTestHelper(t)
+	fw := &repairingFirewall{pendingTestFirewall: dnsFW(h)}
+	h.firewall = fw
+	h.fwSuspendDepth = 1
+	h.repairFirewallEnforcement()
+	if fw.calls != 0 {
+		t.Fatal("repair re-enabled rules a reconnect deliberately suspended")
+	}
+}
+
+func TestRepairIgnoresBackendsWithoutRepairer(t *testing.T) {
+	h := newPendingTestHelper(t)
+	h.repairFirewallEnforcement() // pendingTestFirewall has no repairer: must not panic
+}
+
+// Backend contract after review M-10: a failed removal leaves the backend
+// reporting DNS protection enabled. The helper must retry the removal on a
+// later pass instead of recording the failed attempt as the applied state.
+type failingDNSRemovalFirewall struct {
+	*pendingTestFirewall
+	failures, disables int
+}
+
+func (f *failingDNSRemovalFirewall) DisableDNSProtection() error {
+	f.disables++
+	if f.failures > 0 {
+		f.failures--
+		return errors.New("FwpmTransactionCommit0(DNS rm): 0x80320001")
+	}
+	return f.pendingTestFirewall.DisableDNSProtection()
+}
+
+func TestFailedDNSRemovalIsRetriedUntilBackendReportsRemoved(t *testing.T) {
+	h := newPendingTestHelper(t)
+	h.dnsProtectionWanted = true
+	stubConnected(t, h, tn{"alpha", "utun4", []string{"10.0.0.1"}})
+	if err := h.reapplyDNSProtection(); err != nil {
+		t.Fatal(err)
+	}
+	fw := &failingDNSRemovalFirewall{pendingTestFirewall: dnsFW(h), failures: 1}
+	h.firewall = fw
+	stubConnected(t, h) // the last protected tunnel went away
+	now := time.Now()
+	if err := h.reconcileDNSProtection(false, now); err == nil {
+		t.Fatal("removal failure hidden")
+	}
+	if err := h.reconcileDNSProtection(false, now.Add(5*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if fw.disables != 2 || fw.IsDNSProtectionEnabled() {
+		t.Fatalf("disables=%d enabled=%v; a failed removal was not retried", fw.disables, fw.IsDNSProtectionEnabled())
+	}
+}

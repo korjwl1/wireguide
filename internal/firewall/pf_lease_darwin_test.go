@@ -49,7 +49,9 @@ func TestPFLeaseDoesNotDisableOtherOwnersOrAccumulateReferences(t *testing.T) {
 	if err := disablePf(); err != nil {
 		t.Fatal(err)
 	}
-	if got := strings.Join(*calls, ","); got != "-E,-X 1234567890123456789" {
+	// The second enable verifies PF still runs instead of trusting the cached
+	// token; it must not take another reference.
+	if got := strings.Join(*calls, ","); got != "-E,-si,-X 1234567890123456789" {
 		t.Fatalf("ownership calls = %s", got)
 	}
 }
@@ -161,7 +163,7 @@ func TestPFActivationFailureRollsBackMainAnchor(t *testing.T) {
 			if mode == "kill-switch-over-dns" {
 				f.dnsProtectionEnabled = true
 				f.savedDNSAllow = []DNSAllow{{Servers: []string{"1.1.1.1"}}}
-				want = pfDNSRules(f.savedDNSAllow)
+				want = pfDNSRules(f.savedDNSAllow, false)
 			}
 			var mainLoads []string
 			loadAnchorRules = func(anchor, rules string) error {

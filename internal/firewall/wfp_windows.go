@@ -264,7 +264,9 @@ var (
 
 // --- thin syscall wrappers ---------------------------------------------
 
-func fwpmEngineOpen0(session *fwpmSession0, handle *uintptr) uint32 {
+// The engine, transaction and filter calls are variables so tests can
+// fault-inject WFP failures without a live filtering engine.
+var fwpmEngineOpen0 = func(session *fwpmSession0, handle *uintptr) uint32 {
 	ret, _, _ := procFwpmEngineOpen0.Call(
 		0, // serverName (NULL → local)
 		uintptr(cRPC_C_AUTHN_WINNT),
@@ -277,27 +279,27 @@ func fwpmEngineOpen0(session *fwpmSession0, handle *uintptr) uint32 {
 	return uint32(ret)
 }
 
-func fwpmEngineClose0(handle uintptr) uint32 {
+var fwpmEngineClose0 = func(handle uintptr) uint32 {
 	ret, _, _ := procFwpmEngineClose0.Call(handle)
 	return uint32(ret)
 }
 
-func fwpmTransactionBegin0(handle uintptr) uint32 {
+var fwpmTransactionBegin0 = func(handle uintptr) uint32 {
 	ret, _, _ := procFwpmTransactionBegin0.Call(handle, 0)
 	return uint32(ret)
 }
 
-func fwpmTransactionCommit0(handle uintptr) uint32 {
+var fwpmTransactionCommit0 = func(handle uintptr) uint32 {
 	ret, _, _ := procFwpmTransactionCommit0.Call(handle)
 	return uint32(ret)
 }
 
-func fwpmTransactionAbort0(handle uintptr) uint32 {
+var fwpmTransactionAbort0 = func(handle uintptr) uint32 {
 	ret, _, _ := procFwpmTransactionAbort0.Call(handle)
 	return uint32(ret)
 }
 
-func fwpmProviderAdd0(handle uintptr, p *fwpmProvider0) uint32 {
+var fwpmProviderAdd0 = func(handle uintptr, p *fwpmProvider0) uint32 {
 	ret, _, _ := procFwpmProviderAdd0.Call(
 		handle,
 		uintptr(unsafe.Pointer(p)),
@@ -307,7 +309,7 @@ func fwpmProviderAdd0(handle uintptr, p *fwpmProvider0) uint32 {
 	return uint32(ret)
 }
 
-func fwpmSubLayerAdd0(handle uintptr, sub *fwpmSubLayer0) uint32 {
+var fwpmSubLayerAdd0 = func(handle uintptr, sub *fwpmSubLayer0) uint32 {
 	ret, _, _ := procFwpmSubLayerAdd0.Call(
 		handle,
 		uintptr(unsafe.Pointer(sub)),
@@ -317,7 +319,7 @@ func fwpmSubLayerAdd0(handle uintptr, sub *fwpmSubLayer0) uint32 {
 	return uint32(ret)
 }
 
-func fwpmFilterAdd0(handle uintptr, f *fwpmFilter0) (uint64, uint32) {
+var fwpmFilterAdd0 = func(handle uintptr, f *fwpmFilter0) (uint64, uint32) {
 	var filterID uint64
 	ret, _, _ := procFwpmFilterAdd0.Call(
 		handle,
@@ -332,7 +334,7 @@ func fwpmFilterAdd0(handle uintptr, f *fwpmFilter0) (uint64, uint32) {
 // fwpmFilterDeleteById0 removes a single filter by its WFP filter ID
 // (returned by FwpmFilterAdd0). Used to remove per-tunnel permits when
 // a tunnel disconnects without tearing down the rest of the kill switch.
-func fwpmFilterDeleteById0(handle uintptr, id uint64) uint32 {
+var fwpmFilterDeleteById0 = func(handle uintptr, id uint64) uint32 {
 	ret, _, _ := procFwpmFilterDeleteById0.Call(handle, uintptr(id))
 	return uint32(ret)
 }

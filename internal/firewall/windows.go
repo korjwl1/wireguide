@@ -91,10 +91,12 @@ type WindowsFirewall struct {
 	// changed servers, and on DisableDNSProtection while the kill switch
 	// stays up — without tearing down the whole session.
 	dnsFilterIDs []uint64
-	// dnsServers remembers the last DNS set installed so DisableKillSwitch
-	// (which closes and rebuilds the session) can reinstall DNS protection
-	// alongside endpoint protection instead of silently dropping it.
-	dnsServers []string
+	// dnsAllow remembers the last complete (normalized) DNS permit set so
+	// DisableKillSwitch (which closes and rebuilds the session) can reinstall
+	// DNS protection alongside endpoint protection instead of silently
+	// dropping it, and so EnableKillSwitch can re-render the installed
+	// permits for kill-switch mode (see effectiveDNSAllow).
+	dnsAllow []DNSAllow
 }
 
 func NewPlatformFirewall() FirewallManager {
@@ -270,7 +272,7 @@ func (f *WindowsFirewall) closeSession() {
 	f.endpointProtectionFilterIDs = nil
 	f.endpointProtectionState = nil
 	f.dnsFilterIDs = nil
-	// NB: dnsServers is intentionally NOT cleared here — DisableKillSwitch
+	// NB: dnsAllow is intentionally NOT cleared here — DisableKillSwitch
 	// closes the session and then wants to reinstall DNS protection, so it
 	// needs the remembered server set to survive the cascade.
 }
@@ -291,7 +293,7 @@ var procConvertAliasToLuidFW = windows.NewLazySystemDLL("iphlpapi.dll").NewProc(
 // "does this alias exist" oracle (returns ERROR_NOT_FOUND), and the
 // pre-check syscall + slice allocation was pure overhead on every
 // EnableEndpointProtection.
-func resolveInterfaceLUID(ifaceName string) (uint64, error) {
+var resolveInterfaceLUID = func(ifaceName string) (uint64, error) {
 	if ifaceName == "" {
 		return 0, fmt.Errorf("resolveInterfaceLUID: empty alias")
 	}
@@ -377,30 +379,44 @@ func (f *WindowsFirewall) EnableKillSwitch(interfaceName string, _ []string, end
 		return err
 	}
 
-	if status := fwpmTransactionBegin0(f.sessionHandle); status != 0 {
-		return fmt.Errorf("FwpmTransactionBegin0: 0x%x", status)
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			fwpmTransactionAbort0(f.sessionHandle)
-		}
-	}()
-
-	if err := f.installBaseFiltersLocked(); err != nil {
-		return err
-	}
-	if interfaceName != "" {
-		if err := f.installTunnelFiltersLocked(interfaceName, endpoints); err != nil {
+	// DNS permits outrank the catch-all block (weight 15 > 0) and are not
+	// bound to an interface, so an installed off-tunnel resolver permit would
+	// be an exception to the kill switch. The base set, the tunnel permits
+	// and the DNS set narrowed for kill-switch mode commit together: if the
+	// narrowing fails, nothing commits and the kill switch is not reported
+	// enabled with the old exception still in force.
+	narrowDNS := f.dnsProtectionEnabled && len(f.dnsAllow) > 0
+	var tunnelIDs, dnsIDs []uint64
+	err := runWFPTransaction(f.txnOps(), "kill switch", func() error {
+		if err := f.installBaseFiltersLocked(); err != nil {
 			return err
 		}
+		if interfaceName != "" {
+			ids, err := f.installTunnelFiltersLocked(interfaceName, endpoints)
+			if err != nil {
+				return err
+			}
+			tunnelIDs = ids
+		}
+		if narrowDNS {
+			ids, err := f.renderDNSFiltersLocked(f.dnsAllow, true)
+			if err != nil {
+				return fmt.Errorf("narrow DNS permits for kill switch: %w", err)
+			}
+			dnsIDs = ids
+		}
+		return nil
+	})
+	if err != nil {
+		return err
 	}
-
-	if status := fwpmTransactionCommit0(f.sessionHandle); status != 0 {
-		return fmt.Errorf("FwpmTransactionCommit0: 0x%x", status)
-	}
-	committed = true
 	f.killSwitchEnabled = true
+	if interfaceName != "" {
+		f.recordTunnelFiltersLocked(interfaceName, tunnelIDs)
+	}
+	if narrowDNS {
+		f.dnsFilterIDs = dnsIDs
+	}
 	return nil
 }
 
@@ -443,19 +459,16 @@ func (f *WindowsFirewall) installBaseFiltersLocked() error {
 }
 
 // installTunnelFiltersLocked installs Permit-tunnel-LUID and
-// Permit-endpoint filters for one tunnel, capturing each filter ID into
-// f.tunnelFilterIDs[interfaceName] so RemoveKillSwitchTunnel can pull
-// the same set out later. Caller MUST hold f.mu AND must be inside a
-// WFP transaction.
-func (f *WindowsFirewall) installTunnelFiltersLocked(interfaceName string, endpoints []string) error {
+// Permit-endpoint filters for one tunnel and returns their IDs. The caller
+// records them (recordTunnelFiltersLocked) after its commit so
+// RemoveKillSwitchTunnel can pull the same set out later. Caller MUST hold
+// f.mu AND must be inside a WFP transaction.
+func (f *WindowsFirewall) installTunnelFiltersLocked(interfaceName string, endpoints []string) ([]uint64, error) {
 	luid, err := resolveInterfaceLUID(interfaceName)
 	if err != nil {
-		return fmt.Errorf("resolve tunnel LUID: %w", err)
+		return nil, fmt.Errorf("resolve tunnel LUID: %w", err)
 	}
-	if f.tunnelFilterIDs == nil {
-		f.tunnelFilterIDs = make(map[string][]uint64, 1)
-	}
-	ids := f.tunnelFilterIDs[interfaceName]
+	var ids []uint64
 
 	// Permit on tunnel interface — weight 12. One per ALE layer (v4+v6).
 	for _, layer := range allConnectLayers {
@@ -469,8 +482,7 @@ func (f *WindowsFirewall) installTunnelFiltersLocked(interfaceName string, endpo
 		}
 		id, err := f.addFilter("Permit tunnel", layer, actionPermit, 12, conds)
 		if err != nil {
-			f.tunnelFilterIDs[interfaceName] = ids
-			return err
+			return nil, err
 		}
 		ids = append(ids, id)
 		runtime.KeepAlive(&luidCopy)
@@ -492,13 +504,22 @@ func (f *WindowsFirewall) installTunnelFiltersLocked(interfaceName string, endpo
 		}
 		id, err := f.addEndpointFilterLocked(parsed)
 		if err != nil {
-			f.tunnelFilterIDs[interfaceName] = ids
-			return err
+			return nil, err
 		}
 		ids = append(ids, id)
 	}
+	return ids, nil
+}
+
+// recordTunnelFiltersLocked tracks a tunnel's permits after their
+// transaction committed. An aborted transaction must record nothing: a
+// tracked-but-absent permit makes addTunnelFiltersLocked skip the tunnel and
+// leaves it blocked by the kill switch. Caller MUST hold f.mu.
+func (f *WindowsFirewall) recordTunnelFiltersLocked(interfaceName string, ids []uint64) {
+	if f.tunnelFilterIDs == nil {
+		f.tunnelFilterIDs = make(map[string][]uint64, 1)
+	}
 	f.tunnelFilterIDs[interfaceName] = ids
-	return nil
 }
 
 // addTunnelFiltersLocked wraps installTunnelFiltersLocked in its own
@@ -508,23 +529,16 @@ func (f *WindowsFirewall) addTunnelFiltersLocked(interfaceName string, endpoints
 	if len(f.tunnelFilterIDs[interfaceName]) > 0 {
 		return nil
 	}
-	if status := fwpmTransactionBegin0(f.sessionHandle); status != 0 {
-		return fmt.Errorf("FwpmTransactionBegin0(add-tunnel): 0x%x", status)
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			fwpmTransactionAbort0(f.sessionHandle)
-			delete(f.tunnelFilterIDs, interfaceName)
-		}
-	}()
-	if err := f.installTunnelFiltersLocked(interfaceName, endpoints); err != nil {
+	var ids []uint64
+	err := runWFPTransaction(f.txnOps(), "add-tunnel", func() error {
+		var err error
+		ids, err = f.installTunnelFiltersLocked(interfaceName, endpoints)
+		return err
+	})
+	if err != nil {
 		return err
 	}
-	if status := fwpmTransactionCommit0(f.sessionHandle); status != 0 {
-		return fmt.Errorf("FwpmTransactionCommit0(add-tunnel): 0x%x", status)
-	}
-	committed = true
+	f.recordTunnelFiltersLocked(interfaceName, ids)
 	return nil
 }
 
@@ -811,10 +825,9 @@ func (f *WindowsFirewall) DisableKillSwitch() error {
 	// away, and the kill switch and DNS protection are independent
 	// toggles — if a tunnel is still connected, turning the kill switch
 	// off must not silently strip DNS-leak protection.
-	var dnsSnapshot []string
-	if f.dnsProtectionEnabled && len(f.dnsServers) > 0 {
-		dnsSnapshot = make([]string, len(f.dnsServers))
-		copy(dnsSnapshot, f.dnsServers)
+	var dnsSnapshot []DNSAllow
+	if f.dnsProtectionEnabled && len(f.dnsAllow) > 0 {
+		dnsSnapshot = append([]DNSAllow(nil), f.dnsAllow...)
 	}
 
 	// Closing the dynamic session removes every filter in one shot; the
@@ -839,7 +852,7 @@ func (f *WindowsFirewall) DisableKillSwitch() error {
 	}
 	// Reinstall DNS protection in the same fresh session if it was active.
 	if len(dnsSnapshot) > 0 {
-		if err := f.enableDNSProtectionLocked(dnsSnapshot); err != nil {
+		if err := f.installDNSLocked(dnsSnapshot); err != nil {
 			slog.Error("DisableKillSwitch: failed to reinstall DNS protection",
 				"error", err)
 			rebuildErrs = append(rebuildErrs, fmt.Errorf("reinstall DNS protection: %w", err))
@@ -862,88 +875,93 @@ func (f *WindowsFirewall) DisableKillSwitch() error {
 // hijacking even on a split-tunnel setup).
 //
 // WFP permits each server by remote address on any interface, so the
-// tunnel interfaces in allow are not used here — only the union of their
-// servers, which the system resolver is also given (issue #48).
+// tunnel interfaces in allow are not used to scope the filters — only the
+// union of their servers, which the system resolver is also given (issue
+// #48). With the kill switch on, unpinned (off-tunnel) servers are left out.
 func (f *WindowsFirewall) EnableDNSProtection(allow []DNSAllow) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	servers := dnsAllowServers(normalizeDNSAllow(allow, func(string) bool { return true }))
-	if len(servers) == 0 {
+	allow = normalizeDNSAllow(allow, func(string) bool { return true })
+	if len(dnsAllowServers(allow)) == 0 {
 		// No tunnel with DNS servers is up: remove the rules rather than
 		// leave the previous set (or a block-only set) in place.
 		return f.disableDNSProtectionLocked()
 	}
-	return f.enableDNSProtectionLocked(servers)
+	return f.installDNSLocked(allow)
 }
 
-// enableDNSProtectionLocked is the body of EnableDNSProtection. Caller
-// MUST hold f.mu. Also used by DisableKillSwitch to reinstall DNS
-// protection in the fresh session it rebuilds.
-func (f *WindowsFirewall) enableDNSProtectionLocked(dnsServers []string) error {
-	if len(dnsServers) == 0 {
-		return nil
+func (f *WindowsFirewall) txnOps() wfpTxnOps {
+	h := f.sessionHandle
+	return wfpTxnOps{
+		begin:  func() uint32 { return fwpmTransactionBegin0(h) },
+		commit: func() uint32 { return fwpmTransactionCommit0(h) },
+		abort:  func() uint32 { return fwpmTransactionAbort0(h) },
 	}
+}
+
+func (f *WindowsFirewall) deleteFilter(id uint64) uint32 {
+	return fwpmFilterDeleteById0(f.sessionHandle, id)
+}
+
+// installDNSLocked replaces the DNS filter set with one rendered from allow
+// (non-empty, normalized) for the current kill-switch mode, in its own
+// transaction. Caller MUST hold f.mu. Also used by DisableKillSwitch to
+// reinstall DNS protection in the fresh session it rebuilds.
+func (f *WindowsFirewall) installDNSLocked(allow []DNSAllow) error {
 	if err := f.ensureSession(); err != nil {
 		return err
 	}
-
-	if status := fwpmTransactionBegin0(f.sessionHandle); status != 0 {
-		return fmt.Errorf("FwpmTransactionBegin0(DNS): 0x%x", status)
+	var ids []uint64
+	err := runWFPTransaction(f.txnOps(), "DNS", func() error {
+		var err error
+		ids, err = f.renderDNSFiltersLocked(allow, f.killSwitchEnabled)
+		return err
+	})
+	if err != nil {
+		return err
 	}
-	committed := false
-	defer func() {
-		if !committed {
-			fwpmTransactionAbort0(f.sessionHandle)
-		}
-	}()
+	f.dnsFilterIDs = ids
+	f.dnsAllow = append([]DNSAllow(nil), allow...)
+	f.dnsProtectionEnabled = true
+	return nil
+}
 
-	// Idempotency: delete any DNS filters from a previous enable in the
-	// SAME transaction. Without this, re-enabling (reconnect, or a DNS
-	// server change) stacked duplicate filters unboundedly and, worse,
-	// left the OLD servers' weight-15 permits in place — a hole to a
-	// resolver the user just removed.
-	for _, id := range f.dnsFilterIDs {
-		if status := fwpmFilterDeleteById0(f.sessionHandle, id); status != 0 {
-			slog.Warn("DNS protection: stale filter delete failed (continuing)",
-				"filter_id", id, "status", fmt.Sprintf("0x%x", status))
-		}
+// renderDNSFiltersLocked replaces the tracked DNS filters inside the caller's
+// open transaction and returns the new filter IDs. It records nothing: the
+// caller updates dnsFilterIDs and flags only after its commit, so an aborted
+// transaction leaves the previous set both installed and tracked. Caller
+// MUST hold f.mu.
+//
+// The previous filters are deleted in the SAME transaction: re-enabling
+// (reconnect, or a DNS server change) used to stack duplicate filters and
+// keep the OLD servers' weight-15 permits — a hole to a resolver the user
+// just removed.
+func (f *WindowsFirewall) renderDNSFiltersLocked(allow []DNSAllow, killSwitch bool) ([]uint64, error) {
+	if err := deleteWFPFilters(f.deleteFilter, f.dnsFilterIDs, "stale DNS"); err != nil {
+		return nil, err
 	}
-	f.dnsFilterIDs = nil
-
-	newIDs := make([]uint64, 0, len(dnsServers)*4+len(allConnectLayers)*2)
-
-	// Permit DNS to each whitelisted server first — weight 15 (higher
-	// than the block below). Both UDP and TCP, because DNS-over-TCP is a
+	servers := dnsAllowServers(effectiveDNSAllow(allow, killSwitch))
+	ids := make([]uint64, 0, len(servers)*4+len(allConnectLayers)*2)
+	// Permit DNS to each whitelisted server first — weight 15 (higher than
+	// the block below). Both UDP and TCP, because DNS-over-TCP is a
 	// legitimate fallback for >512-byte responses.
-	cleanServers := make([]string, 0, len(dnsServers))
-	for _, dns := range dnsServers {
+	for _, dns := range servers {
 		ip := net.ParseIP(dns)
 		if ip == nil {
 			continue
 		}
-		ids, err := f.permitDNSServer(ip)
+		permitIDs, err := f.permitDNSServer(ip)
 		if err != nil {
-			return err
+			return nil, err
 		}
-		newIDs = append(newIDs, ids...)
-		cleanServers = append(cleanServers, dns)
+		ids = append(ids, permitIDs...)
 	}
-
 	// Block UDP/TCP port 53 to everything else — weight 14.
 	blockIDs, err := f.blockAllDNS()
 	if err != nil {
-		return err
+		return nil, err
 	}
-	newIDs = append(newIDs, blockIDs...)
-
-	if status := fwpmTransactionCommit0(f.sessionHandle); status != 0 {
-		return fmt.Errorf("FwpmTransactionCommit0(DNS): 0x%x", status)
-	}
-	committed = true
-	f.dnsFilterIDs = newIDs
-	f.dnsServers = cleanServers
-	f.dnsProtectionEnabled = true
-	return nil
+	return append(ids, blockIDs...), nil
 }
 
 // permitDNSServer installs two filters (UDP+TCP) per address family for
@@ -1096,51 +1114,28 @@ func (f *WindowsFirewall) DisableDNSProtection() error {
 
 // disableDNSProtectionLocked is the body of DisableDNSProtection. Caller
 // MUST hold f.mu.
+//
+// Delete only the DNS filters, by tracked ID, so the kill switch (if up)
+// and everything else stay intact. Previously, with no kill switch this tore
+// down the whole session, and with a kill switch up it left the port-53
+// block filters installed — so a user who then switched to a non-whitelisted
+// resolver silently lost all DNS. A failed transaction keeps the flag and
+// the IDs: the filters are still installed, and the helper retries while
+// IsDNSProtectionEnabled reports them.
 func (f *WindowsFirewall) disableDNSProtectionLocked() error {
-	f.dnsProtectionEnabled = false
-	f.dnsServers = nil
-
-	// Delete only the DNS filters, by tracked ID, so the kill switch (if
-	// up) and everything else stay intact. Previously, with no kill
-	// switch this tore down the whole session, and with a kill switch up
-	// it left the port-53 block filters installed — so a user who then
-	// switched to a non-whitelisted resolver silently lost all DNS.
-	if len(f.dnsFilterIDs) == 0 {
-		// Nothing tracked. Close the session only if nothing else lives
-		// in it, so we don't leak an idle dynamic session.
-		if f.sessionIdleLocked() {
-			f.closeSession()
-		}
-		return nil
-	}
-	if f.sessionHandle == 0 {
-		f.dnsFilterIDs = nil
-		return nil
-	}
-
-	if status := fwpmTransactionBegin0(f.sessionHandle); status != 0 {
-		return fmt.Errorf("FwpmTransactionBegin0(DNS rm): 0x%x", status)
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			fwpmTransactionAbort0(f.sessionHandle)
-		}
-	}()
-	for _, id := range f.dnsFilterIDs {
-		if status := fwpmFilterDeleteById0(f.sessionHandle, id); status != 0 {
-			slog.Warn("DNS protection: filter delete failed (continuing)",
-				"filter_id", id, "status", fmt.Sprintf("0x%x", status))
+	if len(f.dnsFilterIDs) > 0 && f.sessionHandle != 0 {
+		err := runWFPTransaction(f.txnOps(), "DNS rm", func() error {
+			return deleteWFPFilters(f.deleteFilter, f.dnsFilterIDs, "DNS")
+		})
+		if err != nil {
+			return err
 		}
 	}
-	if status := fwpmTransactionCommit0(f.sessionHandle); status != 0 {
-		return fmt.Errorf("FwpmTransactionCommit0(DNS rm): 0x%x", status)
-	}
-	committed = true
 	f.dnsFilterIDs = nil
-
+	f.dnsProtectionEnabled = false
+	f.dnsAllow = nil
 	// Close the session now that the DNS filters are gone — but only if
-	// nothing else lives in it.
+	// nothing else lives in it, so we don't leak an idle dynamic session.
 	if f.sessionIdleLocked() {
 		f.closeSession()
 	}

@@ -136,6 +136,7 @@ func (h *Helper) dnsReconcileLoop() {
 			h.connectMu.Lock()
 			h.manager.RetryPendingDNSCleanup()
 			h.retryKillSwitchPermitRemovals(now)
+			h.repairFirewallEnforcement()
 			if err := h.reconcileKillSwitch(false, now); err != nil {
 				slog.Warn("kill-switch reconciliation failed; will retry", "error", err)
 			}
@@ -145,5 +146,23 @@ func (h *Helper) dnsReconcileLoop() {
 				slog.Warn("DNS protection reconciliation failed; will retry", "error", err)
 			}
 		}
+	}
+}
+
+// repairFirewallEnforcement lets the backend restore protection that was lost
+// outside WireGuide (e.g. an external `pfctl -d`) while its model still
+// reports it active; model comparisons alone would never notice. Runs before
+// the reconciliations so they compare against enforced state. Caller holds
+// connectMu.
+func (h *Helper) repairFirewallEnforcement() {
+	r, ok := h.firewall.(firewall.EnforcementRepairer)
+	if !ok || h.fwSuspendDepth > 0 {
+		// A reconnect suspended the rules on purpose; its resume reapplies.
+		return
+	}
+	if repaired, err := r.RepairEnforcement(); err != nil {
+		slog.Error("firewall enforcement lost and not yet restored; will retry", "error", err)
+	} else if repaired {
+		slog.Warn("firewall enforcement was lost outside WireGuide and has been restored")
 	}
 }
