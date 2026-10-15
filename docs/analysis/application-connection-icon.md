@@ -67,6 +67,10 @@ and release occur in the same GUI-thread apartment.
   base restoration. Windows tests create/destroy a real native HICON and
   exercise registered taskbar-recreation messages. Ordinary CI does not
   establish a visible Windows taskbar or every Linux desktop's behavior.
+- [Final CI 38721960210](https://github.com/korjwl1/wireguide/actions/runs/38721960210)
+  on `930dc4a0bf6932b22430a3855d781d28692c9491` also passed all three OSes,
+  including the explicit shutdown reset and GTK/Xvfb fixture. Full raw test
+  logs were checked and contained no test failures or race reports.
 
 This is indicator verification, not a new live VPN/WAN test. The AppKit and
 GTK fixtures do not start a VPN or privileged helper. Actual Windows shell
@@ -80,6 +84,10 @@ profile hashes were unchanged. No VPN was connected during the update, and
 the existing compatible helper is reused; this feature changes only GUI code.
 
 Private installation evidence: `/private/tmp/wg-connection-icon-m1q3da1f`.
+Final installed production source: `930dc4a`; its executable SHA-256 is
+`7b353971dab7312723f436bfa5440fc6e4a5d189c44500100349fe4fd020bf00`.
+Final GUI startup and relaunch reported no application-icon errors, with one
+GUI process. The local bundle is ad-hoc signed, not a notarized release.
 Source/test/build logs and the rendered connected PNG are in SSD scratch
 under `wireguide-connection-icon-*` / `application-connected.png`.
 
