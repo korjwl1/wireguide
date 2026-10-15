@@ -29,17 +29,17 @@ import (
 var (
 	modFwpuclnt = windows.NewLazySystemDLL("fwpuclnt.dll")
 
-	procFwpmEngineOpen0           = modFwpuclnt.NewProc("FwpmEngineOpen0")
-	procFwpmEngineClose0          = modFwpuclnt.NewProc("FwpmEngineClose0")
-	procFwpmTransactionBegin0     = modFwpuclnt.NewProc("FwpmTransactionBegin0")
-	procFwpmTransactionCommit0    = modFwpuclnt.NewProc("FwpmTransactionCommit0")
-	procFwpmTransactionAbort0     = modFwpuclnt.NewProc("FwpmTransactionAbort0")
-	procFwpmProviderAdd0          = modFwpuclnt.NewProc("FwpmProviderAdd0")
-	procFwpmSubLayerAdd0          = modFwpuclnt.NewProc("FwpmSubLayerAdd0")
-	procFwpmSubLayerDeleteByKey0  = modFwpuclnt.NewProc("FwpmSubLayerDeleteByKey0")
-	procFwpmProviderDeleteByKey0  = modFwpuclnt.NewProc("FwpmProviderDeleteByKey0")
-	procFwpmFilterAdd0            = modFwpuclnt.NewProc("FwpmFilterAdd0")
-	procFwpmFilterDeleteById0     = modFwpuclnt.NewProc("FwpmFilterDeleteById0")
+	procFwpmEngineOpen0          = modFwpuclnt.NewProc("FwpmEngineOpen0")
+	procFwpmEngineClose0         = modFwpuclnt.NewProc("FwpmEngineClose0")
+	procFwpmTransactionBegin0    = modFwpuclnt.NewProc("FwpmTransactionBegin0")
+	procFwpmTransactionCommit0   = modFwpuclnt.NewProc("FwpmTransactionCommit0")
+	procFwpmTransactionAbort0    = modFwpuclnt.NewProc("FwpmTransactionAbort0")
+	procFwpmProviderAdd0         = modFwpuclnt.NewProc("FwpmProviderAdd0")
+	procFwpmSubLayerAdd0         = modFwpuclnt.NewProc("FwpmSubLayerAdd0")
+	procFwpmSubLayerDeleteByKey0 = modFwpuclnt.NewProc("FwpmSubLayerDeleteByKey0")
+	procFwpmProviderDeleteByKey0 = modFwpuclnt.NewProc("FwpmProviderDeleteByKey0")
+	procFwpmFilterAdd0           = modFwpuclnt.NewProc("FwpmFilterAdd0")
+	procFwpmFilterDeleteById0    = modFwpuclnt.NewProc("FwpmFilterDeleteById0")
 )
 
 // RPC_C_AUTHN_WINNT — pass-through Windows NT authn for FwpmEngineOpen0.
@@ -71,7 +71,7 @@ const (
 
 // FWP_MATCH_TYPE values.
 const (
-	matchEqual = 0
+	matchEqual        = 0
 	matchFlags_AllSet = 6 // FWP_MATCH_FLAGS_ALL_SET
 )
 
@@ -153,9 +153,9 @@ type fwpmAction0 struct {
 // providerContextKey) is 16 bytes; we represent it as a fixed [16]byte
 // zero-initialised buffer because we never use FWPM_FILTER_FLAG_HAS_PROVIDER_CONTEXT.
 type fwpmFilter0 struct {
-	filterKey           windows.GUID
-	displayData         fwpmDisplayData0
-	flags               uint32
+	filterKey   windows.GUID
+	displayData fwpmDisplayData0
+	flags       uint32
 	// Go's struct alignment inserts the 4-byte pad here automatically because
 	// providerKey is a pointer (8-byte aligned on x64); no explicit _pad needed.
 	providerKey         *windows.GUID
@@ -165,15 +165,15 @@ type fwpmFilter0 struct {
 	weight              fwpValue0
 	numFilterConditions uint32
 	// Again, the next field is a pointer, so Go inserts 4 bytes of padding.
-	filterCondition     *fwpmFilterCondition0
-	action              fwpmAction0 // 20 bytes; Go aligns the next 8-byte field after.
+	filterCondition *fwpmFilterCondition0
+	action          fwpmAction0 // 20 bytes; Go aligns the next 8-byte field after.
 	// providerContextKey union — 16 bytes, alignment 8. Using [2]uint64
 	// forces 8-byte alignment; [16]byte (align 1) would let Go put this
 	// at the wrong offset and the kernel would misread `reserved` etc.
-	providerContext     [2]uint64
-	reserved            *windows.GUID
-	filterID            uint64
-	effectiveWeight     fwpValue0
+	providerContext [2]uint64
+	reserved        *windows.GUID
+	filterID        uint64
+	effectiveWeight fwpValue0
 }
 
 // fwpmSubLayer0 mirrors FWPM_SUBLAYER0.
@@ -412,12 +412,12 @@ func utf16Ptr(s string) *uint16 {
 // unsafe.Sizeof is a constant, so any mismatch fails the build. These
 // guard against silent breakage if someone reorders a field.
 
-const _ = uintptr(20 - unsafe.Sizeof(fwpmAction0{}))               // must be 20
-const _ = uintptr(16 - unsafe.Sizeof(fwpValue0{}))                 // must be 16
-const _ = uintptr(40 - unsafe.Sizeof(fwpmFilterCondition0{}))      // must be 40
-const _ = uintptr(16 - unsafe.Sizeof(fwpByteBlob{}))               // must be 16
-const _ = uintptr(16 - unsafe.Sizeof(fwpmDisplayData0{}))          // must be 16
-const _ = uintptr(72 - unsafe.Sizeof(fwpmSubLayer0{}))             // must be 72
-const _ = uintptr(64 - unsafe.Sizeof(fwpmProvider0{}))             // must be 64
-const _ = uintptr(72 - unsafe.Sizeof(fwpmSession0{}))              // must be 72
-const _ = uintptr(200 - unsafe.Sizeof(fwpmFilter0{}))              // must be 200
+const _ = uintptr(20 - unsafe.Sizeof(fwpmAction0{}))          // must be 20
+const _ = uintptr(16 - unsafe.Sizeof(fwpValue0{}))            // must be 16
+const _ = uintptr(40 - unsafe.Sizeof(fwpmFilterCondition0{})) // must be 40
+const _ = uintptr(16 - unsafe.Sizeof(fwpByteBlob{}))          // must be 16
+const _ = uintptr(16 - unsafe.Sizeof(fwpmDisplayData0{}))     // must be 16
+const _ = uintptr(72 - unsafe.Sizeof(fwpmSubLayer0{}))        // must be 72
+const _ = uintptr(64 - unsafe.Sizeof(fwpmProvider0{}))        // must be 64
+const _ = uintptr(72 - unsafe.Sizeof(fwpmSession0{}))         // must be 72
+const _ = uintptr(200 - unsafe.Sizeof(fwpmFilter0{}))         // must be 200

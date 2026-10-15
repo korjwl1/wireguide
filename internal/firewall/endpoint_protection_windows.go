@@ -100,22 +100,11 @@ func (f *WindowsFirewall) EnableEndpointProtection(tunnelInterfaceName string, e
 	return f.enableEndpointProtectionLocked(tunnelInterfaceName, endpoints)
 }
 
-// enableEndpointProtectionLocked is the lock-held implementation. Used
-// directly by DisableKillSwitch's snapshot-and-rebuild path, where the
-// caller is already inside f.mu.
+// enableEndpointProtectionLocked replaces one interface's filters in a single
+// transaction. Caller holds f.mu; failed replacement preserves the old set.
 func (f *WindowsFirewall) enableEndpointProtectionLocked(tunnelInterfaceName string, endpoints []string) error {
 	if err := f.ensureSession(); err != nil {
 		return fmt.Errorf("endpoint protection: ensureSession: %w", err)
-	}
-
-	// If we already have filters for this tunnel, remove them first so a
-	// reconnect with a different resolved endpoint IP doesn't leak the
-	// old filter forever.
-	if existing := f.endpointProtectionFilterIDs[tunnelInterfaceName]; len(existing) > 0 {
-		if err := f.removeEndpointProtectionFilters(tunnelInterfaceName); err != nil {
-			slog.Warn("endpoint protection: pre-install cleanup failed; continuing",
-				"interface", tunnelInterfaceName, "error", err)
-		}
 	}
 
 	luid, err := resolveInterfaceLUID(tunnelInterfaceName)
@@ -123,56 +112,50 @@ func (f *WindowsFirewall) enableEndpointProtectionLocked(tunnelInterfaceName str
 		return fmt.Errorf("endpoint protection: resolve tunnel LUID: %w", err)
 	}
 
-	if status := fwpmTransactionBegin0(f.sessionHandle); status != 0 {
-		return fmt.Errorf("endpoint protection: FwpmTransactionBegin0: 0x%x", status)
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			fwpmTransactionAbort0(f.sessionHandle)
-		}
-	}()
-
 	var ids []uint64
-	for _, ep := range endpoints {
-		ipStr, portStr, _ := net.SplitHostPort(ep)
-		if ipStr == "" {
-			// "ip:" or malformed → fall back to using the whole string as the IP
-			ipStr = ep
-			portStr = ""
+	err = runWFPTransaction(f.txnOps(), "endpoint-replace", func() error {
+		if err := deleteWFPFilters(f.deleteFilter, f.endpointProtectionFilterIDs[tunnelInterfaceName], "old endpoint"); err != nil {
+			return err
 		}
-		ip := net.ParseIP(ipStr)
-		if ip == nil {
-			slog.Warn("endpoint protection: skipping unparsable endpoint", "endpoint", ep)
-			continue
-		}
-		var port uint16
-		if portStr != "" {
-			p, err := strconv.ParseUint(portStr, 10, 16)
-			if err != nil {
-				slog.Warn("endpoint protection: skipping endpoint with bad port", "endpoint", ep, "error", err)
+		for _, ep := range endpoints {
+			ipStr, portStr, _ := net.SplitHostPort(ep)
+			if ipStr == "" {
+				// "ip:" or malformed → fall back to using the whole string as the IP
+				ipStr = ep
+				portStr = ""
+			}
+			ip := net.ParseIP(ipStr)
+			if ip == nil {
+				slog.Warn("endpoint protection: skipping unparsable endpoint", "endpoint", ep)
 				continue
 			}
-			port = uint16(p)
+			var port uint16
+			if portStr != "" {
+				p, err := strconv.ParseUint(portStr, 10, 16)
+				if err != nil {
+					slog.Warn("endpoint protection: skipping endpoint with bad port", "endpoint", ep, "error", err)
+					continue
+				}
+				port = uint16(p)
+			}
+			filterIDs, err := f.installEndpointBlockFilter(ip, port, luid)
+			if err != nil {
+				return fmt.Errorf("endpoint protection: install filter for %s: %w", ip, err)
+			}
+			ids = append(ids, filterIDs...)
 		}
-		filterIDs, err := f.installEndpointBlockFilter(ip, port, luid)
-		if err != nil {
-			return fmt.Errorf("endpoint protection: install filter for %s: %w", ip, err)
+
+		if len(ids) == 0 {
+			// Every endpoint was unparsable — refuse to commit an empty
+			// transaction; surface to the caller so connectPhases can roll
+			// back the tunnel rather than bring it up unprotected.
+			return fmt.Errorf("endpoint protection: no valid endpoints in %v", endpoints)
 		}
-		ids = append(ids, filterIDs...)
+		return nil
+	})
+	if err != nil {
+		return err
 	}
-
-	if len(ids) == 0 {
-		// Every endpoint was unparsable — refuse to commit an empty
-		// transaction; surface to the caller so connectPhases can roll
-		// back the tunnel rather than bring it up unprotected.
-		return fmt.Errorf("endpoint protection: no valid endpoints in %v", endpoints)
-	}
-
-	if status := fwpmTransactionCommit0(f.sessionHandle); status != 0 {
-		return fmt.Errorf("endpoint protection: FwpmTransactionCommit0: 0x%x", status)
-	}
-	committed = true
 
 	if f.endpointProtectionFilterIDs == nil {
 		f.endpointProtectionFilterIDs = make(map[string][]uint64, 1)
@@ -219,27 +202,11 @@ func (f *WindowsFirewall) removeEndpointProtectionFilters(tunnelInterfaceName st
 	if len(ids) == 0 {
 		return nil
 	}
-	if status := fwpmTransactionBegin0(f.sessionHandle); status != 0 {
-		return fmt.Errorf("endpoint protection: FwpmTransactionBegin0(rm): 0x%x", status)
+	if err := runWFPTransaction(f.txnOps(), "endpoint-remove", func() error {
+		return deleteWFPFilters(f.deleteFilter, ids, "endpoint")
+	}); err != nil {
+		return err
 	}
-	committed := false
-	defer func() {
-		if !committed {
-			fwpmTransactionAbort0(f.sessionHandle)
-		}
-	}()
-	for _, id := range ids {
-		if status := fwpmFilterDeleteById0(f.sessionHandle, id); status != 0 {
-			slog.Warn("endpoint protection: filter delete failed (continuing)",
-				"interface", tunnelInterfaceName,
-				"filter_id", id,
-				"status", fmt.Sprintf("0x%x", status))
-		}
-	}
-	if status := fwpmTransactionCommit0(f.sessionHandle); status != 0 {
-		return fmt.Errorf("endpoint protection: FwpmTransactionCommit0(rm): 0x%x", status)
-	}
-	committed = true
 	delete(f.endpointProtectionFilterIDs, tunnelInterfaceName)
 	delete(f.endpointProtectionState, tunnelInterfaceName)
 	return nil

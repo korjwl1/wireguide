@@ -24,6 +24,9 @@ type fakeWFP struct {
 func stubWFP(t *testing.T) *fakeWFP {
 	t.Helper()
 	w := &fakeWFP{nextID: 100, installed: map[uint64]string{}, deleteStatus: map[uint64]uint32{}}
+	oldLUID := resolveInterfaceLUID
+	resolveInterfaceLUID = func(string) (uint64, error) { return 42, nil }
+	t.Cleanup(func() { resolveInterfaceLUID = oldLUID })
 	oldBegin, oldCommit, oldAbort := fwpmTransactionBegin0, fwpmTransactionCommit0, fwpmTransactionAbort0
 	oldAdd, oldDel, oldClose := fwpmFilterAdd0, fwpmFilterDeleteById0, fwpmEngineClose0
 	oldOpen, oldProvider, oldSublayer := fwpmEngineOpen0, fwpmProviderAdd0, fwpmSubLayerAdd0
