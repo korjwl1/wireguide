@@ -20,6 +20,7 @@ import (
 
 type pfLeaseState struct {
 	Token      string `json:"token,omitempty"`
+	OwnerPID   int    `json:"owner_pid,omitempty"`
 	Boot       string `json:"boot,omitempty"`
 	WasEnabled bool   `json:"was_enabled"`
 }
@@ -44,7 +45,7 @@ func enablePf() error {
 		// `pfctl -d` (another VPN, the user) stops PF and invalidates every
 		// reference, ours included (xnu DIOCSTOP: invalidate_all_tokens).
 		// A cached token therefore proves nothing about enforcement.
-		live, err := pfReferenceHeld(pfLease.state.Token)
+		live, err := pfReferenceHeld(pfLease.state)
 		if err != nil {
 			return fmt.Errorf("verify PF reference: %w", err)
 		}
@@ -53,11 +54,12 @@ func enablePf() error {
 		}
 		slog.Warn("PF reference was invalidated; taking a new one", "token", pfLease.state.Token)
 		pfLease.state.Token, pfLease.state.Boot = "", ""
+		pfLease.state.OwnerPID = 0
 		if err := writePfLease(pfLease.state); err != nil {
 			slog.Warn("failed to drop stale PF token from journal", "error", err)
 		}
 	}
-	out, err := runPfctl("-E")
+	out, ownerPID, err := acquirePfReference()
 	if err != nil {
 		return fmt.Errorf("pfctl -E: %w (%s)", err, strings.TrimSpace(string(out)))
 	}
@@ -70,8 +72,9 @@ func enablePf() error {
 	}
 	pfLease.state.Token = string(match[1])
 	pfLease.state.Boot = boot
+	pfLease.state.OwnerPID = ownerPID
 	if err := writePfLease(pfLease.state); err != nil {
-		_, releaseErr := runPfctl("-X", pfLease.state.Token)
+		releaseErr := releasePfReference(pfLease.state)
 		if releaseErr == nil {
 			pfLease.state.Token = ""
 		}
@@ -110,14 +113,8 @@ func disablePf() error {
 		return err
 	}
 	if state.Boot == boot {
-		if out, err := runPfctl("-X", state.Token); err != nil {
-			if !pfTokenGone(out) {
-				return fmt.Errorf("pfctl -X: %w (%s)", err, strings.TrimSpace(string(out)))
-			}
-			// Nothing left to release: PF was stopped (all references
-			// invalidated) or the kernel no longer knows this token.
-			slog.Warn("PF reference already invalid; dropping it", "token", state.Token,
-				"error", err, "output", strings.TrimSpace(string(out)))
+		if err := releasePfReference(state); err != nil {
+			return err
 		}
 	}
 	pfLease.state = pfLeaseState{}
@@ -152,18 +149,37 @@ func livePfLease() (bool, error) {
 	if err != nil || pfLease.state.Boot != boot {
 		return false, err
 	}
-	return pfReferenceHeld(pfLease.state.Token)
+	return pfReferenceHeld(pfLease.state)
 }
 
-func pfReferenceHeld(token string) (bool, error) {
+// xnu hashes the allocated reference object's address to generate its token.
+// After -d frees it, another -E can immediately receive the same number.
+// Match the issuing pfctl PID as well, including before crash cleanup's -X.
+func pfReferenceHeld(state pfLeaseState) (bool, error) {
+	if state.OwnerPID <= 0 {
+		// A legacy journal cannot distinguish our token from a reused one.
+		// Do not adopt or release an ownership claim it cannot establish.
+		return false, nil
+	}
 	out, err := runPfctl("-s", "References")
 	if err != nil {
 		return false, fmt.Errorf("pfctl -s References: %w", err)
 	}
-	return parsePfReferences(string(out), token)
+	return parsePfReferences(string(out), state.Token, state.OwnerPID)
 }
 
-func parsePfReferences(out, token string) (bool, error) {
+func releasePfReference(state pfLeaseState) error {
+	held, err := pfReferenceHeld(state)
+	if err != nil || !held {
+		return err
+	}
+	if out, err := runPfctl("-X", state.Token); err != nil && !pfTokenGone(out) {
+		return fmt.Errorf("pfctl -X: %w (%s)", err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+func parsePfReferences(out, token string, ownerPID int) (bool, error) {
 	if strings.Contains(out, "No pf starter references held") {
 		return false, nil
 	}
@@ -185,15 +201,16 @@ func parsePfReferences(out, token string) (bool, error) {
 		if len(fields) < 6 || fields[len(fields)-2] != "days" {
 			return false, fmt.Errorf("unrecognized PF reference row")
 		}
-		if _, err := strconv.ParseUint(fields[0], 10, 64); err != nil {
-			return false, fmt.Errorf("invalid PF reference PID: %w", err)
+		pid, err := strconv.Atoi(fields[0])
+		if err != nil || pid <= 0 {
+			return false, fmt.Errorf("invalid PF reference PID: %q", fields[0])
 		}
 		rowToken := fields[len(fields)-4]
 		if _, err := strconv.ParseUint(rowToken, 10, 64); err != nil {
 			return false, fmt.Errorf("invalid PF reference token: %w", err)
 		}
 		rows++
-		found = found || rowToken == token
+		found = found || (rowToken == token && pid == ownerPID)
 	}
 	if !header || rows == 0 {
 		return false, fmt.Errorf("unrecognized PF reference listing")

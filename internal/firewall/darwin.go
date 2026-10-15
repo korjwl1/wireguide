@@ -21,11 +21,24 @@ import (
 // when ruleset locks contend; this ceiling prevents helper hangs.
 const pfCmdTimeout = 15 * time.Second
 
-var runPfctl = func(args ...string) ([]byte, error) {
+func runPfctlWithPID(args ...string) ([]byte, int, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), pfCmdTimeout)
 	defer cancel()
-	return exec.CommandContext(ctx, "pfctl", args...).CombinedOutput()
+	cmd := exec.CommandContext(ctx, "pfctl", args...)
+	out, err := cmd.CombinedOutput()
+	pid := 0
+	if cmd.Process != nil {
+		pid = cmd.Process.Pid
+	}
+	return out, pid, err
 }
+
+var runPfctl = func(args ...string) ([]byte, error) {
+	out, _, err := runPfctlWithPID(args...)
+	return out, err
+}
+
+var acquirePfReference = func() ([]byte, int, error) { return runPfctlWithPID("-E") }
 
 // validIfaceName matches typical macOS interface names like utun4, en0, lo0.
 var validIfaceName = regexp.MustCompile(`^[a-z]+[0-9]+$`)
@@ -721,8 +734,8 @@ func (f *DarwinFirewall) RepairEnforcement() (bool, error) {
 	return true, nil
 }
 
-// persistPfEnabledState writes whether pf was enabled to disk for crash
-// recovery.  The file contains "1" if enabled, "0" if disabled.
+// persistPfEnabledState records the initial status alongside the owned
+// reference identity. Older releases wrote only "1" or "0".
 func persistPfEnabledState(enabled bool) error {
 	pfLease.Lock()
 	defer pfLease.Unlock()

@@ -13,6 +13,7 @@ import (
 func stubPF(t *testing.T) *[]string {
 	t.Helper()
 	oldRun, oldLoad, oldPath, oldBoot := runPfctl, loadAnchorRules, savedPfStateFile, pfBootID
+	oldAcquire := acquirePfReference
 	oldState := pfLease.state
 	pfLease.state = pfLeaseState{}
 	savedPfStateFile = filepath.Join(t.TempDir(), "lease")
@@ -32,9 +33,14 @@ func stubPF(t *testing.T) *[]string {
 		}
 		return nil, nil
 	}
+	acquirePfReference = func() ([]byte, int, error) {
+		out, err := runPfctl("-E")
+		return out, 42, err
+	}
 	loadAnchorRules = func(string, string) error { return nil }
 	t.Cleanup(func() {
 		runPfctl, loadAnchorRules, savedPfStateFile, pfBootID = oldRun, oldLoad, oldPath, oldBoot
+		acquirePfReference = oldAcquire
 		pfLease.state = oldState
 	})
 	return &calls
@@ -53,7 +59,7 @@ func TestPFLeaseDoesNotDisableOtherOwnersOrAccumulateReferences(t *testing.T) {
 	}
 	// The second enable verifies PF still runs instead of trusting the cached
 	// token; it must not take another reference.
-	if got := strings.Join(*calls, ","); got != "-E,-s References,-X 1234567890123456789" {
+	if got := strings.Join(*calls, ","); got != "-E,-s References,-s References,-X 1234567890123456789" {
 		t.Fatalf("ownership calls = %s", got)
 	}
 }
@@ -62,13 +68,13 @@ func TestPFLeaseRecoveryOnlyReleasesSameBootToken(t *testing.T) {
 	for _, boot := range []string{"boot-a", "previous-boot"} {
 		t.Run(boot, func(t *testing.T) {
 			calls := stubPF(t)
-			if err := writePfLease(pfLeaseState{Token: "42", Boot: boot}); err != nil {
+			if err := writePfLease(pfLeaseState{Token: "1234567890123456789", Boot: boot, OwnerPID: 42}); err != nil {
 				t.Fatal(err)
 			}
 			if err := disablePf(); err != nil {
 				t.Fatal(err)
 			}
-			if len(*calls) != map[bool]int{true: 1, false: 0}[boot == "boot-a"] {
+			if len(*calls) != map[bool]int{true: 2, false: 0}[boot == "boot-a"] {
 				t.Fatalf("release calls = %v", *calls)
 			}
 		})

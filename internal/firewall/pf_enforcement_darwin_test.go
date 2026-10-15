@@ -20,6 +20,7 @@ type fakePFKernel struct {
 	running bool
 	next    uint64
 	tokens  map[string]bool
+	owners  map[string]int
 	anchors map[string]string
 	calls   []string
 }
@@ -27,7 +28,7 @@ type fakePFKernel struct {
 func stubPFKernel(t *testing.T) *fakePFKernel {
 	t.Helper()
 	stubPF(t)
-	k := &fakePFKernel{next: 100, tokens: map[string]bool{}, anchors: map[string]string{}}
+	k := &fakePFKernel{next: 100, tokens: map[string]bool{}, owners: map[string]int{}, anchors: map[string]string{}}
 	runPfctl = func(args ...string) ([]byte, error) {
 		k.calls = append(k.calls, strings.Join(args, " "))
 		switch args[0] {
@@ -60,7 +61,11 @@ func stubPFKernel(t *testing.T) *fakePFKernel {
 			}
 			out := "TOKENS:\nPID Process Name TOKEN TIMESTAMP\n"
 			for token := range k.tokens {
-				out += "123 pfctl " + token + " 0 days 00:00:01\n"
+				pid := k.owners[token]
+				if pid == 0 {
+					pid = 42
+				}
+				out += fmt.Sprintf("%d pfctl %s 0 days 00:00:01\n", pid, token)
 			}
 			return []byte(out), nil
 		case "-sr":

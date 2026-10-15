@@ -21,6 +21,26 @@ def call(argv, **kwargs):
     return subprocess.run(argv, text=True, capture_output=True, timeout=25, **kwargs)
 
 
+def release_reference(state):
+    # xnu can reuse a numeric token immediately after -d. Only release the
+    # reference issued to the recorded pfctl process, never a new owner.
+    if not isinstance(state, dict):
+        raise ValueError("invalid PF reference journal")
+    token, pid = str(state.get("token", "")), state.get("owner_pid", 0)
+    if not token.isdigit() or not isinstance(pid, int) or pid <= 0:
+        return
+    refs = call(["/sbin/pfctl", "-s", "References"])
+    if refs.returncode:
+        raise RuntimeError("cannot verify PF reference ownership during recovery")
+    for line in refs.stdout.splitlines():
+        fields = line.split()
+        if len(fields) >= 6 and fields[-2] == "days" and fields[-4] == token and fields[0] == str(pid):
+            released = call(["/sbin/pfctl", "-X", token])
+            if released.returncode:
+                raise RuntimeError("failed to release the recorded PF reference")
+            return
+
+
 def root_run(binary, evidence):
     evidence.mkdir(mode=0o700, parents=True, exist_ok=True)
     work = Path(tempfile.mkdtemp(prefix="wg-native-live-", dir="/private/tmp"))
@@ -112,22 +132,23 @@ def root_run(binary, evidence):
             r = call(["/sbin/pfctl", "-a", anchor, "-F", "rules"])
             if r.returncode:
                 rc = rc or 1
-        # Release only our still-journaled token; never use a global PF stop.
-        if pf_state.exists():
-            try:
-                state = json.loads(pf_state.read_text())
-                token = state.get("token", "")
-                if token and str(token).isdigit():
-                    call(["/sbin/pfctl", "-X", str(token)])
-            except (ValueError, OSError):
-                pass
-        other_token = work / "other-pf-token"
-        if other_token.exists() and other_token.read_text().strip().isdigit():
-            call(["/sbin/pfctl", "-X", other_token.read_text().strip()])
-        if original_lease is not None:
-            pf_state.write_bytes(original_lease)
-        elif pf_state.exists():
-            pf_state.unlink()
+        # Release only journaled identities; never use a global PF stop.
+        restore_pf_journal = True
+        for journal in (pf_state, work / "other-pf-token"):
+            if journal.exists():
+                try:
+                    release_reference(json.loads(journal.read_text()))
+                except (ValueError, OSError, RuntimeError) as exc:
+                    rc = rc or 1
+                    if journal == pf_state:
+                        restore_pf_journal = False
+                    with (evidence / "recovery.log").open("a") as log:
+                        log.write(f"PF reference recovery failed: {exc}\n")
+        if restore_pf_journal:
+            if original_lease is not None:
+                pf_state.write_bytes(original_lease)
+            elif pf_state.exists():
+                pf_state.unlink()
         for name, argv in {"dns": ["/usr/sbin/scutil", "--dns"], "route": ["/sbin/route", "-n", "get", "default"], "pf": ["/sbin/pfctl", "-si"], "interfaces": ["/sbin/ifconfig", "-l"]}.items():
             r = call(argv)
             (evidence / (name + ".after")).write_text(r.stdout + r.stderr)

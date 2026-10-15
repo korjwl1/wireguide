@@ -312,6 +312,33 @@ func livePing(t *testing.T, c *ipc.Client, cfg *domain.WireGuardConfig) {
 	t.Fatalf("tunnel absent from status: %s", cfg.Name)
 }
 
+func liveWaitConnected(t *testing.T, c *ipc.Client, names ...string) {
+	t.Helper()
+	liveWait(t, "connected tunnels: "+strings.Join(names, ", "), 30*time.Second, func() bool {
+		var status domain.ConnectionStatus
+		if err := c.Call(ipc.MethodStatus, nil, &status); err != nil {
+			return false
+		}
+		rows := status.Tunnels
+		if len(rows) == 0 {
+			rows = []domain.ConnectionStatus{status}
+		}
+		if len(rows) != len(names) {
+			return false
+		}
+		for _, name := range names {
+			found := false
+			for _, row := range rows {
+				found = found || (row.TunnelName == name && row.State == domain.StateConnected && row.InterfaceName != "")
+			}
+			if !found {
+				return false
+			}
+		}
+		return true
+	})
+}
+
 func liveServicePreferences(t *testing.T) string {
 	t.Helper()
 	services := strings.Split(liveCommand(t, "/usr/sbin/networksetup", "-listallnetworkservices"), "\n")
@@ -328,6 +355,67 @@ func liveServicePreferences(t *testing.T) string {
 		t.Fatal(err)
 	}
 	return string(raw)
+}
+
+type livePFReference struct {
+	Token    string `json:"token"`
+	OwnerPID int    `json:"owner_pid"`
+}
+
+func livePFLease() (livePFReference, error) {
+	var lease livePFReference
+	raw, err := os.ReadFile("/Library/Application Support/wireguide/pf-was-enabled")
+	if err != nil {
+		return lease, err
+	}
+	if err := json.Unmarshal(raw, &lease); err != nil {
+		return lease, err
+	}
+	if lease.Token == "" || lease.OwnerPID <= 0 {
+		return lease, fmt.Errorf("PF journal has no reference identity")
+	}
+	return lease, nil
+}
+
+func livePFReferenceHeld(ref livePFReference) bool {
+	out, err := exec.Command("/sbin/pfctl", "-s", "References").Output()
+	if err != nil {
+		return false
+	}
+	for _, line := range strings.Split(string(out), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) >= 6 && fields[len(fields)-2] == "days" && fields[len(fields)-4] == ref.Token && fields[0] == strconv.Itoa(ref.OwnerPID) {
+			return true
+		}
+	}
+	return false
+}
+
+func livePFCoowner(t *testing.T, dir string) livePFReference {
+	t.Helper()
+	cmd := exec.Command("/sbin/pfctl", "-E")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatal(err)
+	}
+	match := regexp.MustCompile(`Token\s*:\s*([0-9]+)`).FindSubmatch(out)
+	if len(match) != 2 {
+		t.Fatal("other PF owner returned no token")
+	}
+	ref := livePFReference{Token: string(match[1]), OwnerPID: cmd.Process.Pid}
+	t.Cleanup(func() {
+		if livePFReferenceHeld(ref) {
+			exec.Command("/sbin/pfctl", "-X", ref.Token).Run()
+		}
+	})
+	raw, err := json.Marshal(ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "other-pf-token"), raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	return ref
 }
 
 func TestMacOSLiveProductionNetworking(t *testing.T) {
@@ -439,22 +527,21 @@ func TestMacOSLiveProductionNetworking(t *testing.T) {
 	t.Log("PASS kill switch blocks a fresh physical-network TCP connection that succeeds before activation")
 	t.Log("PASS multi-tunnel kill-switch permits preserve IPv4/IPv6 and DNS")
 	if strings.Contains(pfBefore, "Status: Disabled") && os.Getenv("WIREGUIDE_LIVE_PF_DISABLE") == "1" {
-		raw, err := os.ReadFile("/Library/Application Support/wireguide/pf-was-enabled")
-		if err != nil {
-			t.Fatal(err)
+		stopOwnPF := func() livePFReference {
+			t.Helper()
+			ref, err := livePFLease()
+			if err != nil {
+				t.Fatal(err)
+			}
+			refs := liveCommand(t, "/sbin/pfctl", "-s", "References")
+			tokens := regexp.MustCompile(`[0-9]{12,}`).FindAllString(refs, -1)
+			if len(tokens) != 1 || tokens[0] != ref.Token || !livePFReferenceHeld(ref) {
+				t.Fatal("external PF stop refused: sole ownership not proven")
+			}
+			liveCommand(t, "/sbin/pfctl", "-d")
+			return ref
 		}
-		var lease struct {
-			Token string `json:"token"`
-		}
-		if json.Unmarshal(raw, &lease) != nil {
-			t.Fatal("PF lease unreadable")
-		}
-		refs := liveCommand(t, "/sbin/pfctl", "-s", "References")
-		tokens := regexp.MustCompile(`[0-9]{12,}`).FindAllString(refs, -1)
-		if len(tokens) != 1 || tokens[0] != lease.Token {
-			t.Fatal("external PF stop refused: sole ownership not proven")
-		}
-		liveCommand(t, "/sbin/pfctl", "-d")
+		stopOwnPF()
 		liveWait(t, "periodic native PF repair", 15*time.Second, func() bool {
 			out, _ := exec.Command("/sbin/pfctl", "-si").Output()
 			return strings.Contains(string(out), "Status: Enabled")
@@ -462,6 +549,42 @@ func TestMacOSLiveProductionNetworking(t *testing.T) {
 		livePing(t, c, a)
 		liveDNS(t, "198.18.241.1", true)
 		t.Log("PASS actual external PF stop, invalidated reference and production 5-second repair loop")
+
+		oldRef := stopOwnPF()
+		otherRef := livePFCoowner(t, dir)
+		if ref, err := livePFLease(); err != nil || ref != oldRef {
+			t.Fatal("fixture missed the stale-token window before periodic repair")
+		}
+		t.Logf("PF restart evidence: stale reference=%+v; other owner=%+v", oldRef, otherRef)
+		t.Cleanup(func() {
+			if t.Failed() {
+				ref, err := livePFLease()
+				refs, refsErr := exec.Command("/sbin/pfctl", "-s", "References").CombinedOutput()
+				t.Logf("PF failure evidence: journal=%+v (%v); references=%s (%v)", ref, err, refs, refsErr)
+			}
+		})
+		// PF is already running for another owner. Only a new, live reference
+		// proves that our periodic repair has recovered independent ownership.
+		liveWait(t, "own PF reference after another owner restarts PF", 15*time.Second, func() bool {
+			ref, err := livePFLease()
+			if err != nil || ref == oldRef || ref == otherRef {
+				return false
+			}
+			return livePFReferenceHeld(ref) && livePFReferenceHeld(otherRef)
+		})
+		liveCommand(t, "/sbin/pfctl", "-X", otherRef.Token)
+		if err := os.Remove(filepath.Join(dir, "other-pf-token")); err != nil {
+			t.Fatal(err)
+		}
+		if out := liveCommand(t, "/sbin/pfctl", "-si"); !strings.Contains(out, "Status: Enabled") {
+			t.Fatal("PF stopped when the other owner released its reference")
+		}
+		livePing(t, c, a)
+		liveDNS(t, "198.18.241.1", true)
+		if err := physicalProbe(); err == nil {
+			t.Fatal("recovered PF ownership failed to enforce the kill switch")
+		}
+		t.Log("PASS external PF stop/start by another owner: periodic repair reacquires a live independent reference and retains enforcement after that owner exits")
 	}
 	liveCall(t, c, "Live.Reconnect", a.Name, nil)
 	livePing(t, c, a)
@@ -484,11 +607,7 @@ func TestMacOSLiveProductionNetworking(t *testing.T) {
 		c = dial()
 	}
 	crash()
-	liveWait(t, "desired restoration", 30*time.Second, func() bool {
-		var active ipc.ActiveTunnelsResponse
-		err := c.Call(ipc.MethodActiveTunnels, nil, &active)
-		return err == nil && len(active.Names) == 2
-	})
+	liveWaitConnected(t, c, a.Name, b.Name)
 	livePing(t, c, a)
 	livePing(t, c, b)
 	liveDNS(t, "198.18.241.1", true)
@@ -505,29 +624,13 @@ func TestMacOSLiveProductionNetworking(t *testing.T) {
 		t.Fatal("watchdog block not persisted")
 	}
 	crash()
-	liveWait(t, "surviving tunnel restore", 30*time.Second, func() bool {
-		var active ipc.ActiveTunnelsResponse
-		err := c.Call(ipc.MethodActiveTunnels, nil, &active)
-		return err == nil && len(active.Names) == 1 && active.Names[0] == b.Name
-	})
+	liveWaitConnected(t, c, b.Name)
 	livePing(t, c, b)
 	liveDNS(t, "198.18.242.1", true)
 	liveCall(t, c, ipc.MethodConnect, ipc.ConnectRequest{Config: a}, nil)
 	livePing(t, c, a)
 	t.Log("PASS forced-disconnect cleanup preserves sibling, crash retains block, manual connect clears it")
-	coownerOut, err := exec.Command("/sbin/pfctl", "-E").CombinedOutput()
-	if err != nil {
-		t.Fatal(err)
-	}
-	match := regexp.MustCompile(`Token\s*:\s*([0-9]+)`).FindSubmatch(coownerOut)
-	if len(match) != 2 {
-		t.Fatal("other PF owner returned no token")
-	}
-	otherToken := string(match[1])
-	if err := os.WriteFile(filepath.Join(dir, "other-pf-token"), []byte(otherToken), 0600); err != nil {
-		t.Fatal(err)
-	}
-	defer exec.Command("/sbin/pfctl", "-X", otherToken).Run()
+	otherRef := livePFCoowner(t, dir)
 	saveSettings(false, false)
 	liveCall(t, c, ipc.MethodSetDNSProtection, ipc.DNSProtectionRequest{Enabled: false}, nil)
 	liveCall(t, c, ipc.MethodSetKillSwitch, ipc.KillSwitchRequest{Enabled: false}, nil)
@@ -562,7 +665,7 @@ func TestMacOSLiveProductionNetworking(t *testing.T) {
 	if out := liveCommand(t, "/sbin/pfctl", "-si"); !strings.Contains(out, "Status: Enabled") {
 		t.Fatal("WireGuide Off disabled another owner's PF reference")
 	}
-	liveCommand(t, "/sbin/pfctl", "-X", otherToken)
+	liveCommand(t, "/sbin/pfctl", "-X", otherRef.Token)
 	if err := os.Remove(filepath.Join(dir, "other-pf-token")); err != nil {
 		t.Fatal(err)
 	}
@@ -574,6 +677,32 @@ func TestMacOSLiveProductionNetworking(t *testing.T) {
 	}
 	t.Log("PASS product cleanup restores exact per-service DNS/search preferences and original PF status before emergency fallback")
 	t.Log("PASS real PF reference coexistence: product Off preserves another owner, explicit release restores baseline")
+
+	globalB := *b
+	globalB.Interface.DNS = []string{"198.18.242.1"}
+	if err := store.Save(&globalB); err != nil {
+		t.Fatal(err)
+	}
+	liveCall(t, c, ipc.MethodConnect, ipc.ConnectRequest{Config: a}, nil)
+	liveCall(t, c, ipc.MethodConnect, ipc.ConnectRequest{Config: &globalB}, nil)
+	livePing(t, c, a)
+	livePing(t, c, &globalB)
+	crash()
+	liveWaitConnected(t, c, a.Name, b.Name)
+	livePing(t, c, a)
+	livePing(t, c, &globalB)
+	liveCall(t, c, ipc.MethodDisconnect, ipc.DisconnectRequest{TunnelName: a.Name}, nil)
+	livePing(t, c, &globalB)
+	liveDNS(t, "198.18.242.1", true)
+	liveCall(t, c, ipc.MethodDisconnect, ipc.DisconnectRequest{TunnelName: b.Name}, nil)
+	liveWait(t, "original DNS after two global tunnels and crash", 10*time.Second, func() bool {
+		out, _ := exec.Command("/usr/sbin/scutil", "--dns").Output()
+		return string(out) == beforeDNS
+	})
+	if got := liveServicePreferences(t); got != beforeServices {
+		t.Fatal("two global DNS tunnels or crash restoration replaced the original DNS/search baseline")
+	}
+	t.Log("PASS two global DNS tunnels survive actual SIGKILL/restore; disconnect preserves the sibling and finally restores original per-service DNS/search preferences")
 	liveCall(t, c, ipc.MethodShutdown, nil, nil)
 	c.Close()
 	liveWait(t, "clean helper exit", 10*time.Second, func() bool {
