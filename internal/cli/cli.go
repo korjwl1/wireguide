@@ -289,6 +289,7 @@ func cmdStatus(args []string) int {
 		rows = []domain.ConnectionStatus{st}
 	}
 	seen := make(map[string]bool, len(rows)+len(active.Names))
+	pendingRows := make(map[string]bool)
 	for _, name := range active.Names {
 		seen[name] = true
 	}
@@ -299,14 +300,19 @@ func cmdStatus(args []string) int {
 		if !seen[name] {
 			rows = append(rows, domain.ConnectionStatus{TunnelName: name, State: domain.StateConnecting})
 			seen[name] = true
+			pendingRows[name] = true
 		}
 	}
 	if jsonOut {
 		return printJSON(rows)
 	}
 	for _, r := range rows {
-		if r.State == domain.StateConnecting {
+		if pendingRows[r.TunnelName] {
 			fmt.Printf("○ %s  waiting to reconnect\n", r.TunnelName)
+			continue
+		}
+		if r.State == domain.StateConnecting {
+			fmt.Printf("○ %s  connecting\n", r.TunnelName)
 			continue
 		}
 		hs := r.LastHandshake

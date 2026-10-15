@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/korjwl1/wireguide/internal/domain"
@@ -26,6 +27,7 @@ func TestStatusShowsPendingAlongsideActive(t *testing.T) {
 		t.Fatal(err)
 	}
 	server := ipc.NewServer(ln)
+	var connecting atomic.Bool
 	server.Handle(ipc.MethodPing, func(json.RawMessage) (interface{}, error) {
 		return ipc.PingResponse{Version: ipc.ProtocolVersion, WantedTunnels: []string{"home", "work"}}, nil
 	})
@@ -33,14 +35,20 @@ func TestStatusShowsPendingAlongsideActive(t *testing.T) {
 		return ipc.ActiveTunnelsResponse{Names: []string{"home"}}, nil
 	})
 	server.Handle(ipc.MethodStatus, func(json.RawMessage) (interface{}, error) {
-		return domain.ConnectionStatus{Tunnels: []domain.ConnectionStatus{{TunnelName: "home", State: domain.StateConnected}}}, nil
+		state := domain.StateConnected
+		if connecting.Load() {
+			state = domain.StateConnecting
+		}
+		return domain.ConnectionStatus{Tunnels: []domain.ConnectionStatus{{TunnelName: "home", State: state}}}, nil
 	})
 	go server.Serve()
 	t.Cleanup(server.Shutdown)
 	oldPath := helperSocketPath
 	helperSocketPath = func() string { return addr }
 	t.Cleanup(func() { helperSocketPath = oldPath })
-	for _, jsonOut := range []bool{false, true} {
+	for _, tc := range []struct{ jsonOut, connecting bool }{{false, false}, {true, false}, {false, true}, {true, true}} {
+		jsonOut := tc.jsonOut
+		connecting.Store(tc.connecting)
 		rd, wr, err := os.Pipe()
 		if err != nil {
 			t.Fatal(err)
@@ -67,6 +75,8 @@ func TestStatusShowsPendingAlongsideActive(t *testing.T) {
 			if len(rows) != 2 || rows[0].TunnelName != "home" || rows[1].TunnelName != "work" || rows[1].State != domain.StateConnecting {
 				t.Fatalf("status rows=%+v", rows)
 			}
+		} else if tc.connecting && !strings.Contains(string(out), "home  connecting") {
+			t.Fatalf("active connecting row mislabeled: %s", out)
 		} else if !strings.Contains(string(out), "home") || !strings.Contains(string(out), "work  waiting to reconnect") {
 			t.Fatalf("pending hidden: %s", out)
 		}
