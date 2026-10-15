@@ -21,6 +21,9 @@ func verifyProfileDirectory(info os.FileInfo, uid int, final bool) error {
 	if int(owner.Uid) != uid && owner.Uid != 0 {
 		return fmt.Errorf("untrusted directory owner uid %d", owner.Uid)
 	}
+	if owner.Uid == 0 && int(owner.Uid) != uid && info.Mode()&0022 != 0 && info.Mode()&os.ModeSticky == 0 && info.Mode()&os.ModeSymlink == 0 {
+		return fmt.Errorf("root-owned profile ancestor is writable by other users")
+	}
 	if info.Mode()&os.ModeSymlink != 0 && owner.Uid != 0 {
 		return fmt.Errorf("user-controlled directory symlink")
 	}

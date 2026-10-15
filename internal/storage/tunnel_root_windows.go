@@ -31,7 +31,7 @@ func verifyProfileRoot(root *os.Root, uid int, sid string) error {
 }
 func verifyProfileHandle(f *os.File, uid int, sid string) error {
 	if sid == "" {
-		return nil
+		return fmt.Errorf("authenticated profile owner SID is required")
 	}
 	expected, err := windows.StringToSid(sid)
 	if err != nil {

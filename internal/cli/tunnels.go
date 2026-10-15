@@ -308,8 +308,13 @@ func cmdDelete(args []string) int {
 		return 2
 	}
 	name := args[0]
-	c, _, contactErr := dialHelperRaw()
+	c, ping, contactErr := dialHelperRaw()
 	if contactErr == nil {
+		if ipc.MinorOf(ping.Version) < 4 {
+			c.Close()
+			fmt.Fprintln(os.Stderr, "delete: reopen WireGuide to upgrade the helper before deleting a profile")
+			return 1
+		}
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		err := c.CallWithContext(ctx, ipc.MethodDelete, ipc.DeleteRequest{TunnelName: name, Disconnect: true}, nil)
 		cancel()

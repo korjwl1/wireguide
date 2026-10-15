@@ -222,7 +222,14 @@ func pingTimeout() time.Duration {
 var userPaths = storage.GetPaths
 
 func helperAbsent(err error) bool {
-	return errors.Is(err, os.ErrNotExist) || errors.Is(err, syscall.ECONNREFUSED)
+	if errors.Is(err, os.ErrNotExist) {
+		return true
+	}
+	if errors.Is(err, syscall.ECONNREFUSED) {
+		_, statErr := os.Lstat(helperSocketPath())
+		return errors.Is(statErr, os.ErrNotExist)
+	}
+	return false
 }
 
 func tunnelStore() (*storage.TunnelStore, error) {

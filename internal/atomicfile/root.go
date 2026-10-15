@@ -24,7 +24,7 @@ func WriteInRoot(root *os.Root, name string, data []byte, perm os.FileMode) erro
 	if err := f.Close(); err != nil {
 		return err
 	}
-	if err := root.Rename(temp, name); err != nil {
+	if err := replaceInRoot(root, temp, name); err != nil {
 		return err
 	}
 	if dir, err := root.Open("."); err == nil {

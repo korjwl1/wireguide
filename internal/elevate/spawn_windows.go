@@ -12,10 +12,9 @@ import (
 )
 
 // SpawnHelper launches the helper with admin privileges via PowerShell + UAC.
-// ctx is accepted for parity with darwin; PowerShell's Start-Process detaches
-// the elevated child immediately, leaving nothing for ctx to cancel.
+// Wait for the authorization launcher, which detaches the elevated helper.
+// The context bounds the UAC wait, without waiting for the helper lifetime.
 func SpawnHelper(ctx context.Context, args Args) error {
-	_ = ctx
 	if err := ValidateArgs(args); err != nil {
 		return fmt.Errorf("invalid spawn args: %w", err)
 	}
@@ -38,12 +37,19 @@ func SpawnHelper(ctx context.Context, args Args) error {
 		argList += `,'--restore-desired'`
 	}
 	ps := fmt.Sprintf(
-		`Start-Process '%s' -ArgumentList %s -Verb RunAs -WindowStyle Hidden`,
+		`$ErrorActionPreference = 'Stop'; Start-Process '%s' -ArgumentList %s -Verb RunAs -WindowStyle Hidden`,
 		psEscape(exe), argList,
 	)
-	cmd := exec.Command("powershell", "-Command", ps)
+	cmd := exec.CommandContext(ctx, "powershell", "-NoProfile", "-NonInteractive", "-Command", ps)
 	sysexec.Hide(cmd)
-	return cmd.Start()
+	output, err := cmd.CombinedOutput()
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	if err != nil {
+		return fmt.Errorf("helper authorization failed: %w (%s)", err, strings.TrimSpace(string(output)))
+	}
+	return nil
 }
 
 // psEscape escapes a string for use inside a PowerShell single-quoted string.
