@@ -199,7 +199,7 @@ func parsePeerKey(peer *PeerConfig, key, value string, lineNum int) error {
 }
 
 // Serialize converts a WireGuardConfig back to .conf file format.
-// Multiple Pre/PostUp/Down commands (joined with " ; " internally) are
+// Multiple Pre/PostUp/Down commands (joined with an internal NUL sentinel) are
 // written as separate lines, matching wg-quick's multi-line convention.
 func Serialize(cfg *WireGuardConfig) string {
 	var b strings.Builder

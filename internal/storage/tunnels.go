@@ -36,7 +36,7 @@ func (s *TunnelStore) Save(cfg *config.WireGuardConfig) error {
 	return s.saveLocked(cfg)
 }
 
-// saveLocked publishes a validated config. Caller holds s.mu for writing.
+// saveLocked publishes a config with a validated name. Caller holds s.mu for writing.
 func (s *TunnelStore) saveLocked(cfg *config.WireGuardConfig) error {
 	// Refuse to overwrite a differently-cased existing tunnel: on a
 	// case-insensitive filesystem that write would replace the other
@@ -116,17 +116,10 @@ func (s *TunnelStore) Delete(name string) error {
 	return err
 }
 
-// Rename renames a tunnel from oldName to newName.
-//
-// Only `newName` is validated — `oldName` must already correspond to an
-// existing file on disk, and filesystem escaping is handled by s.path().
-// Validating oldName would strand users who have legacy files with
-// characters the current ValidateTunnelName rejects (e.g. dots from the
-// pre-Phase-0 era: `work.vpn.conf`), with no way to rename them out.
-//
-// Note: there is an intentional TOCTOU between exists() and Rename() — this
-// is a single-user desktop app and the window is microseconds. If this ever
-// becomes a multi-user service, switch to os.Link + os.Remove.
+// Rename moves a config and its metadata from oldName to newName. The old
+// path must stay inside the tunnel directory; legacy names containing dots
+// may be renamed even though new names must pass ValidateTunnelName.
+// The two files are moved separately, with best-effort rollback on failure.
 func (s *TunnelStore) Rename(oldName, newName string) error {
 	if err := ValidateTunnelName(newName); err != nil {
 		return err
@@ -176,24 +169,10 @@ func (s *TunnelStore) Rename(oldName, newName string) error {
 			return fmt.Errorf("tunnel %q conflicts with existing %q on case-insensitive filesystems; choose a distinct name", newName, variant)
 		}
 	}
-	// Two-phase commit for the (.conf, .meta.json) pair. The rollback-
-	// based design (rename .conf, then rename .meta, roll back .conf on
-	// failure) had a tail risk: the rollback rename can itself fail on
-	// Windows (file lock) or under disk-full / EROFS, leaving the user
-	// in a split state with permanent metadata loss.
-	//
-	// Strategy:
-	//   Phase 1 (PRE-CHECK): verify both paths are writable by attempting
-	//     a no-op os.Link-then-Remove on each. This catches permission
-	//     and file-lock failures up front, before any mutation.
-	//   Phase 2 (COMMIT): rename .conf then .meta. If either fails after
-	//     pre-check passed, the cause is almost certainly a TOCTOU race
-	//     (someone else touched the files between phases). Roll back
-	//     best-effort and surface both errors.
-	//
-	// Pre-check is best-effort; it doesn't fully eliminate races, but
-	// it catches the common "Windows file lock" cause that the original
-	// design hit hardest.
+	// Check both destinations before moving the config and its metadata.
+	// The advisory checks cannot guarantee a later rename (especially with
+	// Windows sharing locks). If metadata rename fails, roll back the config
+	// and report any rollback failure so the split state is visible.
 	newPath := s.path(newName)
 	oldMeta := s.metaPath(oldName)
 	newMeta := s.metaPath(newName)
@@ -222,9 +201,8 @@ func (s *TunnelStore) Rename(oldName, newName string) error {
 	}
 	if hasMeta {
 		if err := os.Rename(oldMeta, newMeta); err != nil {
-			// Pre-check said this was writable so the failure is almost
-			// certainly a TOCTOU race. Roll back .conf best-effort and
-			// surface both errors so the operator can investigate.
+			// A pre-check cannot rule out sharing violations or later races.
+			// Roll back .conf and surface both errors if that also fails.
 			if rollbackErr := os.Rename(newPath, oldPath); rollbackErr != nil {
 				return fmt.Errorf("rename meta failed after pre-check (%w) AND .conf rollback also failed (%v) — manual fix required", err, rollbackErr)
 			}
@@ -234,14 +212,9 @@ func (s *TunnelStore) Rename(oldName, newName string) error {
 	return nil
 }
 
-// preCheckWritable verifies that we can rename src→dst by performing a
-// minimal probe: ensure src is statable AND dst doesn't already exist
-// AND we can hardlink src→tmp (this exercises the same VFS permission
-// path as rename without committing). The probe is removed immediately.
-//
-// Hardlinks fail across filesystems with EXDEV; in that case we fall
-// back to "src exists + dst doesn't" which is a weaker check but better
-// than nothing.
+// preCheckWritable checks source accessibility and destination absence. Its
+// hard-link probe is advisory: it does not prove rename permission or Windows
+// delete-sharing support. Actual rename failures still require rollback.
 func preCheckWritable(src, dst string) error {
 	if _, err := os.Stat(src); err != nil {
 		return fmt.Errorf("source not accessible: %w", err)

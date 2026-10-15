@@ -74,6 +74,12 @@ Each tunnel gets its **own `NetworkManager` instance** created via `netMgrFactor
 
 When multiple tunnels are active, DNS servers are merged into a **union set**. On connect, the new tunnel's DNS is merged with all existing tunnels' DNS via `AllDNSServers()`. On disconnect, if other tunnels remain, their combined DNS is re-applied through one of the remaining tunnels' `NetworkManager` instances.
 
+On macOS, each global-DNS adapter checkpoints the exact service DNS/search
+snapshot before changing preferences. The manager shares one original baseline
+across those journals: a later tunnel must not record an earlier tunnel's VPN
+DNS as the user's original settings. Newly discovered services extend the
+baseline; failed checkpoints prevent writes and remain pending for retry.
+
 DNS protection derives per-resolver permits from the longest matching
 AllowedIPs prefix across all connected tunnels. A resolver outside every
 managed tunnel is permitted by address through normal system routing, so a

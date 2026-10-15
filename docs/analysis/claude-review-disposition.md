@@ -70,11 +70,16 @@ are not represented as fixed by the N-1–N-5 changes:
 - Scoped resolver badges, IPv6 zone parsing and Linux systemd-resolved stub
   attribution still need diagnostic improvements (D-1/D-2).
 - Backup error/replacement behavior and GUI visibility remain limited (L4-x).
-- PF live token membership, repair backoff and the periodic wiring test gap
-  remain B-6/B-7/B-5/B-1; a cached lease with PF running is not independently
-  proven to be a live reference.
-- Windows pinned DNS permits do not constrain LUID (B-8), and existing tunnel
-  permit/endpoint filter removal paths may forget failed deletes (B-9).
+- PF live token membership, transient status reads and repair backoff remain
+  B-6/B-7/B-5; a cached lease with PF running is not independently proven to
+  be a live reference. B-1's periodic wiring gap is covered by the earlier
+  native test that stops PF and observes the real helper loop reacquire it;
+  that test's historical scope is recorded below.
+- Windows B-8/B-9 were resolved by the subsequent
+  [code-quality review](code-quality-review-20261015.md): pinned DNS matches
+  LUID; failed tunnel/endpoint deletes abort and retain IDs. Kill-switch Off
+  also keeps independent protection in the same session. Windows CI at
+  `1a78e39` covers the added filter lifecycle tests.
 - Old IPC 1.2 clients cannot observe new headless pending intent (C-1).
 
 P-3's startup restore lifetime gap is covered by the added restore lease and
