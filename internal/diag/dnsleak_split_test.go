@@ -92,8 +92,8 @@ func TestExpectedDNSForTunnelsPrefersGlobal(t *testing.T) {
 	split := []string{"192.168.1.1", "~intranet.example"}
 	global := []string{"10.0.0.1"}
 	got := ExpectedDNSForTunnels([][]string{split, global, nil})
-	if len(got) != 2 || got[0] != "10.0.0.1" || got[1] != "192.168.1.1" {
-		t.Fatalf("global entries plus split server IPs (no ~ tokens), got %v", got)
+	if len(got) != 1 || got[0] != "10.0.0.1" {
+		t.Fatalf("only global resolver entries, got %v", got)
 	}
 	got = ExpectedDNSForTunnels([][]string{split})
 	if len(got) != 2 {

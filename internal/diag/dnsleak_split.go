@@ -125,7 +125,10 @@ func runSplitDNSChecks(ctx context.Context, result *DNSLeakResult, plans []domai
 		result.Error = fmt.Sprintf("scutil --dns: %v", err)
 		return result
 	}
-	blocks := parseScutilDNS(string(out))
+	return evaluateSplitDNSResult(result, plans, parseScutilDNS(string(out)))
+}
+
+func evaluateSplitDNSResult(result *DNSLeakResult, plans []domain.DNSEntries, blocks []scutilResolver) *DNSLeakResult {
 	vpn := make(map[string]bool)
 	for _, p := range plans {
 		for _, s := range p.Servers {
@@ -146,7 +149,12 @@ func runSplitDNSChecks(ctx context.Context, result *DNSLeakResult, plans []domai
 	}
 	result.MissingMatchDomains = evaluateSplitDNSPlans(blocks, plans)
 	if len(result.MissingMatchDomains) > 0 {
-		result.Error = "split DNS: no supplemental resolver for " + strings.Join(result.MissingMatchDomains, ", ")
+		message := "split DNS: no supplemental resolver for " + strings.Join(result.MissingMatchDomains, ", ")
+		if result.Error != "" {
+			result.Error += "; " + message
+		} else {
+			result.Error = message
+		}
 	}
 	return result
 }
@@ -169,6 +177,30 @@ func RunDNSLeakTestForTunnels(perTunnel [][]string) *DNSLeakResult {
 	if len(plans) == 0 {
 		return RunDNSLeakTestContext(ctx, ExpectedDNSForTunnels(perTunnel))
 	}
+	if hasGlobal && runtime.GOOS == "darwin" {
+		// One OS snapshot: supplemental resolvers must never expand the set of
+		// allowed DEFAULT resolvers, even when both share the same server IP.
+		out, err := exec.CommandContext(ctx, "scutil", "--dns").Output()
+		if err != nil {
+			return &DNSLeakResult{Error: fmt.Sprintf("scutil --dns: %v", err)}
+		}
+		blocks := parseScutilDNS(string(out))
+		var defaults []string
+		seen := map[string]bool{}
+		for _, b := range blocks {
+			if b.Scoped || b.Domain != "" {
+				continue
+			}
+			for _, ns := range b.Nameservers {
+				if !seen[ns] {
+					seen[ns] = true
+					defaults = append(defaults, ns)
+				}
+			}
+		}
+		result := runGlobalDNSCheck(ctx, ExpectedDNSForTunnels(perTunnel), func() ([]string, error) { return defaults, nil })
+		return evaluateSplitDNSResult(result, plans, blocks)
+	}
 	result := &DNSLeakResult{SplitMode: !hasGlobal}
 	if hasGlobal {
 		result = RunDNSLeakTestContext(ctx, ExpectedDNSForTunnels(perTunnel))
@@ -176,35 +208,19 @@ func RunDNSLeakTestForTunnels(perTunnel [][]string) *DNSLeakResult {
 	return runSplitDNSChecks(ctx, result, plans)
 }
 
-// ExpectedDNSForTunnels picks the DNS= entries the leak test should expect
-// when several tunnels are connected. A global-mode tunnel overrides system
-// DNS, so its servers are what can leak; if any exists, the global
-// tunnels' entries plus the split tunnels' server IPs (never their ~match
-// tokens, which would switch the test to split mode and mask a global leak). With only split tunnels
-// the entries are merged so every match domain is still verified.
+// ExpectedDNSForTunnels returns only global entries when global DNS is in
+// use. Supplemental ownership is checked separately from default resolvers.
 func ExpectedDNSForTunnels(perTunnel [][]string) []string {
 	var global, split []string
-	var splitEntries [][]string
 	for _, entries := range perTunnel {
 		p := domain.ParseDNSEntries(entries)
-		if len(p.Servers) == 0 && len(p.Match) == 0 {
-			continue
-		}
-		if len(p.Match) == 0 {
-			global = append(global, entries...)
-		} else {
+		if len(p.Match) > 0 {
 			split = append(split, entries...)
-			splitEntries = append(splitEntries, entries)
+		} else if len(p.Servers) > 0 {
+			global = append(global, entries...)
 		}
 	}
 	if len(global) > 0 {
-		// Mixed mode: split tunnels' resolver IPs are legitimate tunnel
-		// resolvers (scutil lists them from the supplemental resolver), so
-		// add them to the expected set without their ~match tokens, which
-		// would flip the test into split mode.
-		for _, entries := range splitEntries {
-			global = append(global, domain.ParseDNSEntries(entries).Servers...)
-		}
 		return global
 	}
 	return split

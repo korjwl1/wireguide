@@ -8,7 +8,7 @@
 
   // Split-mode check failed: no leak verdict, but the tunnel resolver is
   // missing for some match domains (or the check could not run).
-	$: splitFailed = !!result && !result.leaked &&
+	$: splitFailed = !!result &&
     (!!result.error || (result.missing_match_domains || []).length > 0);
 
   async function runTest() {
@@ -41,7 +41,7 @@
     {/if}
 
     {#if result}
-      <div class="result" class:leaked={result.leaked} class:warn={splitFailed} class:safe={!result.leaked && !splitFailed}>
+      <div class="result" class:leaked={result.leaked} class:warn={!result.leaked && splitFailed} class:safe={!result.leaked && !splitFailed}>
         <div class="status-icon">{result.leaked || splitFailed ? '⚠' : '✓'}</div>
         <div class="status-text">
           {result.leaked ? $t('tools.dns_leak_leaked') : splitFailed ? $t('tools.dns_leak_split_failed') : result.split_mode ? $t('tools.dns_leak_split') : $t('tools.dns_leak_safe')}

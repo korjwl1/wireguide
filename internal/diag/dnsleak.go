@@ -66,6 +66,11 @@ func RunDNSLeakTestContext(ctx context.Context, expectedDNS []string) *DNSLeakRe
 		return runSplitDNSCheck(ctx, result, parsed)
 	}
 
+	return runGlobalDNSCheck(ctx, expectedDNS, systemResolverReader)
+}
+
+func runGlobalDNSCheck(ctx context.Context, expectedDNS []string, readResolvers func() ([]string, error)) *DNSLeakResult {
+	result := &DNSLeakResult{}
 	// Generate a fresh random subdomain so the test query can't be
 	// served from any resolver's cache. crypto/rand (16 bytes hex)
 	// gives 128 bits of randomness — far beyond any feasible cache
@@ -82,7 +87,7 @@ func RunDNSLeakTestContext(ctx context.Context, expectedDNS []string) *DNSLeakRe
 
 	// Check system resolver configuration
 	// On macOS: scutil --dns, on Linux: /etc/resolv.conf
-	systemDNS, err := systemResolverReader()
+	systemDNS, err := readResolvers()
 	if err != nil {
 		result.Error = fmt.Sprintf("cannot read system DNS resolvers: %v", err)
 		return result
