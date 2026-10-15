@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/korjwl1/wireguide/internal/domain"
-	"github.com/korjwl1/wireguide/internal/tunnel"
 )
 
 // TunnelManager is the subset of tunnel.Manager that the reconnect monitor
@@ -20,8 +19,8 @@ import (
 type TunnelManager interface {
 	IsConnected() bool
 	ActiveTunnel() string
-	Status() *tunnel.ConnectionStatus
-	AllStatuses() []*tunnel.ConnectionStatus
+	Status() *domain.ConnectionStatus
+	AllStatuses() []*domain.ConnectionStatus
 	Disconnect() error
 	DisconnectTunnel(name string) error
 }
@@ -132,7 +131,7 @@ type Monitor struct {
 
 	// healthCheckEnabled controls whether the periodic handshake age
 	// check runs in monitorLoop. Can be toggled at runtime via
-	// SetHealthCheck. Default: true.
+	// SetHealthCheck. Default: false.
 	healthCheckEnabled bool
 }
 
@@ -707,8 +706,8 @@ func (m *Monitor) reconnectWithBackoff(ctx context.Context, tunnelName string, e
 		case !nothingUp && !legacyTornDown:
 			disconnectErr = m.disconnectAll()
 		}
-		var te *tunnel.TunnelError
-		if errors.As(disconnectErr, &te) && te.Kind == tunnel.ErrNotConnected {
+		var te *domain.TunnelError
+		if errors.As(disconnectErr, &te) && te.Kind == domain.ErrNotConnected {
 			disconnectErr = nil
 		}
 		if disconnectErr != nil {
