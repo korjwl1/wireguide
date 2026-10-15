@@ -313,6 +313,11 @@ func (h *Helper) pruneManualOverrides(st networkState) {
 		if l.unknown && st.identityKnown {
 			l.identity, l.unknown = st.identity, false
 			l.evidence = l.evidence.enrich(st.evidence)
+		} else if l.unknown && l.evidence.empty() && !st.evidence.empty() {
+			// SSID can remain unavailable on wired Windows or permission-
+			// denied Wi-Fi. A completely empty latch still needs one settled
+			// baseline so a later positive network move can release it.
+			l.evidence = st.evidence
 		}
 		h.manualOverride[name] = l
 	}

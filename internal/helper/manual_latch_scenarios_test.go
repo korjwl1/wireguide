@@ -126,3 +126,24 @@ func TestUnknownLatchAdoptsFirstKnownNetwork(t *testing.T) {
 		t.Fatal("adopted baseline did not detect a different router")
 	}
 }
+
+// Offline latches need a first baseline even if the SSID remains unavailable.
+func TestOfflineManualOffAdoptsFirstPositiveNetworkEvidence(t *testing.T) {
+	offline := netProbeResult{PrimaryIsWiFi: true}
+	for _, tc := range []struct {
+		name string
+		a, b netProbeResult
+	}{
+		{"Windows wired", netProbeResult{Gateway: "10.0.0.1", GatewayMAC: "aa:aa:aa:aa:aa:01", PrimaryIsWiFi: true}, netProbeResult{Gateway: "10.1.0.1", GatewayMAC: "bb:bb:bb:bb:bb:02", PrimaryIsWiFi: true}},
+		{"Wi-Fi without SSID permission", netProbeResult{Gateway: "192.168.1.1", Iface: "en0", Subnets: []string{"192.168.1.0/24"}, PrimaryIsWiFi: true}, netProbeResult{Gateway: "10.20.0.1", Iface: "en0", Subnets: []string{"10.20.0.0/24"}, PrimaryIsWiFi: true}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if !latchHeldAfter(t, "", offline, latchStep{"", tc.a}) {
+				t.Fatal("first observation released Off")
+			}
+			if latchHeldAfter(t, "", offline, latchStep{"", tc.a}, latchStep{"", tc.b}) {
+				t.Fatal("later positive move could not release Off")
+			}
+		})
+	}
+}
