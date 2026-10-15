@@ -130,7 +130,7 @@
     "log_level_warn": "Warning",
     "log_level_error": "Error",
     "kill_switch": "Kill Switch",
-    "kill_switch_hint": "Blocks all traffic if VPN drops. Applied automatically on connect.",
+    "kill_switch_hint": "Applies OS firewall protection during the VPN session. Protection is temporarily suspended during setup and reconnect.",
     "dns_protection": "DNS Protection",
     "dns_protection_hint": "Forces DNS through VPN only. Applied automatically on connect.",
     "health_check": "Health Check",

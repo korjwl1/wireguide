@@ -130,7 +130,7 @@
     "log_level_warn": "警告",
     "log_level_error": "エラー",
     "kill_switch": "キルスイッチ",
-    "kill_switch_hint": "VPN が切断されるとすべてのトラフィックをブロックします。接続時に自動適用。",
+    "kill_switch_hint": "VPN接続中はOSのファイアウォールで保護します。接続準備・再接続中は保護が一時的に解除されます。",
     "dns_protection": "DNS 保護",
     "dns_protection_hint": "DNS を VPN トンネル経由のみに強制します。接続時に自動適用。",
     "health_check": "ヘルスチェック",

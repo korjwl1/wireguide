@@ -130,7 +130,7 @@
     "log_level_warn": "경고",
     "log_level_error": "오류",
     "kill_switch": "킬 스위치",
-    "kill_switch_hint": "VPN이 끊기면 모든 트래픽을 차단합니다. 연결 시 자동 적용.",
+    "kill_switch_hint": "VPN 연결 중 OS 방화벽 보호를 적용합니다. 연결 준비·재연결 중에는 보호가 잠시 해제됩니다.",
     "dns_protection": "DNS 보호",
     "dns_protection_hint": "DNS를 VPN 터널로만 강제합니다. 연결 시 자동 적용.",
     "health_check": "헬스 체크",

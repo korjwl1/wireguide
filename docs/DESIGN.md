@@ -318,7 +318,7 @@ transaction preserves the previous filters and their tracked IDs for retry.
 ### Model
 
 Each tunnel owns an ordered list of `condition → action` rules
-(`internal/wifi/automation.go`). A condition is one of:
+(`internal/automation/automation.go`). A condition is one of:
 
 - `ssid` — the current Wi-Fi SSID equals a value
 - `subnet` — a physical-interface IP is inside a CIDR
@@ -397,9 +397,11 @@ The helper's locks:
 - `mu` — protects `activeCfgs` and other manager state
 - `wifiMu` — protects `autoConnectedBy`
 
-Rule: within an evaluation, always acquire in the order
-`connectMu → mu → wifiMu`. Never hold a lower-priority lock when acquiring
-a higher one.
+Within an evaluation, acquire `reevalMu → connectMu → mu → wifiMu`.
+Desired-state persistence acquires `desiredMu` before its `mu → wifiMu`
+snapshot and disk write; callers must release `mu`/`wifiMu` before persistence.
+The tunnel DNS checkpoint mutex serializes journals and baseline replacement;
+its slow fsync runs outside `Manager.mu`, keeping status queries responsive.
 
 ## Reconnect
 
@@ -713,3 +715,44 @@ failure while retaining the working control connection. GUI history changes
 are serialized and stop accepting status events once shutdown closes history.
 Shared status and operation error types live in `domain`; `reconnect` depends
 on those types and its consumer-owned manager interface, not the engine package.
+
+
+### Firewall suspension during reconnect
+
+The current helper policy suspends kill switch and DNS protection during tunnel
+reconstruction so endpoint resolution and interface replacement can proceed.
+This creates an unprotected interval, including for other connected tunnels.
+Atomic replacement of an individual backend ruleset does not remove this
+higher-level policy gap. Preserving a default blockade while permitting only
+bootstrap DNS and endpoint UDP requires a separate cross-platform policy change;
+it must preserve multi-tunnel ownership and failure recovery.
+
+
+### Model and adapter boundaries
+
+`internal/automation` owns condition evaluation, legacy rule migration and
+settling. It uses only the standard library. `internal/wifi` owns OS detection
+and monitor lifetime; storage and CLI rule consumers do not import that adapter.
+`internal/version` supplies build identity without the update downloader.
+
+Helper intent persistence, pending restore and startup orchestration live in
+`desired_store.go`, `pending_restore.go` and `restore.go`. Linux and Windows
+network adapters separate DNS and routing in the same platform package.
+
+GUI preferences use optional-field `SettingsPatch` writes under the settings
+file lock. Saving a preference never replaces another writer's automation
+rules. A failed live apply retains saved intent and exposes a retryable error.
+Profile rename/delete return a structured warning if the committed file change
+succeeds but automation migration fails.
+
+The helper retries failed DNS cleanup while retaining its original baseline and
+crash journal under a separate retired-record identity. Failed cleanup does
+not block new connections or let a same-named profile overwrite its predecessor's
+journal. Retired work runs only when no transport is active; failed startup
+recovery also preserves its original baseline. All active macOS global-DNS
+monitors track the same resolver union.
+Linux interface DNS contributions are withdrawn even when siblings remain.
+
+The macOS GUI reservation uses the OS private per-user temporary directory,
+independent of TMPDIR. A new binary first contacts an old reservation when a
+pre-migration binary is still running, including after an in-place bundle update.
