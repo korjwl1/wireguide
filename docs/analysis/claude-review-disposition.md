@@ -113,15 +113,27 @@ are committed with issue references (#44, #48 and #12) and pushed to
 `fix/windows-single-instance`. Low-priority follow-ups above and native OS
 checks below are still open. No main merge or original PR closure occurred.
 
+## macOS native follow-up
+
+[Native execution on this Mac](macos-native-verification-20261015.md) now
+passes real utun IPv4/IPv6 traffic, macOS split resolver dispatch, actual
+DNS protection/KS packet enforcement, PF stop/reacquisition and coexistence,
+system launchd crash restore, forced-disconnect event teardown/block recovery,
+and normal DNS/route/PF cleanup. The fixtures invoke production packages with
+controlled local peers, not a mocked client network stack. They do not cover
+remote full-tunnel routing or the complete GUI installation flow.
+Actual sleep/wake was explicitly deferred by the user. Windows native checks,
+physical network changes and the listed lower-priority findings remain open.
+
 ## Verification limits
 
-Local full race suite, vet and frontend build are rerun on the integrated
-changes, followed by native three-OS CI. Tests through an OS execution seam
-prove transition/error handling, not actual packet paths. Real sleep/wake,
-PF coexistence/token outputs, mixed DNS packets, systemd-resolved and Windows
-WFP kernel failure injection remain target-machine verification. The same-
-user socket activation capability is an accepted design tradeoff; deleting
-only the app does not uninstall the helper. GUI single-instance reservation
-does not prove asynchronous helper teardown has finished.
+Local full race suite, vet and frontend build passed on the integrated code,
+followed by native three-OS CI. The macOS native follow-up above adds actual
+kernel packet and launchd evidence for its specified scenarios. Real sleep/wake,
+remote full-tunnel endpoint routing, Linux systemd-resolved and Windows WFP
+kernel failure injection remain target-machine verification. The same-user
+socket activation capability is an accepted design tradeoff; deleting only
+the app does not uninstall the helper. GUI single-instance reservation does
+not prove asynchronous helper teardown has finished.
 
 No original PR is closed and no main merge is performed by this follow-up.

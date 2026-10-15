@@ -109,3 +109,13 @@ and cleanup. These target scenarios still need hardware verification:
       Apple's menu-bar icons in both connected and disconnected states.
 - [ ] Verify the green connected badge, absence of a persistent background
       box, and VoiceOver's connection-state announcement.
+
+## macOS native networking follow-up (2026-10-15)
+
+[Execution report](analysis/macos-native-verification-20261015.md) records
+passed native split-route IPv4/IPv6 traffic, macOS resolver dispatch, DNS/KS
+packet enforcement, PF repair/coexistence, system launchd crash restoration
+and product cleanup. Forced-disconnect tests inject the event and validate
+real teardown/block persistence; genuine recursive-route detection and remote
+full-tunnel tests above remain unchecked. Actual sleep/wake was deferred by
+the user. The test runner is `scripts/macos_native_live_test.py`.

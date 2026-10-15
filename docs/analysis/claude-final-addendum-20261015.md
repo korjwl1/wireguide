@@ -1,3 +1,7 @@
+> Subsequent macOS native checks: see [execution report](macos-native-verification-20261015.md).
+> The historical review below predates that run; its remaining-check list is
+> narrowed by the new report, not considered fully closed.
+
 > Codex verification after this review: CI [38686094150](https://github.com/korjwl1/wireguide/actions/runs/38686094150)
 > completed successfully on **48b5c92755f451498897c0e41a3baa7075827b4b**.
 > Windows, macOS and Linux jobs all passed, including Linux binary/DEB packaging.
