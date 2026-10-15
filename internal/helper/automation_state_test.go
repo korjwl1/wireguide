@@ -470,3 +470,24 @@ func TestManualOverrideClearsForDifferentNetworkWithSameSSID(t *testing.T) {
 		t.Fatal("same SSID on a different gateway retained override")
 	}
 }
+
+func TestReconnectPreparationUsesRouteWaitOnlyForWakeAndRoam(t *testing.T) {
+	stubNetwork(t, wifiProbe())
+	var calls int
+	defaultRouteProbe = func() bool { calls++; return false }
+	h := &Helper{}
+	if err := h.prepareReconnect(context.Background(), "Site"); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 0 {
+		t.Fatal("per-tunnel health recovery waited for an unrelated default route")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := h.prepareReconnect(ctx, ""); !errors.Is(err, context.Canceled) {
+		t.Fatalf("legacy readiness wait: %v", err)
+	}
+	if calls != 1 {
+		t.Fatal("wake/roam did not probe the default route")
+	}
+}

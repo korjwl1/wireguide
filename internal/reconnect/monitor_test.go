@@ -1162,3 +1162,74 @@ func TestNamedRetryAfterFailedConnectAllowsAlreadyDown(t *testing.T) {
 	mon.ReconnectTunnelIfIdle("alpha", nil)
 	waitFor(t, time.Second, "restore already down tunnel", func() bool { return attempts.Load() > 0 })
 }
+
+func TestNetworkReadinessWaitPrecedesFirewallAndTeardown(t *testing.T) {
+	var connects, suspends, disconnects atomic.Int32
+	mon, mgr, _ := newTestMonitor(testConfig(), func(context.Context, string) error { connects.Add(1); return nil })
+	mon.networkDetector = nil // These cases drive the trigger explicitly.
+	mgr.setConnected(true, "alpha")
+	mgr.disconnectFn = func() error { disconnects.Add(1); return nil }
+	waiting, ready := make(chan struct{}), make(chan struct{})
+	mon.SetReconnectPreflight(func(ctx context.Context, name string) error {
+		if name != "" {
+			t.Errorf("unexpected per-tunnel wait %q", name)
+		}
+		close(waiting)
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ready:
+			return nil
+		}
+	})
+	mon.SetFirewallCallbacks(func() error { suspends.Add(1); return nil }, func() error { return nil })
+	mon.Start()
+	defer mon.Stop()
+	mon.triggerReconnect()
+	select {
+	case <-waiting:
+	case <-time.After(time.Second):
+		t.Fatal("readiness check was not called")
+	}
+	if suspends.Load() != 0 || disconnects.Load() != 0 || connects.Load() != 0 {
+		t.Fatal("network wait dropped protection or tore down transports")
+	}
+	close(ready)
+	waitFor(t, time.Second, "reconnect after route recovery", func() bool { return connects.Load() == 1 })
+	if suspends.Load() != 1 || disconnects.Load() != 1 {
+		t.Fatal("normal recovery did not follow readiness")
+	}
+}
+
+func TestCancelDuringNetworkWaitDoesNotTouchFirewallOrTunnel(t *testing.T) {
+	var connects, suspends, disconnects atomic.Int32
+	mon, mgr, _ := newTestMonitor(testConfig(), func(context.Context, string) error { connects.Add(1); return nil })
+	mon.networkDetector = nil // These cases drive the trigger explicitly.
+	mgr.setConnected(true, "alpha")
+	mgr.disconnectFn = func() error { disconnects.Add(1); return nil }
+	waiting, finished := make(chan struct{}), make(chan struct{})
+	mon.SetReconnectPreflight(func(ctx context.Context, _ string) error {
+		close(waiting)
+		<-ctx.Done()
+		close(finished)
+		return ctx.Err()
+	})
+	mon.SetFirewallCallbacks(func() error { suspends.Add(1); return nil }, nil)
+	mon.Start()
+	defer mon.Stop()
+	mon.triggerReconnect()
+	select {
+	case <-waiting:
+	case <-time.After(time.Second):
+		t.Fatal("no readiness wait")
+	}
+	mon.CancelRetry()
+	select {
+	case <-finished:
+	case <-time.After(time.Second):
+		t.Fatal("manual Off did not interrupt readiness")
+	}
+	if suspends.Load() != 0 || disconnects.Load() != 0 || connects.Load() != 0 {
+		t.Fatal("cancelled network wait touched transport/protection")
+	}
+}

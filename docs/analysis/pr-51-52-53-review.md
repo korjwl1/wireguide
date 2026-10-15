@@ -346,3 +346,40 @@ prevents delayed cleanup from deleting the new owner's keys. A regression test
 covers failed cleanup, failed reuse, retained journal, successful reuse and an
 empty subsequent retry. Fresh tunnel/helper/diagnostics race tests, affected
 package vet and Windows/Linux core builds passed after this correction.
+
+## Coverage re-audit (2026-10-15)
+
+The remote heads still match the pinned heads above. "Integrated" means adapted
+on the work branch, not a merge into main or a claim of byte-for-byte adoption.
+
+| PR | Adopted behavior | Deliberate differences |
+|---|---|---|
+| #50 | Helper-owned DNS intent, connected-tunnel resolver permits, transition/error reconciliation and retries, PF reference ownership/startup cleanup, Linux rule replacement and bounded signal cleanup | Existing separate kill-switch/DNS implementations retained instead of the unified reconciler; `/1` routing does not acquire `/0` automatic-firewall policy |
+| #51 | `~domain` config, macOS supplemental resolvers, Linux resolved commands, config/editor/CLI support, recovery DNS mode and per-domain diagnostics | Explicitly unsupported DNS fails Connect; diagnostics report unverified checks; resolver ownership and failed cleanup/reuse corrected |
+| #52 | Negation, settle/unknown holds, manual overrides, preview reasons, rule-edit watcher, route-context probes, LAN conflict detection and reconnect fixes | Stronger network identity and downgrade storage; manual On retains transport repair; manual routes are not silently omitted; LAN conflict prevention applies to rule-driven auto-connect |
+| #53 | Listener adoption, install/legacy migration, activation budgets, GUI-presence metadata, transient CLI behavior, dormant automation and quit cancellation | Destructive orphan self-uninstall and its bundle flag omitted; current desired-state, signal, IPC and tray lifecycle preserved |
+
+The re-audit found one actual #52 omission: `waitForDefaultRoute` was ported but
+was not invoked by wake/roam recovery. The follow-up connects it through a
+reconnect preflight, **before** firewall suspension and transport teardown and
+without holding helper connectMu. Per-tunnel health checks keep their existing
+path. The wait remains bounded at ten seconds and can be cancelled by manual
+Off or shutdown. Tests cover the callback's real ordering, cancellation and
+helper route probing; deliberately bypassing preflight makes the regression
+case fail. Helper/reconnect race tests and vet plus Windows/Linux core builds
+verify the correction. This finding invalidates a blanket "every original
+change was already included" claim before this re-audit.
+
+Original release-changelog fragments are not copied into a release; versioning
+and release notes need to describe the final main integration. Native runtime
+limits above still apply. PR #47 (RPM packaging) is separate and is not included
+in this adoption.
+
+### Proposed GitHub PR disposition
+
+Publish/review the corrected integration as one PR against main, preserving
+links and credit for #50–#53 and explaining every intentional difference above.
+Only after main contains that implementation should #50–#53 be closed as
+superseded, with links to the replacement and relevant verification. They
+should not be represented as unmodified merges. Keep #47 open for its separate
+packaging review. No original PR is closed by this local coverage audit.

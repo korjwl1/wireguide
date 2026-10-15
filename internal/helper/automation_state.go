@@ -397,3 +397,13 @@ func (h *Helper) pruneLatchesWithoutRules(rules map[string][]wifi.Rule) {
 		}
 	}
 }
+
+// prepareReconnect waits out wake/roam default-route gaps before suspending
+// protection or tearing down working transports. No helper lock is held, so
+// explicit Off and shutdown can cancel the wait immediately.
+func (h *Helper) prepareReconnect(ctx context.Context, name string) error {
+	if name != "" {
+		return ctx.Err()
+	}
+	return waitForDefaultRoute(ctx, gatewayWaitBudget)
+}

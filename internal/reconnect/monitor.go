@@ -104,6 +104,7 @@ type Monitor struct {
 	cfg             Config
 	manager         TunnelManager
 	reconnectFn     ReconnectFunc
+	preflightFn     func(context.Context, string) error
 	statusFn        StatusChangedFunc
 	fwSuspendFn     FirewallSuspendFunc
 	fwResumeFn      FirewallResumeFunc
@@ -158,6 +159,14 @@ func (m *Monitor) SetFirewallCallbacks(suspend FirewallSuspendFunc, resume Firew
 	defer m.mu.Unlock()
 	m.fwSuspendFn = suspend
 	m.fwResumeFn = resume
+}
+
+// SetReconnectPreflight installs a cancellable readiness check before any
+// firewall suspension or tunnel teardown. Must be called before Start().
+func (m *Monitor) SetReconnectPreflight(fn func(context.Context, string) error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.preflightFn = fn
 }
 
 // SetHealthCheck enables or disables the periodic handshake age check.
@@ -607,6 +616,25 @@ func (m *Monitor) reconnectWithBackoff(ctx context.Context, tunnelName string, e
 		if ctx.Err() != nil || m.cancelInvalidRetry(tunnelName, entry) {
 			slog.Info("reconnection cancelled before attempt", "attempt", attempt)
 			return
+		}
+
+		m.mu.Lock()
+		preflight := m.preflightFn
+		m.mu.Unlock()
+		if preflight != nil {
+			if err := preflight(ctx, tunnelName); err != nil {
+				slog.Info("reconnect preparation stopped", "tunnel", tunnelName, "error", err)
+				m.mu.Lock()
+				if cur, ok := m.retries[tunnelName]; ok && cur == entry {
+					delete(m.retries, tunnelName)
+				}
+				m.mu.Unlock()
+				m.notifyStatus(State{Reconnecting: false})
+				return
+			}
+			if ctx.Err() != nil || m.cancelInvalidRetry(tunnelName, entry) {
+				return
+			}
 		}
 
 		// All-tunnels trigger with nothing up: only the desired-state

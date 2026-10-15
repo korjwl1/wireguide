@@ -458,6 +458,7 @@ func Run(addr string, ownerUID int, ownerSID, dataDir string, restoreDesired boo
 	// Reconnect monitor — uses cached config
 	h.monitor = reconnect.NewMonitor(manager, h.reconnectFn, h.onReconnectState, reconnect.DefaultConfig())
 	h.monitor.SetFirewallCallbacks(h.suspendFirewall, h.resumeFirewall)
+	h.monitor.SetReconnectPreflight(h.prepareReconnect)
 	// Wake/network triggers must also fire when nothing is active but a
 	// persisted desired state says tunnels are wanted (helper crash-restart
 	// whose restore failed; issue #44).
