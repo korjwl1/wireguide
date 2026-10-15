@@ -4,6 +4,7 @@ package helper
 
 import (
 	"context"
+	"errors"
 	"net"
 	"os"
 	"os/exec"
@@ -73,8 +74,15 @@ func TestNativeHelperTerminationSignals(t *testing.T) {
 			if err := cmd.Process.Signal(tc.sig); err != nil {
 				t.Fatal(err)
 			}
-			if err := cmd.Wait(); err != nil {
-				t.Fatalf("helper did not exit cleanly after %s: %v", tc.sig, err)
+			waitErr := cmd.Wait()
+			blocked := tc.mode == "cleanup-blocked" || tc.mode == "startup-blocked"
+			if blocked {
+				var exitErr *exec.ExitError
+				if !errors.As(waitErr, &exitErr) || exitErr.ExitCode() != 1 {
+					t.Fatalf("forced termination reported success: %v", waitErr)
+				}
+			} else if waitErr != nil {
+				t.Fatalf("helper did not exit cleanly after %s: %v", tc.sig, waitErr)
 			}
 			if time.Since(start) > 6*time.Second {
 				t.Fatal("signal deadline did not bound startup/cleanup")

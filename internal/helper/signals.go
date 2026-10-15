@@ -29,24 +29,32 @@ func superviseHelperSignals(signals <-chan os.Signal, ready <-chan func(), finis
 	}
 	// Reserve the final third for independent best-effort firewall/DNS
 	// cleanup even if monitor/tunnel teardown has stalled.
-	deadline := time.NewTimer(timeout * 2 / 3)
+	grace := timeout
+	if len(fallback) > 0 {
+		grace = timeout * 2 / 3
+	}
+	deadline := time.NewTimer(grace)
 	force := func() {
-		done := make(chan struct{})
 		go func() {
-			defer close(done)
 			for _, cleanup := range fallback {
 				cleanup()
 			}
 		}()
-		timer := time.NewTimer(timeout / 3)
+		remaining := timeout - grace
+		if remaining == 0 {
+			remaining = time.Millisecond
+		}
+		timer := time.NewTimer(remaining)
 		defer timer.Stop()
+		// A quick fallback does not prove that ordinary teardown completed.
+		// Keep the remaining grace available to normal cleanup, and report
+		// forced termination as a failure so launchd can run crash recovery.
 		select {
-		case <-done:
 		case <-finished:
 			return
 		case <-timer.C:
 		}
-		exit(0)
+		exit(1)
 	}
 	defer deadline.Stop()
 	for {
