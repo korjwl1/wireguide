@@ -104,14 +104,8 @@ func (b *eventBridge) handleEvent(method string, params json.RawMessage) {
 		} else {
 			b.app.Event.Emit("status", status)
 			if b.onStatusChange != nil {
-				hsMap := make(map[string]bool)
-				for _, ts := range status.Tunnels {
-					hsMap[ts.TunnelName] = ts.LastHandshake != ""
-				}
-				if status.TunnelName != "" {
-					hsMap[status.TunnelName] = status.LastHandshake != ""
-				}
-				b.onStatusChange(status.ActiveTunnels, hsMap)
+				names, handshakes := connectedStatusIndicators(status)
+				b.onStatusChange(names, handshakes)
 			}
 			if b.onReconcileHistory != nil {
 				rx := make(map[string]int64, len(status.Tunnels)+1)
@@ -217,5 +211,13 @@ func (b *eventBridge) handleEvent(method string, params json.RawMessage) {
 			slog.Error("helper background goroutine died permanently", "where", payload.Where, "detail", payload.Detail)
 			b.app.Event.Emit("critical_error", payload)
 		}
+	}
+}
+
+// A missing helper cannot attest to a live connection. Clear indicators without
+// inventing a disconnect/history record; restored status will repopulate them.
+func (b *eventBridge) clearConnectionIndicators() {
+	if b != nil && b.onStatusChange != nil {
+		b.onStatusChange(nil, nil)
 	}
 }

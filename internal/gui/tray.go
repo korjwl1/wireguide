@@ -40,7 +40,7 @@ var (
 	trayOnIconWindows  []byte // app icon + green dot badge
 	trayOffIconWindows []byte // app icon, no badge
 
-	// customTrayIconPNG is the source the Windows builders read from. Set
+	// customTrayIconPNG is the source for color tray and application icons. Set
 	// by SetTrayIconPNG before gui.Run; init can't read it because Go
 	// runs package init() at load time, well before main wires this up.
 	customTrayIconPNG []byte
@@ -48,10 +48,8 @@ var (
 
 // SetTrayIconPNG hands the GUI package the raw bytes of the source app
 // icon (a 1024×1024 RGBA PNG today). main.go embeds the file and calls
-// this before invoking Run. The package keeps a copy so the Windows
-// tray-icon builders can read it later. Calling with an empty slice
-// disables the custom Windows tray icon (we fall back to the template).
-func SetTrayIconPNG(b []byte) { customTrayIconPNG = b }
+// this before invoking Run. An empty source disables custom icon rendering.
+func SetTrayIconPNG(b []byte) { customTrayIconPNG = bytes.Clone(b) }
 
 func init() {
 	white := color.NRGBA{255, 255, 255, 255}
@@ -348,11 +346,12 @@ func buildTrayOffIcon(wColor color.NRGBA) []byte {
 // did an IPC round-trip to the helper inside ListTunnels — that blocked the
 // event stream, making the UI feel sluggish under a 1 Hz status broadcast.
 type trayManager struct {
-	app        *application.App
-	win        *application.WebviewWindow
-	tray       *application.SystemTray
-	svc        *wgapp.TunnelService
-	doShutdown func()
+	app            *application.App
+	win            *application.WebviewWindow
+	tray           *application.SystemTray
+	svc            *wgapp.TunnelService
+	doShutdown     func()
+	connectionIcon *connectionIcon
 
 	mu            sync.Mutex
 	activeTunnels map[string]bool // cached from status events
@@ -448,6 +447,9 @@ func (t *trayManager) setIconState(activeNames []string, handshakeMap map[string
 	t.mu.Unlock()
 
 	anyConnected := len(activeNames) > 0
+	if t.connectionIcon != nil {
+		t.connectionIcon.SetConnected(anyConnected)
+	}
 
 	// Compute "did the active-set change" up front so we can both
 	// (a) gate the SetIcon/SetTooltip cgo calls (they're cheap but

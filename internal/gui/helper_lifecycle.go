@@ -304,6 +304,7 @@ func startHelperHealthMonitor(app *application.App, clients *ipc.ClientHolder, d
 			switch {
 			case !alive && wasAlive:
 				slog.Warn("helper disconnected", "error", err)
+				bridge.clearConnectionIndicators()
 				app.Event.Emit("helper", HelperEvent{
 					Alive:   false,
 					Message: "Helper process not responding: " + err.Error(),

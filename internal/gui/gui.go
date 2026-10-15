@@ -136,6 +136,16 @@ func Run(assetsHandler http.Handler, dataDir string) error {
 	tunnelService := wgapp.NewTunnelService(tunnelStore, settingsStore, historyStore, clients)
 
 	// 4. Wails app
+	var win *application.WebviewWindow
+	var connectionIndicator *connectionIcon
+	if images, err := buildConnectionIconImages(customTrayIconPNG); err != nil {
+		slog.Warn("cannot prepare application connection icons", "error", err)
+	} else {
+		connectionIndicator = newConnectionIcon(application.InvokeAsync, func(connected bool) error {
+			return applyConnectionIcon(win.NativeWindow(), connected, images)
+		})
+		defer connectionIndicator.Close()
+	}
 	app := application.New(application.Options{
 		Name:        "WireGuide",
 		Description: "Cross-platform WireGuard desktop client",
@@ -147,6 +157,13 @@ func Run(assetsHandler http.Handler, dataDir string) error {
 		},
 		Mac: application.MacOptions{
 			ApplicationShouldTerminateAfterLastWindowClosed: false,
+		},
+		Windows: application.WindowsOptions{
+			WndProcInterceptor: connectionIconMessages(func() {
+				if connectionIndicator != nil {
+					connectionIndicator.Refresh()
+				}
+			}),
 		},
 	})
 	tunnelService.SetApp(app)
@@ -179,7 +196,7 @@ func Run(assetsHandler http.Handler, dataDir string) error {
 	//
 	// Min size pins the smallest pretty-looking shape (≈1.44 ratio) while
 	// still leaving the detail pane wide enough that nothing wraps weirdly.
-	win := app.Window.NewWithOptions(application.WebviewWindowOptions{
+	win = app.Window.NewWithOptions(application.WebviewWindowOptions{
 		Title:          "WireGuide",
 		Width:          1200,
 		Height:         740,
@@ -194,6 +211,10 @@ func Run(assetsHandler http.Handler, dataDir string) error {
 		BackgroundColour: application.NewRGB(30, 30, 30), // matches --bg-primary dark (#1E1E1E)
 		URL:              "/",
 	})
+	if connectionIndicator != nil {
+		win.OnWindowEvent(events.Common.WindowRuntimeReady, func(*application.WindowEvent) { connectionIndicator.Ready() })
+		win.OnWindowEvent(events.Common.WindowShow, func(*application.WindowEvent) { connectionIndicator.Refresh() })
+	}
 
 	// macOS standard: close button hides the window instead of destroying it.
 	// The app stays alive in the tray; "Show Window" brings it back.
@@ -259,6 +280,9 @@ func Run(assetsHandler http.Handler, dataDir string) error {
 		shutdownOnce.Do(func() {
 			instance.BeginShutdown()
 			appQuitting.Store(true)
+			if connectionIndicator != nil {
+				connectionIndicator.Close()
+			}
 			stopHealth()
 			slog.Info("shutting down GUI + helper")
 			// Close any in-flight history sessions BEFORE the helper goes
@@ -298,6 +322,7 @@ func Run(assetsHandler http.Handler, dataDir string) error {
 	}
 
 	trayMgr := newTrayManager(app, win, tray, tunnelService, doShutdown)
+	trayMgr.connectionIcon = connectionIndicator
 	trayMgr.initialBuild()
 
 	if runtime.GOOS == "darwin" {
