@@ -44,3 +44,12 @@ func wgNativeTrayAction(value *C.char) {
 		go (*callback)(action)
 	}
 }
+
+func preferredGUILanguage() string {
+	value := C.wgPreferredGUILanguage()
+	if value == nil {
+		return "en"
+	}
+	defer C.free(unsafe.Pointer(value))
+	return C.GoString(value)
+}

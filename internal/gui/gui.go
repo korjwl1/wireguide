@@ -14,7 +14,6 @@ import (
 	"net/http"
 	"runtime"
 	"sync"
-	"time"
 
 	wgapp "github.com/korjwl1/wireguide/internal/app"
 	"github.com/korjwl1/wireguide/internal/domain"
@@ -52,6 +51,7 @@ func init() {
 	application.RegisterEvent[ipc.SettingsChangedPayload]("settings_changed")
 	application.RegisterEvent[struct{}]("config_changed")
 	application.RegisterEvent[struct{}]("tunnels_changed")
+	application.RegisterEvent[ipc.RecoveryWarningPayload]("recovery_warning")
 }
 
 // Run starts the GUI process. Blocks until the Wails app exits.
@@ -99,38 +99,16 @@ func Run(assetsHandler http.Handler, dataDir string) error {
 	historyStore.CloseOpenSessions("app_quit")
 
 	// Apply persisted log level to the GUI side immediately (helper-side
-	// gets it after ensureHelper + the SaveSettings path).
+	// gets it after ensureHelper + the UpdateSettings path).
 	if s, err := settingsStore.Load(); err == nil && s != nil && s.LogLevel != "" {
 		setGUILogLevel(s.LogLevel)
 	}
 
-	// 2. Helper process (spawn if needed).
-	// If the user cancels the admin prompt, retry up to 3 times with a
-	// user-visible dialog explaining why the helper is required.
-	var initialClient *ipc.Client
-	for attempt := 0; attempt < 3; attempt++ {
-		// ensureHelper starts its readiness timeout after authorization.
-		helperCtx, helperCancel := context.WithCancel(context.Background())
-		var err error
-		initialClient, err = ensureHelper(helperCtx, dataDir, false)
-		helperCancel()
-		if err == nil {
-			break
-		}
-		slog.Warn("helper connection failed", "attempt", attempt+1, "error", err)
-		if attempt < 2 {
-			// Native per-OS retry dialog (retry_prompt_*.go) — the Wails
-			// app isn't running yet, so Wails dialogs are unavailable.
-			// On retry, ensureHelper first probes for an already-running
-			// helper, so a UAC prompt the user answered while this dialog
-			// was up connects instantly instead of re-prompting.
-			if !askHelperRetry(err) {
-				return fmt.Errorf("helper setup cancelled by user")
-			}
-			continue
-		}
-		return fmt.Errorf("helper connection failed after 3 attempts: %w", err)
+	initialClient, err := connectInitialHelper(dataDir)
+	if err != nil {
+		return err
 	}
+
 	clients := ipc.NewClientHolder(initialClient)
 
 	// 3. Wails service
@@ -147,16 +125,14 @@ func Run(assetsHandler http.Handler, dataDir string) error {
 		})
 		defer connectionIndicator.Close()
 	}
-	var (
-		shutdownOnce sync.Once
-		doShutdown   func()
-	)
+	var shutdown *guiShutdown
+
 	app := application.New(application.Options{
 		Name:        "WireGuide",
 		Description: "Cross-platform WireGuard desktop client",
 		ShouldQuit: func() bool {
-			if doShutdown != nil {
-				doShutdown()
+			if shutdown != nil {
+				shutdown.run()
 			}
 			return true
 		},
@@ -282,54 +258,16 @@ func Run(assetsHandler http.Handler, dataDir string) error {
 	healthDone := make(chan struct{})
 	var stopHealthOnce sync.Once
 	stopHealth := func() { stopHealthOnce.Do(func() { close(healthDone) }) }
-	// 7. Shutdown coordination (declared upfront so closures can reference it)
-	doShutdown = func() {
-		shutdownOnce.Do(func() {
-			instance.BeginShutdown()
-			appQuitting.Store(true)
-			if connectionIndicator != nil {
-				connectionIndicator.Close()
-			}
-			stopHealth()
-			slog.Info("shutting down GUI + helper")
-			// Close any in-flight history sessions BEFORE the helper goes
-			// away — snapshotActiveStats needs the helper alive to fetch
-			// last-known rx/tx counters.
-			tunnelService.CloseHistorySessions("app_quit")
-			// Flush any deferred history writes synchronously. The
-			// debounced writer would otherwise lose the last 100ms of
-			// records when the GUI process exits.
-			historyStore.Flush()
-			c := clients.Get()
-			if c != nil {
-				// Bounded timeouts so a hung helper can't keep the GUI
-				// alive forever — user clicked Quit, they expect the app
-				// to die. 2s is generous for a local Unix-socket RPC that
-				// just kicks off async teardown.
-				ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-				if err := c.CallWithContext(ctx, ipc.MethodDisconnect, nil, nil); err != nil {
-					slog.Warn("shutdown: Disconnect RPC failed", "error", err)
-				}
-				cancel()
-				ctx, cancel = context.WithTimeout(context.Background(), 2*time.Second)
-				if err := c.CallWithContext(ctx, ipc.MethodShutdown, nil, nil); err != nil {
-					slog.Warn("shutdown: Shutdown RPC failed", "error", err)
-				}
-				cancel()
-			}
-			// Close in a goroutine with a short delay so the helper has
-			// time to process the shutdown command without blocking the
-			// macOS main thread (AppKit requires the main thread to stay
-			// responsive during termination).
-			go func() {
-				time.Sleep(50 * time.Millisecond)
-				clients.Close()
-			}()
-		})
-	}
+	shutdown = &guiShutdown{instance: instance, indicator: connectionIndicator, stopHealth: stopHealth, service: tunnelService, history: historyStore, clients: clients}
+	defer shutdown.run()
 
-	trayMgr := newTrayManager(app, win, tray, tunnelService, doShutdown)
+	trayMgr := newTrayManager(app, win, tray, tunnelService, shutdown.run)
 	trayMgr.connectionIcon = connectionIndicator
+	wgapp.SetGUIPreferencesChanged(func() {
+		if !appQuitting.Load() {
+			trayMgr.scheduleRebuild()
+		}
+	})
 	trayMgr.initialBuild()
 
 	if runtime.GOOS == "darwin" {

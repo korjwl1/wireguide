@@ -1,5 +1,6 @@
 #import <Cocoa/Cocoa.h>
 #include "native_tray_darwin.h"
+#include <string.h>
 
 extern void wgNativeTrayAction(char *action);
 
@@ -153,4 +154,12 @@ void wgNativeTraySetConnected(bool connected) {
         wgTray.badge.hidden = !connected;
         [wgTray.item.button setAccessibilityValue:connected ? @"Connected" : @"Disconnected"];
     });
+}
+
+
+char *wgPreferredGUILanguage(void) {
+    @autoreleasepool {
+        NSString *language = [NSLocale preferredLanguages].firstObject ?: @"en";
+        return strdup(language.UTF8String);
+    }
 }

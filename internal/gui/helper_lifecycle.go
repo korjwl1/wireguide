@@ -437,3 +437,32 @@ func isHelperGoneErr(err error) bool {
 		errors.Is(err, net.ErrClosed) ||
 		errors.Is(err, ipc.ErrClientClosed)
 }
+
+// connectInitialHelper retries interactive setup before Wails owns a window.
+func connectInitialHelper(dataDir string) (*ipc.Client, error) {
+	var initialClient *ipc.Client
+	for attempt := 0; attempt < 3; attempt++ {
+		// ensureHelper starts its readiness timeout after authorization.
+		helperCtx, helperCancel := context.WithCancel(context.Background())
+		var err error
+		initialClient, err = ensureHelper(helperCtx, dataDir, false)
+		helperCancel()
+		if err == nil {
+			break
+		}
+		slog.Warn("helper connection failed", "attempt", attempt+1, "error", err)
+		if attempt < 2 {
+			// Native per-OS retry dialog (retry_prompt_*.go) — the Wails
+			// app isn't running yet, so Wails dialogs are unavailable.
+			// On retry, ensureHelper first probes for an already-running
+			// helper, so a UAC prompt the user answered while this dialog
+			// was up connects instantly instead of re-prompting.
+			if !askHelperRetry(err) {
+				return nil, fmt.Errorf("helper setup cancelled by user")
+			}
+			continue
+		}
+		return nil, fmt.Errorf("helper connection failed after 3 attempts: %w", err)
+	}
+	return initialClient, nil
+}

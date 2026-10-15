@@ -564,6 +564,7 @@ func (t *trayManager) rebuildMenu() {
 		return
 	}
 
+	labels := t.labels()
 	tunnels, err := t.svc.ListTunnelsLocal()
 	if err != nil {
 		slog.Debug("tray: list tunnels failed", "error", err)
@@ -591,7 +592,7 @@ func (t *trayManager) rebuildMenu() {
 			}
 			rows = append(rows, nativeTrayItem{Title: glyph + tun.Name, Action: "tunnel:" + tun.Name, Enabled: true})
 		}
-		rows = append(rows, nativeTrayItem{Separator: true}, nativeTrayItem{Title: "Show Window", Action: "show", Enabled: true}, nativeTrayItem{Separator: true}, nativeTrayItem{Title: "Quit", Action: "quit", Enabled: true})
+		rows = append(rows, nativeTrayItem{Separator: true}, nativeTrayItem{Title: labels.show, Action: "show", Enabled: true}, nativeTrayItem{Separator: true}, nativeTrayItem{Title: labels.quit, Action: "quit", Enabled: true})
 		setNativeTrayMenu(rows)
 		return
 	}
@@ -635,11 +636,11 @@ func (t *trayManager) rebuildMenu() {
 		})
 	}
 	m.AddSeparator()
-	m.Add("Show Window").OnClick(func(ctx *application.Context) {
+	m.Add(labels.show).OnClick(func(ctx *application.Context) {
 		showDock()
 	})
 	m.AddSeparator()
-	m.Add("Quit").OnClick(func(ctx *application.Context) {
+	m.Add(labels.quit).OnClick(func(ctx *application.Context) {
 		t.quitApp()
 	})
 	if created || runtime.GOOS == "windows" {

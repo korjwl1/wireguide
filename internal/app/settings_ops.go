@@ -396,3 +396,14 @@ func installedBundleVersion() string {
 	}
 	return strings.TrimSpace(string(out))
 }
+
+// GUI preferences can change from a Wails RPC; the composition root owns
+// native UI refresh, while this package owns persistence.
+var guiPreferencesChanged atomic.Value // func()
+
+func SetGUIPreferencesChanged(refresh func()) { guiPreferencesChanged.Store(refresh) }
+func notifyGUIPreferencesChanged() {
+	if callback := guiPreferencesChanged.Load(); callback != nil {
+		callback.(func())()
+	}
+}

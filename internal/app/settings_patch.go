@@ -67,6 +67,7 @@ func (s *TunnelService) UpdateSettings(p SettingsPatch) error {
 	}); err != nil {
 		return err
 	}
+	notifyGUIPreferencesChanged()
 	var failures []error
 	apply := func(name string, action func() error) {
 		if err := action(); err != nil {
