@@ -192,6 +192,20 @@ func (s *SettingsStore) loadLocked() (*Settings, error) {
 		}
 		return DefaultSettings(), nil
 	}
+	if settings.Automation != nil {
+		activeExtended := false
+		for _, rules := range settings.Automation.PerTunnel {
+			if wifi.HasNegated(rules) {
+				activeExtended = true
+				break
+			}
+		}
+		if !activeExtended {
+			if _, err := os.Stat(s.path + ".automation-v2-backup"); err == nil {
+				slog.Warn("inactive negated automation rules have a recovery backup; restore explicitly if needed", "path", s.path+".automation-v2-backup")
+			}
+		}
+	}
 	return settings, nil
 }
 
@@ -252,6 +266,41 @@ func (s *SettingsStore) saveLocked(settings *Settings) error {
 	if err != nil {
 		return err
 	}
+	// Keep an inert backup that an older binary cannot erase when it
+	// rewrites config.json and drops unknown negated-rule fields. Never auto-
+	// execute backup rules: only the active config controls automation.
+	hasExtended := false
+	if settings.Automation != nil {
+		for _, rules := range settings.Automation.PerTunnel {
+			if wifi.HasNegated(rules) {
+				hasExtended = true
+				break
+			}
+		}
+	}
+	retireBackup := false
+	if !hasExtended {
+		if previous, err := os.ReadFile(s.path); err == nil {
+			var old Settings
+			if json.Unmarshal(previous, &old) == nil && old.Automation != nil {
+				for _, rules := range old.Automation.PerTunnel {
+					if wifi.HasNegated(rules) {
+						retireBackup = true
+						break
+					}
+				}
+			}
+		}
+	}
+	if hasExtended {
+		backup, err := json.MarshalIndent(settings.Automation, "", "  ")
+		if err != nil {
+			return err
+		}
+		if err := writeAutomationBackup(s.path+".automation-v2-backup", backup); err != nil {
+			return err
+		}
+	}
 	// Ensure the config directory exists before writing (matches history's
 	// saveLocked). Without this, os.CreateTemp fails when EnsureDirs hasn't
 	// run or the directory was removed out from under us.
@@ -285,5 +334,33 @@ func (s *SettingsStore) saveLocked(settings *Settings) error {
 		os.Remove(tmpPath)
 		return err
 	}
+	if retireBackup {
+		if err := os.Remove(s.path + ".automation-v2-backup"); err != nil && !os.IsNotExist(err) {
+			slog.Warn("could not remove retired automation backup", "error", err)
+		}
+	}
 	return nil
+}
+
+func writeAutomationBackup(path string, data []byte) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		return err
+	}
+	f, err := os.CreateTemp(filepath.Dir(path), ".automation-v2-*")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(f.Name())
+	if _, err = f.Write(data); err != nil {
+		f.Close()
+		return err
+	}
+	if err = f.Sync(); err != nil {
+		f.Close()
+		return err
+	}
+	if err = f.Close(); err != nil {
+		return err
+	}
+	return atomicRenameDurable(f.Name(), path)
 }

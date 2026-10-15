@@ -104,6 +104,7 @@ var localOverlapProbe = network.FirstLocalNetworkOverlap
 // it was made on. Automation leaves the tunnel alone until the network
 // settles on a different identity.
 type manualLatch struct {
+	evidence     networkEvidence
 	identity     string
 	disconnected bool // true: user turned it off; false: user turned it on
 	// unknown: identity was recorded while the network was unknown (offline
@@ -116,6 +117,7 @@ type manualLatch struct {
 // engine and the latch need.
 type networkState struct {
 	ctx             wifi.NetworkContext
+	evidence        networkEvidence
 	identity        string
 	identityKnown   bool // false: offline, or blank SSID on Wi-Fi
 	settleRemaining time.Duration
@@ -203,6 +205,7 @@ func (h *Helper) networkState(observe bool) networkState {
 			Online:        probe.Gateway != "" || probe.Iface != "",
 		},
 		identity:        networkIdentity(ssid, probe.Iface, gw, subnets),
+		evidence:        networkEvidence{SSID: ssid, Iface: probe.Iface, MAC: gw, Gateway: probe.Gateway, Subnets: subnets},
 		identityKnown:   (probe.Gateway != "" || probe.Iface != "") && !(ssid == "" && probe.PrimaryIsWiFi),
 		settleRemaining: remaining,
 	}
@@ -271,7 +274,7 @@ func (h *Helper) recordManualOverride(name string, disconnected bool) {
 	if h.manualOverride == nil {
 		h.manualOverride = make(map[string]manualLatch)
 	}
-	h.manualOverride[name] = manualLatch{identity: st.identity, disconnected: disconnected, unknown: !st.identityKnown}
+	h.manualOverride[name] = manualLatch{identity: st.identity, disconnected: disconnected, unknown: !st.identityKnown, evidence: st.evidence}
 	h.wifiMu.Unlock()
 	slog.Info("automation: manual override latched", "tunnel", name,
 		"disconnected", disconnected, "network", st.identity)
@@ -283,23 +286,91 @@ func (h *Helper) recordManualOverride(name string, disconnected bool) {
 // a latch; a latch recorded while the network was unknown adopts the first
 // settled, known identity instead.
 func (h *Helper) pruneManualOverrides(st networkState) {
-	if !st.ctx.Settled || !st.identityKnown {
+	if !st.ctx.Settled || !st.ctx.Online {
 		return
 	}
 	h.wifiMu.Lock()
 	defer h.wifiMu.Unlock()
 	for name, l := range h.manualOverride {
-		if l.unknown {
-			l.identity, l.unknown = st.identity, false
-			h.manualOverride[name] = l
+		changed := networkChanged(l.evidence, st.evidence)
+		// Older in-memory fixtures may carry only a display identity.
+		if l.evidence.empty() && !l.unknown && st.identityKnown {
+			changed = l.identity != st.identity
+		}
+		if changed {
+			delete(h.manualOverride, name)
 			continue
 		}
-		if l.identity != st.identity {
-			slog.Info("automation: manual override cleared, network changed",
-				"tunnel", name, "was", l.identity, "now", st.identity)
-			delete(h.manualOverride, name)
+		if l.unknown && st.identityKnown {
+			l.identity, l.unknown = st.identity, false
 		}
+		// Absence is not a new identity. Keep positive evidence through an ARP
+		// miss or IPv6 churn; fill previously unknown fields when they appear.
+		l.evidence = l.evidence.enrich(st.evidence)
+		h.manualOverride[name] = l
 	}
+}
+
+type networkEvidence struct {
+	SSID, Iface, MAC, Gateway string
+	Subnets                   []string
+}
+
+func (e networkEvidence) empty() bool {
+	return e.SSID == "" && e.Iface == "" && e.MAC == "" && e.Gateway == "" && len(e.Subnets) == 0
+}
+func (e networkEvidence) enrich(n networkEvidence) networkEvidence {
+	if e.SSID == "" {
+		e.SSID = n.SSID
+	}
+	if e.Iface == "" {
+		e.Iface = n.Iface
+	}
+	if e.MAC == "" {
+		e.MAC = n.MAC
+	}
+	if e.Gateway == "" {
+		e.Gateway = n.Gateway
+	}
+	if len(e.Subnets) == 0 {
+		e.Subnets = append([]string(nil), n.Subnets...)
+	}
+	return e
+}
+func networkChanged(a, b networkEvidence) bool {
+	if a.SSID != "" && b.SSID != "" && a.SSID != b.SSID {
+		return true
+	}
+	if a.Iface != "" && b.Iface != "" && a.Iface != b.Iface {
+		return true
+	}
+	if a.MAC != "" && b.MAC != "" && !strings.EqualFold(a.MAC, b.MAC) {
+		return true
+	}
+	ipv4 := func(raw []string) []*net.IPNet {
+		var out []*net.IPNet
+		for _, s := range raw {
+			ip, p, err := net.ParseCIDR(s)
+			if err == nil && ip.To4() != nil {
+				out = append(out, p)
+			}
+		}
+		return out
+	}
+	left, right := ipv4(a.Subnets), ipv4(b.Subnets)
+	if len(left) > 0 && len(right) > 0 {
+		for _, x := range left {
+			for _, y := range right {
+				if x.Contains(y.IP) || y.Contains(x.IP) {
+					return false
+				}
+			}
+		}
+		return true
+	}
+	// Wired/permission-denied SSID probes still identify a move with positive
+	// gateway evidence. An empty SSID or MAC by itself never releases Off.
+	return a.SSID == "" && b.SSID == "" && a.Gateway != "" && b.Gateway != "" && a.Gateway != b.Gateway
 }
 
 // manualLatchFor returns the latch for name, if any.
