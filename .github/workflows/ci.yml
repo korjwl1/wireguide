@@ -48,6 +48,14 @@ jobs:
           npm test
           npm run build
 
+      - name: Go formatting
+        run: |
+          unformatted=$(gofmt -l $(git ls-files '*.go'))
+          if [ -n "$unformatted" ]; then
+            printf '%s\n' "$unformatted"
+            exit 1
+          fi
+
       - name: Test and vet
         run: |
           go test -race ./...

@@ -2,10 +2,11 @@ package storage
 
 import (
 	"encoding/json"
-	"github.com/korjwl1/wireguide/internal/automation"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/korjwl1/wireguide/internal/automation"
 )
 
 func TestDowngradeCannotEraseNegatedRuleBackup(t *testing.T) {

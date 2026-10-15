@@ -483,7 +483,7 @@ func Run(addr string, ownerUID int, ownerSID, dataDir string, restoreDesired boo
 
 	// Desired-state restore (issue #44): if the previous helper instance
 	// died without a clean shutdown (crash during sleep, kill -9, upgrade
-	// ForceShutdown), re-establish the tunnels it had up. Runs after the
+	// abrupt termination), re-establish the tunnels it had up. Runs after the
 	// settings restore and rule wiring above so the helper is fully
 	// configured first, and async so a slow restore never delays the IPC
 	// listener — the GUI's spawn path has a 30s readiness budget. goSafe

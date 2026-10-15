@@ -1,9 +1,10 @@
 package helper
 
 import (
-	"github.com/korjwl1/wireguide/internal/automation"
 	"strings"
 	"testing"
+
+	"github.com/korjwl1/wireguide/internal/automation"
 )
 
 // R1: Windows probe shape (iface always "", IsWiFiInterface always true).
