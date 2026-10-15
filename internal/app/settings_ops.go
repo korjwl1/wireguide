@@ -109,6 +109,10 @@ func getGUILogLevelSetter() func(string) {
 
 // --- Settings (all local, no IPC) ---
 
+func (s *TunnelService) GetAutomationBackupStatus() storage.AutomationBackupStatus {
+	return s.settingsStore.AutomationBackupStatus()
+}
+
 func (s *TunnelService) GetSettings() (*storage.Settings, error) {
 	settings, err := s.settingsStore.Load()
 	if err != nil {

@@ -346,6 +346,11 @@ drop their unknown fields when it rewrites `config.json`. Current versions save
 an inert `config.json.automation-v2-backup` beside that file before saving
 negated rules. This backup survives an older version's rewrite and unrelated
 settings saves after re-upgrading. It is never automatically executed.
+Saving new rules after re-upgrading preserves an older, different backup as
+`config.json.automation-v2-backup.recovery-<sha256>` before replacing the current
+backup. Settings shows recovery copies and backup errors. An unrelated setting
+change can still be saved if the backup is unavailable; changing extended rules
+requires a successful backup transition.
 
 Before downgrading, also copy `config.json` yourself. To recover after an older
 version erased negated rules, quit the app, inspect the backup, and explicitly

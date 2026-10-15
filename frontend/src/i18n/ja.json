@@ -87,6 +87,8 @@
     "name_required": "トンネル名を入力してください"
   },
   "settings": {
+    "automation_backup_recovery": "以前の自動化ルールの復旧コピーがconfig.jsonの隣にあります。自動適用はされません。内容を確認してから復元してください。",
+    "automation_backup_error": "自動化ルールの復旧バックアップを利用できません。現在のルールは維持されますが、旧バージョンに戻す前にバックアップを確認してください。",
     "title": "設定",
     "general": "一般",
     "auto_start": "起動時に自動実行",

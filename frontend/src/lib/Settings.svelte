@@ -144,6 +144,12 @@
   };
   let loaded = false;
   let appVersion = '';
+  let automationBackup = null;
+
+  async function refreshAutomationBackup() {
+    try { automationBackup = await TunnelService.GetAutomationBackupStatus(); }
+    catch (e) { console.error('load automation backup status:', e); }
+  }
 
   async function load() {
     try {
@@ -168,6 +174,7 @@
       console.error('load settings:', e);
     }
     loaded = true;
+    await refreshAutomationBackup();
   }
   load();
 
@@ -223,6 +230,8 @@
       });
     } catch (e) {
       console.error('save settings:', e);
+    } finally {
+      await refreshAutomationBackup();
     }
   }
 
@@ -398,6 +407,12 @@
       </nav>
 
       <div class="settings-content" role="tabpanel">
+        {#if automationBackup?.error || automationBackup?.different || automationBackup?.recovery_copies > 0}
+          <div class="settings-section" role="status">
+            <p class="setting-desc">{$t(automationBackup.error ? 'settings.automation_backup_error' : 'settings.automation_backup_recovery')}</p>
+            {#if automationBackup.error}<p class="setting-desc">{automationBackup.error}</p>{/if}
+          </div>
+        {/if}
         {#if activeTab === 'general'}
           <div class="settings-section">
             <h4 class="section-title">{$t('settings.section_appearance')}</h4>

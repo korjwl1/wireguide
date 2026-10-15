@@ -87,6 +87,8 @@
     "name_required": "터널 이름을 입력하세요"
   },
   "settings": {
+    "automation_backup_recovery": "이전 자동화 규칙의 복구 사본이 config.json 옆에 남아 있어요. 자동으로 적용하지 않으니 내용을 확인한 뒤 필요한 규칙을 복원하세요.",
+    "automation_backup_error": "자동화 규칙의 복구 백업을 사용할 수 없어요. 현재 규칙은 유지되지만 WireGuide를 이전 버전으로 내리기 전에 백업을 확인하세요.",
     "title": "설정",
     "general": "일반",
     "auto_start": "시작 시 자동 실행",

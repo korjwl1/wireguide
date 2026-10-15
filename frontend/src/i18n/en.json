@@ -87,6 +87,8 @@
     "name_required": "Tunnel name is required"
   },
   "settings": {
+    "automation_backup_recovery": "Earlier automation rules are available in recovery copies beside config.json. They are not applied automatically; inspect them before restoring.",
+    "automation_backup_error": "The automation recovery backup is unavailable. Existing rules remain active, but check the backup before downgrading WireGuide.",
     "title": "Settings",
     "general": "General",
     "auto_start": "Launch at startup",

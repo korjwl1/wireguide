@@ -13,6 +13,55 @@ import * as wifi$0 from "../wifi/models.js";
 // @ts-ignore: Unused imports
 import * as time$0 from "../../../../../time/models.js";
 
+export class AutomationBackupStatus {
+    /**
+     * Creates a new AutomationBackupStatus instance.
+     * @param {Partial<AutomationBackupStatus>} [$$source = {}] - The source object to create the AutomationBackupStatus.
+     */
+    constructor($$source = {}) {
+        if (!("available" in $$source)) {
+            /**
+             * @member
+             * @type {boolean}
+             */
+            this["available"] = false;
+        }
+        if (!("different" in $$source)) {
+            /**
+             * @member
+             * @type {boolean}
+             */
+            this["different"] = false;
+        }
+        if (!("recovery_copies" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["recovery_copies"] = 0;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {string | undefined}
+             */
+            this["error"] = undefined;
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new AutomationBackupStatus instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {AutomationBackupStatus}
+     */
+    static createFrom($$source = {}) {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new AutomationBackupStatus(/** @type {Partial<AutomationBackupStatus>} */($$parsedSource));
+    }
+}
+
 /**
  * Session is one VPN session record. EndTime is a pointer so a still-active
  * session (no end yet) can be distinguished from a completed session that
