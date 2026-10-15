@@ -75,6 +75,16 @@ func TestResolvedIPv6LinkLocalRetainsZone(t *testing.T) {
 	}
 }
 
+func TestLinuxDirectLinkLocalResolverRetainsZone(t *testing.T) {
+	servers, err := linuxResolverUpstreams(strings.NewReader("nameserver fe80::53%eth0\n"), func() (resolvedSnapshot, error) {
+		t.Fatal("direct resolver unexpectedly inspected systemd-resolved")
+		return resolvedSnapshot{}, nil
+	})
+	if err != nil || !slices.Equal(servers, []string{"fe80::53%eth0"}) {
+		t.Fatalf("direct link-local DNS=%v err=%v", servers, err)
+	}
+}
+
 func TestScopedResolverZoneSurvivesWithoutFalseLeakBadge(t *testing.T) {
 	blocks := parseScutilDNS("DNS configuration\nresolver #1\n nameserver[0] : fe80::53%en0\n flags : Scoped, Request AAAA records\n")
 	if len(blocks) != 1 || !blocks[0].Scoped || !slices.Equal(blocks[0].Nameservers, []string{"fe80::53%en0"}) {

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/netip"
 	"slices"
 	"sort"
 	"strconv"
@@ -71,8 +72,8 @@ func linuxResolverUpstreams(r io.Reader, readResolved func() (resolvedSnapshot, 
 	var out []string
 	resolved := false
 	for _, server := range servers {
-		ip := net.ParseIP(server)
-		if ip == nil {
+		ip, err := netip.ParseAddr(server)
+		if err != nil {
 			return nil, fmt.Errorf("invalid system DNS address %q", server)
 		}
 		if !ip.IsLoopback() {
