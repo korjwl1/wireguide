@@ -12,8 +12,15 @@ import (
 // back to DHCP-provided defaults. Used by crash recovery when the process
 // has no memory of the pre-crash DNS state. Parallel across services.
 func (m *DarwinManager) ResetDNSToSystemDefault() error {
+	services, err := networkServices()
+	if err != nil {
+		return fmt.Errorf("enumerating DNS services: %w", err)
+	}
+	if len(services) == 0 {
+		return fmt.Errorf("no network services available for DNS reset")
+	}
 	servers, search := map[string][]string{}, map[string][]string{}
-	for _, svc := range getAllNetworkServices() {
+	for _, svc := range services {
 		servers[svc] = nil
 		search[svc] = nil
 	}
@@ -24,22 +31,33 @@ func (m *DarwinManager) ResetDNSToSystemDefault() error {
 func restoreServiceDNS(servers, search map[string][]string) error {
 	errs := make(chan error, len(servers)+len(search))
 	var wg sync.WaitGroup
-	apply := func(option string, values map[string][]string) {
-		for svc, values := range values {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
+	services := map[string]bool{}
+	for svc := range servers {
+		services[svc] = true
+	}
+	for svc := range search {
+		services[svc] = true
+	}
+	for svc := range services {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			apply := func(option string, values []string) {
 				if len(values) == 0 {
 					values = []string{"Empty"}
 				}
 				if err := run("networksetup", append([]string{option, svc}, values...)...); err != nil {
 					errs <- fmt.Errorf("%s %s: %w", option, svc, err)
 				}
-			}()
-		}
+			}
+			if values, ok := servers[svc]; ok {
+				apply("-setdnsservers", values)
+			}
+			if values, ok := search[svc]; ok {
+				apply("-setsearchdomains", values)
+			}
+		}()
 	}
-	apply("-setdnsservers", servers)
-	apply("-setsearchdomains", search)
 	wg.Wait()
 	close(errs)
 	var failures []error
@@ -161,7 +179,8 @@ func (m *DarwinManager) RestoreDNSFromSnapshot(snap DNSSnapshot) error {
 	for svc := range savedSearch {
 		services[svc] = true
 	}
-	for _, svc := range getAllNetworkServices() {
+	currentServices, listErr := networkServices()
+	for _, svc := range currentServices {
 		services[svc] = true
 	}
 	servers, search := map[string][]string{}, map[string][]string{}
@@ -175,7 +194,7 @@ func (m *DarwinManager) RestoreDNSFromSnapshot(snap DNSSnapshot) error {
 			search[svc] = savedSearch[svc]
 		}
 	}
-	if err := restoreServiceDNS(servers, search); err != nil {
+	if err := errors.Join(listErr, restoreServiceDNS(servers, search)); err != nil {
 		return err
 	}
 	m.clearRestoredDNS()

@@ -40,3 +40,16 @@ func TestResetDNSToSystemDefaultReportsWriteFailure(t *testing.T) {
 		t.Fatalf("ResetDNSToSystemDefault returned nil although every write failed")
 	}
 }
+
+func TestDNSRestoreReportsServiceEnumerationFailure(t *testing.T) {
+	old := networkServices
+	networkServices = func() ([]string, error) { return nil, errors.New("enumeration failed") }
+	t.Cleanup(func() { networkServices = old })
+	manager := NewPlatformManager().(*DarwinManager)
+	if err := manager.ResetDNSToSystemDefault(); err == nil {
+		t.Fatal("reset concealed enumeration failure")
+	}
+	if err := manager.RestoreDNSFromSnapshot(DNSSnapshot{}); err == nil {
+		t.Fatal("restore concealed enumeration failure")
+	}
+}

@@ -389,10 +389,21 @@ func (m *DarwinManager) verifyDNS(services, expectedServers []string) error {
 // getAllNetworkServices returns all network services, including disabled ones.
 // wg-quick includes disabled services (strips the "*" prefix) so DNS is
 // applied/restored uniformly regardless of current enabled state.
+// networkServices is the error-preserving enumeration seam for restoration.
+var networkServices = listNetworkServices
+
 func getAllNetworkServices() []string {
+	services, err := networkServices()
+	if err != nil {
+		slog.Warn("cannot enumerate network services", "error", err)
+	}
+	return services
+}
+
+func listNetworkServices() ([]string, error) {
 	out, err := runOut("networksetup", "-listallnetworkservices")
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	var services []string
 	firstLine := true
@@ -414,7 +425,7 @@ func getAllNetworkServices() []string {
 			services = append(services, line)
 		}
 	}
-	return services
+	return services, nil
 }
 
 func getCurrentDNS(service string) ([]string, error) {
@@ -453,4 +464,11 @@ func getCurrentSearchDomains(service string) ([]string, error) {
 		}
 	}
 	return domains, nil
+}
+
+// TrackDNSUnion keeps every live adapter's drift monitor on the same policy.
+func (m *DarwinManager) TrackDNSUnion(entries []string) {
+	m.mu.Lock()
+	m.lastDNS = append([]string(nil), entries...)
+	m.mu.Unlock()
 }

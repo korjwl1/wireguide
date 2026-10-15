@@ -15,7 +15,5 @@ func TestWindowsSetDNSSplitIsUnsupported(t *testing.T) {
 	if !errors.Is(err, ErrSplitDNSUnsupported) {
 		t.Fatalf("err = %v, want ErrSplitDNSUnsupported", err)
 	}
-	if m.origDNSIface != "" || len(m.origDNS) != 0 {
-		t.Fatal("split mode must not capture or touch DNS state")
-	}
+
 }

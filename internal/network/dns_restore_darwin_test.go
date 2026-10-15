@@ -35,7 +35,7 @@ func TestRestoreDNSFromSnapshotRestoresSearchDomains(t *testing.T) {
 
 	snap := DNSSnapshot{
 		Servers: map[string][]string{
-			"Wi-Fi":   {"1.1.1.1"},
+			"Wi-Fi":    {"1.1.1.1"},
 			"Ethernet": nil, // was DHCP → must be reset to Empty
 		},
 		Search: map[string][]string{

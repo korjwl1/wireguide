@@ -62,10 +62,12 @@ type tunnelEntry struct {
 // That keeps Status() / IsConnected() / ActiveTunnel() non-blocking even
 // while a long-running Connect or Disconnect is in flight.
 type Manager struct {
-	mu sync.Mutex
+	mu              sync.Mutex
+	dnsCheckpointMu sync.Mutex
 
-	tunnels           map[string]*tunnelEntry // keyed by tunnel name
-	pendingDNSCleanup map[string]pendingDNSCleanup
+	tunnels               map[string]*tunnelEntry // keyed by tunnel name
+	pendingDNSCleanup     map[string]pendingDNSCleanup
+	pendingNetworkCleanup map[string]pendingNetworkCleanup
 
 	dataDir string
 
@@ -274,6 +276,9 @@ func (m *Manager) PreflightConnect(cfg *domain.WireGuardConfig) error {
 func (m *Manager) ConnectWithContext(ctx context.Context, cfg *domain.WireGuardConfig) error {
 	if err := ctx.Err(); err != nil {
 		return newTunnelError(ErrCancelled, "connect cancelled before start", err)
+	}
+	if err := m.checkPendingNetworkCleanup(); err != nil {
+		return newTunnelError(ErrNetwork, "recovering previous connection", err)
 	}
 	ctx, cancelConnect := context.WithCancel(ctx)
 	defer cancelConnect()

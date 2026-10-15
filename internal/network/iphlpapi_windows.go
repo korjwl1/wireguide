@@ -59,10 +59,10 @@ const (
 	afInet6  = 23
 
 	// GetAdaptersAddresses flags
-	gaaFlagSkipUnicast    = 0x0001
-	gaaFlagSkipAnycast    = 0x0002
-	gaaFlagSkipMulticast  = 0x0004
-	gaaFlagSkipDNSServer  = 0x0080
+	gaaFlagSkipUnicast     = 0x0001
+	gaaFlagSkipAnycast     = 0x0002
+	gaaFlagSkipMulticast   = 0x0004
+	gaaFlagSkipDNSServer   = 0x0080
 	gaaFlagIncludeGateways = 0x0080 // GAA_FLAG_INCLUDE_GATEWAYS
 )
 
@@ -70,21 +70,21 @@ const (
 // we read). Sizes carefully match the C struct because the kernel writes
 // directly into our buffer.
 type mibIpforwardRow2 struct {
-	InterfaceLuid       uint64
-	InterfaceIndex      uint32
-	DestinationPrefix   mibIpAddressPrefix
-	NextHop             sockaddrInet
-	SitePrefixLength    uint8
-	ValidLifetime       uint32
-	PreferredLifetime   uint32
-	Metric              uint32
-	Protocol            uint32
-	Loopback            uint8
+	InterfaceLuid        uint64
+	InterfaceIndex       uint32
+	DestinationPrefix    mibIpAddressPrefix
+	NextHop              sockaddrInet
+	SitePrefixLength     uint8
+	ValidLifetime        uint32
+	PreferredLifetime    uint32
+	Metric               uint32
+	Protocol             uint32
+	Loopback             uint8
 	AutoconfigureAddress uint8
-	Publish             uint8
-	Immortal            uint8
-	Age                 uint32
-	Origin              uint32
+	Publish              uint8
+	Immortal             uint8
+	Age                  uint32
+	Origin               uint32
 }
 
 type mibIpAddressPrefix struct {
@@ -402,17 +402,17 @@ func UnderlayDefaultGatewayV4(excludedAliases []string) string {
 // touch the fields we need; the full struct is ~448 bytes on 64-bit Windows
 // and we let the kernel write the full layout into our buffer.
 type ipAdapterAddresses struct {
-	Length        uint32
-	IfIndex       uint32
-	Next          *ipAdapterAddresses
-	AdapterName   *byte
-	FirstUnicast  uintptr
-	FirstAnycast  uintptr
+	Length         uint32
+	IfIndex        uint32
+	Next           *ipAdapterAddresses
+	AdapterName    *byte
+	FirstUnicast   uintptr
+	FirstAnycast   uintptr
 	FirstMulticast uintptr
 	FirstDnsServer *ipAdapterDNSServerAddress
-	DnsSuffix     *uint16
-	Description   *uint16
-	FriendlyName  *uint16
+	DnsSuffix      *uint16
+	Description    *uint16
+	FriendlyName   *uint16
 	// ... remaining ~360 bytes are not interesting for us. They live in
 	// the kernel-provided buffer; we just need to skip past them when
 	// walking the linked list via Next.
@@ -480,7 +480,7 @@ func getInterfaceNameByIndex(ifIndex uint32) string {
 type adapterEnumeration struct {
 	head    *ipAdapterAddresses
 	pooled  *[adapterBufSize]byte // non-nil → return to pool on Release
-	grown   []byte                 // non-nil → fall through to GC
+	grown   []byte                // non-nil → fall through to GC
 	release func()
 }
 

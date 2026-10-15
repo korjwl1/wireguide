@@ -145,3 +145,10 @@ type PersistentStateDirSetter interface {
 type PreCloseCleaner interface {
 	PreCloseAdapterCleanup(ifaceName string)
 }
+
+// InterfaceDNSRemover removes only the departing interface's contribution;
+// it must preserve global DNS while another tunnel remains.
+type InterfaceDNSRemover interface{ RemoveInterfaceDNS(string) error }
+
+// DNSUnionTracker updates a global DNS monitor without another OS write.
+type DNSUnionTracker interface{ TrackDNSUnion([]string) }
