@@ -5,6 +5,7 @@
   import Icon from './Icon.svelte';
   import { t } from '../i18n/index.js';
   import { errText } from './errors.js';
+  import { createFieldWriter } from './field-writer.js';
   import { createEventDispatcher, tick, onDestroy } from 'svelte';
   import AutomationEditor from './AutomationEditor.svelte';
   import PingHealthSettings from './PingHealthSettings.svelte';
@@ -72,34 +73,22 @@
   let latencyTargetEditing = false;
   let latencyTargetInput = null;
 
-  // flushNotes is the single write path used by both the debounce/blur
-  // saver and the cross-tunnel-switch flush. It patches BOTH stores —
-  // selectedTunnel for the immediate UI, tunnels for the list — so
-  // re-selecting the same tunnel before the next ListTunnels refresh
-  // doesn't show stale (pre-edit) notes.
-  async function flushNotes(name, value) {
-    if (!name) return false;
-    try {
-      await TunnelService.SetTunnelNotes(name, value);
-      tunnels.update(list => list.map(t => t.name === name ? { ...t, notes: value } : t));
-      selectedTunnel.update(sel => sel && sel.name === name ? { ...sel, notes: value } : sel);
-      // Only update local UI state if the user is still on this tunnel —
-      // otherwise we'd overwrite the new tunnel's notesSaved with the
-      // wrong value (this flush could be the cross-switch fire-and-forget).
-      if ($selectedTunnel && $selectedTunnel.name === name) {
-        notesSaved = value;
-        notesError = '';
-      }
-      return true;
-    } catch (e) {
-      if ($selectedTunnel && $selectedTunnel.name === name) {
-        notesError = errText(e);
-      } else {
-        console.error('flushNotes for', name, e);
-      }
-      return false;
-    }
+  function patchProfileField(name, field, value) {
+    tunnels.update(list => list.map(t => t.name === name ? { ...t, [field]: value } : t));
+    selectedTunnel.update(sel => sel?.name === name ? { ...sel, [field]: value } : sel);
   }
+
+  const flushNotes = createFieldWriter(
+    (name, value) => TunnelService.SetTunnelNotes(name, value),
+    (name, value) => {
+      patchProfileField(name, 'notes', value);
+      if ($selectedTunnel?.name === name) { notesSaved = value; notesError = ''; }
+    },
+    (name, failure) => {
+      if ($selectedTunnel?.name === name) notesError = errText(failure);
+      else dispatch('warning', errText(failure));
+    },
+  );
 
   async function saveNotes() {
     if (!$selectedTunnel) return;
@@ -114,27 +103,24 @@
     notesSaveTimer = setTimeout(saveNotes, 800);
   }
 
-  async function flushLatencyTarget(name, value) {
-    if (!name) return false;
-    const normalized = (value || '').trim();
-    try {
-      await TunnelService.SetTunnelLatencyProbeTarget(name, normalized);
-      tunnels.update(list => list.map(t => t.name === name ? { ...t, latency_probe_target: normalized } : t));
-      selectedTunnel.update(sel => sel && sel.name === name ? { ...sel, latency_probe_target: normalized } : sel);
-      if ($selectedTunnel && $selectedTunnel.name === name) {
-        latencyTargetSaved = normalized;
-        latencyTargetValue = normalized;
+  const writeLatencyTarget = createFieldWriter(
+    (name, value) => TunnelService.SetTunnelLatencyProbeTarget(name, value),
+    (name, value) => {
+      patchProfileField(name, 'latency_probe_target', value);
+      if ($selectedTunnel?.name === name) {
+        latencyTargetSaved = value;
+        // An earlier save must not replace what the user is typing now.
+        if (latencyTargetValue.trim() === value) latencyTargetValue = value;
         latencyTargetError = '';
       }
-      return true;
-    } catch (e) {
-      if ($selectedTunnel && $selectedTunnel.name === name) {
-        latencyTargetError = errText(e);
-      } else {
-        console.error('flushLatencyTarget for', name, e);
-      }
-      return false;
-    }
+    },
+    (name, failure) => {
+      if ($selectedTunnel?.name === name) latencyTargetError = errText(failure);
+      else dispatch('warning', errText(failure));
+    },
+  );
+  function flushLatencyTarget(name, value) {
+    return writeLatencyTarget(name, (value || '').trim());
   }
 
   async function saveLatencyTarget() {
