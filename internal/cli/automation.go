@@ -84,7 +84,7 @@ func automationPreview() int {
 }
 
 func settingsStore() (*storage.SettingsStore, error) {
-	paths, err := storage.GetPaths()
+	paths, err := userPaths()
 	if err != nil {
 		return nil, err
 	}

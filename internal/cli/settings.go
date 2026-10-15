@@ -41,10 +41,14 @@ func cmdSet(args []string) int {
 	// when it isn't (issue #10).
 	liveRC := 0
 	applyIPC := func(method string, params interface{}) int {
-		c, derr := dialHelper()
+		c, _, derr := dialHelperRaw()
 		if derr != nil {
-			fmt.Println("(helper not running — saved; will take effect when the app starts)")
-			return 0
+			if helperAbsent(derr) {
+				fmt.Println("(helper not running — saved; will take effect when the app starts)")
+				return 0
+			}
+			fmt.Fprintln(os.Stderr, "error: saved to config but cannot verify live apply:", derr)
+			return 1
 		}
 		defer c.Close()
 		if err := c.Call(method, params, nil); err != nil {

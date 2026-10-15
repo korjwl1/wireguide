@@ -2,12 +2,10 @@ package cli
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/korjwl1/wireguide/internal/config"
@@ -267,18 +265,18 @@ func cmdRename(args []string) int {
 		return 2
 	}
 	old, newName := args[0], args[1]
-	// Prefer the helper's rename (it serialises against connect/disconnect);
-	// fall back to a local store rename if the helper isn't reachable.
-	renamed := false
-	if c, err := dialHelper(); err == nil {
+	c, _, contactErr := dialHelperRaw()
+	if contactErr == nil {
 		defer c.Close()
 		if err := c.Call(ipc.MethodRename, ipc.RenameRequest{OldName: old, NewName: newName}, nil); err != nil {
 			fmt.Fprintln(os.Stderr, "rename:", err)
 			return 1
 		}
-		renamed = true
-	}
-	if !renamed {
+	} else {
+		if !helperAbsent(contactErr) {
+			fmt.Fprintln(os.Stderr, "rename: cannot verify helper state:", contactErr)
+			return 1
+		}
 		store, err := tunnelStore()
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "rename:", err)
@@ -323,7 +321,7 @@ func cmdDelete(args []string) int {
 	} else {
 		// Offline editing remains available when no listener exists. A hung,
 		// incompatible or unauthorized helper is not proof that a tunnel is down.
-		if !errors.Is(contactErr, os.ErrNotExist) && !errors.Is(contactErr, syscall.ECONNREFUSED) {
+		if !helperAbsent(contactErr) {
 			fmt.Fprintln(os.Stderr, "delete: cannot verify helper state:", contactErr)
 			return 1
 		}

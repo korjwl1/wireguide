@@ -9,12 +9,14 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"os"
 	"runtime"
 	"slices"
+	"syscall"
 	"time"
 
 	"github.com/korjwl1/wireguide/internal/ipc"
@@ -215,8 +217,16 @@ func pingTimeout() time.Duration {
 	return 2 * time.Second
 }
 
+// userPaths keeps CLI file access on the same user profile and allows isolated
+// command tests without changing the process home directory.
+var userPaths = storage.GetPaths
+
+func helperAbsent(err error) bool {
+	return errors.Is(err, os.ErrNotExist) || errors.Is(err, syscall.ECONNREFUSED)
+}
+
 func tunnelStore() (*storage.TunnelStore, error) {
-	paths, err := storage.GetPaths()
+	paths, err := userPaths()
 	if err != nil {
 		return nil, err
 	}

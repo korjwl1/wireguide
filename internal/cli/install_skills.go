@@ -214,7 +214,9 @@ func skillTargets() []skillTarget {
 		{
 			name:     "opencode",
 			detected: binOrDir("opencode", filepath.Join(home(), ".config", "opencode")),
-			install:  func() (string, error) { return mergeAgentsFile(filepath.Join(home(), ".config", "opencode", "AGENTS.md")) },
+			install: func() (string, error) {
+				return mergeAgentsFile(filepath.Join(home(), ".config", "opencode", "AGENTS.md"))
+			},
 		},
 		{
 			name:     "hermes",
