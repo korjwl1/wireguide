@@ -77,7 +77,13 @@ func (s *TunnelService) CheckSSIDPermission() wifi.SSIDPermissionStatus {
 // the user can grant SSID access without navigating there manually.
 func (s *TunnelService) OpenLocationSettings() {
 	if runtime.GOOS == "darwin" {
-		exec.Command("open", "x-apple.systempreferences:com.apple.preference.security?Privacy_LocationServices").Start() //nolint:errcheck
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if err := exec.CommandContext(ctx, "open", "x-apple.systempreferences:com.apple.preference.security?Privacy_LocationServices").Run(); err != nil {
+				slog.Debug("open Location Services settings failed", "error", err)
+			}
+		}()
 	}
 }
 

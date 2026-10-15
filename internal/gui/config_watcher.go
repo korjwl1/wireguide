@@ -3,7 +3,7 @@ package gui
 import (
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -11,71 +11,81 @@ import (
 	"github.com/wailsapp/wails/v3/pkg/application"
 )
 
-// startConfigWatcher polls the data files the CLI (or any external
-// process) can change and notifies the frontend so a running GUI reflects
-// them immediately, without going through the helper:
-//
-//   - config.json → "config_changed" (settings incl. automation rules)
-//   - the tunnels dir listing → "tunnels_changed" (import / delete / rename)
-//
-// A 3 s mtime/listing poll is used (fsnotify isn't a dependency); the
-// latency is imperceptible for catching CLI-side edits, and it runs for
-// the whole GUI lifetime including while hidden in the tray — 1 s bought
-// nothing but 3× the stat+readdir churn. Reacting to the GUI's own
-// writes is harmless — the frontend re-reads and re-applies the same
-// values idempotently.
+type tunnelFileStamp struct {
+	name     string
+	size     int64
+	modified int64
+}
+
+// tunnelFilesSnapshot includes config edits and metadata, not just filenames.
+// Atomic-write temporary files are excluded. Read errors leave the watcher's
+// previous snapshot intact rather than reporting a spurious deletion.
+func tunnelFilesSnapshot(dir string) ([]tunnelFileStamp, error) {
+	entries, err := os.ReadDir(dir)
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var stamps []tunnelFileStamp
+	for _, entry := range entries {
+		name := entry.Name()
+		if !strings.HasSuffix(name, ".conf") && !strings.HasSuffix(name, ".meta.json") {
+			continue
+		}
+		info, err := os.Stat(filepath.Join(dir, name))
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		if info.IsDir() {
+			continue
+		}
+		stamps = append(stamps, tunnelFileStamp{name, info.Size(), info.ModTime().UnixNano()})
+	}
+	return stamps, nil // os.ReadDir already sorts by filename.
+}
+
+// startConfigWatcher reflects CLI and external edits in the GUI using a 3 s
+// metadata poll. It runs while the window is hidden and stops on GUI shutdown.
 func startConfigWatcher(app *application.App, configPath, tunnelsDir string, done <-chan struct{}, wg *sync.WaitGroup) {
 	go func() {
 		defer wg.Done()
 		ticker := time.NewTicker(3 * time.Second)
 		defer ticker.Stop()
-
-		fileMtime := func(p string) time.Time {
-			fi, err := os.Stat(p)
+		fileMtime := func() (time.Time, error) {
+			fi, err := os.Stat(configPath)
+			if os.IsNotExist(err) {
+				return time.Time{}, nil
+			}
 			if err != nil {
-				return time.Time{}
+				return time.Time{}, err
 			}
-			return fi.ModTime()
+			return fi.ModTime(), nil
 		}
-		// Signature of the tunnel set: sorted list of .conf base names.
-		// Catches add/delete/rename regardless of directory-mtime quirks.
-		tunnelSig := func(dir string) string {
-			entries, err := os.ReadDir(dir)
-			if err != nil {
-				return ""
-			}
-			var names []string
-			for _, e := range entries {
-				if !e.IsDir() && strings.HasSuffix(e.Name(), ".conf") {
-					names = append(names, e.Name())
-				}
-			}
-			sort.Strings(names)
-			return strings.Join(names, "\n")
-		}
-
-		lastCfg := fileMtime(configPath)
-		lastTun := tunnelSig(tunnelsDir)
-
+		lastCfg, _ := fileMtime()
+		lastTun, _ := tunnelFilesSnapshot(tunnelsDir)
 		for {
 			select {
 			case <-done:
 				return
 			case <-ticker.C:
 			}
-			if m := fileMtime(configPath); !m.Equal(lastCfg) {
+			if m, err := fileMtime(); err == nil && !m.Equal(lastCfg) {
 				lastCfg = m
 				app.Event.Emit("config_changed", struct{}{})
 			}
-			if sig := tunnelSig(tunnelsDir); sig != lastTun {
-				lastTun = sig
+			if snapshot, err := tunnelFilesSnapshot(tunnelsDir); err == nil && !slices.Equal(snapshot, lastTun) {
+				lastTun = snapshot
 				app.Event.Emit("tunnels_changed", struct{}{})
 			}
 		}
 	}()
 }
 
-// configFilePath returns the config.json path inside a config dir.
 func configFilePath(configDir string) string {
 	return filepath.Join(configDir, "config.json")
 }

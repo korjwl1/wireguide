@@ -17,6 +17,8 @@
   import { startLogListener, stopLogListener } from './stores/logs.js';
   import { compactList, listSort, listActiveOnTop, listPaneWidth, saveListPrefs, LIST_PANE_MIN, LIST_PANE_MAX, LIST_PANE_DEFAULT } from './stores/ui.js';
   import { errText } from './lib/errors.js';
+  import { createEventScope } from './lib/event-scope.js';
+  import { uniqueImportName, fileBase64, checkImportSize, MAX_CONFIG_BYTES, MAX_ZIP_BYTES, MAX_QR_BYTES } from './lib/imports.js';
   import { t, setLanguage, detectLanguage } from './i18n/index.js';
   import { TunnelService } from '../bindings/github.com/korjwl1/wireguide/internal/app';
   import Icon from './lib/Icon.svelte';
@@ -44,16 +46,10 @@
   // last-checked timestamp. Loaded once at startup; refreshed by the
   // Settings → About "Check now" flow.
   let updateState = null;
-  let filesDroppedUnsub = null;
-  let helperUnsub = null;
-  let helperResetUnsub = null;
-  let wifiSsidUnsub = null;
-  let autoConnectedUnsub = null;
-  let forcedDisconnectUnsub = null;
-  let criticalErrorUnsub = null;
-  let updateUnsub = null;
-  let configChangedUnsub = null;
-  let tunnelsChangedUnsub = null;
+  let stopThemeWatcher;
+  const appEvents = createEventScope((...args) => Events.On(...args), error => {
+    if (!appEvents.disposed) showToast(errText(error));
+  });
   let criticalErrors = []; // array of { where, detail, at } — shown as a persistent banner
 
   // App-level ESC handler: close the editor modal. ConfigEditor wraps
@@ -94,7 +90,17 @@
     setLanguage(lang === 'auto' ? detectLanguage() : lang);
   }
 
-  onMount(async () => {
+  onMount(() => {
+    stopThemeWatcher = initThemeWatcher();
+    startLogListener();
+    subscribeToEvents();
+    registerAppEvents();
+    initialize().catch(error => {
+      if (!appEvents.disposed) showToast(errText(error));
+    });
+  });
+
+  async function initialize() {
     // Load and apply saved theme before loading other data.
     // applyTheme sets the data-theme attribute AND the resolvedTheme store
     // that CodeMirror subscribes to for its own light/dark swap.
@@ -103,15 +109,9 @@
     } catch (e) {
       applyTheme('system');
     }
-    initThemeWatcher();
-
-    // Start piping backend log events into the LogViewer store BEFORE
-    // initialLoad so the first slog records (tunnel list scan, etc.) are
-    // captured. Idempotent.
-    startLogListener();
-
+    if (appEvents.disposed) return;
     await initialLoad(TunnelService);
-    subscribeToEvents();
+    if (appEvents.disposed) return;
     // Refresh status once on launch — the helper's eventLoop only
     // BROADCASTS on diff, so a fresh GUI subscriber connecting to a
     // long-running helper would otherwise see no status events
@@ -123,13 +123,21 @@
       /* helper may be mid-restart; status will arrive via events */
     }
 
+    try {
+      updateState = await TunnelService.GetUpdateState();
+    } catch (_) { /* GetUpdateState is best-effort UI hint */ }
+  }
+
+  // Register synchronously so backend events cannot be lost while startup
+  // RPCs are pending. The scope owns every listener until component teardown.
+  function registerAppEvents() {
     // Update notifications now come from the Go-side scheduler via the
     // 'update-available' Wails event (see internal/update/scheduler.go).
     // The scheduler handles cadence (24h ±10%), jitter, ETag caching,
     // and dev-build skip — none of which the launch-only check we used
     // to do here could provide. See research-update-patterns for the
     // rationale (wireguard-windows, VS Code, Obsidian cadences).
-    updateUnsub = Events.On('update-available', (event) => {
+    appEvents.on('update-available', (event) => {
       const info = event.data || {};
       if (!info?.available) return;
       // Backend already filters out dismissed + already-notified versions
@@ -137,13 +145,10 @@
       // banner the user should see.
       updateInfo = info;
     });
-    try {
-      updateState = await TunnelService.GetUpdateState();
-    } catch (_) { /* GetUpdateState is best-effort UI hint */ }
 
     // Wails v3 native file drop — HTML5 dragdrop doesn't work in WebKit.
     // Event payload: { files: string[], details: {...} }
-    filesDroppedUnsub = Events.On('files-dropped', async (event) => {
+    appEvents.on('files-dropped', async (event) => {
       const payload = event.data || {};
       const paths = payload.files || [];
       for (const path of paths) {
@@ -161,7 +166,7 @@
     });
 
     // Helper health events (crash detection)
-    helperUnsub = Events.On('helper', (event) => {
+    appEvents.on('helper', (event) => {
       const { alive, message } = event.data || {};
       if (!alive) {
         showToast('⚠ ' + (message || 'Helper process disconnected'));
@@ -175,7 +180,7 @@
     // close any in-flight modals whose state references something
     // the new helper may not have. ConflictWarning's pendingConnectName
     // for instance can point at a tunnel the helper just lost.
-    helperResetUnsub = Events.On('helper_reset', async () => {
+    appEvents.on('helper_reset', async () => {
       showConflictWarning = false;
       conflictList = [];
       pendingConnectName = '';
@@ -187,14 +192,9 @@
       await refreshStatus(TunnelService);
     });
 
-    // Wi-Fi SSID change events are still broadcast by the helper for
-    // observability, but rule evaluation now lives in the helper
-    // itself (internal/helper/wifi_rules_darwin.go). That keeps
-    // auto-connect / auto-disconnect working when the GUI is fully
-    // quit — the helper has KeepAlive=true and runs the rules
-    // independently. We just show a brief toast here so the user
-    // sees what happened.
-    wifiSsidUnsub = Events.On('wifi_ssid', (event) => {
+    // The helper owns automation; the GUI only reports SSID transitions.
+    // Active or pending tunnel intent keeps the helper alive without a GUI.
+    appEvents.on('wifi_ssid', (event) => {
       const { new_ssid } = event.data || {};
       if (new_ssid) {
         showToast(`Wi-Fi: ${new_ssid}`);
@@ -204,23 +204,23 @@
     // Helper auto-connected a tunnel via Wi-Fi rules.
     // EventStatus broadcast handles tunnel state/status update within 1s.
     // Only need to apply firewall settings here (same as after manual connect).
-    autoConnectedUnsub = Events.On('auto_connected', async () => {
+    appEvents.on('auto_connected', async () => {
       await applyFirewallSettings();
     });
 
     // The helper tore a tunnel down on its own (routing-loop watchdog).
     // It won't come back by itself, so say why it went down.
-    forcedDisconnectUnsub = Events.On('forced_disconnect', (event) => {
+    appEvents.on('forced_disconnect', (event) => {
       const { tunnel_name, reason } = event.data || {};
       showToast(`⚠ ${tunnel_name || 'Tunnel'} disconnected: ${reason || 'forced by the helper'}`, 10000);
     });
 
     // External config.json / tunnel-file changes (the CLI) — reflect them
     // in the running GUI so it never sits on stale state.
-    configChangedUnsub = Events.On('config_changed', () => {
+    appEvents.on('config_changed', () => {
       applySettingsToUI().catch(() => {});
     });
-    tunnelsChangedUnsub = Events.On('tunnels_changed', () => {
+    appEvents.on('tunnels_changed', () => {
       refreshTunnels(TunnelService).catch(() => {});
     });
 
@@ -228,7 +228,7 @@
     // restart budget). Show as a persistent banner — these mean some
     // helper subsystem (status broadcast, latency probe, wifi rules)
     // is permanently dead and the user should restart the helper.
-    criticalErrorUnsub = Events.On('critical_error', (event) => {
+    appEvents.on('critical_error', (event) => {
       const { where, detail } = event.data || {};
       const next = [...criticalErrors, {
         where: where || 'unknown',
@@ -240,21 +240,13 @@
       // would otherwise fill the screen with banners and freeze the UI.
       criticalErrors = next.slice(-5);
     });
-  });
+  }
 
   onDestroy(() => {
+    appEvents.dispose();
+    stopThemeWatcher?.();
     unsubscribe();
     stopLogListener();
-    if (filesDroppedUnsub) filesDroppedUnsub();
-    if (helperUnsub) helperUnsub();
-    if (helperResetUnsub) helperResetUnsub();
-    if (wifiSsidUnsub) wifiSsidUnsub();
-    if (autoConnectedUnsub) autoConnectedUnsub();
-    if (forcedDisconnectUnsub) forcedDisconnectUnsub();
-    if (criticalErrorUnsub) criticalErrorUnsub();
-    if (updateUnsub) updateUnsub();
-    if (configChangedUnsub) configChangedUnsub();
-    if (tunnelsChangedUnsub) tunnelsChangedUnsub();
     if (toastTimer) clearTimeout(toastTimer);
   });
 
@@ -268,30 +260,8 @@
     toastTimer = setTimeout(() => { toast = ''; toastTimer = null; }, ms);
   }
 
-  // sanitizeImportName maps an arbitrary filename stem to something
-  // ValidateTunnelName will accept — letters, digits, '-', '_', spaces only.
-  // Phone screenshots and shared QR images often have names like
-  // "Some QR (1).png" or "WG · backup.png" that the validator would reject;
-  // refusing the import outright is worse UX than auto-cleaning the name.
-  function sanitizeImportName(raw) {
-    if (!raw) return 'tunnel';
-    let s = raw.replace(/[^A-Za-z0-9\-_ ]+/g, '-')
-               .replace(/-{2,}/g, '-')
-               .replace(/^[-\s]+|[-\s]+$/g, '');
-    if (s.length > 64) s = s.slice(0, 64).replace(/[-\s]+$/g, '');
-    return s || 'tunnel';
-  }
-
-  // Generate a unique tunnel name by appending -1, -2, etc. if needed.
-  // The base is sanitised first so callers can pass a raw filename stem.
-  async function uniqueName(baseName) {
-    const cleaned = sanitizeImportName(baseName);
-    if (!(await TunnelService.TunnelExists(cleaned))) return cleaned;
-    for (let i = 1; i < 1000; i++) {
-      const candidate = `${cleaned}-${i}`;
-      if (!(await TunnelService.TunnelExists(candidate))) return candidate;
-    }
-    return cleaned + '-' + Date.now();
+  function uniqueName(baseName) {
+    return uniqueImportName(baseName, name => TunnelService.TunnelExists(name));
   }
 
   // Show zip import result modal.
@@ -313,21 +283,12 @@
     }
   }
 
-  // Import a .zip from a browser File object (used by file picker).
-  // Wails serialises []byte as a base64 JSON string, so we must encode manually.
-  // btoa(String.fromCharCode(...bytes)) blows the call stack on large files, so
-  // we process in 8 KB chunks.
+  // Browser file-picker payloads cross the Wails bridge as base64.
   async function importZipFromFile(file) {
     if (!file) return;
     try {
-      const buf = await file.arrayBuffer();
-      const bytes = new Uint8Array(buf);
-      let binary = '';
-      const CHUNK = 8192;
-      for (let i = 0; i < bytes.length; i += CHUNK) {
-        binary += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
-      }
-      const results = await TunnelService.ImportZipData(btoa(binary));
+      const data = await fileBase64(file, MAX_ZIP_BYTES);
+      const results = await TunnelService.ImportZipData(data);
       showZipResults(results);
     } catch (e) {
       showToast('Import failed: ' + errText(e));
@@ -368,22 +329,14 @@
     }
   }
 
-  // Import from a browser File object representing an image with a QR code.
-  // Encodes the bytes as base64 (Wails serialises []byte that way) using the
-  // same chunked approach as importZipFromFile to avoid call-stack blowups.
+  // Import a QR image supplied by the browser file picker.
   async function importQRFromFile(file) {
     if (!file) return;
     try {
-      const buf = await file.arrayBuffer();
-      const bytes = new Uint8Array(buf);
-      let binary = '';
-      const CHUNK = 8192;
-      for (let i = 0; i < bytes.length; i += CHUNK) {
-        binary += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
-      }
+      const data = await fileBase64(file, MAX_QR_BYTES);
       const baseName = file.name.replace(/\.[^.]+$/, '') || 'tunnel';
       const name = await uniqueName(baseName);
-      await TunnelService.ImportQRFromBytes(btoa(binary), name);
+      await TunnelService.ImportQRFromBytes(data, name);
       showToast(`Imported "${name}"`);
       await refreshTunnels(TunnelService);
     } catch (e) {
@@ -395,8 +348,9 @@
   async function importFile(file) {
     if (!file) return;
     const baseName = file.name.replace(/\.conf$/i, '');
-    const content = await file.text();
     try {
+      checkImportSize(file, MAX_CONFIG_BYTES);
+      const content = await file.text();
       const errors = await TunnelService.ValidateConfig(content);
       if (errors && errors.length > 0) {
         showToast('Invalid config: ' + errors[0]);

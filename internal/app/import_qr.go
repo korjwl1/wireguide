@@ -10,15 +10,13 @@ import (
 	"os"
 	"strings"
 
+	"github.com/korjwl1/wireguide/internal/config"
 	"github.com/makiuchi-d/gozxing"
 	"github.com/makiuchi-d/gozxing/qrcode"
 	_ "golang.org/x/image/webp"
 )
 
-// maxReadFileSize is the largest file ReadFile will accept (10 MB).
-// WireGuard configs are typically a few KB; anything larger is almost
-// certainly not a valid .conf file.
-const maxReadFileSize = 10 << 20
+const maxReadFileSize = config.MaxConfigSize
 
 // maxQRImageSize bounds the image we'll try to decode. QR images shared by
 // VPN providers are typically under 200 KB; the cap protects against an

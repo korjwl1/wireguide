@@ -63,8 +63,8 @@
   // actually idle between samples. Previously self-scheduling rAF burned
   // 3-6% CPU painting the same pixels 60×/sec.
   //
-  // Ring-buffer push: O(1), zero allocations on the steady-state path
-  // (the buffer is pre-allocated). samplesVersion increments so Svelte's
+  // Ring-buffer push reuses bounded storage and creates one sample object.
+  // samplesVersion increments so Svelte's
   // reference-equality check on the reactive statement fires — without
   // that the same store value would suppress the re-render.
   $: if ($connectionStatus?.state === 'connected') {
@@ -79,9 +79,7 @@
     if (ctx) draw();
   }
 
-  // orderedSamples returns the samples in chronological order (oldest
-  // first). Called only by draw(); allocates a single Array(samplesCount)
-  // per draw, much less than the per-push slice(-60) we used to do.
+  // Produce an ordered snapshot only when drawing the bounded sample set.
   function orderedSamples() {
     if (samplesCount === 0) return [];
     if (samplesCount < maxSamples) {
