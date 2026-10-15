@@ -156,6 +156,32 @@ task build
 ./bin/wireguide
 ```
 
+### macOS removal and helper cleanup
+
+Deleting `WireGuide.app` alone leaves the privileged launchd helper installed.
+The app does not automatically delete its recovery executable when its bundle
+is temporarily missing. There is no in-app helper uninstaller.
+
+Before removing the app, disconnect all tunnels and run `wireguide ctl stop`.
+Complete shutdown before deleting the helper so its DNS/firewall cleanup can
+finish. If the app was already removed while connected, reinstall the same
+version temporarily and finish this shutdown first.
+
+For Homebrew installations, `brew uninstall --zap wireguide` also removes the
+helper registration and executable. **Back up your profiles and settings
+first: `--zap` removes user application data.** For manual installations,
+after successful shutdown, remove only the helper's registration and files:
+
+```sh
+sudo launchctl bootout system/com.wireguide.helper
+sudo rm -f /Library/LaunchDaemons/com.wireguide.helper.plist /Library/PrivilegedHelperTools/com.wireguide.helper
+sudo rm -f /var/run/com.wireguide.helper.sock /var/run/wireguide/wireguide.sock
+```
+
+Continue with file removal only after the job stopped (or launchctl confirmed
+it was already absent). Keep recovery journals if cleanup failed; deleting
+those files does not restore DNS or firewall state.
+
 ### Tested coverage
 
 Manual QA runs on real hardware, but the hardware doesn't cover every
@@ -313,6 +339,19 @@ Found a bug? [Open an issue](https://github.com/korjwl1/wireguide/issues/new/cho
 
 ---
 
+### Automation rules when downgrading
+
+An older version cannot execute the separate negated-rule lists, but it can
+drop their unknown fields when it rewrites `config.json`. Current versions save
+an inert `config.json.automation-v2-backup` beside that file before saving
+negated rules. This backup survives an older version's rewrite and unrelated
+settings saves after re-upgrading. It is never automatically executed.
+
+Before downgrading, also copy `config.json` yourself. To recover after an older
+version erased negated rules, quit the app, inspect the backup, and explicitly
+restore its automation object into `config.json` before reopening the current
+version. Do not use an older binary to edit negated rules.
+
 ## Code signing
 
 Once the SignPath Foundation OSS approval completes, Windows installers will be
@@ -340,42 +379,3 @@ If WireGuide is useful to you, consider sponsoring to support development.
 ## License
 
 [MIT](LICENSE)
-
-### macOS removal and helper cleanup
-
-Deleting `WireGuide.app` alone leaves the privileged launchd helper installed.
-The app does not automatically delete its recovery executable when its bundle
-is temporarily missing. There is no in-app helper uninstaller.
-
-Before removing the app, disconnect all tunnels and run `wireguide ctl stop`.
-Complete shutdown before deleting the helper so its DNS/firewall cleanup can
-finish. If the app was already removed while connected, reinstall the same
-version temporarily and finish this shutdown first.
-
-For Homebrew installations, `brew uninstall --zap wireguide` also removes the
-helper registration and executable. **Back up your profiles and settings
-first: `--zap` removes user application data.** For manual installations,
-after successful shutdown, remove only the helper's registration and files:
-
-```sh
-sudo launchctl bootout system/com.wireguide.helper
-sudo rm -f /Library/LaunchDaemons/com.wireguide.helper.plist /Library/PrivilegedHelperTools/com.wireguide.helper
-sudo rm -f /var/run/com.wireguide.helper.sock /var/run/wireguide/wireguide.sock
-```
-
-Continue with file removal only after the job stopped (or launchctl confirmed
-it was already absent). Keep recovery journals if cleanup failed; deleting
-those files does not restore DNS or firewall state.
-
-### Automation rules when downgrading
-
-An older version cannot execute the separate negated-rule lists, but it can
-drop their unknown fields when it rewrites `config.json`. Current versions save
-an inert `config.json.automation-v2-backup` beside that file before saving
-negated rules. This backup survives an older version's rewrite and unrelated
-settings saves after re-upgrading. It is never automatically executed.
-
-Before downgrading, also copy `config.json` yourself. To recover after an older
-version erased negated rules, quit the app, inspect the backup, and explicitly
-restore its automation object into `config.json` before reopening the current
-version. Do not use an older binary to edit negated rules.

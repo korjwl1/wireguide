@@ -40,6 +40,47 @@ and DNS narrowing together, with failure leaving previous tracked state intact.
 | L-9 | Same-boot desired recovery is intentionally independent of new automation's GUI-seen gate. DESIGN now states both policies explicitly. |
 | L-10 | Failed supplemental cleanup retains its journal and retries with bounded exponential backoff; interface reuse still requires successful cleanup immediately. |
 
+## Follow-up review of f0ead69
+
+The [second independent review](claude-followup-review-20261015.md) reproduced
+five remaining Medium findings. The earlier table describes the initial
+corrections and must be read together with these additional corrections.
+
+| ID | Additional correction / regression evidence |
+|---|---|
+| N-1 | Interface changes alone do not release manual Off. Known latch evidence remains fixed; missing ARP cannot import another router's MAC. Unknown latches may adopt their first known network once. `manual_latch_scenarios_test.go` covers docking, A→B→A, another VPN owning the default route, and retained Windows wired-change detection. Indistinguishable networks conservatively retain Off. |
+| N-2 | Loaded user DNS settings and live DNS/KS intent take priority over an older crash journal. A recovered full tunnel preserves DNS Off; a new full-tunnel connect retains the previous automatic-protection policy. `recovery_intent_regression_test.go` covers config Off, a live update after the journal snapshot, KS Off, and recovery versus new-connect behavior. |
+| N-3 | An occupied idle timer resets for a future check. Connect rollback, pending withdrawal and missing-config drop start an idle window. Startup restore owns a lifetime lease through pending registration. Tests prove both survival during work and actual server shutdown after work is withdrawn. |
+| N-4 | A pending-only named disconnect succeeds; unknown tunnels still error. CLI text and JSON include waiting tunnels alongside active ones. The old disconnect test now asserts its error instead of discarding it; `TestStatusShowsPendingAlongsideActive` uses real IPC. |
+| N-5 | All macOS global DNS checks share the same default-resolver selector, with scoped flags recognized. Global-only and mixed tests use identical resolver fixtures and probe sets, and both retain real default-leak detection. |
+
+Baseline copies reproduced the DNS/KS override, idle-lifetime and CLI failures;
+the corrected integrated tests are rerun before commit. The first review and
+follow-up review remain historical records, not claims about the final head.
+
+### Remaining follow-up findings
+
+The second review also records lower-priority and inherited limitations. They
+are not represented as fixed by the N-1–N-5 changes:
+
+- LAN overlap skips lack a dedicated event; auto ownership is not persisted
+  across helper restart (N-6).
+- Windows platform rejection can occur after temporary KS suspension (P-1).
+- Signal fallback is best-effort; its normal cleanup budget may expire (P-2).
+- Scoped resolver badges, IPv6 zone parsing and Linux systemd-resolved stub
+  attribution still need diagnostic improvements (D-1/D-2).
+- Backup error/replacement behavior and GUI visibility remain limited (L4-x).
+- PF live token membership, repair backoff and the periodic wiring test gap
+  remain B-6/B-7/B-5/B-1; a cached lease with PF running is not independently
+  proven to be a live reference.
+- Windows pinned DNS permits do not constrain LUID (B-8), and existing tunnel
+  permit/endpoint filter removal paths may forget failed deletes (B-9).
+- Old IPC 1.2 clients cannot observe new headless pending intent (C-1).
+
+P-3's startup restore lifetime gap is covered by the added restore lease and
+`TestRecovery_StartupRestoreOwnsLifetimeBeforePendingRegistration`. Native
+packet-path and OS lifecycle validation below remains separate from CI.
+
 ## Verification limits
 
 Local full race suite, vet and frontend build are rerun on the integrated
