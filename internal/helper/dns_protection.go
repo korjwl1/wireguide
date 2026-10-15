@@ -85,7 +85,7 @@ func (h *Helper) reconcileDNSProtection(force bool, now time.Time) error {
 		return nil
 	default:
 	}
-	if !force && h.dnsSuspended {
+	if h.dnsSuspended {
 		return nil
 	}
 	needed := h.dnsProtectionNeeded()
@@ -100,7 +100,8 @@ func (h *Helper) reconcileDNSProtection(force bool, now time.Time) error {
 		h.dnsRetryDelay = 0
 		h.dnsRetryAt = time.Time{}
 	}
-	if !force && (signature == h.dnsApplied || now.Before(h.dnsRetryAt)) {
+	expectedActive := needed && len(allow) > 0
+	if !force && ((signature == h.dnsApplied && expectedActive == h.firewall.IsDNSProtectionEnabled()) || now.Before(h.dnsRetryAt)) {
 		return nil
 	}
 	var err error
@@ -135,6 +136,9 @@ func (h *Helper) dnsReconcileLoop() {
 			h.connectMu.Lock()
 			h.manager.RetryPendingDNSCleanup()
 			h.retryKillSwitchPermitRemovals(now)
+			if err := h.reconcileKillSwitch(false, now); err != nil {
+				slog.Warn("kill-switch reconciliation failed; will retry", "error", err)
+			}
 			err := h.reconcileDNSProtection(false, now)
 			h.connectMu.Unlock()
 			if err != nil {

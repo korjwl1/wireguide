@@ -381,7 +381,7 @@ func stubRuleSaysOff(t *testing.T, off ...string) {
 func TestPersistDesiredState_RecordsFirewallIntentDuringSuspend(t *testing.T) {
 	h := newPendingTestHelper(t)
 	h.activeCfgs["alpha"] = &domain.WireGuardConfig{Name: "alpha"}
-	h.fwSavedKillSwitch = true
+	h.killSwitchWanted = true
 	h.dnsProtectionWanted = true
 	h.persistDesiredState()
 
@@ -472,7 +472,7 @@ func TestArmShutdownTimer_StaysAliveWhileRestorePending(t *testing.T) {
 // must keep the blockade instead of logging and leaving traffic open.
 func TestResumeFirewall_KeepsKillSwitchWithNoTunnel(t *testing.T) {
 	h := newPendingTestHelper(t)
-	h.fwSavedKillSwitch = true
+	h.killSwitchWanted = true
 	if err := h.resumeFirewall(); err != nil {
 		t.Fatalf("resumeFirewall: %v", err)
 	}

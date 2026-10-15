@@ -514,6 +514,15 @@ func (m *Monitor) startReconnectTunnel(tunnelName string, onlyIfIdle bool, still
 	go func() {
 		defer close(entry.done)
 		defer func() {
+			// A recovered panic must not permanently occupy a retry slot.
+			m.mu.Lock()
+			removed := m.retries[tunnelName] == entry
+			if removed {
+				delete(m.retries, tunnelName)
+			}
+			m.mu.Unlock()
+		}()
+		defer func() {
 			if r := recover(); r != nil {
 				slog.Error("reconnectWithBackoff panic (recovered)",
 					"panic", fmt.Sprintf("%v", r),
@@ -559,6 +568,22 @@ func (m *Monitor) reconnectWithBackoff(ctx context.Context, tunnelName string, e
 	m.mu.Lock()
 	entry.delay = m.cfg.InitialDelay
 	m.mu.Unlock()
+
+	// One owner per successful suspend. The defer also runs when disconnect,
+	// reconnect or status callbacks panic; explicit exits release it early.
+	firewallWasSuspended := false
+	resumeFirewall := func() {
+		if !firewallWasSuspended {
+			return
+		}
+		firewallWasSuspended = false
+		if m.fwResumeFn != nil {
+			if err := m.fwResumeFn(); err != nil {
+				slog.Warn("firewall restore pending helper retry", "error", err)
+			}
+		}
+	}
+	defer resumeFirewall()
 
 	legacyTornDown := false
 	for {
@@ -650,10 +675,13 @@ func (m *Monitor) reconnectWithBackoff(ctx context.Context, tunnelName string, e
 		// Suspend firewall rules before disconnect so old pf rules (which
 		// reference the old utun interface name) don't block the new
 		// connection's traffic when the interface name changes.
-		firewallWasSuspended := false
 		if m.fwSuspendFn != nil && !nothingUp {
 			if err := m.fwSuspendFn(); err != nil {
-				slog.Warn("failed to suspend firewall for reconnect", "error", err)
+				slog.Warn("failed to suspend firewall; keeping transport for retry", "error", err)
+				m.mu.Lock()
+				entry.delay = min(delay*2, m.cfg.MaxDelay)
+				m.mu.Unlock()
+				continue
 			} else {
 				firewallWasSuspended = true
 			}
@@ -663,11 +691,7 @@ func (m *Monitor) reconnectWithBackoff(ctx context.Context, tunnelName string, e
 			// the tunnel down below would undo that (issue #44).
 			if ctx.Err() != nil || m.cancelInvalidRetry(tunnelName, entry) {
 				slog.Info("reconnection cancelled during firewall suspend", "attempt", attempt)
-				if firewallWasSuspended && m.fwResumeFn != nil {
-					if err := m.fwResumeFn(); err != nil {
-						slog.Warn("failed to resume firewall after cancel", "error", err)
-					}
-				}
+				resumeFirewall()
 				return
 			}
 		}
@@ -690,12 +714,7 @@ func (m *Monitor) reconnectWithBackoff(ctx context.Context, tunnelName string, e
 		if disconnectErr != nil {
 			slog.Warn("pre-reconnect disconnect failed; will retry after backoff",
 				"tunnel", tunnelName, "attempt", attempt, "error", disconnectErr)
-			if firewallWasSuspended && m.fwResumeFn != nil {
-				if err := m.fwResumeFn(); err != nil {
-					slog.Warn("failed to resume firewall after disconnect failure",
-						"error", err)
-				}
-			}
+			resumeFirewall()
 			m.mu.Lock()
 			entry.delay = delay * 2
 			if entry.delay > m.cfg.MaxDelay {
@@ -715,11 +734,7 @@ func (m *Monitor) reconnectWithBackoff(ctx context.Context, tunnelName string, e
 			slog.Info("reconnection cancelled before reconnectFn", "attempt", attempt)
 			// Re-enable firewall even on cancel to avoid leaving the
 			// system unprotected.
-			if firewallWasSuspended && m.fwResumeFn != nil {
-				if err := m.fwResumeFn(); err != nil {
-					slog.Warn("failed to resume firewall after cancel", "error", err)
-				}
-			}
+			resumeFirewall()
 			return
 		}
 
@@ -727,9 +742,7 @@ func (m *Monitor) reconnectWithBackoff(ctx context.Context, tunnelName string, e
 		// tunnel is reconnected when doing per-tunnel health recovery.
 		if err := m.reconnectFn(ctx, tunnelName); err != nil {
 			if errors.Is(err, ErrNothingToReconnect) {
-				if firewallWasSuspended && m.fwResumeFn != nil {
-					_ = m.fwResumeFn()
-				}
+				resumeFirewall()
 				m.notifyStatus(State{Reconnecting: false})
 				m.mu.Lock()
 				if cur, ok := m.retries[tunnelName]; ok && cur == entry {
@@ -741,11 +754,7 @@ func (m *Monitor) reconnectWithBackoff(ctx context.Context, tunnelName string, e
 			slog.Warn("reconnection failed", "attempt", attempt, "tunnel", tunnelName, "error", err)
 			// Re-enable firewall after failed attempt so the system stays
 			// protected between retries.
-			if firewallWasSuspended && m.fwResumeFn != nil {
-				if err := m.fwResumeFn(); err != nil {
-					slog.Warn("failed to resume firewall after failed reconnect", "error", err)
-				}
-			}
+			resumeFirewall()
 			// Exponential backoff stored on the entry so a sibling
 			// trigger (e.g. CancelRetry + new triggerReconnectTunnel)
 			// can read it for an informative GetState snapshot, and so
@@ -761,11 +770,7 @@ func (m *Monitor) reconnectWithBackoff(ctx context.Context, tunnelName string, e
 		}
 
 		// Resume firewall with the new interface name and endpoints.
-		if firewallWasSuspended && m.fwResumeFn != nil {
-			if err := m.fwResumeFn(); err != nil {
-				slog.Warn("failed to resume firewall after successful reconnect", "error", err)
-			}
-		}
+		resumeFirewall()
 
 		slog.Info("reconnected successfully", "attempt", attempt, "tunnel", tunnelName)
 		m.notifyStatus(State{Reconnecting: false})

@@ -235,9 +235,13 @@ func (h *Helper) persistDesiredState() {
 	for name := range h.watchdogBlocked {
 		st.WatchdogBlocked = append(st.WatchdogBlocked, name)
 	}
-	// A reconnect suspends the kill switch and remembers it was on; record
-	// that, not the momentary "off" (issue #44).
-	st.KillSwitch = st.KillSwitch || h.fwSavedKillSwitch
+	// Record the requested setting during suspension and after failed OS
+	// applies. An explicit Off must also survive a failed disable (issue #44).
+	if h.ksIntentKnown {
+		st.KillSwitch = h.killSwitchWanted
+	} else {
+		st.KillSwitch = st.KillSwitch || h.killSwitchWanted
+	}
 	h.mu.Unlock()
 	h.desiredMu.Lock()
 	defer h.desiredMu.Unlock()
@@ -484,8 +488,12 @@ func (h *Helper) restoreDesiredTunnels() {
 
 	// Kill switch first: the user had the blockade up, and the crash
 	// recovery above removed it. doConnectHeld handles connecting under it.
-	if intent.KillSwitch && !h.firewall.IsKillSwitchEnabled() {
-		if err := h.enableKillSwitchForActiveTunnels(); err != nil {
+	if intent.KillSwitch {
+		h.mu.Lock()
+		h.killSwitchWanted = true
+		h.ksIntentKnown = true
+		h.mu.Unlock()
+		if err := h.reconcileKillSwitch(true, time.Now()); err != nil {
 			slog.Error("desired-state: restore kill switch failed", "error", err)
 		}
 	}

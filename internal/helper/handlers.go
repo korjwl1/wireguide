@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -240,8 +241,12 @@ func (h *Helper) doConnectHeld(cfg *domain.WireGuardConfig) error {
 	// creation when a peer endpoint is a hostname). Suspend it for the bounded
 	// Connect transaction, then rebuild the complete permit set from every
 	// active tunnel. A failed Connect restores the previous blockade too.
-	restoreKillSwitch := h.firewall.IsKillSwitchEnabled()
-	if restoreKillSwitch {
+	h.rememberEnabledKillSwitch()
+	h.mu.Lock()
+	restoreKillSwitch := h.killSwitchWanted && h.fwSuspendDepth == 0
+	h.mu.Unlock()
+	if restoreKillSwitch && h.firewall.IsKillSwitchEnabled() {
+		h.ksApplied = ""
 		if err := h.firewall.DisableKillSwitch(); err != nil {
 			return fmt.Errorf("temporarily disable kill switch for connect: %w", err)
 		}
@@ -260,7 +265,7 @@ func (h *Helper) doConnectHeld(cfg *domain.WireGuardConfig) error {
 		}
 		h.mu.Unlock()
 		if restoreKillSwitch {
-			if restoreErr := h.enableKillSwitchForActiveTunnels(); restoreErr != nil {
+			if restoreErr := h.reconcileKillSwitch(true, time.Now()); restoreErr != nil {
 				return fmt.Errorf("connect: %v; restore kill switch: %w", err, restoreErr)
 			}
 		}
@@ -268,7 +273,7 @@ func (h *Helper) doConnectHeld(cfg *domain.WireGuardConfig) error {
 	}
 
 	if restoreKillSwitch {
-		if err := h.enableKillSwitchForActiveTunnels(); err != nil {
+		if err := h.reconcileKillSwitch(true, time.Now()); err != nil {
 			// Do not report a successful connection while the user's requested
 			// blockade is absent. Roll the new tunnel back and make one last
 			// attempt to restore the pre-connect kill-switch state.
@@ -279,7 +284,7 @@ func (h *Helper) doConnectHeld(cfg *domain.WireGuardConfig) error {
 				h.activeCfgs[cfg.Name] = prev
 			}
 			h.mu.Unlock()
-			restoreErr := h.enableKillSwitchForActiveTunnels()
+			restoreErr := h.reconcileKillSwitch(true, time.Now())
 			h.maybeArmShutdownAfterTeardown("connect rolled back, no GUI attached")
 			return fmt.Errorf("restore kill switch after connect: %v (disconnect rollback: %v; blockade restore: %v)",
 				err, disconnectErr, restoreErr)
@@ -296,10 +301,10 @@ func (h *Helper) doConnectHeld(cfg *domain.WireGuardConfig) error {
 	return nil
 }
 
-// enableKillSwitchForActiveTunnels atomically rebuilds the kill-switch model
-// from manager state. EnableKillSwitch installs the base set and the first
-// tunnel, then AddKillSwitchTunnel folds in every remaining interface. With no
-// active tunnel it intentionally installs the base blockade only.
+// enableKillSwitchForActiveTunnels reconciles the base blockade and every
+// live tunnel permit. Enable is used only when the blockade is absent; active
+// backends use idempotent add/remove operations. A partial failure retains
+// the blockade and tracked permits so the next reconciliation can finish.
 //
 // Caller MUST hold h.connectMu so Connect/Disconnect cannot invalidate the
 // status snapshot while the firewall rules are being rebuilt.
@@ -313,8 +318,8 @@ func (h *Helper) enableKillSwitchForActiveTunnels() error {
 	activeCfgs := h.copyActiveCfgs()
 	h.mu.Unlock()
 	var active []activeTunnel
-	for _, st := range h.manager.AllStatuses() {
-		if st == nil || st.InterfaceName == "" {
+	for _, st := range tunnelStatuses(h) {
+		if st == nil || st.State != domain.StateConnected || st.InterfaceName == "" {
 			continue
 		}
 		var addresses []string
@@ -324,22 +329,51 @@ func (h *Helper) enableKillSwitchForActiveTunnels() error {
 		active = append(active, activeTunnel{name: st.TunnelName, interfaceName: st.InterfaceName, addresses: addresses})
 	}
 
-	if len(active) == 0 {
-		return h.firewall.EnableKillSwitch("", nil, nil)
+	sort.Slice(active, func(i, j int) bool { return active[i].name < active[j].name })
+	live := make(map[string]bool, len(active))
+	for _, t := range active {
+		live[t.interfaceName] = true
 	}
-
-	// Endpoints are already resolved by Engine before routes are installed.
-	// Supplying the union to each tunnel is conservative and prevents a peer
-	// belonging to another simultaneously active tunnel from being fenced out.
-	endpoints := h.manager.ResolvedEndpoints()
-	if err := h.firewall.EnableKillSwitch(active[0].interfaceName, active[0].addresses, endpoints); err != nil {
-		return err
+	enabled := h.firewall.IsKillSwitchEnabled()
+	if !enabled {
+		h.ksIfaces = make(map[string]struct{})
 	}
-	for _, tunnel := range active[1:] {
-		if err := h.firewall.AddKillSwitchTunnel(tunnel.interfaceName, tunnel.addresses, endpoints); err != nil {
-			_ = h.firewall.DisableKillSwitch()
-			return fmt.Errorf("add tunnel %q to kill switch: %w", tunnel.name, err)
+	if h.ksIfaces == nil {
+		h.ksIfaces = make(map[string]struct{})
+	}
+	// Windows Enable on an already-enabled backend only adds permits. Remove
+	// old interfaces explicitly; the safety net must close stale exceptions.
+	for iface := range h.ksIfaces {
+		if live[iface] {
+			continue
 		}
+		if err := h.firewall.RemoveKillSwitchTunnel(iface); err != nil {
+			return err
+		}
+		delete(h.ksIfaces, iface)
+		delete(h.permitRemovalRetries, iface)
+	}
+	endpoints := h.manager.ResolvedEndpoints()
+	start := 0
+	if !enabled {
+		if len(active) == 0 {
+			return h.firewall.EnableKillSwitch("", nil, nil)
+		}
+		first := active[0]
+		if err := h.firewall.EnableKillSwitch(first.interfaceName, first.addresses, endpoints); err != nil {
+			return err
+		}
+		h.ksIfaces[first.interfaceName] = struct{}{}
+		start = 1
+	}
+	// Add is idempotent on every backend. In particular Linux Enable must
+	// not be replayed against an existing table (it would append rules).
+	for _, t := range active[start:] {
+		if err := h.firewall.AddKillSwitchTunnel(t.interfaceName, t.addresses, endpoints); err != nil {
+			// Keep the base blockade on partial failure; retry the permits.
+			return fmt.Errorf("add tunnel %q to kill switch: %w", t.name, err)
+		}
+		h.ksIfaces[t.interfaceName] = struct{}{}
 	}
 	return nil
 }
@@ -413,25 +447,9 @@ func (h *Helper) applyPostConnectFirewall(cfg *domain.WireGuardConfig) {
 		slog.Warn("DNS protection after connect failed", "tunnel", cfg.Name, "error", err)
 	}
 
-	// If the kill switch is already enabled (user toggled it on before
-	// connecting, OR it's been on the whole time and we just brought up
-	// another tunnel), fold the new tunnel's LUID + endpoints into the
-	// existing WFP filter set. The base "block all" filter would
-	// otherwise still drop the new tunnel's encapsulated UDP traffic
-	// because the only "permit tunnel" filter still references whatever
-	// LUID was current at Enable time.
-	if h.firewall.IsKillSwitchEnabled() {
-		status := h.manager.StatusFor(cfg.Name)
-		ifaceName := ""
-		if status != nil {
-			ifaceName = status.InterfaceName
-		}
-		if ifaceName != "" {
-			eps := h.manager.ResolvedEndpoints()
-			if err := h.firewall.AddKillSwitchTunnel(ifaceName, cfg.Interface.Address, eps); err != nil {
-				slog.Warn("AddKillSwitchTunnel after connect failed", "error", err)
-			}
-		}
+	h.rememberEnabledKillSwitch()
+	if err := h.reconcileKillSwitch(true, time.Now()); err != nil {
+		slog.Warn("kill switch after connect pending retry", "tunnel", cfg.Name, "error", err)
 	}
 }
 
@@ -658,37 +676,16 @@ func (h *Helper) handleSetKillSwitch(params json.RawMessage) (interface{}, error
 	if err := json.Unmarshal(params, &req); err != nil {
 		return nil, err
 	}
-	if req.Enabled {
-		// Enable should work regardless of tunnel state. If no tunnel is
-		// active the firewall installs only the base "block everything
-		// not explicitly allowed" set; once a tunnel connects,
-		// handleConnect will call AddKillSwitchTunnel to fold its
-		// LUID/endpoints in. This matches the user mental model of
-		// "the kill switch is on the moment I flip the toggle" instead
-		// of the old "kill switch can only be enabled while connected"
-		// gate that surprised users into a half-state.
-		if err := h.enableKillSwitchForActiveTunnels(); err != nil {
-			return nil, err
-		}
-	} else {
-		err := h.firewall.DisableKillSwitch()
-		// A reconnect in progress suspended the kill switch and will put
-		// it back on resume; the user's "off" must win over that (issue
-		// #44). suspend/resume read and write the flag under connectMu,
-		// which we hold. Keyed on the resulting state, not the error:
-		// Windows can report a failed rebuild of other filters after the
-		// kill switch itself is already gone.
-		if !h.firewall.IsKillSwitchEnabled() {
-			h.mu.Lock()
-			h.fwSavedKillSwitch = false
-			h.mu.Unlock()
-		}
-		if err != nil {
-			return nil, err
-		}
-	}
-	// The firewall intent is part of what a crash-restore must bring back.
+	h.mu.Lock()
+	h.killSwitchWanted = req.Enabled
+	h.ksIntentKnown = true
+	h.mu.Unlock()
+	// Persist the requested setting even when applying it fails. A retry must
+	// follow the last explicit user intent, including Off during reconnect.
 	h.persistDesiredState()
+	if err := h.reconcileKillSwitch(true, time.Now()); err != nil {
+		return nil, err
+	}
 	h.server.Broadcast(ipc.EventSettingsChanged, ipc.SettingsChangedPayload{KillSwitch: &req.Enabled})
 	return ipc.Empty{}, nil
 }
@@ -703,17 +700,13 @@ func (h *Helper) handleSetDNSProtection(params json.RawMessage) (interface{}, er
 	// is ignored (issue #48). With no tunnel up the setting is recorded and
 	// the next connect installs the rules.
 	h.mu.Lock()
-	prev, prevAutoOff := h.dnsProtectionWanted, h.dnsAutoOff
 	h.dnsProtectionWanted = req.Enabled
 	h.dnsAutoOff = !req.Enabled
 	h.mu.Unlock()
+	h.persistDesiredState()
 	if err := h.reapplyDNSProtection(); err != nil {
-		h.mu.Lock()
-		h.dnsProtectionWanted, h.dnsAutoOff = prev, prevAutoOff
-		h.mu.Unlock()
 		return nil, err
 	}
-	h.persistDesiredState()
 	h.server.Broadcast(ipc.EventSettingsChanged, ipc.SettingsChangedPayload{DNSProtection: &req.Enabled})
 	return ipc.Empty{}, nil
 }

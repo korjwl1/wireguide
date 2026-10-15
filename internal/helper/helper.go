@@ -231,9 +231,18 @@ type Helper struct {
 	// a clean quit removed it (issue #44).
 	desiredMu sync.Mutex
 
-	// Firewall state saved during reconnect suspend/resume cycle.
-	// These track what was active before suspend so resume can restore it.
-	fwSavedKillSwitch bool
+	// Kill-switch intent is independent of OS application success and survives
+	// reconnect suspension. Guarded by mu, including desired-state reads.
+	killSwitchWanted bool
+	ksIntentKnown    bool
+	// Successful suspend calls own one level each. Only the last resume may
+	// apply rules. Guarded by connectMu, like the KS reconciliation journal.
+	fwSuspendDepth int
+	ksIfaces       map[string]struct{}
+	ksApplied      string
+	ksPending      string
+	ksRetryAt      time.Time
+	ksRetryDelay   time.Duration
 
 	// dnsProtectionWanted is the user's DNS-protection setting as last sent
 	// by the GUI/CLI (or carried over by a crash restore). The rules
@@ -998,116 +1007,77 @@ func (h *Helper) shutdown() {
 // rules. Called by the reconnect monitor before Disconnect so that old pf rules
 // referencing the previous utun interface name don't block the new connection.
 func (h *Helper) suspendFirewall() error {
-	// Under connectMu, like resumeFirewall and handleSetKillSwitch: a user
-	// turning the kill switch off between the read below and the saved
-	// flag would otherwise be overwritten with "on" and undone by resume
-	// (issue #44). Only the monitor goroutine calls this.
 	h.connectMu.Lock()
 	defer h.connectMu.Unlock()
-	ksEnabled := h.firewall.IsKillSwitchEnabled()
-	dnsEnabled := h.firewall.IsDNSProtectionEnabled()
-
-	h.mu.Lock()
-	h.fwSavedKillSwitch = ksEnabled
-	h.mu.Unlock()
-	// DNS protection needs no saved copy: resume re-derives the rules from
-	// the setting and the reconnected tunnels (issue #48).
-
-	if !ksEnabled && !dnsEnabled {
-		slog.Debug("suspendFirewall: no firewall rules active, nothing to suspend")
+	if h.fwSuspendDepth > 0 {
+		h.fwSuspendDepth++
 		return nil
 	}
+	// Capture an already-active backend without overwriting a pending wanted
+	// state with the temporarily disabled OS state.
+	h.rememberEnabledKillSwitch()
 	h.dnsMu.Lock()
 	h.dnsSuspended = true
 	h.dnsApplied = ""
 	h.dnsMu.Unlock()
+	h.ksApplied = ""
 
-	slog.Info("suspending firewall rules for reconnect",
-		"kill_switch", ksEnabled, "dns_protection", dnsEnabled)
-
-	// Disable DNS protection first (it may be a sub-anchor of the kill switch).
-	dnsDisabled := false
-	if dnsEnabled {
-		// Under dnsMu so it can't interleave with a reapply.
-		h.dnsMu.Lock()
-		err := h.firewall.DisableDNSProtection()
-		h.dnsMu.Unlock()
-		if err != nil {
-			slog.Warn("suspendFirewall: failed to disable DNS protection", "error", err)
-			h.dnsMu.Lock()
-			h.dnsSuspended = false
-			h.dnsMu.Unlock()
+	// A failed suspend owns no level: roll back through the same retryable
+	// wanted-state reconciliation the normal resume uses. The defer also
+	// repairs a panic inside the backend before a suspend is committed.
+	committed := false
+	defer func() {
+		if !committed {
+			h.cancelFailedFirewallSuspend()
+		}
+	}()
+	if h.firewall.IsDNSProtectionEnabled() {
+		if err := h.firewall.DisableDNSProtection(); err != nil {
 			return fmt.Errorf("suspendFirewall: disable DNS protection: %w", err)
-		} else {
-			dnsDisabled = true
 		}
 	}
-	if ksEnabled {
+	if h.firewall.IsKillSwitchEnabled() {
 		if err := h.firewall.DisableKillSwitch(); err != nil {
-			h.dnsMu.Lock()
-			h.dnsSuspended = false
-			h.dnsMu.Unlock()
-			// We just turned DNS protection off but the kill switch
-			// is still on — that's an inconsistent state. Try to
-			// re-enable DNS protection so the system goes back to
-			// where it was, and surface the error to the caller so
-			// resumeFirewall isn't called against a state that
-			// already half-resumed.
-			if dnsDisabled {
-				if rollbackErr := h.reapplyDNSProtection(); rollbackErr != nil {
-					slog.Error("suspendFirewall: DNS protection rollback ALSO failed",
-						"error", rollbackErr)
-				}
-			}
 			return fmt.Errorf("suspendFirewall: disable kill switch: %w", err)
 		}
 	}
-
+	h.fwSuspendDepth = 1
+	committed = true
 	return nil
 }
 
-// resumeFirewall re-enables firewall rules that were active before the
-// reconnect suspend. It reads the NEW interface name and endpoints from the
-// tunnel manager so the pf rules match the newly created utun interface.
+// Caller holds connectMu. A failed rollback remains pending for the periodic
+// safety net; it must not leave a suspension that has no matching owner.
+func (h *Helper) cancelFailedFirewallSuspend() {
+	h.dnsMu.Lock()
+	h.dnsSuspended = false
+	h.dnsMu.Unlock()
+	if err := h.reconcileKillSwitch(true, time.Now()); err != nil {
+		slog.Error("failed suspend: kill-switch rollback pending", "error", err)
+	}
+	if err := h.reapplyDNSProtection(); err != nil {
+		slog.Error("failed suspend: DNS rollback pending", "error", err)
+	}
+}
+
+// resumeFirewall releases one successful suspension. Desired settings remain
+// intact on apply failure so the safety net can retry after the OS recovers.
 func (h *Helper) resumeFirewall() error {
-	// The kill-switch half is read and acted on under connectMu, so a user
-	// turning the kill switch off mid-reconnect (handleSetKillSwitch clears
-	// the flag under connectMu) can't be undone here (issue #44).
 	h.connectMu.Lock()
 	defer h.connectMu.Unlock()
+	if h.fwSuspendDepth > 0 {
+		h.fwSuspendDepth--
+	}
+	if h.fwSuspendDepth > 0 {
+		return nil
+	}
 	h.dnsMu.Lock()
 	h.dnsSuspended = false
 	h.dnsApplied = ""
 	h.dnsMu.Unlock()
-	h.mu.Lock()
-	restoreKS := h.fwSavedKillSwitch
-	// Clear saved state so a second resume is a no-op.
-	h.fwSavedKillSwitch = false
-	h.mu.Unlock()
-
-	slog.Info("resuming firewall rules after reconnect", "kill_switch", restoreKS)
-
-	if restoreKS {
-		// Rebuild from every active tunnel, not just the first one: with
-		// several tunnels up, a single-interface EnableKillSwitch left the
-		// others fenced out after every wake. With none up (reconnect
-		// failed) this installs the base blockade, keeping the kill switch
-		// on instead of silently dropping it. connectMu is held (above).
-		if err := h.enableKillSwitchForActiveTunnels(); err != nil {
-			slog.Error("resumeFirewall: failed to re-enable kill switch", "error", err)
-			return fmt.Errorf("resumeFirewall: enable kill switch: %w", err)
-		}
-	}
-
-	// Rebuild DNS protection for every reconnected tunnel. The old code
-	// re-enabled it for one interface with servers taken from whichever
-	// activeCfgs entry map iteration returned first — a random pairing.
-	if err := h.reapplyDNSProtection(); err != nil {
-		slog.Error("resumeFirewall: failed to re-enable DNS protection", "error", err)
-		return fmt.Errorf("resumeFirewall: enable DNS protection: %w", err)
-	}
-
-	return nil
+	ksErr := h.reconcileKillSwitch(true, time.Now())
+	dnsErr := h.reapplyDNSProtection()
+	return errors.Join(ksErr, dnsErr)
 }
 
 func (h *Helper) cleanup() {
