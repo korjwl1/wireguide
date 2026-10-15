@@ -28,11 +28,9 @@ const maxQRImageSize = 8 << 20
 const maxQRImagePixels = 16 << 20
 const maxQRImageDimension = 8192
 
-// decodeQRConfig decodes a QR code from raw image bytes and returns its
-// payload. Returns a stable error message ("no WireGuard QR code...") on any
-// decode failure so the frontend can show a single, consistent message
-// regardless of whether the issue was an unsupported image format, a missing
-// QR code, or a QR code without a [Interface] section.
+// decodeQRConfig bounds encoded size and decoded dimensions, then reads a
+// WireGuard QR payload. Decode errors distinguish invalid images, missing QR
+// codes and QR codes whose payload is not a WireGuard config.
 func decodeQRConfig(data []byte) (string, error) {
 	if len(data) > maxQRImageSize {
 		return "", fmt.Errorf("image too large (%d bytes, max %d)", len(data), maxQRImageSize)

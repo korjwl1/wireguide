@@ -11,7 +11,7 @@ import (
 )
 
 // testOverridePubKey lets tests substitute the production
-// expectedPublicKey constant without flipping a real release key.
+// expectedPublicKey without flipping a real release key.
 // Empty in production builds; tests assign to it via
 // withTestPublicKey() and restore on cleanup. The activePublicKey
 // gate ALSO checks testing.Testing() so a future contributor adding
@@ -21,7 +21,7 @@ var testOverridePubKey = ""
 
 // activePublicKey returns the hex-encoded Ed25519 public key the
 // verifier should use: the test override if set AND we're running
-// in a `go test` binary, otherwise the embedded constant. Production
+// in a `go test` binary, otherwise the embedded key. Production
 // builds (where testing.Testing() is false) cannot use the override.
 func activePublicKey() string {
 	if testOverridePubKey != "" && testing.Testing() {
