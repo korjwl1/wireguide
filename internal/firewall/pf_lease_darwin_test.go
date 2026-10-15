@@ -257,3 +257,22 @@ func TestKillSwitchDisableRetainsBothPoliciesIfDNSReplacementFails(t *testing.T)
 		t.Fatal("failed DNS replacement removed existing protection")
 	}
 }
+
+func TestCorruptPFLeaseIsQuarantinedWithoutReleasingUnknownOwner(t *testing.T) {
+	calls := stubPF(t)
+	if err := os.WriteFile(savedPfStateFile, []byte("{invalid"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := enablePf(); err != nil {
+		t.Fatal(err)
+	}
+	backups, _ := filepath.Glob(savedPfStateFile + ".corrupt-*")
+	if len(backups) != 1 {
+		t.Fatal("corrupt ownership evidence was lost")
+	}
+	for _, call := range *calls {
+		if strings.HasPrefix(call, "-X") {
+			t.Fatal("released an unknown PF owner")
+		}
+	}
+}

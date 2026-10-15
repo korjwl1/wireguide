@@ -60,6 +60,9 @@ func TestLinuxDNSDeleteFailureRetainsStateAndCanRetry(t *testing.T) {
 
 func TestLinuxCrashRecoveryRemovesStaleDNSTableWithoutJournal(t *testing.T) {
 	original := nftDeleteDNSTable
+	originalFlush := nftFlush
+	nftFlush = func() error { return nil }
+	t.Cleanup(func() { nftFlush = originalFlush })
 	t.Cleanup(func() { nftDeleteDNSTable = original })
 	calls := 0
 	nftDeleteDNSTable = func() ([]byte, error) { calls++; return nil, nil }

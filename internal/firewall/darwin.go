@@ -85,8 +85,8 @@ type DarwinFirewall struct {
 	mu                   sync.Mutex
 	killSwitchEnabled    bool
 	dnsProtectionEnabled bool
-	// pfWasEnabled tracks whether pf was already enabled before we started,
-	// so we know whether to turn pf back off on disable/cleanup.
+	// pfWasEnabled retains legacy diagnostic state in the lease journal.
+	// PF ownership and release decisions use the reference token and PID.
 	pfWasEnabled bool
 	// savedDNSAllow caches the most recent (normalized) EnableDNSProtection
 	// set so EnableKillSwitch can re-load the DNS sub-anchor after
@@ -430,6 +430,12 @@ func (f *DarwinFirewall) DisableKillSwitch() error {
 		if err := flushAllAnchors(); err != nil {
 			return err
 		}
+		// The anchor flush already removed the effective policy. Retain the
+		// PF lease for retry, but never report the absent rules as active.
+		f.mu.Lock()
+		f.killSwitchEnabled = false
+		f.killSwitchTunnels = make(map[string][]string)
+		f.mu.Unlock()
 		if err := disablePf(); err != nil {
 			return err
 		}
@@ -552,6 +558,12 @@ func (f *DarwinFirewall) disableDNSProtection() error {
 			return err
 		}
 
+		// The anchor flush already removed the effective policy. Retain the
+		// PF lease for retry, but never report the absent rules as active.
+		f.mu.Lock()
+		f.dnsProtectionEnabled = false
+		f.savedDNSAllow = nil
+		f.mu.Unlock()
 		if err := disablePf(); err != nil {
 			return err
 		}

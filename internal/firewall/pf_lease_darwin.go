@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/korjwl1/wireguide/internal/atomicfile"
 	"golang.org/x/sys/unix"
@@ -132,8 +133,15 @@ func readPfLease() (pfLeaseState, error) {
 		state.WasEnabled = text == "1"
 		return state, nil
 	}
-	err = json.Unmarshal(data, &state)
-	return state, err
+	if err := json.Unmarshal(data, &state); err != nil {
+		backup := fmt.Sprintf("%s.corrupt-%d", savedPfStateFile, time.Now().UnixNano())
+		if renameErr := os.Rename(savedPfStateFile, backup); renameErr != nil {
+			return pfLeaseState{}, errors.Join(err, renameErr)
+		}
+		slog.Warn("corrupt PF lease preserved; unknown references cannot be released", "backup", backup)
+		return pfLeaseState{}, nil
+	}
+	return state, nil
 }
 
 // pfRunning reports whether PF is enabled. A failed query is an error, not
