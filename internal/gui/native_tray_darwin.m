@@ -105,14 +105,6 @@ void wgNativeTrayCreate(const void *bytes, size_t count) {
     });
 }
 
-void wgNativeTraySetIcon(const void *bytes, size_t count) {
-    NSData *data = [[NSData alloc] initWithBytes:bytes length:count];
-    dispatch_async(dispatch_get_main_queue(), ^{
-        if (wgTray != nil) wgSetTrayImage(data);
-        [data release];
-    });
-}
-
 void wgNativeTraySetMenu(const char *json) {
     NSString *payload = [[NSString alloc] initWithUTF8String:json];
     dispatch_async(dispatch_get_main_queue(), ^{

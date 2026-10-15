@@ -98,6 +98,7 @@ func main() {
 	// GUI mode
 	gui.SetTrayIconPNG(trayIconBytes)
 	if err := gui.Run(application.AssetFileServerFS(assets), systemDataDir()); err != nil {
+		gui.ShowStartupError(err)
 		log.Fatal(err)
 	}
 }

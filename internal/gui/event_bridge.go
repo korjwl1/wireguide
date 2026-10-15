@@ -60,8 +60,15 @@ func (b *eventBridge) start() {
 // Resubscribe repairs a missing event stream without replacing the control
 // connection or interrupting a long-running VPN operation.
 func (b *eventBridge) Resubscribe() {
+	b.mu.Lock()
+	previous := b.subscribedTo
+	b.mu.Unlock()
 	if b.resubscribe() {
-		b.app.Event.Emit("helper_reset", struct{}{})
+		if previous != nil && previous != b.clients.Get() {
+			b.app.Event.Emit("helper_reset", struct{}{})
+		} else {
+			b.app.Event.Emit("tunnels_changed", struct{}{})
+		}
 	}
 }
 
@@ -209,7 +216,12 @@ func (b *eventBridge) handleEvent(method string, params json.RawMessage) {
 // A missing helper cannot attest to a live connection. Clear indicators without
 // inventing a disconnect/history record; restored status will repopulate them.
 func (b *eventBridge) clearConnectionIndicators() {
-	if b != nil && b.onStatusChange != nil {
+	if b == nil {
+		return
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.onStatusChange != nil {
 		b.onStatusChange(nil, nil)
 	}
 }

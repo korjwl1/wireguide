@@ -77,8 +77,9 @@ func Run(assetsHandler http.Handler, dataDir string) error {
 
 	// Pre-render the Windows tray icon variants now that main.go has
 	// populated customTrayIconPNG via SetTrayIconPNG. macOS uses the
-	// template path built in tray.go's init(); the Windows builder
-	// needs the embedded app icon, which init() can't see.
+	// template path initialized here; the Windows builder
+	// needs the embedded app icon.
+	initializeTrayIcons()
 	buildWindowsTrayIcons()
 
 	// 1. Local storage

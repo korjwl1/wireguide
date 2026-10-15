@@ -30,7 +30,6 @@ var appQuitting atomic.Bool
 var (
 	trayOnIconDark   []byte // white W + green dot (dark menu bar)
 	trayOffIconDark  []byte // white W, no badge
-	trayOnIconLight  []byte // black W + green dot (light menu bar)
 	trayOffIconLight []byte // black W, no badge
 
 	// Windows-only variants rendered from the full app icon (rounded
@@ -51,13 +50,16 @@ var (
 // this before invoking Run. An empty source disables custom icon rendering.
 func SetTrayIconPNG(b []byte) { customTrayIconPNG = bytes.Clone(b) }
 
-func init() {
-	white := color.NRGBA{255, 255, 255, 255}
-	black := color.NRGBA{0, 0, 0, 255}
-	trayOnIconDark = buildTrayOnIcon(white)
-	trayOffIconDark = buildTrayOffIcon(white)
-	trayOnIconLight = buildTrayOnIcon(black)
-	trayOffIconLight = buildTrayOffIcon(black)
+var trayIconsOnce sync.Once
+
+func initializeTrayIcons() {
+	trayIconsOnce.Do(func() {
+		white := color.NRGBA{255, 255, 255, 255}
+		black := color.NRGBA{0, 0, 0, 255}
+		trayOnIconDark = buildTrayOnIcon(white)
+		trayOffIconDark = buildTrayOffIcon(white)
+		trayOffIconLight = buildTrayOffIcon(black)
+	})
 }
 
 // buildWindowsTrayIcons renders the rounded-red app icon at tray size
@@ -353,6 +355,7 @@ type trayManager struct {
 	doShutdown     func()
 	connectionIcon *connectionIcon
 
+	indicatorMu   sync.Mutex // serializes cached state with native icon updates
 	mu            sync.Mutex
 	activeTunnels map[string]bool // cached from status events
 	hasHandshake  map[string]bool // per-tunnel handshake status
@@ -433,6 +436,11 @@ func (t *trayManager) initialBuild() {
 //	disconnected → W glyph (white on dark menu bars, black on light)
 //	connected    → same W with a green dot badge
 func (t *trayManager) setIconState(activeNames []string, handshakeMap map[string]bool) {
+	t.indicatorMu.Lock()
+	defer t.indicatorMu.Unlock()
+	if t.quitting.Load() {
+		return
+	}
 	newSet := make(map[string]bool, len(activeNames))
 	for _, n := range activeNames {
 		newSet[n] = true

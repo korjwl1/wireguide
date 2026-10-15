@@ -21,11 +21,6 @@ func createNativeTray(icon []byte, action func(string)) {
 		C.wgNativeTrayCreate(unsafe.Pointer(&icon[0]), C.size_t(len(icon)))
 	}
 }
-func setNativeTrayIcon(icon []byte) {
-	if len(icon) > 0 {
-		C.wgNativeTraySetIcon(unsafe.Pointer(&icon[0]), C.size_t(len(icon)))
-	}
-}
 func setNativeTrayConnected(connected bool) { C.wgNativeTraySetConnected(C.bool(connected)) }
 func setNativeTrayMenu(items []nativeTrayItem) {
 	data, _ := json.Marshal(items)
