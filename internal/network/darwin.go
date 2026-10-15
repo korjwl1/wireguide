@@ -9,6 +9,8 @@ import (
 	"net"
 	"os/exec"
 	"regexp"
+	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -1707,17 +1709,9 @@ func sortAllowedIPs(cidrs []string) []string {
 	result := make([]string, len(cidrs))
 	copy(result, cidrs)
 
-	// Simple insertion sort (lists are small, stability guaranteed)
-	for i := 1; i < len(result); i++ {
-		cur := result[i]
-		curPrefix := prefixLen(cur)
-		j := i - 1
-		for j >= 0 && prefixLen(result[j]) < curPrefix {
-			result[j+1] = result[j]
-			j--
-		}
-		result[j+1] = cur
-	}
+	slices.SortStableFunc(result, func(a, b string) int {
+		return prefixLen(b) - prefixLen(a)
+	})
 	return result
 }
 
@@ -1730,7 +1724,6 @@ func prefixLen(cidr string) int {
 		}
 		return 32
 	}
-	var n int
-	fmt.Sscanf(cidr[idx+1:], "%d", &n)
+	n, _ := strconv.Atoi(cidr[idx+1:]) // CIDRs are validated before route installation.
 	return n
 }
