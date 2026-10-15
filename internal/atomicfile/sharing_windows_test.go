@@ -28,9 +28,9 @@ func TestAtomicPublicationWaitsForReaderSharingDelete(t *testing.T) {
 			released := make(chan struct{})
 			go func() { time.Sleep(75 * time.Millisecond); windows.CloseHandle(handle); close(released) }()
 			if rooted {
-				root, err := os.OpenRoot(dir)
-				if err != nil {
-					t.Fatal(err)
+				root, openErr := os.OpenRoot(dir)
+				if openErr != nil {
+					t.Fatal(openErr)
 				}
 				defer root.Close()
 				err = WriteInRoot(root, "settings.json", []byte("new"), 0600)
