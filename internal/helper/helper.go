@@ -373,7 +373,12 @@ type Helper struct {
 func Run(addr string, ownerUID int, ownerSID, dataDir string, restoreDesired bool) (runErr error) {
 	finished := make(chan struct{})
 	shutdownReady := make(chan func(), 1)
-	stopSignals := watchHelperSignals(shutdownReady, finished)
+	var emergencyCleanup atomic.Pointer[func()]
+	stopSignals := watchHelperSignals(shutdownReady, finished, func() {
+		if f := emergencyCleanup.Load(); f != nil {
+			(*f)()
+		}
+	})
 	defer stopSignals()
 	defer close(finished)
 
@@ -417,6 +422,20 @@ func Run(addr string, ownerUID int, ownerSID, dataDir string, restoreDesired boo
 		logLevel:        new(slog.LevelVar), // defaults to Info
 		done:            make(chan struct{}),
 	}
+	fallback := func() {
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			if err := fw.Cleanup(); err != nil {
+				slog.Warn("signal fallback: firewall cleanup failed", "error", err)
+			}
+		}()
+		go func() { defer wg.Done(); manager.RestoreDNSBestEffort() }()
+		wg.Wait()
+	}
+	emergencyCleanup.Store(&fallback)
+
 	h.dataDir = dataDir
 	// launchd restarts a crashed macOS helper on its own, so there the
 	// boot-time check alone decides. Elsewhere only the GUI respawns the
@@ -472,6 +491,7 @@ func Run(addr string, ownerUID int, ownerSID, dataDir string, restoreDesired boo
 	// persisted desired state says tunnels are wanted (helper crash-restart
 	// whose restore failed; issue #44).
 	h.monitor.SetDesiredActiveFn(h.desiredActiveFn)
+	h.restoreUserSettings()
 	h.monitor.Start()
 
 	// Register RPC handlers
@@ -519,33 +539,6 @@ func Run(addr string, ownerUID int, ownerSID, dataDir string, restoreDesired boo
 		h.handleSSIDChange(oldSSID, newSSID)
 	})
 	h.wifiMon.Start()
-
-	// Restore persisted helper-side settings so a helper restart (crash,
-	// LaunchDaemon KeepAlive, reboot, upgrade) doesn't silently drop what
-	// the user enabled. The GUI only pushes these when the user TOGGLES
-	// them in Settings (plus log level once at GUI startup), so without
-	// this a freshly-restarted headless helper ran with defaults — health
-	// check off, pin-interface off, log level Info — regardless of
-	// config.json. Kill switch / DNS protection are deliberately NOT
-	// auto-applied here: they are firewall state transitions tied to the
-	// connect path (see applyPostConnectFirewall); enabling them at boot
-	// with no tunnel up would block all traffic, which is a product
-	// decision, not a restore.
-	if settings, err := h.loadUserSettings(); err == nil {
-		h.monitor.SetHealthCheck(settings.HealthCheck)
-		if settings.PinInterface {
-			if err := h.manager.SetPinInterface(true); err != nil {
-				slog.Warn("restore pin-interface failed", "error", err)
-			}
-		}
-		if settings.LogLevel != "" {
-			h.logLevel.Set(parseLevel(settings.LogLevel))
-		}
-		slog.Info("restored persisted helper settings",
-			"health_check", settings.HealthCheck,
-			"pin_interface", settings.PinInterface,
-			"log_level", settings.LogLevel)
-	}
 
 	// Re-evaluate rules once on startup. The autoConnectedBy map is
 	// in-memory only, so a helper crash + LaunchDaemon restart loses
@@ -705,6 +698,9 @@ func (h *Helper) reconnectFn(ctx context.Context, name string) error {
 		if !h.stillCached(name) {
 			return nil // disconnected while this retry waited (issue #44)
 		}
+		if h.automaticLANConflict(cfg) {
+			return reconnect.ErrNothingToReconnect
+		}
 		if latch, ok := h.manualLatchFor(name); ok && latch.disconnected {
 			return reconnect.ErrNothingToReconnect
 		}
@@ -721,30 +717,35 @@ func (h *Helper) reconnectFn(ctx context.Context, name string) error {
 		if err := ctx.Err(); err != nil {
 			return fmt.Errorf("reconnect-all cancelled mid-loop: %w", err)
 		}
-		h.connectMu.Lock()
-		// cfgs is a snapshot from before this retry waited on connectMu.
-		// A Disconnect that ran meanwhile dropped the tunnel from
-		// activeCfgs (and may have cancelled ctx); bringing it back from
-		// the stale copy would undo the user's "off" (issue #44).
-		latch, latched := h.manualLatchFor(cfg.Name)
-		if ctx.Err() != nil || !h.stillCached(cfg.Name) || (latched && latch.disconnected) {
-			h.connectMu.Unlock()
-			continue
-		}
-		attempted++
-		var err error
-		if h.firewall.IsKillSwitchEnabled() {
-			// The monitor did not suspend the firewall this attempt (nothing
-			// was up — e.g. the previous attempt failed and resume put the
-			// base blockade back). A bare connect would run under the
-			// blockade, which drops DNS and WireGuard UDP, and nothing
-			// would ever permit the new interface. doConnectHeld lifts the
-			// blockade for the connect and rebuilds it with this tunnel.
-			err = connectUnderKillSwitch(h, cfg)
-		} else {
-			err = h.manager.ConnectWithContext(ctx, cfg)
-		}
-		h.connectMu.Unlock()
+		err := func() error {
+			h.connectMu.Lock()
+			defer h.connectMu.Unlock()
+			// cfgs is a snapshot from before this retry waited on connectMu.
+			// A Disconnect that ran meanwhile dropped the tunnel from
+			// activeCfgs (and may have cancelled ctx); bringing it back from
+			// the stale copy would undo the user's "off" (issue #44).
+			latch, latched := h.manualLatchFor(cfg.Name)
+			if ctx.Err() != nil || !h.stillCached(cfg.Name) || (latched && latch.disconnected) {
+				return nil
+			}
+			if h.automaticLANConflict(cfg) {
+				return nil
+			}
+			attempted++
+			var err error
+			if h.firewall.IsKillSwitchEnabled() {
+				// The monitor did not suspend the firewall this attempt (nothing
+				// was up — e.g. the previous attempt failed and resume put the
+				// base blockade back). A bare connect would run under the
+				// blockade, which drops DNS and WireGuard UDP, and nothing
+				// would ever permit the new interface. doConnectHeld lifts the
+				// blockade for the connect and rebuilds it with this tunnel.
+				err = connectUnderKillSwitch(h, cfg)
+			} else {
+				err = h.manager.ConnectWithContext(ctx, cfg)
+			}
+			return err
+		}()
 		// Already up (a GUI connect raced the retry) is the goal state.
 		var te *tunnel.TunnelError
 		if errors.As(err, &te) && te.Kind == tunnel.ErrAlreadyConnected {
@@ -906,7 +907,7 @@ func (h *Helper) armShutdownTimer(grace time.Duration, reason string) {
 
 	// A tunnel waiting on a restore retry is still wanted (issue #44): exit
 	// now and nothing retries it until the GUI next starts the helper.
-	if active == "" && len(h.pendingDesired) > 0 {
+	if active == "" && (len(h.pendingDesired) > 0 || len(h.activeCfgs) > 0) {
 		active = "(pending restore)"
 	}
 	if active != "" {
@@ -936,7 +937,7 @@ func (h *Helper) armShutdownTimer(grace time.Duration, reason string) {
 		// down right after a GUI attached.
 		h.mu.Lock()
 		current := h.shutdownTimer
-		pending := len(h.pendingDesired)
+		pending := len(h.pendingDesired) + len(h.activeCfgs)
 		h.mu.Unlock()
 		if current != t {
 			return
@@ -1126,4 +1127,41 @@ func (h *Helper) cleanup() {
 		h.firewall.Cleanup()
 		slog.Info("helper shutdown complete")
 	})
+}
+
+// Only automatically established intent uses the LAN conflict guard. A
+// manual On override keeps the user's explicitly imported route policy.
+func (h *Helper) automaticLANConflict(cfg *domain.WireGuardConfig) bool {
+	if l, ok := h.manualLatchFor(cfg.Name); ok && !l.disconnected {
+		return false
+	}
+	h.wifiMu.Lock()
+	_, owned := h.autoConnectedBy[cfg.Name]
+	h.wifiMu.Unlock()
+	if !owned {
+		return false
+	}
+	_, _, conflict := overlapsLocalNetwork(cfg)
+	return conflict
+}
+
+func (h *Helper) restoreUserSettings() {
+	if settings, err := h.loadUserSettings(); err == nil {
+		h.mu.Lock()
+		h.dnsProtectionWanted = settings.DNSProtection
+		h.mu.Unlock()
+		h.monitor.SetHealthCheck(settings.HealthCheck)
+		if settings.PinInterface {
+			if err := h.manager.SetPinInterface(true); err != nil {
+				slog.Warn("restore pin-interface failed", "error", err)
+			}
+		}
+		if settings.LogLevel != "" {
+			h.logLevel.Set(parseLevel(settings.LogLevel))
+		}
+		slog.Info("restored persisted helper settings",
+			"health_check", settings.HealthCheck,
+			"pin_interface", settings.PinInterface,
+			"log_level", settings.LogLevel)
+	}
 }

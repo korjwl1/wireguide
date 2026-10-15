@@ -294,7 +294,7 @@ func (h *Helper) teardownTunnelHeld(name, shutdownReason string) {
 	// LUID permitted in the WFP filters (issue #12).
 	iface := ""
 	if h.firewall.IsKillSwitchEnabled() {
-		for _, st := range h.manager.AllStatuses() {
+		for _, st := range tunnelStatuses(h) {
 			if st != nil && st.TunnelName == name && st.InterfaceName != "" {
 				iface = st.InterfaceName
 				break

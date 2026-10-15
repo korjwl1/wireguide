@@ -559,10 +559,34 @@ func (h *Helper) restoreDesiredTunnels() {
 // tunnelActive reports whether the manager currently has name connected.
 
 func (h *Helper) tunnelActive(name string) bool {
-	for _, st := range h.manager.AllStatuses() {
+	for _, st := range tunnelStatuses(h) {
 		if st != nil && st.TunnelName == name && st.State == domain.StateConnected {
 			return true
 		}
 	}
 	return false
+}
+
+// wantedTunnelNames exposes intent during transport teardown/backoff and
+// pending crash restore without misreporting disconnected tunnels as active.
+func (h *Helper) wantedTunnelNames() []string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	names := make(map[string]bool)
+	for n := range h.activeCfgs {
+		if _, blocked := h.watchdogBlocked[n]; !blocked {
+			names[n] = true
+		}
+	}
+	for n := range h.pendingDesired {
+		if _, blocked := h.watchdogBlocked[n]; !blocked {
+			names[n] = true
+		}
+	}
+	out := make([]string, 0, len(names))
+	for n := range names {
+		out = append(out, n)
+	}
+	sort.Strings(out)
+	return out
 }

@@ -108,7 +108,7 @@ func cmdStop(_ []string) int {
 
 	// A helper with no app attached and no tunnel is idle (a probe started
 	// it) and exits on its own shortly; there is nothing to stop.
-	if !appRunning(ping) && activeTunnelCount(c) == 0 {
+	if !helperWorking(ping) && activeTunnelCount(c) == 0 {
 		fmt.Println("WireGuide is not running")
 		return 0
 	}
@@ -157,7 +157,7 @@ func cmdStop(_ []string) int {
 // no GUI attached and no active tunnels. (A helper that predates GUIAttached
 // can't say, so it only counts as stopped once it stops answering.)
 func quitComplete(ping ipc.PingResponse, activeTunnels int) bool {
-	return !appRunning(ping) && activeTunnels == 0
+	return !helperWorking(ping) && activeTunnels == 0
 }
 
 // activeTunnelCount returns how many tunnels the helper has up, or -1 when it

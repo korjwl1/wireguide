@@ -18,7 +18,7 @@ var fullTunnelForcesDNSProtection = runtime.GOOS == "windows"
 // tunnelStatuses is the per-tunnel status source for DNS protection. A
 // package var so tests can present connected tunnels without real ones.
 var tunnelStatuses = func(h *Helper) []*tunnel.ConnectionStatus {
-	return h.manager.AllStatuses()
+	return h.manager.ConnectedInterfaces()
 }
 
 // DNS protection follows the tunnel set (issue #48). The system resolver is

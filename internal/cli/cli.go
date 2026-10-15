@@ -159,7 +159,7 @@ func dialHelper() (*ipc.Client, error) {
 	// outlive the app, wg-quick style) is live state the CLI must act on:
 	// delete/rename/set/disconnect all guard against exactly that tunnel.
 	// This is the same exception cmdStatus and cmdStop make.
-	if !appRunning(ping) && activeTunnelCount(c) <= 0 {
+	if !helperWorking(ping) && activeTunnelCount(c) <= 0 {
 		c.Close()
 		return nil, errAppNotRunning
 	}
@@ -256,9 +256,20 @@ func cmdStatus(args []string) int {
 	// No app attached: report "not running" like every other command — unless
 	// a tunnel is still up. The helper deliberately keeps tunnels alive after
 	// the app quits (wg-quick semantics), and hiding one would be wrong.
-	if !appRunning(ping) && len(active.Names) == 0 {
+	if !helperWorking(ping) && len(active.Names) == 0 {
 		fmt.Fprintln(os.Stderr, errAppNotRunning)
 		return 1
+	}
+	if len(active.Names) == 0 && len(ping.WantedTunnels) > 0 {
+		if jsonOut {
+			var rows []domain.ConnectionStatus
+			for _, name := range ping.WantedTunnels {
+				rows = append(rows, domain.ConnectionStatus{TunnelName: name, State: domain.StateConnecting})
+			}
+			return printJSON(rows)
+		}
+		fmt.Println("waiting to reconnect: " + strings.Join(ping.WantedTunnels, ", "))
+		return 0
 	}
 	if len(active.Names) == 0 {
 		if jsonOut {
@@ -1016,12 +1027,11 @@ func cmdDNSLeak(_ []string) int {
 		fmt.Fprintln(os.Stderr, "dnsleak: no result")
 		return 1
 	}
-	if res.Error != "" {
-		fmt.Fprintln(os.Stderr, "dnsleak:", res.Error)
-		return 1
-	}
+
 	if res.Leaked {
 		fmt.Println("LEAK: DNS queries are resolving outside the tunnel")
+	} else if res.Error != "" {
+		// No success verdict for an incomplete check.
 	} else if res.SplitMode {
 		fmt.Println("OK: split DNS resolver configuration checked (not a packet leakage test)")
 	} else {
@@ -1029,6 +1039,10 @@ func cmdDNSLeak(_ []string) int {
 	}
 	for _, srv := range res.DNSServers {
 		fmt.Printf("  resolver %s\n", srv.IP)
+	}
+	if res.Error != "" {
+		fmt.Fprintln(os.Stderr, "dnsleak:", res.Error)
+		return 1
 	}
 	if res.Leaked {
 		return 1
@@ -1065,3 +1079,7 @@ func humanBytes(n int64) string {
 	}
 	return fmt.Sprintf("%.1f%cB", float64(n)/float64(div), "KMGTPE"[exp])
 }
+
+// appRunning remains GUI-only for ctl start. Working intent also counts for
+// status/disconnect/stop, so pending recovery can always be cancelled.
+func helperWorking(p ipc.PingResponse) bool { return appRunning(p) || len(p.WantedTunnels) > 0 }

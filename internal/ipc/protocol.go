@@ -25,9 +25,11 @@ import (
 // Minor 2 added PingResponse.GUIAttached. With launchd socket activation a
 // successful dial no longer proves the app is running (the dial itself starts
 // the helper), so the CLI needs the helper to say whether a GUI is attached.
+// Minor 3 adds wanted_tunnels so pending restore/backoff remains visible to
+// CLI status/disconnect/stop even when no GUI or transport is currently up.
 const (
 	ProtocolMajor = 1
-	ProtocolMinor = 2
+	ProtocolMinor = 3
 )
 
 // ProtocolVersion is the canonical "major.minor" string used in

@@ -675,7 +675,7 @@ func (m *Monitor) reconnectWithBackoff(ctx context.Context, tunnelName string, e
 		// Suspend firewall rules before disconnect so old pf rules (which
 		// reference the old utun interface name) don't block the new
 		// connection's traffic when the interface name changes.
-		if m.fwSuspendFn != nil && !nothingUp {
+		if m.fwSuspendFn != nil && !nothingUp && (tunnelName != "" || !legacyTornDown) {
 			if err := m.fwSuspendFn(); err != nil {
 				slog.Warn("failed to suspend firewall; keeping transport for retry", "error", err)
 				m.mu.Lock()

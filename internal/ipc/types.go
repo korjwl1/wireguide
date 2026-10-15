@@ -7,10 +7,11 @@ type Empty struct{}
 
 // PingResponse is returned from Helper.Ping.
 type PingResponse struct {
-	Version     string `json:"version"`     // IPC protocol version
-	AppVersion  string `json:"app_version"` // Application version (e.g. "0.1.5")
-	PID         int    `json:"pid"`
-	GUIAttached bool   `json:"gui_attached"`
+	Version       string   `json:"version"`     // IPC protocol version
+	AppVersion    string   `json:"app_version"` // Application version (e.g. "0.1.5")
+	PID           int      `json:"pid"`
+	GUIAttached   bool     `json:"gui_attached"`
+	WantedTunnels []string `json:"wanted_tunnels,omitempty"`
 }
 
 // GUIKnown distinguishes absent metadata in older helpers.

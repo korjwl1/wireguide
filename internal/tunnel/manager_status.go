@@ -282,3 +282,19 @@ func (m *Manager) activeTunnelNamesLocked() []string {
 	sort.Strings(names)
 	return names
 }
+
+// ConnectedInterfaces returns lifecycle-owned state for firewall decisions.
+// UAPI telemetry failures do not change whether the engine/interface exists.
+func (m *Manager) ConnectedInterfaces() []*ConnectionStatus {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var out []*ConnectionStatus
+	for name, e := range m.tunnels {
+		if e.state != domain.StateConnected || e.engine == nil {
+			continue
+		}
+		out = append(out, &ConnectionStatus{State: domain.StateConnected, TunnelName: name, InterfaceName: e.engine.InterfaceName()})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].TunnelName < out[j].TunnelName })
+	return out
+}
