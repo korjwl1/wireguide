@@ -254,6 +254,17 @@ func (m *Manager) Connect(cfg *domain.WireGuardConfig) error {
 	return m.ConnectWithContext(context.Background(), cfg)
 }
 
+// PreflightConnect checks platform capabilities without creating an interface
+// or changing network state. Call before temporarily relaxing a kill switch.
+func (m *Manager) PreflightConnect(cfg *domain.WireGuardConfig) error {
+	if validator, ok := m.netMgrFactory().(interface{ ValidateDNSConfig([]string) error }); ok {
+		if err := validator.ValidateDNSConfig(cfg.Interface.DNS); err != nil {
+			return newTunnelError(ErrNetwork, "validating DNS support", err)
+		}
+	}
+	return nil
+}
+
 // ConnectWithContext is Connect with cancellation. The ctx is checked at every
 // phase boundary; in-flight kernel/exec operations inside connectPhases honour
 // their own cmdTimeout, so the worst-case latency for a cancellation landing

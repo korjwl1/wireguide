@@ -235,6 +235,9 @@ func (h *Helper) handleRename(params json.RawMessage) (interface{}, error) {
 // monitor sees the config during Connect), then rolls back on failure.
 // Caller MUST hold h.connectMu.
 func (h *Helper) doConnectHeld(cfg *domain.WireGuardConfig) error {
+	if err := h.manager.PreflightConnect(cfg); err != nil {
+		return err
+	}
 	// A firewall cannot permit a not-yet-created tunnel interface, and a
 	// pre-enabled base kill switch deliberately blocks DNS and WireGuard UDP.
 	// This applies equally to nftables, PF, and WFP (and is fatal before Engine
