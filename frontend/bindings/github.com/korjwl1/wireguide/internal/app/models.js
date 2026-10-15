@@ -245,6 +245,38 @@ export class KnownSSIDs {
 }
 
 /**
+ * ProfileMutationResult reports a committed profile change whose auxiliary
+ * automation update failed. Callers must refresh the profile and show Warning.
+ */
+export class ProfileMutationResult {
+    /**
+     * Creates a new ProfileMutationResult instance.
+     * @param {Partial<ProfileMutationResult>} [$$source = {}] - The source object to create the ProfileMutationResult.
+     */
+    constructor($$source = {}) {
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {string | undefined}
+             */
+            this["warning"] = undefined;
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new ProfileMutationResult instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {ProfileMutationResult}
+     */
+    static createFrom($$source = {}) {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new ProfileMutationResult(/** @type {Partial<ProfileMutationResult>} */($$parsedSource));
+    }
+}
+
+/**
  * RouteEntry mirrors diag.RouteEntry for Wails JSON serialisation.
  */
 export class RouteEntry {
@@ -293,6 +325,129 @@ export class RouteEntry {
     static createFrom($$source = {}) {
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         return new RouteEntry(/** @type {Partial<RouteEntry>} */($$parsedSource));
+    }
+}
+
+/**
+ * SettingsPatch owns only explicitly changed preferences. Automation has its
+ * own per-tunnel API and cannot be resurrected by a stale settings window.
+ */
+export class SettingsPatch {
+    /**
+     * Creates a new SettingsPatch instance.
+     * @param {Partial<SettingsPatch>} [$$source = {}] - The source object to create the SettingsPatch.
+     */
+    constructor($$source = {}) {
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {string | null | undefined}
+             */
+            this["language"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {string | null | undefined}
+             */
+            this["theme"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {string | null | undefined}
+             */
+            this["tray_icon_style"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {boolean | null | undefined}
+             */
+            this["auto_start"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {boolean | null | undefined}
+             */
+            this["kill_switch"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {boolean | null | undefined}
+             */
+            this["dns_protection"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {boolean | null | undefined}
+             */
+            this["health_check"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {boolean | null | undefined}
+             */
+            this["pin_interface"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {string | null | undefined}
+             */
+            this["log_level"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {boolean | null | undefined}
+             */
+            this["auto_update_check"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {boolean | null | undefined}
+             */
+            this["compact_list"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {string | null | undefined}
+             */
+            this["list_sort"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {boolean | null | undefined}
+             */
+            this["list_active_on_top"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {number | null | undefined}
+             */
+            this["list_pane_width"] = undefined;
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new SettingsPatch instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {SettingsPatch}
+     */
+    static createFrom($$source = {}) {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new SettingsPatch(/** @type {Partial<SettingsPatch>} */($$parsedSource));
     }
 }
 

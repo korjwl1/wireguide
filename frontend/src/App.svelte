@@ -1,4 +1,7 @@
 <script>
+ import { modal, backdrop } from './lib/modal.js';
+  import { loadSettings, settingsErrors } from './stores/settings.js';
+  import { connectedTunnelNames, tunnelState } from './lib/tunnel-state.js';
   import { onMount, onDestroy } from 'svelte';
   import { Events } from '@wailsio/runtime';
   import TunnelList from './lib/TunnelList.svelte';
@@ -76,7 +79,7 @@
   // externally (the CLI) — every set is idempotent, so re-applying our own
   // writes is harmless.
   async function applySettingsToUI() {
-    const s = await TunnelService.GetSettings();
+    const s = await loadSettings(TunnelService);
     applyTheme(s?.theme || 'system');
     compactList.set(s?.compact_list ?? false);
     listSort.set(s?.list_sort || 'name_asc');
@@ -160,7 +163,7 @@
         } else if (/\.(png|jpe?g|webp)$/.test(lower)) {
           await importQRFromPath(path);
         } else {
-          showToast('Only .conf, .zip, and QR image files are supported');
+          showToast($t('app.supported_imports'));
         }
       }
     });
@@ -169,9 +172,9 @@
     appEvents.on('helper', (event) => {
       const { alive, message } = event.data || {};
       if (!alive) {
-        showToast('⚠ ' + (message || 'Helper process disconnected'));
+        showToast('⚠ ' + (message || $t('app.helper_disconnected')));
       } else {
-        showToast('Helper reconnected');
+        showToast($t('app.helper_reconnected'));
       }
     });
 
@@ -219,7 +222,7 @@
     // It won't come back by itself, so say why it went down.
     appEvents.on('forced_disconnect', (event) => {
       const { tunnel_name, reason } = event.data || {};
-      showToast(`⚠ ${tunnel_name || 'Tunnel'} disconnected: ${reason || 'forced by the helper'}`, 10000);
+      showToast($t('app.forced_disconnect', {name: tunnel_name || $t('app.tunnel'), reason: reason || $t('app.helper_forced')}), 10000);
     });
 
     // External config.json / tunnel-file changes (the CLI) — reflect them
@@ -286,7 +289,7 @@
       const results = await TunnelService.ImportZip(path);
       showZipResults(results);
     } catch (e) {
-      showToast('Import failed: ' + errText(e));
+      showToast($t('app.import_failed') + ': ' + errText(e));
     }
   }
 
@@ -298,7 +301,7 @@
       const results = await TunnelService.ImportZipData(data);
       showZipResults(results);
     } catch (e) {
-      showToast('Import failed: ' + errText(e));
+      showToast($t('app.import_failed') + ': ' + errText(e));
     }
   }
 
@@ -308,16 +311,16 @@
       const content = await TunnelService.ReadFile(path);
       const errors = await TunnelService.ValidateConfig(content);
       if (errors && errors.length > 0) {
-        showToast('Invalid config: ' + errors[0]);
+        showToast($t('app.invalid_config') + ': ' + errors[0]);
         return;
       }
       const baseName = await TunnelService.BaseName(path);
       const name = await uniqueName(baseName);
       await TunnelService.ImportConfig(name, content);
-      showToast(`Imported "${name}"`);
+      showToast($t('app.imported', {name}));
       await refreshTunnels(TunnelService);
     } catch (e) {
-      showToast("Import failed: " + errText(e));
+      showToast($t('app.import_failed') + ': ' + errText(e));
     }
   }
 
@@ -329,10 +332,10 @@
       const baseName = await TunnelService.BaseName(path);
       const name = await uniqueName(baseName || 'tunnel');
       await TunnelService.ImportQRFromPath(path, name);
-      showToast(`Imported "${name}"`);
+      showToast($t('app.imported', {name}));
       await refreshTunnels(TunnelService);
     } catch (e) {
-      showToast('QR import failed: ' + errText(e));
+      showToast($t('app.qr_import_failed') + ': ' + errText(e));
     }
   }
 
@@ -344,10 +347,10 @@
       const baseName = file.name.replace(/\.[^.]+$/, '') || 'tunnel';
       const name = await uniqueName(baseName);
       await TunnelService.ImportQRFromBytes(data, name);
-      showToast(`Imported "${name}"`);
+      showToast($t('app.imported', {name}));
       await refreshTunnels(TunnelService);
     } catch (e) {
-      showToast('QR import failed: ' + errText(e));
+      showToast($t('app.qr_import_failed') + ': ' + errText(e));
     }
   }
 
@@ -360,15 +363,15 @@
       const content = await file.text();
       const errors = await TunnelService.ValidateConfig(content);
       if (errors && errors.length > 0) {
-        showToast('Invalid config: ' + errors[0]);
+        showToast($t('app.invalid_config') + ': ' + errors[0]);
         return;
       }
       const name = await uniqueName(baseName);
       await TunnelService.ImportConfig(name, content);
-      showToast(`Imported "${name}"`);
+      showToast($t('app.imported', {name}));
       await refreshTunnels(TunnelService);
     } catch (e) {
-      showToast("Import failed: " + errText(e));
+      showToast($t('app.import_failed') + ': ' + errText(e));
     }
   }
 
@@ -464,7 +467,7 @@
       // Surface the failure as a toast so the user knows why the
       // editor didn't open. Silently console.error'ing left them
       // clicking Edit repeatedly with no feedback.
-      showToast(`Edit failed: ${errText(err)}`);
+      showToast($t('app.edit_failed') + ': ' + errText(err));
     }
   }
 
@@ -494,7 +497,8 @@
       } else {
         const renamed = saveName !== originalName;
         if (renamed) {
-          await TunnelService.RenameTunnel(originalName, saveName);
+          const result = await TunnelService.RenameTunnel(originalName, saveName);
+          if (result?.warning) showToast($t('app.profile_rules_warning') + ': ' + result.warning, 10000);
         }
         try {
           await TunnelService.UpdateConfig(saveName, saveContent);
@@ -507,9 +511,10 @@
           // genuinely-broken state.
           if (renamed) {
             try {
-              await TunnelService.RenameTunnel(saveName, originalName);
+              const result = await TunnelService.RenameTunnel(saveName, originalName);
+              if (result?.warning) showToast($t('app.profile_rules_warning') + ': ' + result.warning, 10000);
             } catch (rollbackErr) {
-              showToast(`Rename rollback failed: ${errText(rollbackErr)}`);
+              showToast($t('app.rename_rollback_failed') + ': ' + errText(rollbackErr));
             }
           }
           throw err;
@@ -534,10 +539,10 @@
     try {
       const path = await TunnelService.ExportTunnel(name);
       if (path) {
-        showToast(`Exported to ${path}`);
+        showToast($t('app.exported', {path}));
       }
     } catch (err) {
-      showToast('Export failed: ' + err.toString());
+      showToast($t('app.export_failed') + ': ' + err.toString());
     }
   }
 
@@ -545,7 +550,7 @@
   // Called after any successful connect (manual or auto).
   async function applyFirewallSettings() {
     try {
-      const s = await TunnelService.GetSettings();
+      const s = await loadSettings(TunnelService);
       if (s?.kill_switch) await TunnelService.SetKillSwitch(true);
       if (s?.dns_protection) await TunnelService.SetDNSProtection(true);
     } catch (e) {
@@ -561,7 +566,7 @@
       await refreshStatus(TunnelService);
       await applyFirewallSettings();
     } catch (e) {
-      showToast("Connect failed: " + errText(e));
+      showToast($t('app.connect_failed') + ': ' + errText(e));
     }
   }
 
@@ -602,7 +607,7 @@
     try {
       await TunnelService.RunUpdate(updateInfo);
     } catch (e) {
-      showToast('Update failed: ' + (e?.message || e));
+      showToast($t('update.install_failed') + ': ' + (e?.message || e));
       // Rethrow: modal-context callers (Settings → About, the banner)
       // render the failure inline — a toast alone can sit underneath an
       // open modal where it is never seen.
@@ -647,16 +652,23 @@
 
   {#if criticalErrors.length > 0}
     <div class="critical-banner" role="alert">
-      <div class="critical-banner-title">⚠ Helper subsystem failure</div>
+      <div class="critical-banner-title">⚠ {$t('app.helper_subsystem_failure')}</div>
       {#each criticalErrors as e, i}
         <div class="critical-banner-row">
           <span class="critical-banner-where">{e.where}</span>
           <span class="critical-banner-detail">{e.detail}</span>
           <span class="critical-banner-time">{e.at}</span>
-          <button class="critical-banner-close" on:click={() => dismissCriticalError(i)} aria-label="Dismiss">×</button>
+          <button class="critical-banner-close" on:click={() => dismissCriticalError(i)} aria-label={$t('app.dismiss')}>×</button>
         </div>
       {/each}
-      <div class="critical-banner-hint">Restart the app to recover the affected subsystem.</div>
+      <div class="critical-banner-hint">{$t('app.helper_restart_hint')}</div>
+    </div>
+  {/if}
+
+  {#if !showSettings && Object.keys($settingsErrors).length > 0}
+    <div class="critical-banner" role="alert">
+      <span>{$t('settings.save_failed')}</span>
+      <button class="btn btn-secondary" on:click={() => showSettings = true}>{$t('nav.settings')}</button>
     </div>
   {/if}
 
@@ -676,8 +688,8 @@
             <Icon name="shield" size={15} strokeWidth={2} />
           </span>
           <span class="nav-label">{$t('nav.tunnels')}</span>
-          {#if ($connectionStatus?.active_tunnels || []).length > 0}
-            <span class="nav-badge">{($connectionStatus.active_tunnels).length}</span>
+          {#if connectedTunnelNames($connectionStatus).length > 0}
+            <span class="nav-badge">{connectedTunnelNames($connectionStatus).length}</span>
           {/if}
         </button>
         <button class="nav-item" class:active={currentView === 'history'} on:click={() => currentView = 'history'}>
@@ -736,15 +748,22 @@
           </div>
           <div class="pane-resizer" class:resizing
             on:mousedown={onResizeStart} on:dblclick={onResizeReset}
-            role="separator" aria-orientation="vertical" title="Drag to resize · double-click to reset"></div>
+            role="slider" aria-label={$t('settings.list_width')} tabindex="0" aria-orientation="vertical" aria-valuemin={LIST_PANE_MIN} aria-valuemax={LIST_PANE_MAX} aria-valuenow={$listPaneWidth}
+            on:keydown={(e) => {
+              if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+                e.preventDefault();
+                listPaneWidth.set(Math.min(LIST_PANE_MAX, Math.max(LIST_PANE_MIN, $listPaneWidth + (e.key === 'ArrowRight' ? 10 : -10))));
+                saveListPrefs();
+              } else if (e.key === 'Home') { e.preventDefault(); onResizeReset(); }
+            }} title="Drag to resize · double-click to reset"></div>
           <div class="tunnel-detail-pane">
             {#if $selectedTunnel}
               <TunnelDetail {TunnelService}
-                on:edit={handleEdit}
+                on:warning={(event) => showToast(event.detail, 10000)} on:edit={handleEdit}
                 on:export={handleExport}
                 on:connect={handleConnect}
                 on:refresh={handleRefresh} />
-              {#if $connectionStatus?.state === 'connected' && $connectionStatus?.tunnel_name === $selectedTunnel?.name}
+              {#if tunnelState($connectionStatus, $selectedTunnel?.name) === 'connected'}
                 <div class="stats-section">
                   <StatsDashboard />
                 </div>
@@ -795,8 +814,8 @@
 
   <!-- Modals -->
   {#if showEditor}
-    <div class="modal-backdrop" on:click={() => showEditor = false}>
-      <div class="modal modal-editor" on:click|stopPropagation
+    <div class="modal-backdrop" use:backdrop={() => showEditor = false}>
+      <div class="modal modal-editor" use:modal={() => showEditor = false} tabindex="-1"
         role="dialog" aria-modal="true"
         aria-label={editorIsNew ? $t('tunnel.new_tunnel') : $t('tunnel.edit')}>
         <ConfigEditor
@@ -823,8 +842,8 @@
   {/if}
 
   {#if showZipResult}
-    <div class="modal-backdrop" on:click={() => showZipResult = false}>
-      <div class="modal modal-zip-result" on:click|stopPropagation
+    <div class="modal-backdrop" use:backdrop={() => showZipResult = false}>
+      <div class="modal modal-zip-result" use:modal={() => showZipResult = false} tabindex="-1"
         role="dialog" aria-modal="true" aria-labelledby="zip-result-title">
         <h3 id="zip-result-title">{$t('import.zip_result_title')}</h3>
         <div class="zip-result-list">

@@ -1,4 +1,5 @@
 <script>
+ import { modal, backdrop } from './modal.js';
   import { onDestroy, onMount } from 'svelte';
   import { Events } from '@wailsio/runtime';
   import { t } from '../i18n/index.js';
@@ -51,7 +52,7 @@
       if (onInstall) await onInstall();
       // RunUpdate verifies the installed version and schedules the restart.
     } catch (e) {
-      errorMsg = ($t('update.install_failed') || 'Update failed') + ': ' + (e?.message || e);
+      errorMsg = $t('update.install_failed') + ': ' + (e?.message || e);
     } finally {
       installing = false;
       phase = '';
@@ -100,8 +101,8 @@
 {/if}
 
 {#if showConfirm}
-  <div class="popup-backdrop" on:mousedown|self={() => showConfirm = false}>
-    <div class="popup" on:mousedown|stopPropagation role="dialog" aria-modal="true">
+  <div class="popup-backdrop" use:backdrop={() => showConfirm = false}>
+    <div class="popup" use:modal={() => showConfirm = false} tabindex="-1" role="dialog" aria-label={$t('update.confirm_title')} aria-modal="true">
       <h3>{$t('update.confirm_title')}</h3>
       <p class="confirm-msg">{$t('update.vpn_warning')}</p>
       <div class="popup-actions">

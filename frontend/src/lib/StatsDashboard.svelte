@@ -1,8 +1,12 @@
 <script>
   import { onMount, onDestroy } from 'svelte';
-  import { connectionStatus } from '../stores/tunnels.js';
+  import { connectionStatus, selectedTunnel } from '../stores/tunnels.js';
+  import { tunnelStatus } from './tunnel-state.js';
   import { resolvedTheme } from '../stores/theme.js';
   import { t } from '../i18n/index.js';
+
+  $: status = tunnelStatus($connectionStatus, $selectedTunnel?.name);
+  let sampleIdentity = "";
 
   let canvas;
   let ctx;
@@ -67,10 +71,12 @@
   // samplesVersion increments so Svelte's
   // reference-equality check on the reactive statement fires — without
   // that the same store value would suppress the re-render.
-  $: if ($connectionStatus?.state === 'connected') {
+  $: if (status?.state === 'connected') {
+    const identity = status.tunnel_name + ':' + status.interface_name;
+    if (identity !== sampleIdentity) { samplesHead = 0; samplesCount = 0; sampleIdentity = identity; }
     samplesBuf[samplesHead] = {
-      rx: $connectionStatus.rx_bytes || 0,
-      tx: $connectionStatus.tx_bytes || 0,
+      rx: status.rx_bytes || 0,
+      tx: status.tx_bytes || 0,
       time: Date.now(),
     };
     samplesHead = (samplesHead + 1) % maxSamples;

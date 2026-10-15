@@ -1,4 +1,5 @@
 import { writable, get } from 'svelte/store';
+import { patchSettings } from './settings.js';
 import { TunnelService } from '../../bindings/github.com/korjwl1/wireguide/internal/app';
 
 // Shared UI view-state, mirrored from persisted Settings. App.onMount
@@ -20,18 +21,13 @@ export const listPaneWidth = writable(LIST_PANE_DEFAULT);
 
 let saveTimer = null;
 
-// saveListPrefs persists the list-ordering prefs. It re-fetches the
-// freshest settings and overlays only its own fields (the same
-// spread-fresh pattern TunnelDetail uses for wifi_rules) so it never
-// clobbers edits another screen made to settings.json. Debounced.
+// Persist only list preferences; the backend merges them under its file lock.
 export function saveListPrefs() {
   if (saveTimer) clearTimeout(saveTimer);
   saveTimer = setTimeout(async () => {
     saveTimer = null;
     try {
-      const fresh = await TunnelService.GetSettings();
-      await TunnelService.SaveSettings({
-        ...fresh,
+      await patchSettings(TunnelService, {
         list_sort: get(listSort),
         list_active_on_top: get(listActiveOnTop),
         list_pane_width: Math.round(get(listPaneWidth)),

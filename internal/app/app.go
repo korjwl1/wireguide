@@ -111,6 +111,9 @@ var errHelperUnavailable = fmt.Errorf("helper connection not available")
 // been closed — this prevents nil-pointer panics in the narrow window
 // between doShutdown() and Wails app termination.
 func (s *TunnelService) call(method string, params interface{}, result interface{}) error {
+	if s.clients == nil {
+		return errHelperUnavailable
+	}
 	c := s.clients.Get()
 	if c == nil {
 		return errHelperUnavailable

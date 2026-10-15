@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/korjwl1/wireguide/internal/automation"
-	"github.com/korjwl1/wireguide/internal/autostart"
 	"github.com/korjwl1/wireguide/internal/ipc"
 	"github.com/korjwl1/wireguide/internal/storage"
 	"github.com/korjwl1/wireguide/internal/update"
@@ -128,58 +127,6 @@ func (s *TunnelService) GetSettings() (*storage.Settings, error) {
 		settings.EnsureAutomation()
 	}
 	return settings, nil
-}
-
-// SaveSettings persists the settings file AND applies any side effects:
-// currently, pushing the new log level to both the GUI's slog handler and
-// the helper's slog handler. Without those side effects a user lowering the
-// level to Debug wouldn't see any new records — the saved file would match
-// the UI but the running process would still be at Info.
-func (s *TunnelService) SaveSettings(settings *storage.Settings) error {
-	// Read the previous state first so we only (un)install the autostart
-	// entry when the user actually toggles it. This avoids rewriting the
-	// LaunchAgent plist / desktop file on every unrelated setting change.
-	prev, _ := s.settingsStore.Load()
-
-	if err := s.settingsStore.Save(settings); err != nil {
-		return err
-	}
-
-	if prev == nil || prev.AutoStart != settings.AutoStart {
-		if settings.AutoStart {
-			exe, err := os.Executable()
-			if err != nil {
-				return fmt.Errorf("autostart: cannot resolve exe path: %w", err)
-			}
-			if err := autostart.InstallAutostart(exe); err != nil {
-				return fmt.Errorf("autostart: install failed: %w", err)
-			}
-		} else {
-			if err := autostart.RemoveAutostart(); err != nil && !os.IsNotExist(err) {
-				return fmt.Errorf("autostart: remove failed: %w", err)
-			}
-		}
-	}
-	if settings.LogLevel != "" {
-		if fn := getGUILogLevelSetter(); fn != nil {
-			fn(settings.LogLevel)
-		}
-		// Best-effort: the helper may be unreachable during shutdown, and
-		// the level change is not critical to Save succeeding.
-		_ = s.call(ipc.MethodSetLogLevel, ipc.SetLogLevelRequest{Level: settings.LogLevel}, nil)
-	}
-
-	// Auto-update toggle OFF→ON: nudge the scheduler so the user doesn't
-	// have to wait up to 24 h for the next regular tick. The force flag
-	// on Kick bypasses the focusRecheckThreshold gate (we *want* to
-	// re-check immediately after the user opts back in, regardless of
-	// when the last check ran). OFF→OFF, ON→ON, and ON→OFF all skip.
-	prevEnabled := prev == nil || prev.AutoUpdateCheckEnabled()
-	if !prevEnabled && settings.AutoUpdateCheckEnabled() && s.updateScheduler != nil {
-		s.updateScheduler.Kick(true)
-	}
-
-	return nil
 }
 
 // SaveAutomationRules atomically replaces one tunnel's Automation rules.

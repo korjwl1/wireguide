@@ -1,23 +1,21 @@
 <script>
-  // Per-tunnel Automation rule editor (issue #12). Each rule is an
-  // ordered condition→action: on a matching network the tunnel is
-  // connected or disconnected. Connect and disconnect conditions are set
-  // independently (just add rules with the action you want). Persisted to
-  // Settings.automation.per_tunnel_rules[tunnelName]; the whole settings
-  // object is re-fetched and spread on save so other screens' edits (and
-  // other tunnels' rules) are never clobbered.
+ import { modal, backdrop } from './modal.js';
+  // Ordered per-tunnel rules are saved through the scoped backend API.
   import { afterUpdate, onMount, onDestroy } from 'svelte';
   import { Events } from '@wailsio/runtime';
   import Icon from './Icon.svelte';
   import { t } from '../i18n/index.js';
   import { errText } from './errors.js';
   import SSIDPermissionBanner from './SSIDPermissionBanner.svelte';
+  import { loadSettings } from '../stores/settings.js';
 
   export let TunnelService;
   export let tunnelName = '';
   export let open = false;
 
   let rules = [];
+  let rulesLoaded = false;
+  let loadError = "";
   // Local-only row identity for the {#each} key; never persisted
   // (persistSet() rebuilds plain objects). Monotonic and never reset, so
   // keys stay unique across loads. Note this does NOT preserve DOM across
@@ -48,9 +46,11 @@
     // Persist any pending edit for the tunnel we're leaving BEFORE we
     // overwrite `rules`, so switching tunnels never drops the last change.
     await flush();
+    rulesLoaded = false;
+    loadError = '';
     saveError = '';
     try {
-      const s = await TunnelService.GetSettings();
+      const s = await loadSettings(TunnelService);
       if (gen !== loadGen) return; // a newer load superseded this one
       const per = { ...(s?.automation?.per_tunnel_rules || {}), ...(s?.automation?.per_tunnel_rules_v2 || {}) };
       // Deep-copy so edits don't mutate the fetched object before save.
@@ -74,8 +74,9 @@
         row._committed = cleanedRule(row);
         return row;
       });
+      rulesLoaded = true;
     } catch (e) {
-      if (gen === loadGen) rules = [];
+      if (gen === loadGen) { rules = []; rulesLoaded = false; loadError = errText(e); }
       console.error('automation load:', e);
     }
     try {
@@ -98,6 +99,7 @@
 
   const MAX_RULES = 50;
   function addRule() {
+    if (!rulesLoaded) return;
     if (rules.length >= MAX_RULES) return;
     // No save() here: a blank draft is not a configuration change — it
     // becomes persistable on the first input that completes it. Saving
@@ -229,7 +231,20 @@
   let pending = null;             // { name, rules } snapshot to persist
   let saveChain = Promise.resolve();
 
+  function moveRuleByKey(event, index) {
+    const offset = event.key === 'ArrowUp' ? -1 : event.key === 'ArrowDown' ? 1 : 0;
+    if (!offset) return;
+    event.preventDefault();
+    const destination = index + offset;
+    if (destination < 0 || destination >= rules.length) return;
+    const next = [...rules];
+    [next[index], next[destination]] = [next[destination], next[index]];
+    rules = next;
+    save();
+  }
+
   function save() {
+    if (!rulesLoaded || loadError) return;
     pending = { name: tunnelName, rules: persistSet() };
     if (saveTimer) clearTimeout(saveTimer);
     saveTimer = setTimeout(runSave, 300);
@@ -322,7 +337,7 @@
       if (!name || busy()) return;
       try {
         await saveChain; // let an in-flight persist settle before comparing
-        const s = await TunnelService.GetSettings();
+        const s = await loadSettings(TunnelService);
         if (busy()) return; // state moved while we awaited
         const disk = ({ ...(s?.automation?.per_tunnel_rules || {}), ...(s?.automation?.per_tunnel_rules_v2 || {}) })[name] || [];
         if (!diskDiffers(disk)) return;
@@ -341,8 +356,8 @@
 </script>
 
 {#if open}
-  <div class="am-backdrop" on:click={close}>
-    <div class="am-dialog" on:click|stopPropagation role="dialog" aria-modal="true" aria-label={$t('automation.title')}>
+  <div class="am-backdrop" use:backdrop={close}>
+    <div class="am-dialog" use:modal={close} tabindex="-1" role="dialog" aria-modal="true" aria-label={$t('automation.title')}>
       <div class="am-header">
         <div class="am-icon"><Icon name="wifi" size={18} strokeWidth={2} /></div>
         <div class="am-header-text">
@@ -355,6 +370,8 @@
 
       <SSIDPermissionBanner {TunnelService} />
 
+      {#if loadError}<div class="am-error" role="alert">{$t('settings.load_failed')} {loadError}<button class="btn btn-secondary" on:click={() => load(tunnelName)}>{$t('settings.retry')}</button></div>{/if}
+      <fieldset class="am-fields" disabled={!rulesLoaded}>
       <div class="am-rules-wrap">
         <div class="am-fade am-fade-top" class:show={canScrollUp}>
           <span class="am-chevron am-chevron-up"><Icon name="chevron-down" size={15} strokeWidth={2.5} /></span>
@@ -364,11 +381,11 @@
           <div class="am-empty">{$t('automation.empty')}</div>
         {:else}
           {#each rules as rule, i (rule._id)}
-            <div class="am-rule" class:am-dragging={dragIndex === i}
+            <div class="am-rule" role="group" class:am-dragging={dragIndex === i}
               on:dragover={(e) => onRowDragOver(e, i)}
               on:dragend={onDragEnd}>
-              <span class="am-handle" draggable="true" title={$t('automation.drag_hint')}
-                on:dragstart={(e) => onDragStart(e, i)}>⋮⋮</span>
+              <button type="button" class="am-handle" aria-label={$t('automation.drag_hint')} on:keydown={(e) => moveRuleByKey(e, i)} draggable="true" title={$t('automation.drag_hint')}
+                on:dragstart={(e) => onDragStart(e, i)}>⋮⋮</button>
               <span class="am-priority">{i + 1}</span>
               <select class="am-do" bind:value={rule.do} on:change={save} aria-label={$t('automation.action')}>
                 <option value="connect">{$t('automation.connect')}</option>
@@ -436,14 +453,16 @@
 
       {#if saveError}<div class="am-error">{saveError}</div>{/if}
 
-      <button class="am-add" on:click={addRule} disabled={rules.length >= MAX_RULES}>
+      <button class="am-add" on:click={addRule} disabled={!rulesLoaded || rules.length >= MAX_RULES}>
         <Icon name="plus" size={13} strokeWidth={2.25} /> {$t('automation.add_rule')}
       </button>
+      </fieldset>
     </div>
   </div>
 {/if}
 
 <style>
+  .am-fields { border: 0; padding: 0; margin: 0; min-width: 0; display: flex; flex-direction: column; flex: 1; min-height: 0; }
   .am-backdrop {
     position: fixed; inset: 0; z-index: 1000;
     background: color-mix(in srgb, #000 45%, transparent);

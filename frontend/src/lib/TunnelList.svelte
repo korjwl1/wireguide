@@ -1,6 +1,7 @@
 <script>
   import { createEventDispatcher } from 'svelte';
   import Icon from './Icon.svelte';
+  import { connectedTunnelNames, tunnelState } from './tunnel-state.js';
   import { tunnels, selectedTunnel, connectionStatus } from '../stores/tunnels.js';
   import { compactList, listSort, listActiveOnTop, saveListPrefs } from '../stores/ui.js';
   import { t } from '../i18n/index.js';
@@ -12,8 +13,8 @@
     tun.name.toLowerCase().includes(search.toLowerCase())
   );
 
-  // Connected indicators from active_tunnels array (multi-tunnel aware).
-  $: activeSet = new Set($connectionStatus?.active_tunnels || []);
+  // Connected indicators exclude setup and teardown intent.
+  $: activeSet = new Set(connectedTunnelNames($connectionStatus));
 
   // Sorted view. Array.sort is stable, so sorting by the chosen key first
   // and then stably floating active tunnels keeps key order within groups.
@@ -125,7 +126,7 @@
         >
           <span class="status-dot"
             class:on={activeSet.has(tun.name) && tunnelHandshakes[tun.name]}
-            class:warning={activeSet.has(tun.name) && !tunnelHandshakes[tun.name]}></span>
+            class:warning={(activeSet.has(tun.name) && !tunnelHandshakes[tun.name]) || ["connecting", "disconnecting"].includes(tunnelState($connectionStatus, tun.name))}></span>
           <div class="tunnel-text">
             <span class="tunnel-name">{tun.name}</span>
             {#if tun.endpoint}

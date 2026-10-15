@@ -4,7 +4,27 @@
     "disconnected": "Disconnected",
     "connecting": "Connecting...",
     "connected": "Connected",
-    "no_handshake": "No Handshake"
+    "no_handshake": "No Handshake",
+    "disconnecting": "Disconnecting...",
+    "profile_rules_warning": "Profile changed, but automation rules could not be updated. Check the rules before reconnecting.",
+    "supported_imports": "Only .conf, .zip, and QR image files are supported",
+    "helper_disconnected": "Helper process disconnected",
+    "helper_reconnected": "Helper reconnected",
+    "import_failed": "Import failed",
+    "qr_import_failed": "QR import failed",
+    "invalid_config": "Invalid config",
+    "imported": "Imported “{name}”",
+    "edit_failed": "Edit failed",
+    "rename_rollback_failed": "Rename rollback failed",
+    "exported": "Exported to {path}",
+    "export_failed": "Export failed",
+    "connect_failed": "Connect failed",
+    "helper_subsystem_failure": "Helper subsystem failure",
+    "dismiss": "Dismiss",
+    "helper_restart_hint": "Restart the app to recover the affected subsystem.",
+    "forced_disconnect": "⚠ {name} disconnected: {reason}",
+    "tunnel": "Tunnel",
+    "helper_forced": "forced by the helper"
   },
   "nav": {
     "tunnels": "Tunnels",
@@ -133,11 +153,15 @@
     "auto_update_check_hint": "When on, WireGuide checks GitHub once a day (with jitter and conditional GETs so it never wastes the public API quota).",
     "section_security": "Security",
     "section_connection": "Connection",
-    "section_logging": "Logging"
+    "section_logging": "Logging",
+    "load_failed": "Could not load settings. Editing is disabled.",
+    "save_failed": "The setting could not be saved or applied. Retry the change.",
+    "retry": "Retry",
+    "list_width": "Tunnel list width"
   },
   "confirm": {
     "delete_title": "Delete Tunnel",
-    "delete_message": "Are you sure you want to delete \"{name}\"?",
+    "delete_message": "Delete “{name}”? Pending reconnection and recovery will also be cancelled.",
     "yes": "Delete",
     "no": "Cancel",
     "disconnect_first": "Disconnect the tunnel first"

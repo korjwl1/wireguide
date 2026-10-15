@@ -1,4 +1,6 @@
 <script>
+ import { modal, backdrop } from './modal.js';
+  import { tunnelState, tunnelStatus } from './tunnel-state.js';
   import { tunnels, selectedTunnel, connectionStatus, refreshTunnels, refreshStatus } from '../stores/tunnels.js';
   import Icon from './Icon.svelte';
   import { t } from '../i18n/index.js';
@@ -225,32 +227,22 @@
     }
   });
 
-  // Single source of truth for "is this tunnel currently active?" —
-  // combine the selected-tunnel flag with the live connection status so the
-  // UI can't show a stale "connected" chip briefly after disconnect.
-  $: isConnected = $selectedTunnel?.is_connected
-    && ($connectionStatus?.active_tunnels || []).includes($selectedTunnel?.name);
-  $: isConnecting = !isConnected
-    && $connectionStatus?.state === 'connecting'
-    && $connectionStatus?.tunnel_name === $selectedTunnel?.name;
-  $: noHandshake = isConnected && !status?.last_handshake;
-  // Use the primary status if it matches the selected tunnel (has full stats).
-  // Otherwise fall back to the lightweight per-tunnel info from the tunnels array
-  // (name + state + handshake only, no rx/tx/duration).
-  $: status = (() => {
-    if ($connectionStatus?.tunnel_name === $selectedTunnel?.name) {
-      return $connectionStatus;
-    }
-    const tunnels = $connectionStatus?.tunnels || [];
-    const match = tunnels.find(t => t.tunnel_name === $selectedTunnel?.name);
-    return match || $connectionStatus;
-  })();
+  $: state = tunnelState($connectionStatus, $selectedTunnel?.name);
+  $: isConnected = state === 'connected';
+  $: isConnecting = state === 'connecting' || state === 'disconnecting';
+  $: status = tunnelStatus($connectionStatus, $selectedTunnel?.name) || { state: 'disconnected' };
+  $: noHandshake = isConnected && !status.last_handshake;
 
+  let detailGeneration = 0;
   async function loadDetail(name) {
+    const generation = ++detailGeneration;
     try {
-      detail = await TunnelService.GetTunnelDetail(name);
+      const value = await TunnelService.GetTunnelDetail(name);
+      if (generation !== detailGeneration || $selectedTunnel?.name !== name) return;
+      detail = value;
       error = '';
     } catch (e) {
+      if (generation !== detailGeneration || $selectedTunnel?.name !== name) return;
       detail = null;
       // Surface the failure rather than silently leaving the panel
       // blank — most failures here are "tunnel was deleted" or
@@ -283,7 +275,7 @@
       if (/client closed|connection closed|broken pipe|EOF/i.test(raw)) {
         consecutiveClientClosed += 1;
         if (consecutiveClientClosed >= 2) {
-          error = $t('tunnel.helper_recovering') || 'Helper recovering, please retry in a moment.';
+          error = $t('tunnel.helper_recovering');
         } else {
           error = raw;
         }
@@ -313,7 +305,8 @@
   async function confirmDelete() {
     showDeleteConfirm = false;
     try {
-      await TunnelService.DeleteTunnel($selectedTunnel.name);
+      const result = await TunnelService.DeleteTunnel($selectedTunnel.name);
+      if (result?.warning) dispatch('warning', $t('app.profile_rules_warning') + ': ' + result.warning);
       selectedTunnel.set(null);
       dispatch('refresh');
     } catch (e) {
@@ -370,6 +363,7 @@
   }
 
   async function commitRename() {
+    if (!renaming) return;
     if (renameCancelled) {
       renameCancelled = false;
       return;
@@ -379,8 +373,9 @@
     renaming = false;
     if (!newName || newName === oldName) return;
     try {
-      await TunnelService.RenameTunnel(oldName, newName);
-      selectedTunnel.set({ ...$selectedTunnel, name: newName });
+      const result = await TunnelService.RenameTunnel(oldName, newName);
+      if (result?.warning) dispatch('warning', $t('app.profile_rules_warning') + ': ' + result.warning);
+      if ($selectedTunnel?.name === oldName) selectedTunnel.set({ ...$selectedTunnel, name: newName });
       dispatch('refresh');
     } catch (e) {
       error = errText(e);
@@ -451,7 +446,7 @@
             {:else if isConnected}
               {$t('app.connected')}
             {:else if isConnecting}
-              {$t('app.connecting')}
+              {state === 'disconnecting' ? $t('app.disconnecting') : $t('app.connecting')}
             {:else}
               {$t('app.disconnected')}
             {/if}
@@ -475,7 +470,7 @@
         <button class="btn-primary-large btn-connect-lg" on:click={connect} disabled={loading || isConnecting}>
           {#if loading || isConnecting}
             <span class="spinner"></span>
-            <span>{$t('app.connecting')}</span>
+            <span>{state === 'disconnecting' ? $t('app.disconnecting') : $t('app.connecting')}</span>
           {:else}
             <Icon name="zap" size={16} strokeWidth={2.25} />
             <span>{$t('tunnel.connect')}</span>
@@ -653,8 +648,8 @@
 <AutomationEditor {TunnelService} tunnelName={$selectedTunnel?.name || ''} bind:open={showAutomation} />
 
 {#if showDeleteConfirm}
-  <div class="confirm-backdrop" on:click={cancelDelete}>
-    <div class="confirm-dialog" on:click|stopPropagation>
+  <div class="confirm-backdrop" use:backdrop={cancelDelete}>
+    <div class="confirm-dialog" use:modal={cancelDelete} role="dialog" aria-modal="true" aria-label={$t('confirm.delete_title')} tabindex="-1">
       <div class="dialog-header">
         <div class="dialog-icon-tile danger">
           <Icon name="triangle-alert" size={18} strokeWidth={2} />

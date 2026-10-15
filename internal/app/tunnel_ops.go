@@ -186,13 +186,22 @@ func (s *TunnelService) isActiveTunnel(name string) (bool, error) {
 	return false, nil
 }
 
+// ProfileMutationResult reports a committed profile change whose auxiliary
+// automation update failed. Callers must refresh the profile and show Warning.
+type ProfileMutationResult struct {
+	Warning string `json:"warning,omitempty"`
+}
+
 // DeleteTunnel removes a tunnel from local storage. Rejects deletion of the
 // currently connected tunnel (would orphan the interface).
-func (s *TunnelService) DeleteTunnel(name string) error {
+func (s *TunnelService) DeleteTunnel(name string) (*ProfileMutationResult, error) {
+	if s.clients == nil {
+		return nil, fmt.Errorf("helper unavailable")
+	}
 	s.clients.MarkInflight()
 	defer s.clients.UnmarkInflight()
 	if err := s.callLong(ipc.MethodDelete, ipc.DeleteRequest{TunnelName: name}, nil); err != nil {
-		return fmt.Errorf("deleting tunnel through helper: %w", err)
+		return nil, fmt.Errorf("deleting tunnel through helper: %w", err)
 	}
 	// Drop the tunnel's automation rules so they don't linger and re-attach
 	// to a future same-named tunnel (issue #12). Best-effort — the tunnel
@@ -201,9 +210,9 @@ func (s *TunnelService) DeleteTunnel(name string) error {
 		cfg.DeleteTunnelRules(name)
 		return nil
 	}); err != nil {
-		slog.Warn("deleted tunnel but could not remove its automation rules", "tunnel", name, "error", err)
+		return &ProfileMutationResult{Warning: err.Error()}, nil
 	}
-	return nil
+	return &ProfileMutationResult{}, nil
 }
 
 // RenameTunnel changes a tunnel's name. Rejects rename of the connected
@@ -216,27 +225,27 @@ func (s *TunnelService) DeleteTunnel(name string) error {
 //
 // Falls back to a direct local rename if the helper rejects the method
 // (older helper that hasn't been upgraded yet).
-func (s *TunnelService) RenameTunnel(oldName, newName string) error {
+func (s *TunnelService) RenameTunnel(oldName, newName string) (*ProfileMutationResult, error) {
 	if err := storage.ValidateTunnelName(newName); err != nil {
-		return err
+		return nil, err
 	}
 	if oldName == newName {
-		return nil
+		return &ProfileMutationResult{}, nil
 	}
 	err := s.call(ipc.MethodRename, ipc.RenameRequest{OldName: oldName, NewName: newName}, nil)
 	if err != nil {
 		if !isMethodNotFound(err) {
-			return err
+			return nil, err
 		}
 		active, activeErr := s.isActiveTunnel(oldName)
 		if activeErr != nil {
-			return fmt.Errorf("cannot verify tunnel state (helper unreachable): %w", activeErr)
+			return nil, fmt.Errorf("cannot verify tunnel state (helper unreachable): %w", activeErr)
 		}
 		if active {
-			return fmt.Errorf("cannot rename connected tunnel %q — disconnect first", oldName)
+			return nil, fmt.Errorf("cannot rename connected tunnel %q — disconnect first", oldName)
 		}
 		if err := s.tunnelStore.Rename(oldName, newName); err != nil {
-			return err
+			return nil, err
 		}
 	}
 	// Carry the tunnel's automation rules over to the new name so they
@@ -245,10 +254,9 @@ func (s *TunnelService) RenameTunnel(oldName, newName string) error {
 		cfg.RenameTunnelRules(oldName, newName)
 		return nil
 	}); err != nil {
-		slog.Warn("renamed tunnel but could not move its automation rules",
-			"from", oldName, "to", newName, "error", err)
+		return &ProfileMutationResult{Warning: err.Error()}, nil
 	}
-	return nil
+	return &ProfileMutationResult{}, nil
 }
 
 // isMethodNotFound classifies an IPC error as "old helper doesn't know

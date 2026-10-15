@@ -7,6 +7,44 @@
 import { Create as $Create } from "@wailsio/runtime";
 
 /**
+ * ConfigKey preserves unknown config entries, including repeated keys.
+ */
+export class ConfigKey {
+    /**
+     * Creates a new ConfigKey instance.
+     * @param {Partial<ConfigKey>} [$$source = {}] - The source object to create the ConfigKey.
+     */
+    constructor($$source = {}) {
+        if (!("key" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["key"] = "";
+        }
+        if (!("value" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["value"] = "";
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new ConfigKey instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {ConfigKey}
+     */
+    static createFrom($$source = {}) {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new ConfigKey(/** @type {Partial<ConfigKey>} */($$parsedSource));
+    }
+}
+
+/**
  * ConnectionStatus is the single source of truth for tunnel connection state
  * across the whole application. It carries both wire-safe fields (strings,
  * JSON-tagged) that are sent to the frontend, and internal fields (time.Time,
@@ -237,6 +275,13 @@ export class InterfaceConfig {
         }
         if (/** @type {any} */(false)) {
             /**
+             * @member
+             * @type {ConfigKey[] | undefined}
+             */
+            this["extra_entries"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
              * Unrecognized keys preserved for round-tripping
              * @member
              * @type {{ [_ in string]?: string } | undefined}
@@ -255,7 +300,8 @@ export class InterfaceConfig {
     static createFrom($$source = {}) {
         const $$createField1_0 = $$createType0;
         const $$createField2_0 = $$createType0;
-        const $$createField11_0 = $$createType3;
+        const $$createField11_0 = $$createType4;
+        const $$createField12_0 = $$createType5;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("address" in $$parsedSource) {
             $$parsedSource["address"] = $$createField1_0($$parsedSource["address"]);
@@ -263,8 +309,11 @@ export class InterfaceConfig {
         if ("dns" in $$parsedSource) {
             $$parsedSource["dns"] = $$createField2_0($$parsedSource["dns"]);
         }
+        if ("extra_entries" in $$parsedSource) {
+            $$parsedSource["extra_entries"] = $$createField11_0($$parsedSource["extra_entries"]);
+        }
         if ("extra_keys" in $$parsedSource) {
-            $$parsedSource["extra_keys"] = $$createField11_0($$parsedSource["extra_keys"]);
+            $$parsedSource["extra_keys"] = $$createField12_0($$parsedSource["extra_keys"]);
         }
         return new InterfaceConfig(/** @type {Partial<InterfaceConfig>} */($$parsedSource));
     }
@@ -321,6 +370,13 @@ export class PeerConfig {
         }
         if (/** @type {any} */(false)) {
             /**
+             * @member
+             * @type {ConfigKey[] | undefined}
+             */
+            this["extra_entries"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
              * Unrecognized keys preserved for round-tripping
              * @member
              * @type {{ [_ in string]?: string } | undefined}
@@ -338,13 +394,17 @@ export class PeerConfig {
      */
     static createFrom($$source = {}) {
         const $$createField3_0 = $$createType0;
-        const $$createField5_0 = $$createType3;
+        const $$createField5_0 = $$createType4;
+        const $$createField6_0 = $$createType5;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("allowed_ips" in $$parsedSource) {
             $$parsedSource["allowed_ips"] = $$createField3_0($$parsedSource["allowed_ips"]);
         }
+        if ("extra_entries" in $$parsedSource) {
+            $$parsedSource["extra_entries"] = $$createField5_0($$parsedSource["extra_entries"]);
+        }
         if ("extra_keys" in $$parsedSource) {
-            $$parsedSource["extra_keys"] = $$createField5_0($$parsedSource["extra_keys"]);
+            $$parsedSource["extra_keys"] = $$createField6_0($$parsedSource["extra_keys"]);
         }
         return new PeerConfig(/** @type {Partial<PeerConfig>} */($$parsedSource));
     }
@@ -410,8 +470,8 @@ export class WireGuardConfig {
      * @returns {WireGuardConfig}
      */
     static createFrom($$source = {}) {
-        const $$createField1_0 = $$createType4;
-        const $$createField2_0 = $$createType6;
+        const $$createField1_0 = $$createType6;
+        const $$createField2_0 = $$createType8;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("interface" in $$parsedSource) {
             $$parsedSource["interface"] = $$createField1_0($$parsedSource["interface"]);
@@ -427,7 +487,9 @@ export class WireGuardConfig {
 const $$createType0 = $Create.Array($Create.Any);
 const $$createType1 = ConnectionStatus.createFrom;
 const $$createType2 = $Create.Array($$createType1);
-const $$createType3 = $Create.Map($Create.Any, $Create.Any);
-const $$createType4 = InterfaceConfig.createFrom;
-const $$createType5 = PeerConfig.createFrom;
-const $$createType6 = $Create.Array($$createType5);
+const $$createType3 = ConfigKey.createFrom;
+const $$createType4 = $Create.Array($$createType3);
+const $$createType5 = $Create.Map($Create.Any, $Create.Any);
+const $$createType6 = InterfaceConfig.createFrom;
+const $$createType7 = PeerConfig.createFrom;
+const $$createType8 = $Create.Array($$createType7);

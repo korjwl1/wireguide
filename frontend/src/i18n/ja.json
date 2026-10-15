@@ -4,7 +4,27 @@
     "disconnected": "未接続",
     "connecting": "接続中…",
     "connected": "接続済み",
-    "no_handshake": "ハンドシェイクなし"
+    "no_handshake": "ハンドシェイクなし",
+    "disconnecting": "切断中...",
+    "profile_rules_warning": "プロファイルは変更されましたが、自動化ルールを更新できませんでした。再接続する前にルールを確認してください。",
+    "supported_imports": ".conf、.zip、QR画像ファイルのみ対応しています",
+    "helper_disconnected": "ヘルパーとの接続が切れました",
+    "helper_reconnected": "ヘルパーに再接続しました",
+    "import_failed": "インポート失敗",
+    "qr_import_failed": "QRインポート失敗",
+    "invalid_config": "無効な設定",
+    "imported": "「{name}」をインポートしました",
+    "edit_failed": "編集失敗",
+    "rename_rollback_failed": "名前変更の取り消し失敗",
+    "exported": "{path}にエクスポートしました",
+    "export_failed": "エクスポート失敗",
+    "connect_failed": "接続失敗",
+    "helper_subsystem_failure": "ヘルパー内部機能のエラー",
+    "dismiss": "閉じる",
+    "helper_restart_hint": "該当機能を復旧するにはアプリを再起動してください。",
+    "forced_disconnect": "⚠ {name}の接続が解除されました: {reason}",
+    "tunnel": "トンネル",
+    "helper_forced": "ヘルパーが接続を解除しました"
   },
   "nav": {
     "tunnels": "トンネル",
@@ -133,11 +153,15 @@
     "section_security": "セキュリティ",
     "section_connection": "接続",
     "section_logging": "ログ",
-    "up_to_date": "最新バージョンです。"
+    "up_to_date": "最新バージョンです。",
+    "load_failed": "設定を読み込めないため編集を無効にしました。",
+    "save_failed": "設定の保存または適用に失敗しました。もう一度お試しください。",
+    "retry": "再試行",
+    "list_width": "トンネル一覧の幅"
   },
   "confirm": {
     "delete_title": "トンネルを削除",
-    "delete_message": "\"{name}\" を削除しますか?",
+    "delete_message": "「{name}」を削除しますか？保留中の再接続と復旧も取り消されます。",
     "yes": "削除",
     "no": "キャンセル",
     "disconnect_first": "先にトンネルを切断してください"

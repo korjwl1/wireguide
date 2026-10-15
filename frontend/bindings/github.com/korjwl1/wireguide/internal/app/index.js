@@ -13,7 +13,9 @@ export {
     DNSLeakResult,
     DNSServer,
     KnownSSIDs,
+    ProfileMutationResult,
     RouteEntry,
+    SettingsPatch,
     TunnelInfo,
     UpdateState,
     ZipImportResult

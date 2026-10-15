@@ -1,4 +1,5 @@
 <script>
+ import { modal, backdrop } from './modal.js';
   import { onDestroy, onMount } from 'svelte';
   import { Events } from '@wailsio/runtime';
   import { t, setLanguage, getLanguage, detectLanguage } from '../i18n/index.js';
@@ -6,6 +7,8 @@
   import { connectionStatus, tunnels } from '../stores/tunnels.js';
   import { compactList } from '../stores/ui.js';
   import Icon from './Icon.svelte';
+  import { loadSettings, patchSettings, settingsErrors } from '../stores/settings.js';
+  import { errText } from './errors.js';
 
   export let TunnelService;
   export let onClose = () => {};
@@ -70,7 +73,7 @@
       // timestamp flipping to "just now" is the silent feedback that
       // the click actually did something.
     } catch (e) {
-      aboutCheckResult = ($t('update.check_failed') || 'Check failed') + ': ' + (e?.message || e);
+      aboutCheckResult = $t('update.check_failed') + ': ' + (e?.message || e);
     } finally {
       aboutChecking = false;
     }
@@ -122,7 +125,7 @@
     } catch (e) {
       // Inline, next to the button that failed — the toast alone renders
       // under this modal.
-      aboutCheckResult = ($t('update.install_failed') || 'Update failed') + ': ' + (e?.message || e);
+      aboutCheckResult = $t('update.install_failed') + ': ' + (e?.message || e);
     } finally {
       aboutUpdating = false;
     }
@@ -143,6 +146,9 @@
     compact_list: false,
   };
   let loaded = false;
+  let loadError = "";
+  let pendingPatch = {};
+  let busyFields = {};
   let appVersion = '';
   let automationBackup = null;
 
@@ -153,7 +159,7 @@
 
   async function load() {
     try {
-      const s = await TunnelService.GetSettings();
+      const s = await loadSettings(TunnelService);
       if (s) {
         settings.language = s.language || 'auto';
         settings.theme = s.theme || 'system';
@@ -170,73 +176,47 @@
         // Settings.AutoUpdateCheckEnabled() semantics.
         settings.auto_update_check = (s.auto_update_check === false) ? false : true;
       }
+      loaded = true;
+      loadError = '';
     } catch (e) {
-      console.error('load settings:', e);
+      loaded = false;
+      loadError = errText(e);
     }
-    loaded = true;
     await refreshAutomationBackup();
   }
   load();
 
   async function save() {
-    // Re-fetch the freshest settings.json before writing so per-tunnel
-    // wifi rule edits made in TunnelDetail (which calls SaveSettings
-    // independently with its own modified per_tunnel map) aren't
-    // silently overwritten. This screen owns NO part of wifi_rules —
-    // both halves are carried from the fresh fetch. If the fresh fetch fails
-    // (helper restarting, IPC flake) we abort rather than write our
-    // potentially-stale per_tunnel snapshot — a deferred save is far
-    // better than clobbering the user's per-tunnel edits.
-    let fresh;
-    try {
-      fresh = await TunnelService.GetSettings();
-    } catch (e) {
-      console.warn('settings save aborted: fresh fetch failed (will retry on next change)', e);
-      return;
-    }
-    const perTunnel = fresh?.wifi_rules?.per_tunnel || {};
-    try {
-      await TunnelService.SaveSettings({
-        language: settings.language,
-        theme: settings.theme,
-        tray_icon_style: settings.tray_icon_style,
-        auto_start: settings.auto_start,
-        kill_switch: settings.kill_switch,
-        dns_protection: settings.dns_protection,
-        health_check: settings.health_check,
-        pin_interface: settings.pin_interface,
-        log_level: settings.log_level,
-        auto_update_check: settings.auto_update_check,
-        compact_list: settings.compact_list,
-        // List-ordering prefs are owned by the tunnel-list header, not
-        // this screen — carry them from the fresh fetch so saving any
-        // Settings toggle doesn't wipe them back to defaults.
-        list_sort: fresh?.list_sort || 'name_asc',
-        list_active_on_top: fresh?.list_active_on_top ?? true,
-        list_pane_width: fresh?.list_pane_width || 0,
-        // Automation rules are owned by the per-tunnel editor — carry
-        // them from the fresh fetch so saving a Settings toggle never
-        // wipes them.
-        automation: fresh?.automation,
-        // Legacy Wi-Fi trust rules have no UI on this screen — carry both
-        // halves from the fresh fetch (not a load-time snapshot) so a
-        // Settings toggle can't clobber CLI edits made while it is open.
-        // The Go side still migrates trusted_ssids/per_tunnel into the
-        // Automation model, so the round-trip itself must stay.
-        wifi_rules: {
-          trusted_ssids: fresh?.wifi_rules?.trusted_ssids || [],
-          per_tunnel: perTunnel,
-        },
-      });
-    } catch (e) {
-      console.error('save settings:', e);
-    } finally {
-      await refreshAutomationBackup();
-    }
+    if (!loaded || Object.keys(pendingPatch).length === 0) return;
+    const patch = pendingPatch;
+    pendingPatch = {};
+    try { await patchSettings(TunnelService, patch); }
+    catch (_) { /* Shared error state remains visible until this field succeeds. */ }
+    finally { await refreshAutomationBackup(); }
+  }
+
+  function queuePatch(patch) {
+    if (!loaded) return;
+    pendingPatch = { ...pendingPatch, ...patch };
+    scheduleSave();
+  }
+
+  async function applyToggle(key, value) {
+    if (!loaded || busyFields[key]) return;
+    settings[key] = value;
+    busyFields = { ...busyFields, [key]: true };
+    try { await patchSettings(TunnelService, { [key]: value }); }
+    catch (_) {
+      // A failed live apply can still have persisted intent. Re-read this
+      // field instead of guessing with !value or overwriting another edit.
+      try { settings[key] = (await loadSettings(TunnelService))[key]; } catch (_) {}
+    } finally { busyFields = { ...busyFields, [key]: false }; }
   }
 
   let saveTimer = null;
-  function scheduleSave() {
+  function scheduleSave(event) {
+    if (event?.target?.id === 'auto-update') pendingPatch.auto_update_check = settings.auto_update_check;
+    if (!loaded) return;
     if (saveTimer) clearTimeout(saveTimer);
     saveTimer = setTimeout(() => {
       saveTimer = null;
@@ -247,14 +227,14 @@
   function onThemeChange(e) {
     settings.theme = e.target.value;
     applyTheme(settings.theme);
-    scheduleSave();
+    queuePatch({ theme: settings.theme });
   }
 
   function onLanguageChange(e) {
     settings.language = e.target.value;
     const resolved = settings.language === 'auto' ? detectLanguage() : settings.language;
     setLanguage(resolved);
-    scheduleSave();
+    queuePatch({ language: settings.language });
   }
 
   function onCompactListChange(e) {
@@ -262,66 +242,19 @@
     // Update the shared store so the tunnel list re-renders immediately,
     // then persist.
     compactList.set(settings.compact_list);
-    scheduleSave();
+    queuePatch({ compact_list: settings.compact_list });
   }
 
   function onAutoStartChange(e) {
     settings.auto_start = e.target.checked;
-    scheduleSave();
+    queuePatch({ auto_start: settings.auto_start });
   }
 
-  function onLogLevelChange(e) {
-    settings.log_level = e.target.value;
-    TunnelService.SetLogLevel(settings.log_level).catch((err) => {
-      console.error('SetLogLevel failed:', err);
-    });
-    scheduleSave();
-  }
-
-  function onKillSwitchChange(e) {
-    // Always forward to the helper, regardless of connection state.
-    // The previous `if connected` gate meant that toggling off while
-    // the tunnel was already disconnected updated settings.json but
-    // left the WFP filters in place — internet stayed blocked until
-    // a reboot. The helper itself decides what to do based on its
-    // current tunnel set.
-    settings.kill_switch = e.target.checked;
-    TunnelService.SetKillSwitch(settings.kill_switch).catch((err) => {
-      console.error('SetKillSwitch failed:', err);
-      settings.kill_switch = !settings.kill_switch;
-    });
-    scheduleSave();
-  }
-
-  function onDnsProtectionChange(e) {
-    // Same rationale as the kill-switch toggle: always send the IPC so
-    // that a "disable while disconnected" doesn't leave stale WFP
-    // DNS block filters in place.
-    settings.dns_protection = e.target.checked;
-    TunnelService.SetDNSProtection(settings.dns_protection).catch((err) => {
-      console.error('SetDNSProtection failed:', err);
-      settings.dns_protection = !settings.dns_protection;
-    });
-    scheduleSave();
-  }
-
-  function onPinInterfaceChange(e) {
-    settings.pin_interface = e.target.checked;
-    TunnelService.SetPinInterface(settings.pin_interface).catch((err) => {
-      console.error('SetPinInterface failed:', err);
-      settings.pin_interface = !settings.pin_interface;
-    });
-    scheduleSave();
-  }
-
-  function onHealthCheckChange(e) {
-    settings.health_check = e.target.checked;
-    TunnelService.SetHealthCheck(settings.health_check).catch((err) => {
-      console.error('SetHealthCheck failed:', err);
-      settings.health_check = !settings.health_check;
-    });
-    scheduleSave();
-  }
+  function onLogLevelChange(e) { applyToggle('log_level', e.target.value); }
+  function onKillSwitchChange(e) { applyToggle('kill_switch', e.target.checked); }
+  function onDnsProtectionChange(e) { applyToggle('dns_protection', e.target.checked); }
+  function onPinInterfaceChange(e) { applyToggle('pin_interface', e.target.checked); }
+  function onHealthCheckChange(e) { applyToggle('health_check', e.target.checked); }
 
   // Reflect settings applied by another client (the CLI) live, so the
   // toggle doesn't sit stale while the helper actually changed state.
@@ -346,10 +279,13 @@
     if (nowTimer) clearInterval(nowTimer);
   });
 
-  function stopEvent(e) { e.stopPropagation(); }
-
-  function handleBackdropMousedown(e) {
-    if (e.target === e.currentTarget) close();
+  function tabKeydown(event) {
+    const tabs = ['general', 'advanced', 'about'];
+    const direction = ['ArrowDown', 'ArrowRight'].includes(event.key) ? 1 : ['ArrowUp', 'ArrowLeft'].includes(event.key) ? -1 : 0;
+    if (!direction && !['Home', 'End'].includes(event.key)) return;
+    event.preventDefault();
+    activeTab = event.key === 'Home' ? tabs[0] : event.key === 'End' ? tabs.at(-1) : tabs[(tabs.indexOf(activeTab) + direction + tabs.length) % tabs.length];
+    event.currentTarget.parentElement.querySelectorAll('[role="tab"]')[tabs.indexOf(activeTab)].focus();
   }
 
   function close() {
@@ -386,25 +322,28 @@
   });
 </script>
 
-<div class="modal-backdrop" on:mousedown={handleBackdropMousedown}>
-  <div class="modal" on:mousedown={stopEvent} role="dialog" aria-modal="true" aria-labelledby="settings-title">
+<div class="modal-backdrop" use:backdrop={close}>
+  <div class="modal" use:modal={close} tabindex="-1" role="dialog" aria-modal="true" aria-labelledby="settings-title">
     <h3 id="settings-title">{$t('settings.title')}</h3>
 
+    {#if loadError}<div class="settings-error" role="alert">{$t('settings.load_failed')} {loadError}<button class="btn btn-secondary" on:click={load}>{$t('settings.retry')}</button></div>{/if}
+    {#each Object.entries($settingsErrors) as [key, failure]}<div class="settings-error" role="alert">{$t('settings.save_failed')} {failure}<button class="btn btn-secondary" disabled={busyFields[key]} on:click={() => applyToggle(key, settings[key])}>{$t('settings.retry')}</button></div>{/each}
+    <fieldset disabled={!loaded} class="settings-fields">
     <div class="settings-layout">
-      <nav class="settings-sidebar" role="tablist" aria-label="Settings sections">
-        <button role="tab" aria-selected={activeTab === 'general'} class:active={activeTab === 'general'} on:click={() => activeTab = 'general'}>
+      <div class="settings-sidebar" role="tablist" aria-orientation="vertical" aria-label={$t('settings.title')}>
+        <button role="tab" tabindex={activeTab === 'general' ? 0 : -1} on:keydown={tabKeydown} aria-selected={activeTab === 'general'} class:active={activeTab === 'general'} on:click={() => activeTab = 'general'}>
           <Icon name="settings" size={14} strokeWidth={1.75} />
           <span>{$t('settings.general')}</span>
         </button>
-        <button role="tab" aria-selected={activeTab === 'advanced'} class:active={activeTab === 'advanced'} on:click={() => activeTab = 'advanced'}>
+        <button role="tab" tabindex={activeTab === 'advanced' ? 0 : -1} on:keydown={tabKeydown} aria-selected={activeTab === 'advanced'} class:active={activeTab === 'advanced'} on:click={() => activeTab = 'advanced'}>
           <Icon name="wrench" size={14} strokeWidth={1.75} />
           <span>{$t('settings.advanced')}</span>
         </button>
-        <button role="tab" aria-selected={activeTab === 'about'} class:active={activeTab === 'about'} on:click={() => activeTab = 'about'}>
+        <button role="tab" tabindex={activeTab === 'about' ? 0 : -1} on:keydown={tabKeydown} aria-selected={activeTab === 'about'} class:active={activeTab === 'about'} on:click={() => activeTab = 'about'}>
           <Icon name="info" size={14} strokeWidth={1.75} />
           <span>{$t('settings.about')}</span>
         </button>
-      </nav>
+      </div>
 
       <div class="settings-content" role="tabpanel">
         {#if automationBackup?.error || automationBackup?.different || automationBackup?.recovery_copies > 0}
@@ -489,7 +428,7 @@
                   <p class="setting-desc">{$t('settings.kill_switch_hint')}</p>
                 </div>
                 <label class="toggle">
-                  <input id="kill-switch" type="checkbox"
+                  <input id="kill-switch" disabled={busyFields.kill_switch} type="checkbox"
                     checked={settings.kill_switch}
                     on:change={onKillSwitchChange} />
                   <span class="toggle-track"></span>
@@ -501,7 +440,7 @@
                   <p class="setting-desc">{$t('settings.dns_protection_hint')}</p>
                 </div>
                 <label class="toggle">
-                  <input id="dns-protection" type="checkbox"
+                  <input id="dns-protection" disabled={busyFields.dns_protection} type="checkbox"
                     checked={settings.dns_protection}
                     on:change={onDnsProtectionChange} />
                   <span class="toggle-track"></span>
@@ -519,7 +458,7 @@
                   <p class="setting-desc">{$t('settings.health_check_hint')}</p>
                 </div>
                 <label class="toggle">
-                  <input id="health-check" type="checkbox"
+                  <input id="health-check" disabled={busyFields.health_check} type="checkbox"
                     checked={settings.health_check}
                     on:change={onHealthCheckChange} />
                   <span class="toggle-track"></span>
@@ -531,7 +470,7 @@
                   <p class="setting-desc">{$t('settings.pin_interface_hint')}</p>
                 </div>
                 <label class="toggle">
-                  <input id="pin-interface" type="checkbox"
+                  <input id="pin-interface" disabled={busyFields.pin_interface} type="checkbox"
                     checked={settings.pin_interface}
                     on:change={onPinInterfaceChange} />
                   <span class="toggle-track"></span>
@@ -545,7 +484,7 @@
             <div class="settings-card">
               <div class="setting-row">
                 <label class="setting-label" for="log-level">{$t('settings.log_level')}</label>
-                <select id="log-level" value={settings.log_level} on:change={onLogLevelChange}>
+                <select id="log-level" disabled={busyFields.log_level} value={settings.log_level} on:change={onLogLevelChange}>
                   <option value="debug">{$t('settings.log_level_debug')}</option>
                   <option value="info">{$t('settings.log_level_info')}</option>
                   <option value="warn">{$t('settings.log_level_warn')}</option>
@@ -625,6 +564,7 @@
       </div>
     </div>
 
+    </fieldset>
     <div class="modal-footer">
       <div class="footer-info">
         <span class="footer-credit-label">{$t('settings.about_made_by')}</span>
@@ -632,12 +572,14 @@
         <span class="footer-sep">·</span>
         <span class="footer-credit-text">{$t('settings.about_footer_copyright')}</span>
       </div>
-      <button type="button" class="btn-close" on:mousedown|stopPropagation={close}>{$t('settings.close')}</button>
+      <button type="button" class="btn-close" on:click={close}>{$t('settings.close')}</button>
     </div>
   </div>
 </div>
 
 <style>
+  .settings-fields { border: 0; padding: 0; margin: 0; min-width: 0; display: flex; flex-direction: column; flex: 1; min-height: 0; }
+  .settings-error { color: var(--danger, #e74c3c); padding: 8px 0; overflow-wrap: anywhere; }
   .modal-backdrop {
     position: fixed;
     inset: 0;

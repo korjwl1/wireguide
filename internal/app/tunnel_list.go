@@ -65,7 +65,9 @@ func (s *TunnelService) ListTunnels() ([]TunnelInfo, error) {
 		return nil, err
 	}
 	var active ipc.ActiveTunnelsResponse
-	_ = s.call(ipc.MethodActiveTunnels, nil, &active)
+	if err := s.call(ipc.MethodActiveTunnels, nil, &active); err != nil {
+		slog.Debug("listing local profiles without helper state", "error", err)
+	}
 	names := make(map[string]bool, len(active.Names))
 	for _, name := range active.Names {
 		names[name] = true

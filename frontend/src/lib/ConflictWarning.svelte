@@ -1,4 +1,5 @@
 <script>
+ import { modal, backdrop } from './modal.js';
   import { createEventDispatcher, onDestroy, onMount } from 'svelte';
   import { t } from '../i18n/index.js';
 
@@ -16,8 +17,8 @@
   onDestroy(() => window.removeEventListener('keydown', onKeyDown));
 </script>
 
-<div class="modal-backdrop" on:click={() => dispatch('cancel')}>
-  <div class="modal" on:click|stopPropagation
+<div class="modal-backdrop" use:backdrop={() => dispatch('cancel')}>
+  <div class="modal" use:modal={() => dispatch('cancel')} tabindex="-1"
     role="dialog" aria-modal="true" aria-labelledby="conflict-title">
     <h3 id="conflict-title">{$t('conflict.title')}</h3>
 
