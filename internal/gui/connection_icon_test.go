@@ -3,6 +3,7 @@ package gui
 import (
 	"bytes"
 	"errors"
+	"image"
 	"image/color"
 	"image/png"
 	"math"
@@ -203,5 +204,14 @@ func TestConnectionIconRenderingPreservesBaseOutsideBadge(t *testing.T) {
 		if err := os.WriteFile(dir+"/application-connected.png", icons.connected, 0600); err != nil {
 			t.Fatal(err)
 		}
+	}
+}
+
+func BenchmarkPaintConnectionDot(b *testing.B) {
+	img := image.NewNRGBA(image.Rect(0, 0, 256, 256))
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		paintConnectionDot(img, 211, 211, 30, 4)
 	}
 }

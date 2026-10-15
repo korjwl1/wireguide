@@ -64,6 +64,10 @@ func buildConnectionIconImages(source []byte) (connectionIconImages, error) {
 // The outline keeps the green visible against the red tile and either shell
 // background. Coverage blending preserves the source outside the dot.
 func paintConnectionDot(img *image.NRGBA, cx, cy, radius, outline float64) {
+	// Reuse the brush and color storage across pixels; draw consumes both
+	// synchronously, so no per-pixel image/interface allocation is needed.
+	var c color.NRGBA
+	brush := image.NewUniform(&c)
 	outer := radius + outline
 	for y := int(cy - outer - 1); y <= int(cy+outer+1); y++ {
 		for x := int(cx - outer - 1); x <= int(cx+outer+1); x++ {
@@ -76,13 +80,13 @@ func paintConnectionDot(img *image.NRGBA, cx, cy, radius, outline float64) {
 				continue
 			}
 			green := min(1, max(0, radius+0.5-distance))
-			c := color.NRGBA{
+			c = color.NRGBA{
 				R: uint8(255*(1-green) + 52*green),
 				G: uint8(255*(1-green) + 199*green),
 				B: uint8(255*(1-green) + 89*green),
 				A: uint8(255 * coverage),
 			}
-			draw.Draw(img, image.Rect(x, y, x+1, y+1), image.NewUniform(c), image.Point{}, draw.Over)
+			draw.Draw(img, image.Rect(x, y, x+1, y+1), brush, image.Point{}, draw.Over)
 		}
 	}
 }
