@@ -72,8 +72,8 @@ correction through **f5fc9f1**, including tests and verification limits:
 | D-1 | Scoped IPv6 zone addresses survive parsing; resolver scope and individual observed-leak flags reach the GUI, which no longer marks every non-VPN supplemental/scoped row as a leak. |
 | D-2 | Linux stub discovery uses structured systemd-resolved DNS/domain/default-route properties to attribute eligible upstreams. An unknown local proxy or failed inspection returns an incomplete check. |
 | L4-x | Unchanged automation avoids backup writes; new post-downgrade rules archive the old recovery copy before replacement. Settings exposes backup errors and recovery copies without activating them. |
-| B-6/B-7 | Cached PF references are checked against the exact token column of `pfctl -s References`. Query failure preserves the journal; another owner's running PF is not accepted as our live lease. |
-| B-5/B-1 | Failed repair has bounded backoff. The production tick body is extracted and tested through its real repair call; the earlier native PF stop test remains historical native evidence. |
+| B-6/B-7 | References are checked against both token and issuing PID in `pfctl -s References`. Native testing exposed immediate numeric token reuse after stop/start; `f634db7` fixes repair and normal/crash release. Query failure preserves the journal; another owner's running PF is not accepted as our live lease. |
+| B-5/B-1 | Failed repair has bounded backoff. The production tick body is extracted and tested through its real repair call. The expanded native run includes the latest ownership repair and two global-DNS tunnels across crash restoration; see the native report. |
 
 - Windows B-8/B-9 were resolved by the subsequent
   [code-quality review](code-quality-review-20261015.md): pinned DNS matches
@@ -131,7 +131,10 @@ DNS protection/KS packet enforcement, PF stop/reacquisition and coexistence,
 system launchd crash restore, forced-disconnect event teardown/block recovery,
 and normal DNS/route/PF cleanup. The fixtures invoke production packages with
 controlled local peers, not a mocked client network stack. They do not cover
-remote full-tunnel routing or the complete GUI installation flow.
+remote full-tunnel routing. A subsequent [GUI follow-up](macos-single-instance.md)
+verified successful current cold upgrade and one GUI across installed/copied
+bundles, including hidden/minimised window restoration. Interactive setup
+failure/Retry/BTM scenarios retain their separate verification limits.
 Actual sleep/wake was explicitly deferred by the user. Windows native checks,
 physical network changes and the compatibility limits above remain open.
 

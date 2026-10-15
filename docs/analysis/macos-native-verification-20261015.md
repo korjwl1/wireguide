@@ -122,14 +122,71 @@ two-global-tunnel original-baseline case has engine-level regression tests,
 not a two-global-tunnel native packet test. Actual sleep/wake remains
 deferred, and the other scope limits below still apply.
 
+## Latest logic retest and PF token reuse defect
+
+The six desktop checks were rerun from `86a06fa` under `-race` with native
+opt-ins: DNS checkpoint-before-write (0.23 s), Apple sample/Go stack capture
+(2.09 s), Cocoa status-item lifecycle (1.93 s), socket activation (5.49 s),
+disabled-state parsing (0.01 s), and generated launchd lifecycle (6.59 s).
+All passed. Hang capture tests the capture mechanism, not a real main-queue
+deadlock. The original root networking matrix also passed in 11.89 s.
+
+An additional real PF stop/start scenario then exposed an ownership defect:
+after `pfctl -d`, a second owner received **the same numeric token** as the
+invalidated WireGuide reference. The production loop accepted the number as
+proof of ownership, and the second owner's release could stop our protection.
+The narrow earlier stop/repair and coexistence cases did not detect this.
+
+[Apple's xnu implementation](https://github.com/apple-oss-distributions/xnu/blob/main/bsd/net/pf_ioctl.c)
+generates a token by hashing the allocated reference object's address and
+frees all reference objects on DIOCSTOP. Immediate reuse is therefore possible;
+the observed native log confirms it occurred on this Mac.
+
+`f634db7` records the issuing `pfctl -E` process PID with the token and boot
+UUID, and compares both PID and token in the kernel reference listing.
+Reconciliation and normal/crash release use the same ownership check. Query
+failure retains the journal; another owner's reused token is neither adopted
+nor released. Old journals without an issuing PID cannot prove ownership and
+are retired without releasing that reference. This conservative migration can
+leave an old reference enabled; it does not globally stop another firewall.
+The independent test supervisor uses the same identity rule for cleanup.
+
+Focused counterexamples failed before the change for both ownership repair
+and live/crash release, then passed after it. The fixed native PF scenario
+also passed with an actually reused numeric token (different issuing PIDs).
+That run subsequently failed in the new two-global-DNS fixture because it
+mistook a connecting tunnel for a connected one; no full-run success is
+claimed for it. The fixture now waits for connected state and a real interface.
+
+The final expanded native run, whose production and test source was committed
+in `f634db7`, **passed in 24.08 s**. It includes the complete original matrix,
+other-owner PF restart/reacquisition, retained packet enforcement after that
+owner exits, and two global-DNS tunnels across actual SIGKILL/launchd recovery.
+Disconnecting the first global tunnel preserves its sibling's IPv4/IPv6 and
+DNS; disconnecting the last restores exact original service DNS/search values.
+
+Independent recovery also passed (0.02 s), runner exit 0. DNS, default-route
+and interface snapshots matched byte for byte; PF returned to its initial
+disabled state. No native test helper or system job remained. The installed
+helper was still stopped, run count 1, and public HTTPS returned 200.
+
+Private evidence: `macos-expanded-native-final-20261015` in SSD scratch.
+Executable SHA-256:
+`355842b62e0b18f705d07c64c9c17cb24abbaf9ed6d48e2e32b24fabecbc882e`.
+The complete repository race suite and vet passed. An earlier full-suite run
+concurrent with privileged networking hit a five-second synthetic-scutil
+timeout; the fresh complete run after networking cleanup passed.
+
 ## Still open
 
 - **Actual sleep/wake:** explicitly deferred by the user in this session.
 - Remote WAN peers, full-tunnel default routes, endpoint-bypass repair/failure,
   real routing-loop detection, physical Wi-Fi/Ethernet changes and IPv6 outer
   transport. Controlled split routes do not establish those behaviors.
-- Current full GUI installation/upgrade and interactive error/retry flows.
-  The Cocoa fixture and system launchd helper fixture cover narrower paths.
+- Current interactive cancellation, slow authorization, failed Retry and
+  BTM approval flows. A subsequent [full GUI follow-up](macos-single-instance.md)
+  verified successful cold upgrade, matching installed helper, app-copy
+  reservation and hidden/minimised window restoration on the current code.
 - Native Windows WFP/crash recovery and remaining Linux resolver behavior.
 - The lower-priority findings retained in
   [review disposition](claude-review-disposition.md).

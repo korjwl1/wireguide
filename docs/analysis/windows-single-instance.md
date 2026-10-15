@@ -36,7 +36,9 @@ Requests coalesce while UAC or the WebView is initializing. Delivery waits for
 requests focus; a normal or maximized window is not restored to a different
 size. The same display path serves the tray's Show Window action. Linux's
 existing decoration recovery remains in that shared display path. The process
-reservation applies only to Windows.
+reservation described here applies to Windows. A later
+[macOS implementation](macos-single-instance.md) adds a private file lock and
+Unix activation socket before helper setup, with live app-copy verification.
 
 The built-in Wails single-instance option was not used: its initialization
 currently follows our helper setup, and its pinned Windows implementation
