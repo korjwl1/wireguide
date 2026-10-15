@@ -330,6 +330,9 @@ func Run(addr string, ownerUID int, ownerSID, dataDir string, restoreDesired boo
 	// A loop-watchdog trip runs the helper's teardown, not a bare
 	// DisconnectTunnel inside the Manager (issue #49).
 	manager.SetOnForcedDisconnect(h.handleForcedDisconnect)
+	manager.SetOnRecoveryWarning(func(name string, err error) {
+		h.server.Broadcast(ipc.EventRecoveryWarning, ipc.RecoveryWarningPayload{TunnelName: name, Detail: err.Error()})
+	})
 
 	// Derive the user's Application Support dir from the uid the
 	// LaunchDaemon plist passed in (`--uid=501` typically). Helper
@@ -359,6 +362,7 @@ func Run(addr string, ownerUID int, ownerSID, dataDir string, restoreDesired boo
 	if recovered := tunnel.RecoverFromCrash(dataDir, fw); len(recovered) > 0 {
 		slog.Warn("recovered from previous crash", "tunnels", recovered)
 	}
+	manager.AdoptPendingRecovery()
 
 	// Firewall crash recovery — restores OS-level firewall state (e.g. macOS
 	// pf enabled/disabled) that the previous helper persisted to disk before

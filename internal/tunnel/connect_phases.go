@@ -57,50 +57,13 @@ func (m *Manager) connectPhases(ctx context.Context, cfg *domain.WireGuardConfig
 		return nil, newTunnelError(ErrNetwork, "removing previous interface DNS", err)
 	}
 
-	// rollback helper closes the engine and restores network state if any
-	// later phase fails. Best-effort — we log rather than propagate cleanup
-	// errors because we already have a primary failure to report.
-	rollback := func(primary error) error {
-		cleaned := true
-		// Undo routes that may have been installed before the failure.
-		if err := netMgr.RemoveRoutes(ifaceName, allAllowedIPs, fullTunnel); err != nil {
-			cleaned = false
-			slog.Warn("rollback: RemoveRoutes failed", "error", err)
-		}
-		// Strip any endpoint loop protection filters we installed before
-		// the failure point — leaving them in force after a failed
-		// connect would block re-connects to the same endpoint until
-		// the helper restarted (the WFP BLOCK targets remote IP+port +
-		// tunnel LUID; on a re-connect the LUID matches again).
-		if m.endpointProtector != nil {
-			if err := m.endpointProtector.DisableEndpointProtection(ifaceName); err != nil {
-				slog.Warn("rollback: DisableEndpointProtection failed", "iface", ifaceName, "error", err)
-			}
-		}
-		var splitCleanupErr error
-		if cfg.Interface.IsSplitDNS() {
-			splitCleanupErr = m.removeSplitDNS(cfg.Name, netMgr, ifaceName)
-		}
-		if err := netMgr.Cleanup(ifaceName); err != nil {
-			cleaned = false
-			slog.Warn("rollback: network Cleanup failed", "iface", ifaceName, "error", err)
-		}
-		// A rolled-back connect must not leave a journal that crash
-		// recovery would later act on (and misread as a live tunnel).
-		if cleaned && splitCleanupErr == nil {
-			if err := ClearActiveState(m.dataDir, cfg.Name); err != nil {
-				slog.Warn("rollback: ClearActiveState failed", "tunnel", cfg.Name, "error", err)
-			}
-		}
-		if !cleaned {
-			m.queueNetworkCleanup(cfg.Name, ifaceName, netMgr)
-		}
-		if cleaned && len(m.AllDNSServers()) == 0 {
-			m.ClearPreModDNS()
-		}
+	// Record interface ownership before the first OS mutation, including
+	// failures that happen before the precise pre-DNS checkpoint.
+	if err := SaveActiveState(m.dataDir, &ActiveTunnelState{TunnelName: cfg.Name, InterfaceName: ifaceName, FullTunnel: fullTunnel, Table: cfg.Interface.Table, FwMark: cfg.Interface.FwMark}); err != nil {
 		engine.Close()
-		return primary
+		return nil, newTunnelError(ErrNetwork, "persisting interface recovery state", err)
 	}
+	rollback := func(primary error) error { return m.rollbackConnect(cfg, engine, netMgr, primary) }
 
 	// checkCtx is the per-phase cancellation gate. The individual exec
 	// helpers inside netMgr have their own bounded timeouts (cmdTimeout),
@@ -428,11 +391,11 @@ func (m *Manager) disconnectPhases(cfg *domain.WireGuardConfig, engine *Engine, 
 		} else {
 			cleanupErr = m.cleanupNetwork(netMgr, ifaceName)
 			if cleanupErr == nil {
-				m.ClearPreModDNS()
+				m.clearRecoveredBaseline()
 			}
 		}
 		if cleanupErr != nil {
-			m.queueNetworkCleanup(cfg.Name, ifaceName, netMgr)
+			m.queueNetworkCleanup(cfg.Name, ifaceName, netMgr, cleanupErr)
 			slog.Warn("disconnect: network recovery pending", "iface", ifaceName, "error", cleanupErr)
 		}
 	}

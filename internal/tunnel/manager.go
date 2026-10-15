@@ -68,6 +68,7 @@ type Manager struct {
 	tunnels               map[string]*tunnelEntry // keyed by tunnel name
 	pendingDNSCleanup     map[string]pendingDNSCleanup
 	pendingNetworkCleanup map[string]pendingNetworkCleanup
+	onRecoveryWarning     func(string, error)
 
 	dataDir string
 
@@ -150,7 +151,7 @@ type EndpointProtector interface {
 // closest public state (connecting/disconnecting both surface as
 // "connecting" since the GUI treats them the same way).
 const (
-	stateDisconnecting domain.State = "disconnecting"
+	stateDisconnecting = domain.StateDisconnecting
 )
 
 // NewManager creates a tunnel manager. Each tunnel gets its own
@@ -277,7 +278,7 @@ func (m *Manager) ConnectWithContext(ctx context.Context, cfg *domain.WireGuardC
 	if err := ctx.Err(); err != nil {
 		return newTunnelError(ErrCancelled, "connect cancelled before start", err)
 	}
-	if err := m.checkPendingNetworkCleanup(); err != nil {
+	if err := m.preparePendingJournal(cfg.Name); err != nil {
 		return newTunnelError(ErrNetwork, "recovering previous connection", err)
 	}
 	ctx, cancelConnect := context.WithCancel(ctx)
@@ -448,7 +449,7 @@ func (m *Manager) Disconnect() error {
 	m.mu.Lock()
 	var name string
 	for n, e := range m.tunnels {
-		if e.state == domain.StateConnected || e.state == domain.StateConnecting {
+		if e.state == domain.StateConnected || e.state == domain.StateConnecting || e.state == stateDisconnecting {
 			name = n
 			break
 		}

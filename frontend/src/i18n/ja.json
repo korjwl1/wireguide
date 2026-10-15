@@ -24,7 +24,8 @@
     "helper_restart_hint": "該当機能を復旧するにはアプリを再起動してください。",
     "forced_disconnect": "⚠ {name}の接続が解除されました: {reason}",
     "tunnel": "トンネル",
-    "helper_forced": "ヘルパーが接続を解除しました"
+    "helper_forced": "ヘルパーが接続を解除しました",
+    "recovery_warning": "{name}: 元のDNS設定の復旧が保留中です。設定は保持され、新しい接続は利用できます。"
   },
   "nav": {
     "tunnels": "トンネル",

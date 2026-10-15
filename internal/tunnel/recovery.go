@@ -21,6 +21,7 @@ type FirewallCleaner interface {
 // ActiveTunnelState is persisted to disk while a tunnel is active.
 // On startup, if this file exists, a previous crash is detected.
 type ActiveTunnelState struct {
+	journalKey    string   // retained cleanup records are keyed separately from live profiles
 	TunnelName    string   `json:"tunnel_name"`
 	InterfaceName string   `json:"interface_name"`
 	DNSServers    []string `json:"dns_servers_original"`
@@ -97,7 +98,7 @@ func SaveActiveState(dataDir string, state *ActiveTunnelState) error {
 	if err != nil {
 		return err
 	}
-	return atomicfile.WriteFile(filepath.Join(dir, stateFileName(state.TunnelName)), data, 0600)
+	return atomicfile.WriteFile(filepath.Join(dir, stateFileName(activeStateKey(state))), data, 0600)
 }
 
 // ClearActiveState removes the state file for a specific tunnel.
@@ -143,6 +144,9 @@ func LoadActiveState(dataDir string) []*ActiveTunnelState {
 					os.Remove(srcPath)
 				}
 				continue
+			}
+			if e.Name() != stateFileName(st.TunnelName) {
+				st.journalKey = strings.TrimSuffix(e.Name(), ".json")
 			}
 			states = append(states, &st)
 		}
@@ -281,7 +285,7 @@ func RecoverFromCrash(dataDir string, fw FirewallCleaner) []string {
 
 		recovered = append(recovered, state.TunnelName)
 		if ok {
-			fullySucceeded = append(fullySucceeded, state.TunnelName)
+			fullySucceeded = append(fullySucceeded, activeStateKey(state))
 		}
 	}
 
@@ -300,9 +304,18 @@ func RecoverFromCrash(dataDir string, fw FirewallCleaner) []string {
 	// another chance — silently dropping them all at once stranded
 	// the bug for users.
 	for _, name := range fullySucceeded {
-		ClearActiveState(dataDir, name)
+		if err := ClearActiveState(dataDir, name); err != nil {
+			slog.Warn("recovery journal removal failed", "journal", name, "error", err)
+		}
 	}
 	os.Remove(filepath.Join(dataDir, activeTunnelFile)) // legacy cleanup
 
 	return recovered
+}
+
+func activeStateKey(state *ActiveTunnelState) string {
+	if state.journalKey != "" {
+		return state.journalKey
+	}
+	return state.TunnelName
 }

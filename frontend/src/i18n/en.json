@@ -24,7 +24,8 @@
     "helper_restart_hint": "Restart the app to recover the affected subsystem.",
     "forced_disconnect": "⚠ {name} disconnected: {reason}",
     "tunnel": "Tunnel",
-    "helper_forced": "forced by the helper"
+    "helper_forced": "forced by the helper",
+    "recovery_warning": "{name}: original DNS recovery is pending. Saved settings are retained; new connections remain available."
   },
   "nav": {
     "tunnels": "Tunnels",

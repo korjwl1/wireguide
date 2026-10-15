@@ -199,6 +199,13 @@ func (b *eventBridge) handleEvent(method string, params json.RawMessage) {
 		} else {
 			b.app.Event.Emit("settings_changed", payload)
 		}
+	case ipc.EventRecoveryWarning:
+		var payload ipc.RecoveryWarningPayload
+		if err := json.Unmarshal(params, &payload); err != nil {
+			slog.Warn("invalid recovery warning", "error", err)
+		} else {
+			b.app.Event.Emit("recovery_warning", payload)
+		}
 	case ipc.EventCriticalError:
 		// A helper background goroutine has died permanently. Surface to
 		// the frontend so the user knows tunnel state may stop updating

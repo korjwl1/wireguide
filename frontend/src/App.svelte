@@ -220,6 +220,10 @@
 
     // The helper tore a tunnel down on its own (routing-loop watchdog).
     // It won't come back by itself, so say why it went down.
+    appEvents.on('recovery_warning', event => {
+      const {tunnel_name, detail} = event.data || {};
+      showToast($t('app.recovery_warning', {name: tunnel_name || $t('app.tunnel')}) + ': ' + (detail || ''), 10000);
+    });
     appEvents.on('forced_disconnect', (event) => {
       const { tunnel_name, reason } = event.data || {};
       showToast($t('app.forced_disconnect', {name: tunnel_name || $t('app.tunnel'), reason: reason || $t('app.helper_forced')}), 10000);

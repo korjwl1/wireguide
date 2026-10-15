@@ -263,12 +263,16 @@ func (m *LinuxManager) loadPersistedDNS() ([]string, error) {
 }
 
 // clearPersistedDNS removes the persisted DNS state file.
-func (m *LinuxManager) clearPersistedDNS() {
+func (m *LinuxManager) clearPersistedDNS() error {
 	if m.dataDir == "" {
-		return
+		return nil
 	}
 	path := filepath.Join(m.dataDir, dnsStateFile)
-	_ = os.Remove(path)
+	err := os.Remove(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	return err
 }
 
 // ResetDNSToSystemDefault clears DNS overrides without relying on in-memory
@@ -297,8 +301,8 @@ func (m *LinuxManager) ResetDNSToSystemDefault() error {
 			failures = append(failures, errors.New("resolv.conf changed to a symlink; original DNS retained for recovery"))
 		} else if err := writeResolvConf(strings.Join(persisted, "\n") + "\n"); err != nil {
 			failures = append(failures, err)
-		} else {
-			m.clearPersistedDNS()
+		} else if err := m.clearPersistedDNS(); err != nil {
+			failures = append(failures, err)
 		}
 	}
 	return errors.Join(failures...)
@@ -328,7 +332,9 @@ func (m *LinuxManager) RestoreDNS(ifaceName string) error {
 	if err := writeResolvConf(content); err != nil {
 		return err
 	}
-	m.clearPersistedDNS()
+	if err := m.clearPersistedDNS(); err != nil {
+		return err
+	}
 	// Allow the next SetDNS to capture a fresh original snapshot.
 	m.origDNS = nil
 	m.origDNSCaptured = false

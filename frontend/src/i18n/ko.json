@@ -24,7 +24,8 @@
     "helper_restart_hint": "해당 기능을 복구하려면 앱을 다시 시작하세요.",
     "forced_disconnect": "⚠ {name} 연결이 해제됐습니다: {reason}",
     "tunnel": "터널",
-    "helper_forced": "헬퍼에서 연결을 해제했습니다"
+    "helper_forced": "헬퍼에서 연결을 해제했습니다",
+    "recovery_warning": "{name}: 기존 DNS 복구가 대기 중입니다. 원래 설정은 보관되며 새 연결은 가능합니다."
   },
   "nav": {
     "tunnels": "터널",

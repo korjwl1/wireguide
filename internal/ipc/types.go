@@ -205,3 +205,9 @@ type AutomationTunnelDecision struct {
 	Held     bool   `json:"held,omitempty"`
 	Latched  bool   `json:"latched,omitempty"`
 }
+
+// RecoveryWarningPayload reports retained OS cleanup without disabling new connections.
+type RecoveryWarningPayload struct {
+	TunnelName string `json:"tunnel_name"`
+	Detail     string `json:"detail"`
+}

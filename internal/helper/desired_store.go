@@ -65,8 +65,8 @@ import (
 //	                                       Windows/Linux: GUI respawn with
 //	                                       --restore-desired)
 //	crash while the machine is asleep    → restore on launchd restart / wake
-//	upgrade ForceShutdown (no teardown)  → macOS: restore; Windows/Linux: the
-//	                                       relaunched GUI is a fresh start, so no
+//	upgrade ForceShutdown               → cleanup withdraws intent; unfinished
+//	                                       OS teardown retains recovery journals
 //	clean Quit / `wireguide ctl stop`    → no restore (cleanup cleared the file)
 //	reboot / power loss                  → no restore (file predates current boot)
 //	Windows logoff / Fast Startup        → no restore (fresh GUI start; boot

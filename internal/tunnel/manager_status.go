@@ -67,7 +67,7 @@ func (m *Manager) Status() *ConnectionStatus {
 	switch state {
 	case domain.StateConnecting, stateDisconnecting:
 		return &ConnectionStatus{
-			State:         domain.StateConnecting,
+			State:         state,
 			TunnelName:    cfgName,
 			ActiveTunnels: activeTunnels,
 		}
@@ -123,7 +123,7 @@ func (m *Manager) StatusFor(name string) *ConnectionStatus {
 
 	switch state {
 	case domain.StateConnecting, stateDisconnecting:
-		return &ConnectionStatus{State: domain.StateConnecting, TunnelName: cfgName}
+		return &ConnectionStatus{State: state, TunnelName: cfgName}
 	case domain.StateDisconnected:
 		return &ConnectionStatus{State: domain.StateDisconnected, TunnelName: cfgName}
 	case domain.StateError:
@@ -164,7 +164,7 @@ func (m *Manager) AllStatuses() []*ConnectionStatus {
 	for _, s := range snaps {
 		switch s.state {
 		case domain.StateConnecting, stateDisconnecting:
-			out = append(out, &ConnectionStatus{State: domain.StateConnecting, TunnelName: s.cfgName})
+			out = append(out, &ConnectionStatus{State: s.state, TunnelName: s.cfgName})
 		case domain.StateDisconnected:
 			out = append(out, &ConnectionStatus{State: domain.StateDisconnected, TunnelName: s.cfgName})
 		case domain.StateError:

@@ -185,7 +185,8 @@ const (
 	// helper has died permanently (e.g. exceeded goSafe restart budget).
 	// The GUI is expected to surface this via a banner/toast so the user
 	// knows tunnels may no longer reflect real state.
-	EventCriticalError = "event.critical_error"
+	EventCriticalError   = "event.critical_error"
+	EventRecoveryWarning = "event.recovery_warning"
 	// EventSettingsChanged is broadcast when a firewall/monitor setting is
 	// applied via IPC (kill switch, DNS protection, health check, pin
 	// interface, log level) — usually from the CLI. It carries the changed
