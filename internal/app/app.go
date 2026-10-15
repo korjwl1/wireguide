@@ -1,12 +1,6 @@
-// Package app provides Wails bindings bridging the Svelte frontend to the
-// IPC helper client and local storage.
-//
-// The package is split across four files so that each has a single reason
-// to change:
-//   - app.go          (this file)    — TunnelService facade, constructor, shared types
-//   - tunnel_ops.go                  — tunnel lifecycle: connect, disconnect, list, status, rename, delete
-//   - file_ops.go                    — file/dialog operations: import, export, read, parse, edit
-//   - settings_ops.go                — settings + firewall toggles
+// Package app exposes the GUI's Wails service facade. It coordinates local
+// configuration/history storage and forwards privileged network operations to
+// the helper through a replaceable IPC client.
 package app
 
 import (
@@ -23,7 +17,7 @@ import (
 )
 
 // TunnelService is the Wails-bound service.
-// Storage (tunnel files, settings) stays in the GUI process.
+// GUI edits use local storage; the helper also reads it for automation/recovery.
 // Tunnel operations go through the helper via an ipc.ClientHolder (so the
 // helper can be re-spawned and the connection swapped without rebuilding
 // the whole service graph).

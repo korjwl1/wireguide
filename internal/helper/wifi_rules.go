@@ -15,7 +15,7 @@ import (
 	"github.com/korjwl1/wireguide/internal/wifi"
 )
 
-// loadUserSettings reads the user's settings.json directly. Reading
+// loadUserSettings reads the user's config.json directly. Reading
 // fresh on every SSID transition (instead of caching + IPC sync from
 // the GUI) means rule edits made in Settings take effect on the next
 // network change without any explicit push, and there's no "in-memory

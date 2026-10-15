@@ -11,12 +11,9 @@ import (
 	"github.com/korjwl1/wireguide/internal/network"
 )
 
-// FirewallCleaner is the minimal slice of the firewall manager that
-// crash recovery needs — just enough to flush leftover OS-level rules.
-// Defined in the tunnel (domain) package so recovery doesn't need to
-// import the firewall (infra) package directly. The helper passes its
-// own live firewall instance in, preserving its in-memory state
-// (pfWasEnabled, savedDNSServers, etc.) across the cleanup.
+// FirewallCleaner is the recovery consumer's narrow firewall dependency.
+// The helper supplies its live instance so cleanup preserves backend ownership
+// and recovery bookkeeping; the tunnel engine need not import firewall.
 type FirewallCleaner interface {
 	Cleanup() error
 }
