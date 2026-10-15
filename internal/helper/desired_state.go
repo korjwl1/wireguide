@@ -10,6 +10,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/korjwl1/wireguide/internal/atomicfile"
 	"github.com/korjwl1/wireguide/internal/domain"
 	"github.com/korjwl1/wireguide/internal/ipc"
 	"github.com/korjwl1/wireguide/internal/wifi"
@@ -155,25 +156,7 @@ func saveDesiredIntent(dataDir string, st desiredStateJSON) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	tmp, err := os.CreateTemp(dir, desiredStateFile+".tmp-*")
-	if err != nil {
-		return err
-	}
-	tmpName := tmp.Name()
-	defer os.Remove(tmpName) // no-op after a successful rename
-	if _, err := tmp.Write(append(data, '\n')); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	// 0600: root-owned file in a root-owned dir; names aren't secret, but
-	// keep parity with the crash-recovery journal's permissions.
-	if err := os.Chmod(tmpName, 0o600); err != nil {
-		return err
-	}
-	return os.Rename(tmpName, desiredStatePath(dataDir))
+	return atomicfile.WriteFile(desiredStatePath(dataDir), append(data, '\n'), 0600)
 }
 
 // clearDesiredState removes the file (best-effort, errors logged).

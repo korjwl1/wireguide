@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sync"
 
+	"github.com/korjwl1/wireguide/internal/atomicfile"
 	"github.com/korjwl1/wireguide/internal/wifi"
 )
 
@@ -217,6 +218,25 @@ func (s *SettingsStore) loadLocked() (*Settings, error) {
 // delete) should use this rather than Load-then-Save. mutate sees the
 // freshest on-disk state.
 func (s *SettingsStore) Update(mutate func(*Settings) error) error {
+	return s.withWriteLock(func() error {
+		settings, err := s.loadLocked()
+		if err != nil {
+			return err
+		}
+		if err := mutate(settings); err != nil {
+			return err
+		}
+		return s.saveLocked(settings)
+	})
+}
+
+// Save writes a complete settings snapshot under the same cross-process lock
+// as Update. Call Update for edits that must preserve other writers' fields.
+func (s *SettingsStore) Save(settings *Settings) error {
+	return s.withWriteLock(func() error { return s.saveLocked(settings) })
+}
+
+func (s *SettingsStore) withWriteLock(write func() error) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err := os.MkdirAll(filepath.Dir(s.path), 0700); err != nil {
@@ -231,32 +251,7 @@ func (s *SettingsStore) Update(mutate func(*Settings) error) error {
 		return err
 	}
 	defer flockUnlock(int(lf.Fd())) //nolint:errcheck
-	settings, err := s.loadLocked()
-	if err != nil {
-		return err
-	}
-	if err := mutate(settings); err != nil {
-		return err
-	}
-	return s.saveLocked(settings)
-}
-
-// Save writes settings to disk atomically. It takes the same
-// cross-process file lock as Update so a whole-object GUI write can't
-// interleave with an in-progress CLI Update at the file level.
-func (s *SettingsStore) Save(settings *Settings) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if err := os.MkdirAll(filepath.Dir(s.path), 0700); err != nil {
-		return err
-	}
-	if lf, err := os.OpenFile(s.path+".lock", os.O_CREATE|os.O_RDWR, 0600); err == nil {
-		defer lf.Close()
-		if flockExclusive(int(lf.Fd())) == nil {
-			defer flockUnlock(int(lf.Fd())) //nolint:errcheck
-		}
-	}
-	return s.saveLocked(settings)
+	return write()
 }
 
 // saveLocked is Save's body without the mutex/flock, for callers (Update)
@@ -307,31 +302,7 @@ func (s *SettingsStore) saveLocked(settings *Settings) error {
 	if err := os.MkdirAll(filepath.Dir(s.path), 0700); err != nil {
 		return err
 	}
-	tmpFile, err := os.CreateTemp(filepath.Dir(s.path), ".wireguide-*.tmp")
-	if err != nil {
-		return err
-	}
-	tmpPath := tmpFile.Name()
-	if _, err := tmpFile.Write(data); err != nil {
-		tmpFile.Close()
-		os.Remove(tmpPath)
-		return err
-	}
-	if err := tmpFile.Sync(); err != nil {
-		tmpFile.Close()
-		os.Remove(tmpPath)
-		return err
-	}
-	if err := tmpFile.Close(); err != nil {
-		os.Remove(tmpPath)
-		return err
-	}
-	if err := os.Chmod(tmpPath, 0600); err != nil {
-		os.Remove(tmpPath)
-		return err
-	}
-	if err := atomicRenameDurable(tmpPath, s.path); err != nil {
-		os.Remove(tmpPath)
+	if err := atomicfile.WriteFile(s.path, data, 0600); err != nil {
 		return err
 	}
 	if retireBackup {
@@ -346,21 +317,5 @@ func writeAutomationBackup(path string, data []byte) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		return err
 	}
-	f, err := os.CreateTemp(filepath.Dir(path), ".automation-v2-*")
-	if err != nil {
-		return err
-	}
-	defer os.Remove(f.Name())
-	if _, err = f.Write(data); err != nil {
-		f.Close()
-		return err
-	}
-	if err = f.Sync(); err != nil {
-		f.Close()
-		return err
-	}
-	if err = f.Close(); err != nil {
-		return err
-	}
-	return atomicRenameDurable(f.Name(), path)
+	return atomicfile.WriteFile(path, data, 0600)
 }

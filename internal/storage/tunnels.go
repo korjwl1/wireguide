@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/korjwl1/wireguide/internal/atomicfile"
 	"github.com/korjwl1/wireguide/internal/config"
 	"github.com/korjwl1/wireguide/internal/healthcheck"
 )
@@ -48,33 +49,7 @@ func (s *TunnelStore) Save(cfg *config.WireGuardConfig) error {
 	content := config.Serialize(cfg)
 	path := s.path(cfg.Name)
 
-	// Atomic write: temp file + rename (prevents partial writes on crash).
-	// Use os.CreateTemp to avoid predictable temp file names (symlink attacks).
-	tmpFile, err := os.CreateTemp(filepath.Dir(path), ".wireguide-*.tmp")
-	if err != nil {
-		return err
-	}
-	tmpPath := tmpFile.Name()
-	if _, err := tmpFile.Write([]byte(content)); err != nil {
-		tmpFile.Close()
-		os.Remove(tmpPath)
-		return err
-	}
-	if err := tmpFile.Sync(); err != nil {
-		tmpFile.Close()
-		os.Remove(tmpPath)
-		return err
-	}
-	if err := tmpFile.Close(); err != nil {
-		os.Remove(tmpPath)
-		return err
-	}
-	if err := os.Chmod(tmpPath, 0600); err != nil {
-		os.Remove(tmpPath)
-		return err
-	}
-	if err := atomicRenameDurable(tmpPath, path); err != nil {
-		os.Remove(tmpPath)
+	if err := atomicfile.WriteFile(path, []byte(content), 0600); err != nil {
 		return err
 	}
 
@@ -514,33 +489,5 @@ func (s *TunnelStore) saveMetaLocked(name string, meta *TunnelMeta) error {
 		return err
 	}
 
-	dst := s.metaPath(name)
-	tmpFile, err := os.CreateTemp(filepath.Dir(dst), ".wireguide-meta-*.tmp")
-	if err != nil {
-		return err
-	}
-	tmpPath := tmpFile.Name()
-	if _, err := tmpFile.Write(data); err != nil {
-		tmpFile.Close()
-		os.Remove(tmpPath)
-		return err
-	}
-	if err := tmpFile.Sync(); err != nil {
-		tmpFile.Close()
-		os.Remove(tmpPath)
-		return err
-	}
-	if err := tmpFile.Close(); err != nil {
-		os.Remove(tmpPath)
-		return err
-	}
-	if err := os.Chmod(tmpPath, 0600); err != nil {
-		os.Remove(tmpPath)
-		return err
-	}
-	if err := atomicRenameDurable(tmpPath, dst); err != nil {
-		os.Remove(tmpPath)
-		return err
-	}
-	return nil
+	return atomicfile.WriteFile(s.metaPath(name), data, 0600)
 }

@@ -3,6 +3,7 @@ package update
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/korjwl1/wireguide/internal/atomicfile"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -12,7 +13,7 @@ import (
 
 // State is the persisted update-checker state.
 //
-// Lives alongside settings.json in ConfigDir so it survives app restarts
+// Lives alongside config.json in ConfigDir so it survives app restarts
 // without leaking into the system-wide DataDir owned by the root helper.
 // Only the GUI process reads/writes this file; the helper never touches
 // updates (update notifications are pure UI concerns — keep the root
@@ -157,11 +158,7 @@ func (s *StateStore) save() error {
 	if err != nil {
 		return err
 	}
-	tmp := s.path + ".tmp"
-	if err := os.WriteFile(tmp, raw, 0600); err != nil {
-		return err
-	}
-	return os.Rename(tmp, s.path)
+	return atomicfile.WriteFile(s.path, raw, 0600)
 }
 
 // LastCheckTime returns the timestamp of the last successful check as a

@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/korjwl1/wireguide/internal/atomicfile"
 	"golang.org/x/sys/unix"
 )
 
@@ -157,17 +158,5 @@ func writePfLease(state pfLeaseState) error {
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return err
 	}
-	f, err := os.CreateTemp(dir, ".pf-lease-")
-	if err != nil {
-		return err
-	}
-	defer os.Remove(f.Name())
-	if _, err := f.Write(data); err != nil {
-		_ = f.Close()
-		return err
-	}
-	if err := f.Close(); err != nil {
-		return err
-	}
-	return os.Rename(f.Name(), savedPfStateFile)
+	return atomicfile.WriteFile(savedPfStateFile, data, 0600)
 }

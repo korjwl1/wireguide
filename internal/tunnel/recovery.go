@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/korjwl1/wireguide/internal/atomicfile"
 	"github.com/korjwl1/wireguide/internal/network"
 )
 
@@ -99,7 +100,7 @@ func SaveActiveState(dataDir string, state *ActiveTunnelState) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(dir, stateFileName(state.TunnelName)), data, 0600)
+	return atomicfile.WriteFile(filepath.Join(dir, stateFileName(state.TunnelName)), data, 0600)
 }
 
 // ClearActiveState removes the state file for a specific tunnel.
