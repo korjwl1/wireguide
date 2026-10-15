@@ -5,7 +5,7 @@ export function modal(node, close) {
   dialogs.push(node);
   node.tabIndex = -1;
   const focusable = () => [...node.querySelectorAll('button, [href], input, select, textarea, [tabindex]')]
-    .filter(el => !el.disabled && el.tabIndex >= 0 && el.getClientRects().length > 0);
+    .filter(el => !el.matches(':disabled') && el.tabIndex >= 0 && el.getClientRects().length > 0);
   queueMicrotask(() => { if (node.isConnected) (focusable()[0] || node).focus(); });
   function keydown(event) {
     if (dialogs.at(-1) !== node) return;
