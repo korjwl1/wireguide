@@ -93,6 +93,35 @@ authorization attempt hit external-volume TCC protection and performed no
 network mutation. These were fixture/setup failures, not passing product
 checks or application defects.
 
+## Retest after the code-quality audit
+
+After administrator authorization, the executable was rebuilt from
+`fc70480c12133e650c4eaf0171091a6b11a58fd3` using Go 1.26.9 and the macOS
+12.0 CGo deployment settings. This includes the audit's canonical DNS
+checkpoint changes, atomic storage, IPC lifecycle and package refactoring;
+its final functional source is `ef31b4f`.
+
+`TestMacOSLiveProductionNetworking` **passed in 12.14 s**. The independent
+runner exited **0**, and `TestMacOSLiveEmergencyCleanup` also passed. All
+networking scenarios in the table above ran again. The test asserted exact
+per-service DNS/search restoration before emergency cleanup. The runner's
+DNS, default-route and interface-list snapshots matched byte for byte, and
+PF was disabled before and after. The temporary system launchd job was
+absent afterward, no test helper process remained, and the installed helper
+was still stopped with run count 1. A subsequent public HTTPS check returned
+HTTP 200. No installed app/helper was replaced.
+
+Private evidence: `macos-audit-evidence-20261015` under the session's SSD
+scratch folder. Executable SHA-256:
+`fed0ef54c7add22b76596b7e6ce7515ea8dfeeb67338a7feeb689331ce081723`.
+The earlier canceled authorization request produced no test results; this
+was a separate completed run with a freshly rebuilt executable.
+
+This fixture uses one global DNS tunnel and one split DNS tunnel. The
+two-global-tunnel original-baseline case has engine-level regression tests,
+not a two-global-tunnel native packet test. Actual sleep/wake remains
+deferred, and the other scope limits below still apply.
+
 ## Still open
 
 - **Actual sleep/wake:** explicitly deferred by the user in this session.
