@@ -50,7 +50,8 @@ func activateOldReservation(ctx context.Context, dir string) (bool, error) {
 		return false, err
 	}
 	if st.Mode&unix.S_IFMT != unix.S_IFDIR || int(st.Uid) != os.Getuid() || st.Mode&0777 != 0700 {
-		return false, fmt.Errorf("unsafe legacy GUI reservation directory")
+		// An untrusted directory cannot belong to this user's old GUI.
+		return false, nil
 	}
 	fd, err := unix.Open(filepath.Join(dir, "gui.lock"), unix.O_RDWR|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
 	if errors.Is(err, os.ErrNotExist) {
@@ -64,7 +65,7 @@ func activateOldReservation(ctx context.Context, dir string) (bool, error) {
 		return false, err
 	}
 	if st.Mode&unix.S_IFMT != unix.S_IFREG || int(st.Uid) != os.Getuid() || st.Mode&0777 != 0600 || st.Nlink != 1 {
-		return false, fmt.Errorf("unsafe legacy GUI reservation lock")
+		return false, nil
 	}
 	if err := unix.Flock(fd, unix.LOCK_EX|unix.LOCK_NB); err == nil {
 		return false, nil

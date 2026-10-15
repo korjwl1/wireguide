@@ -200,3 +200,14 @@ func TestMacOSMigrationActivatesOldReservation(t *testing.T) {
 		t.Fatalf("stale old lock prevented new primary: %v %v", active, err)
 	}
 }
+
+func TestMacOSMigrationIgnoresUntrustedOldReservation(t *testing.T) {
+	dir := macInstanceDir(t)
+	if err := os.Chmod(dir, 0777); err != nil {
+		t.Fatal(err)
+	}
+	active, err := activateOldReservation(context.Background(), dir)
+	if err != nil || active {
+		t.Fatalf("unsafe old path denied private reservation: %v %v", active, err)
+	}
+}
