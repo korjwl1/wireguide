@@ -25,8 +25,11 @@ The second process verifies the pipe server's user/session and grants that
 PID foreground permission with `AllowSetForegroundWindow`. It sends a bounded
 activation request and exits after acknowledgement. Failure to contact a live
 owner does not start another GUI. During shutdown the reservation remains
-held until helper teardown and GUI background loops finish; a relaunch retries
-until release, within a five-second contact budget.
+held until GUI shutdown and its background loops finish; a relaunch retries
+until release, within a five-second contact budget. The helper Shutdown RPC
+acknowledges a request asynchronously; this is not proof that privileged
+helper teardown has already completed. Quit/relaunch helper timing still
+needs the target-machine check below.
 
 Requests coalesce while UAC or the WebView is initializing. Delivery waits for
 `WindowRuntimeReady`. Activation restores a minimized window, shows it and

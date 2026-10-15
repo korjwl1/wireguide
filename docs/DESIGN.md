@@ -13,8 +13,8 @@ starts the root helper on contact. `RunAtLoad=false` prevents boot execution;
 `KeepAlive={AfterInitialDemand:true, SuccessfulExit:false}` restarts crashes
 after demand. The helper adopts the listener without unlinking it, verifies
 peer credentials, and gates automation until the first GUI control connection.
-A transient CLI probe does not grant that control lease. With no GUI or desired
-tunnels it exits after 15 seconds when activated (60 seconds for a direct
+A transient CLI probe does not grant that control lease. Same-boot desired recovery is separate from new automation and may run
+without a GUI. With no GUI or desired tunnels it exits after 15 seconds when activated (60 seconds for a direct
 start); after GUI detachment the grace is 10 seconds. Same-boot crash recovery
 retains existing desired tunnel intent. Clean quit cancels GUI probes before
 shutting down the helper, so they cannot activate it again.
@@ -23,7 +23,9 @@ Installation, upgrades and repair can require administrator authorization;
 a healthy installed job starts through its socket. Legacy socket migration
 asks the old helper to shut down before replacing it. Temporary disappearance
 of the app bundle never deletes the helper or its recovery state. Uninstall
-is explicit; removing only the app can leave a dormant launchd registration.
+requires a manual removal or Homebrew zap; no native app/CLI helper uninstaller
+is provided. Removing only the app leaves a dormant launchd registration. See
+[README removal instructions](../README.md#macos-removal-and-helper-cleanup).
 
 ```
 ┌──────────────────────────────┐     ┌──────────────────────────────┐
@@ -82,9 +84,9 @@ choose between them. The kill switch remains an independent outer restriction.
 This adapts the per-resolver approach proposed in
 [PR #50](https://github.com/korjwl1/wireguide/pull/50), while retaining the
 existing helper, Windows address-based DNS permits and wg-quick routing model.
-Unlike that PR, a resolver's route is checked against all connected tunnel
-configs, and /1 route pairs do not change /0-specific firewall auto-enable
-semantics ([WireGuard's documented distinction](https://git.zx2c4.com/wireguard-windows/tree/docs/netquirk.md)).
+A resolver's route is checked against all connected tunnel configs. Both
+the original PR source and this implementation retain /0-specific firewall
+auto-enable semantics ([WireGuard's documented distinction](https://git.zx2c4.com/wireguard-windows/tree/docs/netquirk.md)).
 
 A periodic helper reconciliation retries failed DNS and kill-switch changes
 with bounded backoff and skips healthy, unchanged sets. Kill-switch intent is
@@ -649,3 +651,26 @@ WireGuide chose wireguard-go for cross-platform support and full control over ne
 ### Why pf anchors instead of modifying main ruleset?
 
 macOS Tahoe's `pfctl -sr` outputs `scrub-anchor` directives that cause syntax errors when re-loaded. Using anchors avoids touching the main ruleset entirely — the `com.apple/*` wildcard evaluates our rules automatically.
+
+
+### Independent review follow-up (2026-10-15)
+
+The [Claude review of 68fdca0](analysis/claude-integration-review-20261015.md)
+found additional omissions; the [disposition](analysis/claude-review-disposition.md)
+records the fixes. Firewall snapshots now use manager lifecycle state rather
+than wgctrl telemetry; a failed stats query cannot erase a live permit. DNS
+intent is loaded before background workers start. Cached wanted transports
+keep the helper alive during retry gaps and are exposed through IPC 1.3 so
+headless recovery can be stopped from the CLI. Legacy connect locks unwind
+on panic. Signal shutdown reserves part of its deadline for parallel best-
+effort firewall/DNS fallback; stalled OS commands can still outlast that cap,
+so recovery journals remain necessary.
+
+PF enforcement is checked by the safety net and restored after an external
+PF disable. Invalid same-boot tokens do not wedge release. DNS permits cannot
+open off-tunnel exceptions through the kill switch on macOS/Windows; Windows
+KS activation and DNS narrowing commit in one transaction. WFP IDs and flags
+are updated only after commit. Mixed DNS diagnostics evaluate default and
+supplemental resolvers separately and retain both leak and incomplete-check
+results. Manual overrides use positive evidence of a network change; missing
+ARP and IPv6 prefix churn do not clear an explicit Off.

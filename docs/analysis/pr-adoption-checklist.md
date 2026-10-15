@@ -4,7 +4,10 @@ Checked on 2026-10-15 against the PR descriptions, feature-only diffs, general
 comments, reviews, inline comments, and the detailed #48/#49 issue comments.
 Source heads: #50 `c06c0fe`, #51 `37e63bb`, #52 `0bb2fb7`, #53 `f1de66f`.
 
-This records behavior, its implementation and verification, plus explicit
+The first version of this checklist overclaimed coverage. An independent
+[Claude review](claude-integration-review-20261015.md) of 68fdca0 found omissions
+and regressions; the [follow-up disposition](claude-review-disposition.md) records
+the corrections. This records behavior, implementation and verification, plus explicit
 policy changes. Main has not received these branch changes and the original
 PRs remain open. #47 RPM packaging is outside this integration.
 
@@ -12,7 +15,7 @@ PRs remain open. #47 RPM packaging is outside this integration.
 
 | Requested behavior | Implementation and evidence |
 |---|---|
-| Helper owns wanted DNS / kill-switch settings; ignore legacy client DNS list | `helper/dns_protection.go`, `kill_switch.go`, `handlers.go`; handler, desired-state and DNS intent failure tests |
+| Helper owns wanted DNS / kill-switch settings; restore saved DNS intent before workers; ignore legacy client DNS list | `helper/dns_protection.go`, `kill_switch.go`, `handlers.go`; handler, desired-state and DNS intent failure tests |
 | Reconcile manual connect, all disconnect paths including partial failure, automation, watchdog, restore, resume | Shared post-connect / teardown / disconnect reconciliation; `dns_protection_test.go`, `forced_disconnect_test.go`, `desired_state_test.go`; periodic live-set tests |
 | Retry failed applies with backoff; skip healthy unchanged state | Separate DNS / KS journals; periodic `dnsReconcileLoop` calls both; failure, backoff, healthy-rule and lost-backend-state tests |
 | Reconnect suspension, zero-tunnel blockade and every exit including panic | Successful suspend depth; final-owner resume; suspend rollback; monitor deferred resume and retry-slot cleanup; nested, explicit On/Off, failed apply/connect/suspend and panic regression tests |
@@ -51,7 +54,7 @@ Configuration verification for supplemental resolvers is not a packet trace.
 | Negated SSID/subnet/MAC conditions in config, editor, CLI and en/ko/ja | `wifi/automation.go`, JSON storage, AutomationEditor, `ctl automation add`; evaluation, JSON and CLI tests |
 | Unknown input / offline / settle holds; known empty SSID on wired uplink | Network context and EvaluateDetailed; negation tables; Windows interface detection limit below |
 | Primary-interface settle fingerprint; preview peeks without resetting | `wifi/settle.go`, `helper/automation_state.go`; fake-clock, primary-only and preview-drift tests |
-| Manual connect/disconnect wins until settled network identity changes | Per-tunnel latch shared by GUI/tray/CLI handlers; network identity includes SSID, iface, gateway MAC and subnet; latch/rename/offline/same-SSID tests |
+| Manual connect/disconnect wins until settled network identity changes | Per-tunnel latch shared by GUI/tray/CLI; compare positive network evidence, preserve Off through missing ARP and IPv6 churn; latch/rename/offline/same-SSID/wired-change tests |
 | Saving rules reevaluates; held rules reevaluate after settling | Rules file watcher and settle timer; watcher and timer tests |
 | ErrAlreadyConnected / ErrNotConnected tolerance, all-tunnel teardown once, only down tunnels reconnect, end when no intent remains | Helper/monitor reconnect paths; reconnect and automation-state tests; pending desired restore remains eligible |
 | Wait for default route before wake/roam teardown | `prepareReconnect` wired through monitor preflight; ordering, cancellation and route-probe tests |
@@ -66,7 +69,7 @@ Configuration verification for supplemental resolvers is not a packet trace.
 | Dormant automation until GUI seen; short GUI-less grace; active/pending wanted tunnel keeps helper alive | Helper startup gate, grace timer, desired-state integration; activation and recovery tests |
 | Up-to-date install avoids authorization; repair missing/broken job; graceful legacy upgrade | Elevation and GUI lifecycle paths; slow activation/no-spawn, readiness/cancellation, legacy shutdown and repair tests |
 | Quit stops recovery before shutdown so helper is not reactivated | GUI quit/recovery lifecycle; cancellation/quit tests |
-| IPC 1.2 GUI presence; transient CLI start/stop/status semantics | `gui_attached` metadata, transient transport, CLI lifecycle; IPC and CLI tests |
+| IPC 1.2 GUI presence; transient CLI start/stop/status semantics | `gui_attached` and additive IPC 1.3 `wanted_tunnels` metadata, transient transport, CLI lifecycle; pending-stop IPC tests |
 | Owner-only RPC | Socket permissions plus existing peer UID checks; private transport and plist tests |
 
 ## Deliberate changes / exclusions
@@ -77,12 +80,12 @@ reproductions and compatibility reasons.
 | Original behavior | Adopted policy and reason |
 |---|---|
 | #50 unified firewall reconciler | Retain separate OS backends and DNS lock; add full KS wanted/retry reconciliation and shared reconnect ownership. Preserves existing Windows filters and #44/#49 lifecycle. |
-| #50 treat `/1` pairs like `/0` for automatic firewall policy | `/1` participates in resolver routing; retain existing `/0` auto-enable policy, matching the documented WireGuard routing distinction. |
+| `/1` automatic-firewall policy | Correction: the original PR source also uses `/0` (`IsFullTunnel`); this was not an excluded feature. `/1` remains part of resolver routing. |
 | #51 warn and connect when split DNS is unsupported | Explicit DNS failure fails Connect, preserving the existing DNS contract. Windows split DNS remains unsupported. Linux requires working resolved integration. |
 | #52 same-SSID identity, old-binary negation inversion | Include underlying network identity; store negated rule lists separately so older versions cannot execute their positive inverses. |
 | #52 suppress repair for manual On / rule-owned tunnels | Preserve transport repair for wanted On; manual Off and durable watchdog blocks veto restoration. Avoids stranded active-looking tunnels after wake. |
-| #52 silently omit LAN-overlapping routes and skip cached reconnects | Keep explicit manual configuration and recovery intent intact. Only rule-driven automatic connect is skipped for overlap. |
-| #53 delete helper automatically after two missing-app checks | Exclude orphan self-uninstall and bundle flag: a short app update or unavailable volume must not erase the recovery executable or journals. Existing explicit uninstall remains. |
+| #52 silently omit LAN-overlapping routes and skip cached reconnects | Keep explicit manual configuration and recovery intent intact. Rule-driven automatic connect and recovery of automatically owned intent are skipped for overlap; explicit manual On remains authoritative. |
+| #53 delete helper automatically after two missing-app checks | Exclude orphan self-uninstall and bundle flag: a short app update or unavailable volume must not erase the recovery executable or journals. There is no native app/CLI helper uninstaller. README now documents explicit manual removal and Homebrew zap. |
 | Original release fragments | Release notes/version remain a separate main/release step; no release was cut. |
 
 ## Verification and limits

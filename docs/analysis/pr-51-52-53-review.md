@@ -328,8 +328,9 @@ checks, dormant automation before GUI attachment and cancellation at quit.
 The existing bounded signals, IPC write cancellation, durable watchdog blocks,
 macOS native tray and desired-state recovery remain in place. Automatic orphan
 self-uninstall is excluded: transient app replacement must not erase the only
-recovery binary. Explicit uninstall metadata includes the new socket and actual
-PF journal path.
+recovery binary. Correction from the independent review: there is no native helper uninstall
+command; README now documents manual removal and Homebrew zap, while preserving
+recovery journals until cleanup succeeds.
 
 Fresh full-repository race tests and vet passed. Windows amd64 and Linux arm64
 core builds passed. Real per-user launchd fixtures passed for generated plist
@@ -410,3 +411,12 @@ corrections. PR descriptions, general comments, submitted reviews and inline
 comments were refreshed on this date at the immutable heads listed above;
 #48/#49 comments were also read again. #50–#53 have no submitted comments or
 reviews at those heads.
+
+
+The independent [Claude review of 68fdca0](claude-integration-review-20261015.md)
+subsequently found further omissions/regressions and factual errors in the
+checklist. The [disposition](claude-review-disposition.md) supersedes blanket
+completion claims and maps each reported item to its correction or explicit
+policy/runtime limit. In particular the original PR source also retained `/0`
+automatic-firewall policy, and the native app/CLI never provided an explicit
+helper uninstall command.
