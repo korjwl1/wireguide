@@ -301,12 +301,19 @@ func (h *Helper) pruneManualOverrides(st networkState) {
 			delete(h.manualOverride, name)
 			continue
 		}
+		// Absence is not a new identity: an ARP miss or IPv6 churn keeps the
+		// latch. A known latch is never enriched from later observations.
+		// "No difference found" does not prove the device is still on the
+		// latch network: a different router sharing the SSID, /24 and gateway
+		// IP looks identical while the field that would tell them apart (the
+		// gateway MAC) is missing from the latch, and copying that router's
+		// MAC in would release the latch on returning to the original network.
+		// Only a latch made while the network was unknown adopts the first
+		// settled, known network as its baseline.
 		if l.unknown && st.identityKnown {
 			l.identity, l.unknown = st.identity, false
+			l.evidence = l.evidence.enrich(st.evidence)
 		}
-		// Absence is not a new identity. Keep positive evidence through an ARP
-		// miss or IPv6 churn; fill previously unknown fields when they appear.
-		l.evidence = l.evidence.enrich(st.evidence)
 		h.manualOverride[name] = l
 	}
 }
@@ -337,11 +344,12 @@ func (e networkEvidence) enrich(n networkEvidence) networkEvidence {
 	}
 	return e
 }
+
+// networkChanged reports positive evidence that b is a different network
+// from a. Missing fields never count. The interface alone is not evidence:
+// docking from Wi-Fi to Ethernet on the same LAN changes it.
 func networkChanged(a, b networkEvidence) bool {
 	if a.SSID != "" && b.SSID != "" && a.SSID != b.SSID {
-		return true
-	}
-	if a.Iface != "" && b.Iface != "" && a.Iface != b.Iface {
 		return true
 	}
 	if a.MAC != "" && b.MAC != "" && !strings.EqualFold(a.MAC, b.MAC) {
@@ -370,7 +378,12 @@ func networkChanged(a, b networkEvidence) bool {
 	}
 	// Wired/permission-denied SSID probes still identify a move with positive
 	// gateway evidence. An empty SSID or MAC by itself never releases Off.
-	return a.SSID == "" && b.SSID == "" && a.Gateway != "" && b.Gateway != "" && a.Gateway != b.Gateway
+	// Both observations must come from the same uplink: on platforms that
+	// resolve the interface, a blank one means another VPN owns the default
+	// route and the gateway is its tunnel peer, not the physical network.
+	// Windows never resolves it, so both sides are blank there.
+	return a.SSID == "" && b.SSID == "" && a.Iface == b.Iface &&
+		a.Gateway != "" && b.Gateway != "" && a.Gateway != b.Gateway
 }
 
 // manualLatchFor returns the latch for name, if any.
