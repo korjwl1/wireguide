@@ -383,3 +383,30 @@ Only after main contains that implementation should #50–#53 be closed as
 superseded, with links to the replacement and relevant verification. They
 should not be represented as unmodified merges. Keep #47 open for its separate
 packaging review. No original PR is closed by this local coverage audit.
+
+
+## Follow-up after adversarial verification (2026-10-15)
+
+The coverage table above described intended adoption too broadly. The next
+review reproduced nested reconnect state loss and failed kill-switch restore
+losing its retry intent. Further line-by-line comparison with #50 found its
+panic-safe deferred resume missing, and DNS setting failure reverted wanted
+state instead of retrying the request. A failed suspend also proceeded with
+transport teardown. These paths have now been implemented and regression
+checked alongside existing #44/#49 recovery and explicit manual Off.
+
+The helper retains separate DNS and kill-switch backends, with wanted/applied
+journals for both, nested successful-suspension ownership, bounded apply retry,
+tracked stale-permit removal and healthy-state detection. An unsuccessful
+suspend rolls back (including on panic) and the monitor leaves the old
+transport up. Reconnect panic resumes once and removes the dead retry slot.
+Global DNS diagnostics now report enumeration failure, empty resolver lists
+and no responses as unverified; mixed mode preserves a failed global check.
+
+The complete requirement-to-implementation mapping and exclusions are recorded
+in [pr-adoption-checklist.md](pr-adoption-checklist.md). It supersedes any claim
+that the original PRs had already been completely implemented before these
+corrections. PR descriptions, general comments, submitted reviews and inline
+comments were refreshed on this date at the immutable heads listed above;
+#48/#49 comments were also read again. #50–#53 have no submitted comments or
+reviews at those heads.

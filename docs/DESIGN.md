@@ -86,9 +86,14 @@ Unlike that PR, a resolver's route is checked against all connected tunnel
 configs, and /1 route pairs do not change /0-specific firewall auto-enable
 semantics ([WireGuard's documented distinction](https://git.zx2c4.com/wireguard-windows/tree/docs/netquirk.md)).
 
-A periodic helper reconciliation retries failed DNS rule changes with bounded
-backoff and skips successfully applied, unchanged sets. It respects reconnect
-suspension and shutdown. Linux deletion errors retain the active state and
+A periodic helper reconciliation retries failed DNS and kill-switch changes
+with bounded backoff and skips healthy, unchanged sets. Kill-switch intent is
+separate from actual backend state: failed On/Off requests, connect rollback
+and resume retain the requested setting. Each successful reconnect suspension
+owns one level; only the last resume applies current rules. Explicit reapply
+cannot bypass suspension. Failed suspension rolls back without an owner and
+keeps the transport up for retry. Deferred resume also runs on reconnect panic;
+the dead retry slot is removed. Shutdown prevents later rule installation. Linux deletion errors retain the active state and
 propagate to the caller; startup removes stale kernel DNS tables even without
 a tunnel crash journal. Linux kernel integration tests run in an isolated
 container namespace with CAP_NET_ADMIN and WIREGUIDE_TEST_NFT=1.
@@ -116,7 +121,7 @@ firewall reconciliation on disconnect errors. These are now implemented.
 |---|---|
 | Helper-owned wanted DNS state; ignore legacy GUI server list | `dns_protection.go`; handler and multi-tunnel tests |
 | Reconcile connect, disconnect, automation, watchdog, restore and resume | Serialized helper transitions plus periodic DNS retry; error returns now also rebuild rules immediately |
-| Retry failures without removing a surviving tunnel's permits | Failed kill-switch removals are queued with bounded backoff; interface reuse cancels obsolete removals |
+| Retry failures without removing a surviving tunnel's permits | DNS and kill-switch wanted/applied journals retry failures with backoff; failed permit removals remain tracked; interface reuse cancels obsolete removals |
 | Per-resolver tunnel/physical permits; DNS-less/no protected tunnel | Longest prefix across connected configs; physical address permits; empty sets remove rules |
 | PF ordered anchor updates and rollback | DNS sub-anchor prepared before main replacement; failed activation restores the committed main rules; rollback failure is returned |
 | PF reference ownership and existing main rules | Same-boot `-E`/`-X` token; existing required wildcard preserved |
@@ -429,7 +434,14 @@ Wake detected (all tunnels)
 
 **Exponential backoff**: 5s initial, 60s max, unlimited attempts.
 
-**Firewall suspend/resume**: on reconnect, utun name changes (utun4->utun5). Old kill switch rules block the new interface. Suspending before disconnect and resuming after connect with fresh interface/endpoints prevents this deadlock.
+**Firewall suspend/resume**: on reconnect, utun name changes (utun4->utun5).
+Old rules can block the new interface. Successful suspensions are counted;
+only the last matching resume rebuilds rules from current tunnels and wanted
+settings. Failed suspension preserves the old transport and retries later.
+Resume runs on success, failure, cancellation and panic. An OS apply failure
+keeps wanted state and remains pending for periodic retry. See the
+[PR adoption checklist](analysis/pr-adoption-checklist.md) for verified paths
+and deliberate differences from the contributor proposals.
 
 ### Loop watchdog and forced disconnect
 
