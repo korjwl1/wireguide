@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/korjwl1/wireguide/internal/automation"
 	"github.com/korjwl1/wireguide/internal/domain"
 	"github.com/korjwl1/wireguide/internal/ipc"
 	"github.com/korjwl1/wireguide/internal/reconnect"
@@ -55,7 +56,7 @@ func newAutomationHelper(t *testing.T, ssid string) (*Helper, *fakeClock) {
 	t.Helper()
 	clk := &fakeClock{t: time.Unix(10_000, 0)}
 	h := newPendingTestHelper(t)
-	h.settle = wifi.NewSettleTracker(clk.Now)
+	h.settle = automation.NewSettleTracker(clk.Now)
 	h.manualOverride = map[string]manualLatch{}
 	h.autoConnectedBy = map[string]string{}
 	h.wifiMon = wifi.NewMonitor(nil)
@@ -72,7 +73,7 @@ func TestNetworkContextFields(t *testing.T) {
 	h, clk := newAutomationHelper(t, "CafeWiFi")
 
 	st := h.currentNetworkState()
-	if st.ctx.Settled || st.settleRemaining != wifi.NegationSettleWindow {
+	if st.ctx.Settled || st.settleRemaining != automation.NegationSettleWindow {
 		t.Fatalf("fresh context must be unsettled: %+v rem=%v", st.ctx, st.settleRemaining)
 	}
 	if st.ctx.PrimaryIface != "en0" || !st.ctx.PrimaryIsWiFi || !st.ctx.Online {
@@ -81,7 +82,7 @@ func TestNetworkContextFields(t *testing.T) {
 	if st.identity != networkIdentity("CafeWiFi", p.Iface, p.GatewayMAC, p.Subnets) {
 		t.Fatalf("identity %q", st.identity)
 	}
-	clk.Advance(wifi.NegationSettleWindow)
+	clk.Advance(automation.NegationSettleWindow)
 	if st := h.currentNetworkState(); !st.ctx.Settled {
 		t.Fatal("must settle after the window")
 	}
@@ -124,7 +125,7 @@ func TestManualLatchHoldsThroughBlipClearsOnSettledChange(t *testing.T) {
 	// Back on the same network and settled -> same identity, latch stays.
 	h.wifiMon.ReportExternalSSID("HomeWiFi")
 	h.currentNetworkState()
-	clk.Advance(wifi.NegationSettleWindow)
+	clk.Advance(automation.NegationSettleWindow)
 	st = h.currentNetworkState()
 	if !st.ctx.Settled {
 		t.Fatal("expected settled")
@@ -137,7 +138,7 @@ func TestManualLatchHoldsThroughBlipClearsOnSettledChange(t *testing.T) {
 	// Settled on a different network -> cleared.
 	h.wifiMon.ReportExternalSSID("CafeWiFi")
 	h.currentNetworkState()
-	clk.Advance(wifi.NegationSettleWindow)
+	clk.Advance(automation.NegationSettleWindow)
 	st = h.currentNetworkState()
 	h.pruneManualOverrides(st)
 	if _, ok := h.manualLatchFor("Site"); ok {
@@ -149,7 +150,7 @@ func TestPruneLatchesWithoutRules(t *testing.T) {
 	h, _ := newAutomationHelper(t, "x")
 	h.manualOverride["a"] = manualLatch{identity: "i"}
 	h.manualOverride["b"] = manualLatch{identity: "i"}
-	h.pruneLatchesWithoutRules(map[string][]wifi.Rule{"a": {{Do: wifi.ActionConnect}}})
+	h.pruneLatchesWithoutRules(map[string][]automation.Rule{"a": {{Do: automation.ActionConnect}}})
 	if _, ok := h.manualOverride["a"]; !ok {
 		t.Error("a has rules, must stay")
 	}
@@ -203,10 +204,10 @@ func captureLogs(t *testing.T) *logBuf {
 	return buf
 }
 
-func writeAutomation(t *testing.T, h *Helper, rules map[string][]wifi.Rule) {
+func writeAutomation(t *testing.T, h *Helper, rules map[string][]automation.Rule) {
 	t.Helper()
 	s := storage.DefaultSettings()
-	s.Automation = &wifi.Automation{PerTunnel: rules}
+	s.Automation = &automation.Automation{PerTunnel: rules}
 	b, err := json.Marshal(s)
 	if err != nil {
 		t.Fatal(err)
@@ -221,10 +222,10 @@ func TestReevaluateRespectsLatchAndArmsSettleTimer(t *testing.T) {
 	h, clk := newAutomationHelper(t, "CafeWiFi")
 	h.done = make(chan struct{})
 	t.Cleanup(h.stopSettleTimer)
-	writeAutomation(t, h, map[string][]wifi.Rule{
+	writeAutomation(t, h, map[string][]automation.Rule{
 		"Site": {
-			{When: wifi.Condition{Type: wifi.CondSSID, SSID: "HomeWiFi"}, Do: wifi.ActionDisconnect},
-			{When: wifi.Condition{Type: wifi.CondSSID, Negate: true, SSID: "HomeWiFi"}, Do: wifi.ActionConnect},
+			{When: automation.Condition{Type: automation.CondSSID, SSID: "HomeWiFi"}, Do: automation.ActionDisconnect},
+			{When: automation.Condition{Type: automation.CondSSID, Negate: true, SSID: "HomeWiFi"}, Do: automation.ActionConnect},
 		},
 	})
 
@@ -242,7 +243,7 @@ func TestReevaluateRespectsLatchAndArmsSettleTimer(t *testing.T) {
 	}
 
 	// Settled: the rule connects (observed via the missing tunnel store).
-	clk.Advance(wifi.NegationSettleWindow)
+	clk.Advance(automation.NegationSettleWindow)
 	logs.Reset()
 	h.reevaluateAutomation("test")
 	if !strings.Contains(logs.String(), "tunnel store unavailable") {
@@ -331,8 +332,8 @@ func TestWaitForDefaultRoute(t *testing.T) {
 func TestLegacyReconnectRestoresUnmanagedRuleTunnel(t *testing.T) {
 	stubNetwork(t, wifiProbe())
 	h, _ := newAutomationHelper(t, "cafe")
-	writeAutomation(t, h, map[string][]wifi.Rule{
-		"Site": {{When: wifi.Condition{Type: wifi.CondSSID, SSID: "CafeWiFi"}, Do: wifi.ActionConnect}},
+	writeAutomation(t, h, map[string][]automation.Rule{
+		"Site": {{When: automation.Condition{Type: automation.CondSSID, SSID: "CafeWiFi"}, Do: automation.ActionConnect}},
 	})
 	h.activeCfgs["Site"] = cfgNamed("Site", "10.0.0.0/24")
 
@@ -354,8 +355,8 @@ func TestSettleTimerArmedForLatchWithPositiveOnlyRules(t *testing.T) {
 	h, _ := newAutomationHelper(t, "Home")
 	h.done = make(chan struct{})
 	t.Cleanup(h.stopSettleTimer)
-	writeAutomation(t, h, map[string][]wifi.Rule{
-		"T": {{When: wifi.Condition{Type: wifi.CondSSID, SSID: "Cafe"}, Do: wifi.ActionConnect}},
+	writeAutomation(t, h, map[string][]automation.Rule{
+		"T": {{When: automation.Condition{Type: automation.CondSSID, SSID: "Cafe"}, Do: automation.ActionConnect}},
 	})
 	h.manualOverride["T"] = manualLatch{identity: "ssid:Cafe", disconnected: true}
 
@@ -378,7 +379,7 @@ func TestLatchSurvivesOfflineAndAdoptsKnownIdentity(t *testing.T) {
 	// Offline for longer than the settle window: latch must stay.
 	p.Gateway, p.Iface = "", ""
 	h.currentNetworkState()
-	clk.Advance(wifi.NegationSettleWindow)
+	clk.Advance(automation.NegationSettleWindow)
 	st := h.currentNetworkState()
 	if !st.ctx.Settled || st.ctx.Online {
 		t.Fatalf("expected settled offline: %+v", st.ctx)
@@ -393,7 +394,7 @@ func TestLatchSurvivesOfflineAndAdoptsKnownIdentity(t *testing.T) {
 	p.Gateway, p.Iface = "192.168.50.1", "en0"
 	h.wifiMon.ReportExternalSSID("")
 	h.currentNetworkState()
-	clk.Advance(wifi.NegationSettleWindow)
+	clk.Advance(automation.NegationSettleWindow)
 	h.currentNetworkState()
 	h.recordManualOverride("T2", false)
 	if l, _ := h.manualLatchFor("T2"); !l.unknown {
@@ -401,7 +402,7 @@ func TestLatchSurvivesOfflineAndAdoptsKnownIdentity(t *testing.T) {
 	}
 	h.wifiMon.ReportExternalSSID("HomeWiFi")
 	h.currentNetworkState()
-	clk.Advance(wifi.NegationSettleWindow)
+	clk.Advance(automation.NegationSettleWindow)
 	st = h.currentNetworkState()
 	h.pruneManualOverrides(st)
 	l, ok := h.manualLatchFor("T2")
@@ -443,9 +444,9 @@ func TestRuleDisconnectCancelsRetryForInactiveTunnel(t *testing.T) {
 	stubNetwork(t, wifiProbe())
 	h, _ := newAutomationHelper(t, "HomeWiFi")
 	h.done = make(chan struct{})
-	writeAutomation(t, h, map[string][]wifi.Rule{
+	writeAutomation(t, h, map[string][]automation.Rule{
 		"home-vpn": {
-			{When: wifi.Condition{Type: wifi.CondSSID, SSID: "HomeWiFi"}, Do: wifi.ActionDisconnect},
+			{When: automation.Condition{Type: automation.CondSSID, SSID: "HomeWiFi"}, Do: automation.ActionDisconnect},
 		},
 	})
 	h.monitor = startPendingRetry(t, "home-vpn")
@@ -464,7 +465,7 @@ func TestManualOverrideClearsForDifferentNetworkWithSameSSID(t *testing.T) {
 	p.GatewayMAC = "02:00:00:00:00:02"
 	p.Subnets = []string{"192.168.60.0/24"}
 	h.currentNetworkState()
-	clk.Advance(wifi.NegationSettleWindow)
+	clk.Advance(automation.NegationSettleWindow)
 	h.pruneManualOverrides(h.currentNetworkState())
 	if _, ok := h.manualLatchFor("Site"); ok {
 		t.Fatal("same SSID on a different gateway retained override")

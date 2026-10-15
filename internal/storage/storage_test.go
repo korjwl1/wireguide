@@ -6,8 +6,8 @@ import (
 	"runtime"
 	"testing"
 
+	"github.com/korjwl1/wireguide/internal/automation"
 	"github.com/korjwl1/wireguide/internal/config"
-	"github.com/korjwl1/wireguide/internal/wifi"
 )
 
 func testConfig() *config.WireGuardConfig {
@@ -352,8 +352,8 @@ func TestRenameAndDeleteTunnelRules(t *testing.T) {
 	st := NewSettingsStore(dir)
 	if err := st.Update(func(s *Settings) error {
 		s.EnsureAutomation()
-		s.Automation.PerTunnel["old"] = []wifi.Rule{
-			{When: wifi.Condition{Type: wifi.CondNoneMatch}, Do: wifi.ActionConnect},
+		s.Automation.PerTunnel["old"] = []automation.Rule{
+			{When: automation.Condition{Type: automation.CondNoneMatch}, Do: automation.ActionConnect},
 		}
 		return nil
 	}); err != nil {

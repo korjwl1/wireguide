@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/korjwl1/wireguide/internal/ipc"
-	"github.com/korjwl1/wireguide/internal/update"
+	"github.com/korjwl1/wireguide/internal/version"
 	"github.com/korjwl1/wireguide/internal/wifi"
 )
 
@@ -50,7 +50,7 @@ func (h *Helper) handleSetLogLevel(params json.RawMessage) (interface{}, error) 
 }
 
 func (h *Helper) handlePing(params json.RawMessage) (interface{}, error) {
-	return ipc.PingResponse{Version: ipc.ProtocolVersion, AppVersion: update.CurrentVersion(), GUIAttached: h.server != nil && h.server.HasControlConn(),
+	return ipc.PingResponse{Version: ipc.ProtocolVersion, AppVersion: version.Current, GUIAttached: h.server != nil && h.server.HasControlConn(),
 		PID: os.Getpid(), WantedTunnels: h.wantedTunnelNames()}, nil
 }
 
@@ -92,23 +92,9 @@ func (h *Helper) handleRequestQuit(params json.RawMessage) (interface{}, error) 
 	return ipc.RequestQuitResponse{NotifiedGUI: false}, nil
 }
 
-// handleForceShutdown bypasses graceful teardown and exits as fast as
-// possible. Used by the GUI's upgrade path when MethodShutdown failed
-// (wedged handler, stale state).
-//
-// We still do a minimum-effort firewall cleanup before exit:
-//   - macOS: pf anchors persist past process death, so leaving the kill
-//     switch up would lock the user out of the internet.
-//   - Linux: nftables wireguide table persists in the kernel, same risk.
-//   - Windows: WFP dynamic-session filters are auto-deleted by BFE when
-//     the process dies (FWPM_SESSION_FLAG_DYNAMIC contract), so the
-//     Cleanup call here is a no-op on the kernel side — still cheap.
-//
-// Tunnels themselves (TUN device + wireguard-go) are NOT torn down — the
-// utun/wg interface disappears when the process dies on Unix, and Wintun
-// adapters get cleaned up by our cleanupStaleWintunAdapter on next launch.
-// The whole sequence is bounded by a 3-second deadline so a wedged
-// firewall.Cleanup can't keep ForceShutdown hostage.
+// handleForceShutdown attempts normal cleanup with a three-second deadline.
+// It is the upgrade fallback for an unresponsive graceful shutdown. Timeout
+// exits with failure so journals can recover any incomplete OS teardown.
 func (h *Helper) handleForceShutdown(params json.RawMessage) (interface{}, error) {
 	go func() {
 		// First, give the response 50ms to actually reach the client.

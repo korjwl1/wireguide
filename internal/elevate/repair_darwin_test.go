@@ -17,7 +17,7 @@ import (
 	"time"
 
 	"github.com/korjwl1/wireguide/internal/ipc"
-	"github.com/korjwl1/wireguide/internal/update"
+	"github.com/korjwl1/wireguide/internal/version"
 )
 
 func TestBoundedDaemonRepair(t *testing.T) {
@@ -159,7 +159,7 @@ func TestHelperResponsiveToleratesSlowActivation(t *testing.T) {
 	srv := ipc.NewServer(listener)
 	srv.Handle(ipc.MethodPing, func(json.RawMessage) (interface{}, error) {
 		time.Sleep(1500 * time.Millisecond) // > the 1 s no-socket budget
-		return ipc.PingResponse{Version: ipc.ProtocolVersion, AppVersion: update.CurrentVersion()}, nil
+		return ipc.PingResponse{Version: ipc.ProtocolVersion, AppVersion: version.Current}, nil
 	})
 	go srv.Serve()
 	t.Cleanup(srv.Shutdown)
@@ -209,8 +209,8 @@ func repairSocket(t *testing.T) string {
 }
 
 func TestHelperHealthRequiresCompatibleRPC(t *testing.T) {
-	for _, version := range []string{update.CurrentVersion(), "0.0.0-old"} {
-		t.Run(version, func(t *testing.T) {
+	for _, helperVersion := range []string{version.Current, "0.0.0-old"} {
+		t.Run(helperVersion, func(t *testing.T) {
 			addr := repairSocket(t)
 			listener, err := ipc.Listen(addr, -1, "")
 			if err != nil {
@@ -218,13 +218,13 @@ func TestHelperHealthRequiresCompatibleRPC(t *testing.T) {
 			}
 			srv := ipc.NewServer(listener)
 			srv.Handle(ipc.MethodPing, func(json.RawMessage) (interface{}, error) {
-				return ipc.PingResponse{Version: ipc.ProtocolVersion, AppVersion: version}, nil
+				return ipc.PingResponse{Version: ipc.ProtocolVersion, AppVersion: helperVersion}, nil
 			})
 			go srv.Serve()
 			t.Cleanup(srv.Shutdown)
 			err = helperResponsive(context.Background(), addr)
-			if (err == nil) != (version == update.CurrentVersion()) {
-				t.Fatalf("health error=%v for version %s", err, version)
+			if (err == nil) != (helperVersion == version.Current) {
+				t.Fatalf("health error=%v for version %s", err, helperVersion)
 			}
 			if srv.HasControlConn() {
 				t.Fatal("health probe acquired a GUI lease")

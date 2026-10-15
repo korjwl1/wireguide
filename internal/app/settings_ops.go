@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/korjwl1/wireguide/internal/automation"
 	"github.com/korjwl1/wireguide/internal/autostart"
 	"github.com/korjwl1/wireguide/internal/ipc"
 	"github.com/korjwl1/wireguide/internal/storage"
@@ -188,7 +189,7 @@ func (s *TunnelService) SaveSettings(settings *storage.Settings) error {
 // be clobbered by a stale GUI snapshot (issue #27 review follow-up).
 // An empty rules slice removes the tunnel's entry entirely. The helper
 // re-reads settings from disk on every evaluation, so no push is needed.
-func (s *TunnelService) SaveAutomationRules(tunnel string, rules []wifi.Rule) error {
+func (s *TunnelService) SaveAutomationRules(tunnel string, rules []automation.Rule) error {
 	if tunnel == "" {
 		return fmt.Errorf("automation: empty tunnel name")
 	}
@@ -196,7 +197,7 @@ func (s *TunnelService) SaveAutomationRules(tunnel string, rules []wifi.Rule) er
 	// no-ops on rules it can't interpret, so a bad save would otherwise
 	// look accepted while doing nothing.
 	for i, r := range rules {
-		if err := wifi.ValidateRule(r); err != nil {
+		if err := automation.ValidateRule(r); err != nil {
 			return fmt.Errorf("automation: rule %d: %w", i+1, err)
 		}
 	}
@@ -207,7 +208,7 @@ func (s *TunnelService) SaveAutomationRules(tunnel string, rules []wifi.Rule) er
 			return nil
 		}
 		if st.Automation.PerTunnel == nil {
-			st.Automation.PerTunnel = map[string][]wifi.Rule{}
+			st.Automation.PerTunnel = map[string][]automation.Rule{}
 		}
 		st.Automation.PerTunnel[tunnel] = rules
 		return nil

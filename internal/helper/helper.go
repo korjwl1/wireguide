@@ -15,6 +15,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/korjwl1/wireguide/internal/automation"
 	"github.com/korjwl1/wireguide/internal/domain"
 	"github.com/korjwl1/wireguide/internal/firewall"
 	"github.com/korjwl1/wireguide/internal/ipc"
@@ -209,7 +210,7 @@ type Helper struct {
 	// negated rules can wait out roam blips; settleTimer re-triggers a
 	// held evaluation when the window elapses. Both guarded by settleMu.
 	settleMu    sync.Mutex
-	settle      *wifi.SettleTracker
+	settle      *automation.SettleTracker
 	settleTimer *time.Timer
 
 	// manualOverride latches an explicit user connect/disconnect per tunnel

@@ -4,8 +4,8 @@ import (
 	"encoding/json"
 	"log/slog"
 
+	"github.com/korjwl1/wireguide/internal/automation"
 	"github.com/korjwl1/wireguide/internal/domain"
-	"github.com/korjwl1/wireguide/internal/wifi"
 )
 
 // anyNegatedRules reports whether any tunnel has a negated automation rule.
@@ -19,7 +19,7 @@ func (h *Helper) anyNegatedRules() bool {
 		return false
 	}
 	for _, rules := range settings.Automation.PerTunnel {
-		if wifi.HasNegated(rules) {
+		if automation.HasNegated(rules) {
 			return true
 		}
 	}
@@ -28,7 +28,7 @@ func (h *Helper) anyNegatedRules() bool {
 
 // automationRules returns tunnel name's automation rules (nil when settings
 // can't be read).
-func (h *Helper) automationRules(name string) []wifi.Rule {
+func (h *Helper) automationRules(name string) []automation.Rule {
 	settings, err := h.loadUserSettings()
 	if err != nil {
 		return nil

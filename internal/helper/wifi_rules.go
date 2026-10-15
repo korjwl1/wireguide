@@ -10,9 +10,9 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/korjwl1/wireguide/internal/automation"
 	"github.com/korjwl1/wireguide/internal/ipc"
 	"github.com/korjwl1/wireguide/internal/storage"
-	"github.com/korjwl1/wireguide/internal/wifi"
 )
 
 // loadUserSettings reads the user's config.json directly. Reading
@@ -55,7 +55,7 @@ func (h *Helper) loadUserSettings() (*storage.Settings, error) {
 // The context also carries the default-route interface, whether that is
 // Wi-Fi, whether a default route exists, and whether the network
 // fingerprint has settled (see automation_state.go).
-func (h *Helper) currentNetworkContext() wifi.NetworkContext {
+func (h *Helper) currentNetworkContext() automation.NetworkContext {
 	return h.currentNetworkState().ctx
 }
 
@@ -109,7 +109,7 @@ func (h *Helper) reevaluateAutomation(reason string) {
 	anyNegated := false
 	for _, name := range auto.TunnelNames() {
 		rules := auto.PerTunnel[name]
-		if wifi.HasNegated(rules) {
+		if automation.HasNegated(rules) {
 			anyNegated = true
 		}
 		if latch, ok := h.manualLatchFor(name); ok {
@@ -117,18 +117,18 @@ func (h *Helper) reevaluateAutomation(reason string) {
 				"tunnel", name, "disconnected", latch.disconnected, "reason", reason)
 			continue
 		}
-		state, info := wifi.EvaluateDetailed(rules, ctx)
+		state, info := automation.EvaluateDetailed(rules, ctx)
 		if info.Held {
 			slog.Debug("automation: negated rule undecidable, holding",
 				"tunnel", name, "rule", info.RuleIndex, "reason", reason,
 				"ssid", ctx.SSID, "settled", ctx.Settled, "online", ctx.Online)
 		}
 		switch state {
-		case wifi.StateConnect:
+		case automation.StateConnect:
 			if !active[name] && !h.isWatchdogBlocked(name) {
 				h.automationConnect(name, reason, ctx.SSID)
 			}
-		case wifi.StateDisconnect:
+		case automation.StateDisconnect:
 			h.disconnectAutoManaged(name)
 		}
 	}
@@ -179,11 +179,11 @@ func (h *Helper) handleAutomationPreview(_ json.RawMessage) (interface{}, error)
 		for _, name := range auto.TunnelNames() {
 			rules := auto.PerTunnel[name]
 			decision := "unmanaged"
-			state, info := wifi.EvaluateDetailed(rules, ctx)
+			state, info := automation.EvaluateDetailed(rules, ctx)
 			switch state {
-			case wifi.StateConnect:
+			case automation.StateConnect:
 				decision = "connect"
-			case wifi.StateDisconnect:
+			case automation.StateDisconnect:
 				decision = "disconnect"
 			}
 			_, latched := h.manualLatchFor(name)
@@ -339,14 +339,14 @@ const previewDriftInterval = 5 * time.Second
 // the GUI would show "settling" forever. One real evaluation observes the
 // fingerprint and arms the timer. Asynchronous and rate-limited; never runs
 // under reevalMu/connectMu.
-func (h *Helper) previewDriftCheck(auto *wifi.Automation, st networkState) {
+func (h *Helper) previewDriftCheck(auto *automation.Automation, st networkState) {
 	if st.ctx.Settled {
 		return
 	}
 	needs := h.hasManualOverrides()
 	if auto != nil && !needs {
 		for _, rules := range auto.PerTunnel {
-			if wifi.HasNegated(rules) {
+			if automation.HasNegated(rules) {
 				needs = true
 				break
 			}

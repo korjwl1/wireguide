@@ -7,9 +7,9 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/korjwl1/wireguide/internal/automation"
 	"github.com/korjwl1/wireguide/internal/ipc"
 	"github.com/korjwl1/wireguide/internal/storage"
-	"github.com/korjwl1/wireguide/internal/wifi"
 )
 
 func cmdAutomation(args []string) int {
@@ -108,24 +108,24 @@ func loadSettingsWithAutomation() (*storage.SettingsStore, *storage.Settings, er
 	}
 	s.EnsureAutomation()
 	if s.Automation.PerTunnel == nil {
-		s.Automation.PerTunnel = map[string][]wifi.Rule{}
+		s.Automation.PerTunnel = map[string][]automation.Rule{}
 	}
 	return ss, s, nil
 }
 
-func formatCondition(c wifi.Condition) string {
+func formatCondition(c automation.Condition) string {
 	op := "="
 	if c.Negate {
 		op = "!="
 	}
 	switch c.Type {
-	case wifi.CondSSID:
+	case automation.CondSSID:
 		return "ssid" + op + c.SSID
-	case wifi.CondSubnet:
+	case automation.CondSubnet:
 		return "subnet" + op + c.Subnet
-	case wifi.CondNetwork:
+	case automation.CondNetwork:
 		return "network(mac)" + op + c.GatewayMAC
-	case wifi.CondNoneMatch:
+	case automation.CondNoneMatch:
 		return "otherwise"
 	}
 	return c.Type
@@ -155,21 +155,21 @@ func automationRules(args []string) int {
 }
 
 // parseCondition turns "ssid:home" / "subnet:10.0.0.0/24" / "mac:.." /
-// "else" into a wifi.Condition. A "not-" prefix on ssid/subnet/mac
+// "else" into a automation.Condition. A "not-" prefix on ssid/subnet/mac
 // ("not-ssid:home") negates it: it matches only when the value is known
 // and different (a blank SSID mid-roam holds instead of matching).
 // "not-else" is rejected. Returns an error for malformed values.
-func parseCondition(spec string) (wifi.Condition, error) {
+func parseCondition(spec string) (automation.Condition, error) {
 	spec = strings.TrimSpace(spec)
 	if spec == "else" || spec == "otherwise" || spec == "none" {
-		return wifi.Condition{Type: wifi.CondNoneMatch}, nil
+		return automation.Condition{Type: automation.CondNoneMatch}, nil
 	}
 	if spec == "not-else" || spec == "not-otherwise" || spec == "not-none" {
-		return wifi.Condition{}, fmt.Errorf("'else' cannot be negated")
+		return automation.Condition{}, fmt.Errorf("'else' cannot be negated")
 	}
 	kind, val, ok := strings.Cut(spec, ":")
 	if !ok || strings.TrimSpace(val) == "" {
-		return wifi.Condition{}, fmt.Errorf("condition %q must be ssid:<name>, subnet:<CIDR>, mac:<MAC> or else (prefix not- to negate)", spec)
+		return automation.Condition{}, fmt.Errorf("condition %q must be ssid:<name>, subnet:<CIDR>, mac:<MAC> or else (prefix not- to negate)", spec)
 	}
 	negate := false
 	if rest, found := strings.CutPrefix(kind, "not-"); found {
@@ -179,12 +179,12 @@ func parseCondition(spec string) (wifi.Condition, error) {
 	val = strings.TrimSpace(val)
 	switch kind {
 	case "ssid":
-		return wifi.Condition{Type: wifi.CondSSID, Negate: negate, SSID: val}, nil
+		return automation.Condition{Type: automation.CondSSID, Negate: negate, SSID: val}, nil
 	case "subnet":
 		if _, _, err := net.ParseCIDR(val); err != nil {
-			return wifi.Condition{}, fmt.Errorf("subnet %q is not a valid CIDR (e.g. 192.168.0.0/24)", val)
+			return automation.Condition{}, fmt.Errorf("subnet %q is not a valid CIDR (e.g. 192.168.0.0/24)", val)
 		}
-		return wifi.Condition{Type: wifi.CondSubnet, Negate: negate, Subnet: val}, nil
+		return automation.Condition{Type: automation.CondSubnet, Negate: negate, Subnet: val}, nil
 	case "mac":
 		hex := strings.Map(func(r rune) rune {
 			if (r >= '0' && r <= '9') || (r >= 'a' && r <= 'f') || (r >= 'A' && r <= 'F') {
@@ -193,11 +193,11 @@ func parseCondition(spec string) (wifi.Condition, error) {
 			return -1
 		}, val)
 		if len(hex) != 12 {
-			return wifi.Condition{}, fmt.Errorf("mac %q is not a valid MAC address", val)
+			return automation.Condition{}, fmt.Errorf("mac %q is not a valid MAC address", val)
 		}
-		return wifi.Condition{Type: wifi.CondNetwork, Negate: negate, GatewayMAC: strings.ToLower(val)}, nil
+		return automation.Condition{Type: automation.CondNetwork, Negate: negate, GatewayMAC: strings.ToLower(val)}, nil
 	default:
-		return wifi.Condition{}, fmt.Errorf("unknown condition kind %q (use ssid/subnet/mac/else, or not-ssid/not-subnet/not-mac)", kind)
+		return automation.Condition{}, fmt.Errorf("unknown condition kind %q (use ssid/subnet/mac/else, or not-ssid/not-subnet/not-mac)", kind)
 	}
 }
 
@@ -229,9 +229,9 @@ func automationAdd(args []string) int {
 	err = ss.Update(func(s *storage.Settings) error {
 		s.EnsureAutomation()
 		if s.Automation.PerTunnel == nil {
-			s.Automation.PerTunnel = map[string][]wifi.Rule{}
+			s.Automation.PerTunnel = map[string][]automation.Rule{}
 		}
-		s.Automation.PerTunnel[name] = append(s.Automation.PerTunnel[name], wifi.Rule{When: cond, Do: wifi.Action(action)})
+		s.Automation.PerTunnel[name] = append(s.Automation.PerTunnel[name], automation.Rule{When: cond, Do: automation.Action(action)})
 		ruleNum = len(s.Automation.PerTunnel[name])
 		return nil
 	})
@@ -259,7 +259,7 @@ func automationRm(args []string) int {
 		fmt.Fprintln(os.Stderr, "automation:", err)
 		return 1
 	}
-	var removed wifi.Rule
+	var removed automation.Rule
 	tooFew := -1 // set to the actual rule count if idx is out of range
 	err = ss.Update(func(s *storage.Settings) error {
 		s.EnsureAutomation()

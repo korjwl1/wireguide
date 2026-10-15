@@ -3,25 +3,25 @@ package cli
 import (
 	"testing"
 
-	"github.com/korjwl1/wireguide/internal/wifi"
+	"github.com/korjwl1/wireguide/internal/automation"
 )
 
 func TestParseCondition(t *testing.T) {
 	cases := []struct {
 		spec    string
-		want    wifi.Condition
+		want    automation.Condition
 		wantErr bool
 	}{
-		{spec: "ssid:Home", want: wifi.Condition{Type: wifi.CondSSID, SSID: "Home"}},
-		{spec: "ssid: Home  ", want: wifi.Condition{Type: wifi.CondSSID, SSID: "Home"}},
-		{spec: "not-ssid:Home WiFi", want: wifi.Condition{Type: wifi.CondSSID, Negate: true, SSID: "Home WiFi"}},
-		{spec: "not-ssid:  HomeWiFi ", want: wifi.Condition{Type: wifi.CondSSID, Negate: true, SSID: "HomeWiFi"}},
-		{spec: "ssid:cafe:5G", want: wifi.Condition{Type: wifi.CondSSID, SSID: "cafe:5G"}},
-		{spec: "subnet:10.0.0.0/24", want: wifi.Condition{Type: wifi.CondSubnet, Subnet: "10.0.0.0/24"}},
-		{spec: "not-subnet:10.0.0.0/24", want: wifi.Condition{Type: wifi.CondSubnet, Negate: true, Subnet: "10.0.0.0/24"}},
-		{spec: "mac:B0:38:6C:54:8B:AB", want: wifi.Condition{Type: wifi.CondNetwork, GatewayMAC: "b0:38:6c:54:8b:ab"}},
-		{spec: "not-mac:B0:38:6C:54:8B:AB", want: wifi.Condition{Type: wifi.CondNetwork, Negate: true, GatewayMAC: "b0:38:6c:54:8b:ab"}},
-		{spec: "else", want: wifi.Condition{Type: wifi.CondNoneMatch}},
+		{spec: "ssid:Home", want: automation.Condition{Type: automation.CondSSID, SSID: "Home"}},
+		{spec: "ssid: Home  ", want: automation.Condition{Type: automation.CondSSID, SSID: "Home"}},
+		{spec: "not-ssid:Home WiFi", want: automation.Condition{Type: automation.CondSSID, Negate: true, SSID: "Home WiFi"}},
+		{spec: "not-ssid:  HomeWiFi ", want: automation.Condition{Type: automation.CondSSID, Negate: true, SSID: "HomeWiFi"}},
+		{spec: "ssid:cafe:5G", want: automation.Condition{Type: automation.CondSSID, SSID: "cafe:5G"}},
+		{spec: "subnet:10.0.0.0/24", want: automation.Condition{Type: automation.CondSubnet, Subnet: "10.0.0.0/24"}},
+		{spec: "not-subnet:10.0.0.0/24", want: automation.Condition{Type: automation.CondSubnet, Negate: true, Subnet: "10.0.0.0/24"}},
+		{spec: "mac:B0:38:6C:54:8B:AB", want: automation.Condition{Type: automation.CondNetwork, GatewayMAC: "b0:38:6c:54:8b:ab"}},
+		{spec: "not-mac:B0:38:6C:54:8B:AB", want: automation.Condition{Type: automation.CondNetwork, Negate: true, GatewayMAC: "b0:38:6c:54:8b:ab"}},
+		{spec: "else", want: automation.Condition{Type: automation.CondNoneMatch}},
 		{spec: "not-else", wantErr: true},
 		{spec: "not-ssid:", wantErr: true},
 		{spec: "not-ssid:   ", wantErr: true},
@@ -53,16 +53,16 @@ func TestParseCondition(t *testing.T) {
 
 func TestFormatCondition(t *testing.T) {
 	cases := []struct {
-		c    wifi.Condition
+		c    automation.Condition
 		want string
 	}{
-		{wifi.Condition{Type: wifi.CondSSID, SSID: "A"}, "ssid=A"},
-		{wifi.Condition{Type: wifi.CondSSID, Negate: true, SSID: "A"}, "ssid!=A"},
-		{wifi.Condition{Type: wifi.CondSubnet, Subnet: "10.0.0.0/8"}, "subnet=10.0.0.0/8"},
-		{wifi.Condition{Type: wifi.CondSubnet, Negate: true, Subnet: "10.0.0.0/8"}, "subnet!=10.0.0.0/8"},
-		{wifi.Condition{Type: wifi.CondNetwork, GatewayMAC: "aa:bb:cc:dd:ee:ff"}, "network(mac)=aa:bb:cc:dd:ee:ff"},
-		{wifi.Condition{Type: wifi.CondNetwork, Negate: true, GatewayMAC: "aa:bb:cc:dd:ee:ff"}, "network(mac)!=aa:bb:cc:dd:ee:ff"},
-		{wifi.Condition{Type: wifi.CondNoneMatch}, "otherwise"},
+		{automation.Condition{Type: automation.CondSSID, SSID: "A"}, "ssid=A"},
+		{automation.Condition{Type: automation.CondSSID, Negate: true, SSID: "A"}, "ssid!=A"},
+		{automation.Condition{Type: automation.CondSubnet, Subnet: "10.0.0.0/8"}, "subnet=10.0.0.0/8"},
+		{automation.Condition{Type: automation.CondSubnet, Negate: true, Subnet: "10.0.0.0/8"}, "subnet!=10.0.0.0/8"},
+		{automation.Condition{Type: automation.CondNetwork, GatewayMAC: "aa:bb:cc:dd:ee:ff"}, "network(mac)=aa:bb:cc:dd:ee:ff"},
+		{automation.Condition{Type: automation.CondNetwork, Negate: true, GatewayMAC: "aa:bb:cc:dd:ee:ff"}, "network(mac)!=aa:bb:cc:dd:ee:ff"},
+		{automation.Condition{Type: automation.CondNoneMatch}, "otherwise"},
 	}
 	for _, tc := range cases {
 		if got := formatCondition(tc.c); got != tc.want {

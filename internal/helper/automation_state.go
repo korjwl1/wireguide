@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/korjwl1/wireguide/internal/automation"
 	"github.com/korjwl1/wireguide/internal/domain"
 	"github.com/korjwl1/wireguide/internal/network"
 	"github.com/korjwl1/wireguide/internal/wifi"
@@ -116,7 +117,7 @@ type manualLatch struct {
 // networkState is one snapshot of the context plus the bookkeeping the
 // engine and the latch need.
 type networkState struct {
-	ctx             wifi.NetworkContext
+	ctx             automation.NetworkContext
 	evidence        networkEvidence
 	identity        string
 	identityKnown   bool // false: offline, or blank SSID on Wi-Fi
@@ -127,7 +128,7 @@ type networkState struct {
 // when known, else the interface + gateway MAC + subnets.
 func networkIdentity(ssid, iface, gwMAC string, subnets []string) string {
 	// Include the network beneath the SSID: different routers often share a name.
-	return wifi.NetworkFingerprint(ssid, iface, gwMAC, subnets)
+	return automation.NetworkFingerprint(ssid, iface, gwMAC, subnets)
 }
 
 // currentNetworkState builds the NetworkContext (see currentNetworkContext
@@ -180,10 +181,10 @@ func (h *Helper) networkState(observe bool) networkState {
 	}
 	subnets := append([]string(nil), probe.Subnets...)
 	sort.Strings(subnets)
-	fp := wifi.NetworkFingerprint(ssid, probe.Iface, gw, subnets)
+	fp := automation.NetworkFingerprint(ssid, probe.Iface, gw, subnets)
 	h.settleMu.Lock()
 	if h.settle == nil {
-		h.settle = wifi.NewSettleTracker(nil)
+		h.settle = automation.NewSettleTracker(nil)
 	}
 	tracker := h.settle
 	h.settleMu.Unlock()
@@ -195,7 +196,7 @@ func (h *Helper) networkState(observe bool) networkState {
 		settled, remaining = tracker.Peek(fp)
 	}
 	return networkState{
-		ctx: wifi.NetworkContext{
+		ctx: automation.NetworkContext{
 			SSID:          ssid,
 			PhysicalIPs:   probe.IPs,
 			GatewayMAC:    gw,
@@ -478,7 +479,7 @@ func (h *Helper) cancelLegacyRetryIfIdle() {
 // pruneLatchesWithoutRules drops latches for tunnels that no longer have
 // automation rules (rules removed, tunnel deleted): the latch has nothing
 // left to override and a stale one would block rules added later.
-func (h *Helper) pruneLatchesWithoutRules(rules map[string][]wifi.Rule) {
+func (h *Helper) pruneLatchesWithoutRules(rules map[string][]automation.Rule) {
 	h.wifiMu.Lock()
 	defer h.wifiMu.Unlock()
 	for name := range h.manualOverride {

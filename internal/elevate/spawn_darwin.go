@@ -18,7 +18,7 @@ import (
 	"time"
 
 	"github.com/korjwl1/wireguide/internal/ipc"
-	"github.com/korjwl1/wireguide/internal/update"
+	"github.com/korjwl1/wireguide/internal/version"
 )
 
 const (
@@ -351,8 +351,8 @@ func helperResponsive(ctx context.Context, addr string) error {
 	if err != nil {
 		return err
 	}
-	if ping.AppVersion != update.CurrentVersion() {
-		return fmt.Errorf("helper version %q does not match app %q", ping.AppVersion, update.CurrentVersion())
+	if ping.AppVersion != version.Current {
+		return fmt.Errorf("helper version %q does not match app %q", ping.AppVersion, version.Current)
 	}
 	return nil
 }

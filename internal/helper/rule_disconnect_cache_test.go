@@ -4,8 +4,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/korjwl1/wireguide/internal/automation"
 	"github.com/korjwl1/wireguide/internal/domain"
-	"github.com/korjwl1/wireguide/internal/wifi"
 )
 
 // Q3: a tunnel that a wake/health retry has already torn down (manager
@@ -17,8 +17,8 @@ func TestRuleDisconnectWithdrawsCachedTransport(t *testing.T) {
 	h, clk := newAutomationHelper(t, "HomeWiFi")
 	h.done = make(chan struct{})
 	clk.Advance(time.Minute)
-	writeAutomation(t, h, map[string][]wifi.Rule{
-		"Site": {{When: wifi.Condition{Type: wifi.CondSSID, SSID: "HomeWiFi"}, Do: wifi.ActionDisconnect}},
+	writeAutomation(t, h, map[string][]automation.Rule{
+		"Site": {{When: automation.Condition{Type: automation.CondSSID, SSID: "HomeWiFi"}, Do: automation.ActionDisconnect}},
 	})
 	cfg := &domain.WireGuardConfig{Name: "Site"}
 	h.mu.Lock()

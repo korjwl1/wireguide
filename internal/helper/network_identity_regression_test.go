@@ -1,7 +1,7 @@
 package helper
 
 import (
-	"github.com/korjwl1/wireguide/internal/wifi"
+	"github.com/korjwl1/wireguide/internal/automation"
 	"strings"
 	"testing"
 )
@@ -19,16 +19,16 @@ func TestReview52_WindowsWiredLatchNeverClears(t *testing.T) {
 	stubNetwork(t, p)
 	h, clk := newAutomationHelper(t, "")
 	h.done = make(chan struct{})
-	writeAutomation(t, h, map[string][]wifi.Rule{
-		"T": {{When: wifi.Condition{Type: wifi.CondNetwork, GatewayMAC: "bb:bb:bb:bb:bb:02"}, Do: wifi.ActionConnect}},
+	writeAutomation(t, h, map[string][]automation.Rule{
+		"T": {{When: automation.Condition{Type: automation.CondNetwork, GatewayMAC: "bb:bb:bb:bb:bb:02"}, Do: automation.ActionConnect}},
 	})
-	clk.Advance(wifi.NegationSettleWindow * 4)
+	clk.Advance(automation.NegationSettleWindow * 4)
 	h.recordManualOverride("T", true) // user turns T off at office (wired)
 
 	// Move to a different wired network and stay there well past settle.
 	p.Gateway, p.GatewayMAC = "10.1.0.1", "bb:bb:bb:bb:bb:02"
 	h.currentNetworkState()
-	clk.Advance(wifi.NegationSettleWindow * 4)
+	clk.Advance(automation.NegationSettleWindow * 4)
 	logs := captureLogs(t)
 	h.reevaluateAutomation("test")
 	if _, ok := h.manualLatchFor("T"); ok {
@@ -48,16 +48,16 @@ func TestReview52_LatchClearedBySubnetChurnOnSameNetwork(t *testing.T) {
 	stubNetwork(t, p)
 	h, clk := newAutomationHelper(t, "Home")
 	h.done = make(chan struct{})
-	writeAutomation(t, h, map[string][]wifi.Rule{
-		"T": {{When: wifi.Condition{Type: wifi.CondSSID, SSID: "Home"}, Do: wifi.ActionConnect}},
+	writeAutomation(t, h, map[string][]automation.Rule{
+		"T": {{When: automation.Condition{Type: automation.CondSSID, SSID: "Home"}, Do: automation.ActionConnect}},
 	})
 	h.currentNetworkState()
-	clk.Advance(wifi.NegationSettleWindow * 2)
+	clk.Advance(automation.NegationSettleWindow * 2)
 	h.recordManualOverride("T", true) // manual Off on Home
 
 	p.Subnets = []string{"192.168.50.0/24", "2001:db8:1::/64"} // SLAAC prefix arrives
 	h.currentNetworkState()
-	clk.Advance(wifi.NegationSettleWindow)
+	clk.Advance(automation.NegationSettleWindow)
 	logs := captureLogs(t)
 	h.reevaluateAutomation("test")
 	if _, ok := h.manualLatchFor("T"); !ok && strings.Contains(logs.String(), "tunnel store unavailable") {
@@ -73,14 +73,14 @@ func TestKnownGatewayDisappearanceDoesNotReleaseManualOff(t *testing.T) {
 	p.GatewayMAC = ""
 	p.Subnets = []string{"192.168.50.0/24", "2001:db8:2::/64"}
 	h.currentNetworkState()
-	clk.Advance(wifi.NegationSettleWindow * 2)
+	clk.Advance(automation.NegationSettleWindow * 2)
 	h.pruneManualOverrides(h.currentNetworkState())
 	if _, ok := h.manualLatchFor("work"); !ok {
 		t.Fatal("missing ARP/SLAAC change released manual Off")
 	}
 	p.GatewayMAC = "b0:38:6c:54:8b:ab"
 	h.currentNetworkState()
-	clk.Advance(wifi.NegationSettleWindow * 2)
+	clk.Advance(automation.NegationSettleWindow * 2)
 	h.pruneManualOverrides(h.currentNetworkState())
 	if _, ok := h.manualLatchFor("work"); !ok {
 		t.Fatal("ARP recovery released manual Off")

@@ -10,12 +10,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/korjwl1/wireguide/internal/automation"
 	"github.com/korjwl1/wireguide/internal/storage"
-	"github.com/korjwl1/wireguide/internal/wifi"
 )
 
-var negatedRules = map[string][]wifi.Rule{
-	"T": {{When: wifi.Condition{Type: wifi.CondSSID, Negate: true, SSID: "HomeWiFi"}, Do: wifi.ActionConnect}},
+var negatedRules = map[string][]automation.Rule{
+	"T": {{When: automation.Condition{Type: automation.CondSSID, Negate: true, SSID: "HomeWiFi"}, Do: automation.ActionConnect}},
 }
 
 // bumpStat makes every tick see a changed config.json stat.
@@ -147,8 +147,8 @@ func TestPreviewDriftSkippedWithoutNegatedRulesOrWhenTimerArmed(t *testing.T) {
 	t.Cleanup(h.stopSettleTimer)
 	var calls atomic.Int32
 	h.reevalTrigger = func(string) { calls.Add(1) }
-	writeAutomation(t, h, map[string][]wifi.Rule{
-		"T": {{When: wifi.Condition{Type: wifi.CondSSID, SSID: "X"}, Do: wifi.ActionConnect}},
+	writeAutomation(t, h, map[string][]automation.Rule{
+		"T": {{When: automation.Condition{Type: automation.CondSSID, SSID: "X"}, Do: automation.ActionConnect}},
 	})
 	h.handleAutomationPreview(nil)
 	writeAutomation(t, h, negatedRules)

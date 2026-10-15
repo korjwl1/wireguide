@@ -3,7 +3,7 @@ package helper
 import (
 	"testing"
 
-	"github.com/korjwl1/wireguide/internal/wifi"
+	"github.com/korjwl1/wireguide/internal/automation"
 )
 
 type latchStep struct {
@@ -19,13 +19,13 @@ func latchHeldAfter(t *testing.T, ssid0 string, p0 netProbeResult, steps ...latc
 	stubNetwork(t, &p)
 	h, clk := newAutomationHelper(t, ssid0)
 	h.currentNetworkState()
-	clk.Advance(wifi.NegationSettleWindow * 2)
+	clk.Advance(automation.NegationSettleWindow * 2)
 	h.recordManualOverride("T", true)
 	for _, s := range steps {
 		p = s.p
 		h.wifiMon.ReportExternalSSID(s.ssid)
 		h.currentNetworkState()
-		clk.Advance(wifi.NegationSettleWindow * 2)
+		clk.Advance(automation.NegationSettleWindow * 2)
 		h.pruneManualOverrides(h.currentNetworkState())
 	}
 	_, held := h.manualLatchFor("T")

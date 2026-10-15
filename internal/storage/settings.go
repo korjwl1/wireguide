@@ -8,7 +8,7 @@ import (
 	"sync"
 
 	"github.com/korjwl1/wireguide/internal/atomicfile"
-	"github.com/korjwl1/wireguide/internal/wifi"
+	"github.com/korjwl1/wireguide/internal/automation"
 )
 
 // Settings holds application-wide settings.
@@ -45,13 +45,13 @@ type Settings struct {
 	// policy. Retained for migration; superseded by Automation. Once
 	// Automation is populated it is the source of truth and WifiRules is
 	// no longer consulted by the rule engine.
-	WifiRules wifi.Rules `json:"wifi_rules"`
+	WifiRules automation.Rules `json:"wifi_rules"`
 
 	// Automation is the per-tunnel condition→action rule model (issue
 	// #12). A nil pointer means "not yet migrated from WifiRules";
 	// EnsureAutomation() populates it once from the legacy rules. A
 	// non-nil (possibly empty) value means the user is on the new model.
-	Automation *wifi.Automation `json:"automation,omitempty"`
+	Automation *automation.Automation `json:"automation,omitempty"`
 }
 
 // EnsureAutomation lazily migrates the legacy WifiRules into the
@@ -65,7 +65,7 @@ func (s *Settings) EnsureAutomation() {
 	if s.Automation != nil {
 		return
 	}
-	s.Automation = wifi.MigrateFromLegacy(&s.WifiRules)
+	s.Automation = automation.MigrateFromLegacy(&s.WifiRules)
 }
 
 // RenameTunnelRules moves a tunnel's Automation (and legacy WifiRules)
@@ -119,10 +119,10 @@ func DefaultSettings() *Settings {
 		ListSort:        "name_asc",
 		ListActiveOnTop: true,
 		ListPaneWidth:   240,
-		WifiRules: wifi.Rules{
+		WifiRules: automation.Rules{
 			// Initialize the map so JSON serialization round-trips
 			// produce {} rather than null for an empty mapping.
-			PerTunnel: make(map[string]wifi.TunnelSSIDs),
+			PerTunnel: make(map[string]automation.TunnelSSIDs),
 		},
 	}
 }

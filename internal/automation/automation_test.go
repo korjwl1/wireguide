@@ -1,4 +1,4 @@
-package wifi
+package automation
 
 import (
 	"net"
@@ -203,7 +203,7 @@ func TestMigrateFromLegacy(t *testing.T) {
 	legacy := &Rules{
 		TrustedSSIDs: []string{"corp-wifi"},
 		PerTunnel: map[string]TunnelSSIDs{
-			"company": {AutoConnectSSIDs: []string{"home", "cafe"}},
+			"company":  {AutoConnectSSIDs: []string{"home", "cafe"}},
 			"nolegacy": {},
 		},
 	}

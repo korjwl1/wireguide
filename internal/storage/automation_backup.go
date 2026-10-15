@@ -11,7 +11,7 @@ import (
 	"path/filepath"
 
 	"github.com/korjwl1/wireguide/internal/atomicfile"
-	"github.com/korjwl1/wireguide/internal/wifi"
+	"github.com/korjwl1/wireguide/internal/automation"
 )
 
 const automationBackupSuffix = ".automation-v2-backup"
@@ -23,10 +23,10 @@ type AutomationBackupStatus struct {
 	Error          string `json:"error,omitempty"`
 }
 
-func extendedAutomation(a *wifi.Automation) bool {
+func extendedAutomation(a *automation.Automation) bool {
 	if a != nil {
 		for _, rules := range a.PerTunnel {
-			if wifi.HasNegated(rules) {
+			if automation.HasNegated(rules) {
 				return true
 			}
 		}
@@ -34,7 +34,7 @@ func extendedAutomation(a *wifi.Automation) bool {
 	return false
 }
 
-func automationBytes(a *wifi.Automation) []byte {
+func automationBytes(a *automation.Automation) []byte {
 	data, _ := json.MarshalIndent(a, "", "  ")
 	return data
 }
@@ -53,7 +53,7 @@ func readAutomationBackup(path string) ([]byte, error) {
 	return data, err
 }
 
-func (s *SettingsStore) currentAutomation() (*wifi.Automation, error) {
+func (s *SettingsStore) currentAutomation() (*automation.Automation, error) {
 	data, err := os.ReadFile(s.path)
 	if err != nil {
 		return nil, err
@@ -84,7 +84,7 @@ func (s *SettingsStore) prepareAutomationBackup(settings *Settings) (bool, error
 		return false, err
 	}
 	if err == nil {
-		var old wifi.Automation
+		var old automation.Automation
 		matchesPrevious := json.Unmarshal(oldBackup, &old) == nil && bytes.Equal(automationBytes(&old), automationBytes(previous))
 		if !matchesPrevious {
 			archive := fmt.Sprintf("%s.recovery-%x", path, sha256.Sum256(oldBackup))
@@ -130,7 +130,7 @@ func (s *SettingsStore) AutomationBackupStatus() AutomationBackupStatus {
 		return status
 	}
 	status.Available = true
-	var backup wifi.Automation
+	var backup automation.Automation
 	if err := json.Unmarshal(data, &backup); err != nil {
 		status.Error = err.Error()
 		return status

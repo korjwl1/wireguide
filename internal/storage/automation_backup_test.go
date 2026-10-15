@@ -2,7 +2,7 @@ package storage
 
 import (
 	"encoding/json"
-	"github.com/korjwl1/wireguide/internal/wifi"
+	"github.com/korjwl1/wireguide/internal/automation"
 	"os"
 	"path/filepath"
 	"testing"
@@ -11,7 +11,7 @@ import (
 func TestDowngradeCannotEraseNegatedRuleBackup(t *testing.T) {
 	store := NewSettingsStore(t.TempDir())
 	s := DefaultSettings()
-	s.Automation = &wifi.Automation{PerTunnel: map[string][]wifi.Rule{"work": {{When: wifi.Condition{Type: wifi.CondSSID, SSID: "Home", Negate: true}, Do: wifi.ActionConnect}}}}
+	s.Automation = &automation.Automation{PerTunnel: map[string][]automation.Rule{"work": {{When: automation.Condition{Type: automation.CondSSID, SSID: "Home", Negate: true}, Do: automation.ActionConnect}}}}
 	if err := store.Save(s); err != nil {
 		t.Fatal(err)
 	}
@@ -23,11 +23,11 @@ func TestDowngradeCannotEraseNegatedRuleBackup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var backup wifi.Automation
+	var backup automation.Automation
 	if err := json.Unmarshal(data, &backup); err != nil {
 		t.Fatal(err)
 	}
-	if !wifi.HasNegated(backup.PerTunnel["work"]) {
+	if !automation.HasNegated(backup.PerTunnel["work"]) {
 		t.Fatal("old rewrite lost recovery copy")
 	}
 	active, err := store.Load()
@@ -57,7 +57,7 @@ func TestDowngradeCannotEraseNegatedRuleBackup(t *testing.T) {
 func TestUnrelatedSettingsSaveDoesNotRequireWritableAutomationBackup(t *testing.T) {
 	store := NewSettingsStore(t.TempDir())
 	s := DefaultSettings()
-	s.Automation = &wifi.Automation{PerTunnel: map[string][]wifi.Rule{"work": {{When: wifi.Condition{Type: wifi.CondSSID, SSID: "Home", Negate: true}, Do: wifi.ActionConnect}}}}
+	s.Automation = &automation.Automation{PerTunnel: map[string][]automation.Rule{"work": {{When: automation.Condition{Type: automation.CondSSID, SSID: "Home", Negate: true}, Do: automation.ActionConnect}}}}
 	if err := store.Save(s); err != nil {
 		t.Fatal(err)
 	}
@@ -72,7 +72,7 @@ func TestUnrelatedSettingsSaveDoesNotRequireWritableAutomationBackup(t *testing.
 		t.Fatalf("unrelated settings blocked by backup failure: %v", err)
 	}
 	active, err := store.Load()
-	if err != nil || active.Theme != "dark" || !wifi.HasNegated(active.Automation.PerTunnel["work"]) {
+	if err != nil || active.Theme != "dark" || !automation.HasNegated(active.Automation.PerTunnel["work"]) {
 		t.Fatal("unrelated save changed existing automation")
 	}
 	if status := store.AutomationBackupStatus(); status.Error == "" {
@@ -87,7 +87,7 @@ func TestUnrelatedSettingsSaveDoesNotRequireWritableAutomationBackup(t *testing.
 func TestReupgradePreservesEarlierRulesBeforeWritingNewBackup(t *testing.T) {
 	store := NewSettingsStore(t.TempDir())
 	s := DefaultSettings()
-	s.Automation = &wifi.Automation{PerTunnel: map[string][]wifi.Rule{"work": {{When: wifi.Condition{Type: wifi.CondSSID, SSID: "Home", Negate: true}, Do: wifi.ActionConnect}}}}
+	s.Automation = &automation.Automation{PerTunnel: map[string][]automation.Rule{"work": {{When: automation.Condition{Type: automation.CondSSID, SSID: "Home", Negate: true}, Do: automation.ActionConnect}}}}
 	if err := store.Save(s); err != nil {
 		t.Fatal(err)
 	}
