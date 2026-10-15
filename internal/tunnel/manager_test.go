@@ -558,17 +558,17 @@ func TestDisconnect_WaitsForConnectToFinish(t *testing.T) {
 	// Wait for connecting state.
 	time.Sleep(50 * time.Millisecond)
 
-	// Disconnect should wait for Connect to finish, then disconnect.
+	// Disconnect cancels setup and waits for rollback to finish.
 	if err := mgr.Disconnect(); err != nil {
 		t.Fatalf("Disconnect failed: %v", err)
 	}
 
-	// Connect should also have succeeded.
+	// Off during setup cancels the connection.
 	if err := <-connectDone; err != nil {
 		// Connect may have succeeded or gotten ErrStateCorrupt if Disconnect
 		// changed state while it was in-flight. Either is acceptable.
 		var te *TunnelError
-		if errors.As(err, &te) && te.Kind != ErrStateCorrupt {
+		if errors.As(err, &te) && te.Kind != ErrStateCorrupt && te.Kind != ErrCancelled {
 			t.Fatalf("unexpected Connect error: %v", err)
 		}
 	}

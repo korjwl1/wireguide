@@ -55,7 +55,9 @@ func (h *Helper) doConnectWithOwnerHeld(cfg *domain.WireGuardConfig, owner *stri
 	h.activeCfgs[cfg.Name] = cfg
 	h.mu.Unlock()
 
-	if err := h.manager.Connect(cfg); err != nil {
+	ctx, cancel := h.operationContext()
+	defer cancel()
+	if err := h.manager.ConnectWithContext(ctx, cfg); err != nil {
 		h.mu.Lock()
 		delete(h.activeCfgs, cfg.Name)
 		if prev, ok := prevCfgs[cfg.Name]; ok {

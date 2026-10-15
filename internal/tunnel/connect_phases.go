@@ -10,7 +10,7 @@ import (
 )
 
 // connectPhases executes the steps that bring a tunnel up. Called from
-// Manager.Connect under the manager's mutex. Returns the created engine on
+// Manager.ConnectWithContext outside the manager's mutex. Returns the engine on
 // success, or an error after rolling back any partial state on failure.
 //
 // Steps:

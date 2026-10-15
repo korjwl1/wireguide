@@ -215,6 +215,8 @@ func (h *Helper) persistDesiredState() {
 	if h.dataDir == "" {
 		return
 	}
+	h.desiredMu.Lock()
+	defer h.desiredMu.Unlock()
 	var st desiredStateJSON
 	if h.firewall != nil {
 		st.KillSwitch = h.firewall.IsKillSwitchEnabled()
@@ -248,8 +250,6 @@ func (h *Helper) persistDesiredState() {
 		}
 	}
 	h.wifiMu.Unlock()
-	h.desiredMu.Lock()
-	defer h.desiredMu.Unlock()
 	select {
 	case <-h.done:
 		// Shutdown began: cleanup() owns the file now (it clears it).

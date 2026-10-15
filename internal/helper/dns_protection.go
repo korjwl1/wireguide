@@ -141,6 +141,11 @@ func (h *Helper) dnsReconcileLoop() {
 func (h *Helper) reconcileFirewallTick(now time.Time) {
 	h.connectMu.Lock()
 	defer h.connectMu.Unlock()
+	select {
+	case <-h.done:
+		return
+	default:
+	}
 	h.manager.RetryPendingDNSCleanup()
 	h.retryKillSwitchPermitRemovals(now)
 	h.repairFirewallEnforcement(now)

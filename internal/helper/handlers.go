@@ -107,32 +107,21 @@ func (h *Helper) handleRequestQuit(params json.RawMessage) (interface{}, error) 
 // Tunnels themselves (TUN device + wireguard-go) are NOT torn down — the
 // utun/wg interface disappears when the process dies on Unix, and Wintun
 // adapters get cleaned up by our cleanupStaleWintunAdapter on next launch.
-// The whole sequence is bounded by a 1-second deadline so a wedged
+// The whole sequence is bounded by a 3-second deadline so a wedged
 // firewall.Cleanup can't keep ForceShutdown hostage.
 func (h *Helper) handleForceShutdown(params json.RawMessage) (interface{}, error) {
 	go func() {
 		// First, give the response 50ms to actually reach the client.
-		// Then run firewall cleanup with a 1s hard cap, then exit.
+		// Then run normal cleanup with a 3s hard cap, then exit.
 		time.Sleep(50 * time.Millisecond)
 		slog.Warn("helper ForceShutdown requested, cleaning firewall then exiting")
 		done := make(chan struct{})
-		go func() {
-			defer close(done)
-			if err := h.firewall.Cleanup(); err != nil {
-				slog.Warn("ForceShutdown: firewall.Cleanup failed", "error", err)
-			}
-			// The utun devices die with this process, but networksetup DNS
-			// overrides persist in SystemConfiguration — restore them or a
-			// helper upgrade while connected leaves tunnel DNS behind
-			// (issue #34). Best-effort under the same deadline.
-			if h.manager != nil {
-				h.manager.RestoreDNSBestEffort()
-			}
-		}()
+		go func() { defer close(done); h.cleanup() }()
 		select {
 		case <-done:
 		case <-time.After(3 * time.Second):
-			slog.Warn("ForceShutdown: cleanup timed out; exiting anyway")
+			slog.Warn("ForceShutdown: cleanup timed out; exiting for crash recovery")
+			os.Exit(1)
 		}
 		os.Exit(0)
 	}()

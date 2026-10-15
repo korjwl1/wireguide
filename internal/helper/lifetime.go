@@ -155,7 +155,9 @@ func (h *Helper) cleanup() {
 		slog.Info("helper cleanup starting",
 			"connected", h.manager.IsConnected(),
 			"call_stack", string(debug.Stack()))
-		close(h.done)
+		if h.done != nil {
+			close(h.done)
+		}
 		h.mu.Lock()
 		blocked := make([]string, 0, len(h.watchdogBlocked))
 		for name := range h.watchdogBlocked {
@@ -183,17 +185,21 @@ func (h *Helper) cleanup() {
 		}
 		h.stopSettleTimer()
 		network.UnsubscribeNetworkChange("automation")
-		h.monitor.Stop()
+		if h.monitor != nil {
+			h.monitor.Stop()
+		}
+		h.connectMu.Lock()
+		defer h.connectMu.Unlock()
 		// Tear down tunnels BEFORE removing kill-switch / pf rules.
 		// Doing it the other way around — flushing pf first — leaves
 		// a small but real window where the user's traffic flows
 		// over the underlying network unprotected while utun*
 		// devices are being closed (DisconnectAll can take seconds
 		// per tunnel as wireguard-go drains).
-		if h.manager.IsConnected() {
-			h.manager.DisconnectAll()
+		h.manager.DisconnectAll()
+		if err := h.firewall.Cleanup(); err != nil {
+			slog.Warn("helper firewall cleanup incomplete", "error", err)
 		}
-		h.firewall.Cleanup()
 		slog.Info("helper shutdown complete")
 	})
 }

@@ -12,6 +12,8 @@ func (h *Helper) handleRename(params json.RawMessage) (interface{}, error) {
 	h.connectMu.Lock()
 	defer h.connectMu.Unlock()
 
+	h.registerPendingRestore()
+
 	var req ipc.RenameRequest
 	if err := json.Unmarshal(params, &req); err != nil {
 		return nil, err
@@ -132,6 +134,7 @@ func (h *Helper) handleDelete(params json.RawMessage) (interface{}, error) {
 	h.mu.Lock()
 	delete(h.watchdogBlocked, req.TunnelName)
 	h.mu.Unlock()
+	h.persistDesiredState()
 	h.latencyMu.Lock()
 	delete(h.latencyByTunnel, req.TunnelName)
 	h.latencyMu.Unlock()

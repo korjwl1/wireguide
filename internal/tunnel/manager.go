@@ -24,11 +24,13 @@ import (
 // manager. Each entry has its own state machine, engine, config, connected
 // timestamp, and per-tunnel NetworkManager instance.
 type tunnelEntry struct {
-	state       domain.State
-	engine      *Engine
-	cfg         *domain.WireGuardConfig
-	connectedAt time.Time
-	netMgr      network.NetworkManager // per-tunnel network state (routes, DNS, monitor)
+	state         domain.State
+	engine        *Engine
+	cfg           *domain.WireGuardConfig
+	connectedAt   time.Time
+	netMgr        network.NetworkManager // per-tunnel network state (routes, DNS, monitor)
+	connectCancel context.CancelFunc
+	connectDone   <-chan struct{}
 
 	// watchdogCancel stops the endpoint-route watchdog, when the platform
 	// supplies a forwarding-decision checker (macOS).
@@ -273,6 +275,8 @@ func (m *Manager) ConnectWithContext(ctx context.Context, cfg *domain.WireGuardC
 	if err := ctx.Err(); err != nil {
 		return newTunnelError(ErrCancelled, "connect cancelled before start", err)
 	}
+	ctx, cancelConnect := context.WithCancel(ctx)
+	defer cancelConnect()
 	name := cfg.Name
 
 	// --- Phase 1: claim the connecting slot under the lock ---
@@ -310,6 +314,9 @@ func (m *Manager) ConnectWithContext(ctx context.Context, cfg *domain.WireGuardC
 	// while the phases are running.
 	entry.cfg = cfg
 	entry.state = domain.StateConnecting
+	done := make(chan struct{})
+	entry.connectCancel, entry.connectDone = cancelConnect, done
+	defer close(done)
 
 	// Create a per-tunnel NetworkManager so this tunnel's routes, DNS
 	// snapshot, and route monitor are independent of other tunnels.
@@ -358,7 +365,7 @@ func (m *Manager) ConnectWithContext(ctx context.Context, cfg *domain.WireGuardC
 	}
 	// Re-validate state: a Disconnect may have landed while we were outside
 	// the lock. If so, discard the engine we just created.
-	if entry.state != domain.StateConnecting {
+	if entry.state != domain.StateConnecting || ctx.Err() != nil {
 		// A Disconnect landed while we were outside the lock. Snapshot
 		// what teardown needs, then RELEASE the lock before the slow
 		// network operations so concurrent Status calls don't block.
@@ -393,8 +400,12 @@ func (m *Manager) ConnectWithContext(ctx context.Context, cfg *domain.WireGuardC
 		m.mu.Lock()
 		m.removeEntry(name)
 		m.mu.Unlock()
+		if ctx.Err() != nil {
+			return newTunnelError(ErrCancelled, "connect cancelled before commit", ctx.Err())
+		}
 		return newTunnelError(ErrStateCorrupt, "connect aborted: state changed during setup", nil)
 	}
+	entry.connectCancel, entry.connectDone = nil, nil
 	entry.engine = engine
 	entry.connectedAt = time.Now()
 	entry.state = domain.StateConnected
@@ -475,11 +486,26 @@ func (m *Manager) DisconnectTunnel(name string) error {
 			break // lock still held, state is stable
 		}
 		observedTransitioning = true
+		// Cancellation survives this caller's bounded wait. A slow OS phase
+		// must never commit Connected after the user's Off has timed out.
+		if entry.connectCancel != nil {
+			entry.connectCancel()
+		}
+		done := entry.connectDone
 		m.mu.Unlock()
 		if time.Now().After(deadline) {
 			return newTunnelError(ErrTimeout, fmt.Sprintf("disconnect timeout for tunnel %q: transition in progress", name), nil)
 		}
-		time.Sleep(100 * time.Millisecond)
+		if done != nil {
+			timer := time.NewTimer(time.Until(deadline))
+			select {
+			case <-done:
+			case <-timer.C:
+			}
+			timer.Stop()
+		} else {
+			time.Sleep(100 * time.Millisecond)
+		}
 	}
 	// m.mu held here, state is Connected / Disconnected / Error.
 	entry := m.tunnels[name]
@@ -528,12 +554,16 @@ func (m *Manager) DisconnectTunnel(name string) error {
 
 // DisconnectAll tears down all active tunnels, including those still in the
 // connecting state. DisconnectTunnel internally waits for connecting tunnels
-// to settle before tearing them down. Used during shutdown.
+// to settle before tearing them down. Every connecting slot is cancelled
+// before waiting for any one teardown. Used during shutdown.
 func (m *Manager) DisconnectAll() {
 	m.mu.Lock()
 	var names []string
 	for n, e := range m.tunnels {
-		if e.state == domain.StateConnected || e.state == domain.StateConnecting {
+		if e.connectCancel != nil {
+			e.connectCancel()
+		}
+		if e.state == domain.StateConnected || e.state == domain.StateConnecting || e.state == stateDisconnecting {
 			names = append(names, n)
 		}
 	}
