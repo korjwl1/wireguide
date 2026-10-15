@@ -97,6 +97,22 @@ They were corrected with the reproductions moved into repository tests:
 The earlier CI success at 6dcc6d5 did not cover these scenarios. Its report
 and findings remain preserved as historical evidence, not a final pass claim.
 
+## Final outcome
+
+Claude directly rechecked the committed code at **48b5c92** and found no
+remaining merge blockers within the reviewed corrections. The complete
+[final assessment](claude-final-addendum-20261015.md) preserves that scope,
+tests and target-machine limitations. Its CI condition is now satisfied:
+[CI 38686094150](https://github.com/korjwl1/wireguide/actions/runs/38686094150)
+ran on that exact SHA and passed Windows, macOS and Linux, including native
+Linux build/DEB packaging. Linux/macOS ran the full race suite; Windows ran
+the native suite without race. All jobs also ran vet.
+
+The records added after this CI change documentation only. The corrections
+are committed with issue references (#44, #48 and #12) and pushed to
+`fix/windows-single-instance`. Low-priority follow-ups above and native OS
+checks below are still open. No main merge or original PR closure occurred.
+
 ## Verification limits
 
 Local full race suite, vet and frontend build are rerun on the integrated
