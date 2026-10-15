@@ -202,7 +202,7 @@
     scheduleSave();
   }
 
-  async function applyToggle(key, value) {
+  async function applyField(key, value) {
     if (!loaded || busyFields[key]) return;
     settings[key] = value;
     busyFields = { ...busyFields, [key]: true };
@@ -251,11 +251,11 @@
     queuePatch({ auto_start: settings.auto_start });
   }
 
-  function onLogLevelChange(e) { applyToggle('log_level', e.target.value); }
-  function onKillSwitchChange(e) { applyToggle('kill_switch', e.target.checked); }
-  function onDnsProtectionChange(e) { applyToggle('dns_protection', e.target.checked); }
-  function onPinInterfaceChange(e) { applyToggle('pin_interface', e.target.checked); }
-  function onHealthCheckChange(e) { applyToggle('health_check', e.target.checked); }
+  function onLogLevelChange(e) { applyField('log_level', e.target.value); }
+  function onKillSwitchChange(e) { applyField('kill_switch', e.target.checked); }
+  function onDnsProtectionChange(e) { applyField('dns_protection', e.target.checked); }
+  function onPinInterfaceChange(e) { applyField('pin_interface', e.target.checked); }
+  function onHealthCheckChange(e) { applyField('health_check', e.target.checked); }
 
   // Reflect settings applied by another client (the CLI) live, so the
   // toggle doesn't sit stale while the helper actually changed state.
@@ -328,7 +328,7 @@
     <h3 id="settings-title">{$t('settings.title')}</h3>
 
     {#if loadError}<ErrorNotice message={$t('settings.load_failed') + ' ' + loadError} onRetry={load}/>{/if}
-    {#each Object.entries($settingsErrors) as [key, failure]}<ErrorNotice message={$t('settings.save_failed') + ' ' + failure} busy={!loaded || busyFields[key]} onRetry={() => applyToggle(key, settings[key])}/>{/each}
+    {#each Object.entries($settingsErrors) as [key, failure] (key)}<ErrorNotice message={$t('settings.save_failed') + ' ' + failure} busy={!loaded || busyFields[key]} onRetry={() => applyField(key, settings[key])}/>{/each}
     <fieldset disabled={!loaded} class="settings-fields">
     <div class="settings-layout">
       <div class="settings-sidebar" role="tablist" aria-orientation="vertical" aria-label={$t('settings.title')}>
