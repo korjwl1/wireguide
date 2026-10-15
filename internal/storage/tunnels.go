@@ -74,12 +74,17 @@ func (s *TunnelStore) Load(name string) (*config.WireGuardConfig, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	path := s.path(name)
-	data, err := os.ReadFile(path)
+	return s.loadConfigLocked(name)
+}
+
+// loadConfigLocked bounds config reads before parsing. Caller holds s.mu.
+func (s *TunnelStore) loadConfigLocked(name string) (*config.WireGuardConfig, error) {
+	f, err := os.Open(s.path(name))
 	if err != nil {
 		return nil, err
 	}
-	cfg, err := config.Parse(string(data))
+	defer f.Close()
+	cfg, err := config.ParseReader(f)
 	if err != nil {
 		return nil, fmt.Errorf("parsing %s: %w", name, err)
 	}
@@ -430,16 +435,10 @@ func (s *TunnelStore) LoadWithMeta(name string) (*config.WireGuardConfig, *Tunne
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	path := s.path(name)
-	data, err := os.ReadFile(path)
+	cfg, err := s.loadConfigLocked(name)
 	if err != nil {
 		return nil, nil, err
 	}
-	cfg, err := config.Parse(string(data))
-	if err != nil {
-		return nil, nil, fmt.Errorf("parsing %s: %w", name, err)
-	}
-	cfg.Name = name
 
 	meta, _ := s.loadMetaLocked(name)
 	if meta == nil {

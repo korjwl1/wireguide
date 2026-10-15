@@ -3,6 +3,7 @@ package config
 import (
 	"bufio"
 	"fmt"
+	"io"
 	"log/slog"
 	"strconv"
 	"strings"
@@ -16,11 +17,20 @@ import (
 const MaxConfigSize = 1 << 20 // 1 MiB
 
 // MaxAllowedIPsPerPeer is the per-peer cap on AllowedIPs entries. A
-// realistic peer has 1-10 CIDRs; 10K entries is far beyond legitimate
-// use but still lets a power user spell out every /32 in a /16 (65K
-// would be too permissive). Caps the O(N) work the validator does
-// per peer.
+// typical peer has 1-10 CIDRs; 10K leaves room for generated split-tunnel
+// policies while bounding validation and route installation work.
 const MaxAllowedIPsPerPeer = 10000
+
+// ParseReader reads at most MaxConfigSize+1 bytes before parsing. Files and
+// other streams must be bounded while reading, before allocating their entire
+// contents; Parse's string-size check alone cannot enforce that.
+func ParseReader(r io.Reader) (*WireGuardConfig, error) {
+	data, err := io.ReadAll(io.LimitReader(r, MaxConfigSize+1))
+	if err != nil {
+		return nil, err
+	}
+	return Parse(string(data))
+}
 
 // Parse parses a WireGuard .conf file content into a WireGuardConfig.
 func Parse(content string) (*WireGuardConfig, error) {
@@ -42,7 +52,7 @@ func Parse(content string) (*WireGuardConfig, error) {
 	// long AllowedIPs lists — legitimate when a peer covers a lot of
 	// /32 routes. Bump to 1 MiB; the file as a whole is already
 	// bounded by the config-import filesize check.
-	scanner.Buffer(make([]byte, 0, 64*1024), 1<<20)
+	scanner.Buffer(make([]byte, 0, min(len(content)+1, 4096)), MaxConfigSize)
 	lineNum := 0
 
 	for scanner.Scan() {

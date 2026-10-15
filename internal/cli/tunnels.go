@@ -224,11 +224,12 @@ func cmdImport(args []string) int {
 		return 2
 	}
 	path := args[0]
-	data, err := os.ReadFile(path)
+	f, err := os.Open(path)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "import:", err)
 		return 1
 	}
+	defer f.Close()
 	name := ""
 	if len(args) >= 2 {
 		name = args[1]
@@ -236,7 +237,8 @@ func cmdImport(args []string) int {
 		base := filepath.Base(path)
 		name = strings.TrimSuffix(base, filepath.Ext(base))
 	}
-	if _, err := config.Parse(string(data)); err != nil {
+	cfg, err := config.ParseReader(f)
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "import: %q is not a valid WireGuard config: %v\n", path, err)
 		return 1
 	}
@@ -249,7 +251,7 @@ func cmdImport(args []string) int {
 		fmt.Fprintf(os.Stderr, "import: tunnel %q already exists (rename or delete it before importing)\n", name)
 		return 1
 	}
-	if _, err := store.ImportFromContent(name, string(data)); err != nil {
+	if _, err := store.ImportFromContent(name, config.Serialize(cfg)); err != nil {
 		fmt.Fprintln(os.Stderr, "import:", err)
 		return 1
 	}
