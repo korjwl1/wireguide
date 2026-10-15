@@ -26,6 +26,9 @@ type Handler func(params json.RawMessage) (interface{}, error)
 // The 32-connection cap is the practical denial-of-service defense.
 const maxConcurrentConns = 32
 
+// A client that stops reading must not hold a connection slot indefinitely.
+const writeTimeout = 5 * time.Second
+
 // Server is an IPC server that dispatches RPC requests to handlers
 // and broadcasts events to subscribed clients.
 type Server struct {
@@ -250,6 +253,11 @@ func (s *Server) Broadcast(method string, params interface{}) {
 	if err != nil {
 		return
 	}
+	if len(data) > maxFrameSize {
+		slog.Warn("dropping oversized IPC event", "method", method, "bytes", len(data))
+		return
+	}
+	framed := frameBytes(data)
 
 	s.mu.Lock()
 	subs := make([]*subscriber, 0, len(s.eventSubs))
@@ -260,7 +268,7 @@ func (s *Server) Broadcast(method string, params interface{}) {
 
 	for _, sub := range subs {
 		select {
-		case sub.ch <- data:
+		case sub.ch <- framed:
 		default:
 			// Drop event if subscriber is slow (prevents helper from blocking)
 		}
@@ -363,6 +371,7 @@ func (s *Server) handleConn(conn net.Conn) {
 		// Dispatch RPC
 		resp := s.dispatch(&req)
 		if resp != nil {
+			_ = conn.SetWriteDeadline(time.Now().Add(writeTimeout))
 			if err := WriteFrame(conn, resp); err != nil {
 				slog.Debug("ipc: WriteFrame error, closing conn",
 					"conn", remoteDesc,
@@ -399,6 +408,18 @@ func (s *Server) dispatch(req *Request) *Response {
 
 // handleSubscribe takes over a connection as an event stream.
 func (s *Server) handleSubscribe(conn net.Conn, reqID uint64) {
+	// Event streams have no inbound frames after Subscribe. Read once to
+	// detect EOF even when idle; the control connection's read deadline no
+	// longer applies. Closing conn on every exit also releases this reader.
+	_ = conn.SetReadDeadline(time.Time{})
+	defer conn.Close()
+	peerDone := make(chan struct{})
+	go func() {
+		defer close(peerDone)
+		var unexpected [1]byte
+		_, _ = conn.Read(unexpected[:])
+	}()
+
 	sub := &subscriber{
 		conn: conn,
 		ch:   make(chan []byte, 32),
@@ -420,6 +441,7 @@ func (s *Server) handleSubscribe(conn net.Conn, reqID uint64) {
 
 	// Acknowledge subscription
 	ack, _ := NewResponse(reqID, Empty{})
+	_ = conn.SetWriteDeadline(time.Now().Add(writeTimeout))
 	if err := WriteFrame(conn, ack); err != nil {
 		return
 	}
@@ -429,11 +451,14 @@ func (s *Server) handleSubscribe(conn net.Conn, reqID uint64) {
 		select {
 		case <-s.shutdownCh:
 			return
+		case <-peerDone:
+			return
 		case data, ok := <-sub.ch:
 			if !ok {
 				return
 			}
-			if _, err := conn.Write(frameBytes(data)); err != nil {
+			_ = conn.SetWriteDeadline(time.Now().Add(writeTimeout))
+			if n, err := conn.Write(data); err != nil || n != len(data) {
 				return
 			}
 		}

@@ -12,8 +12,8 @@ import (
 const maxFrameSize = 1024 * 1024
 
 // WriteFrame writes a length-prefixed JSON-serialized message to w.
-// The header and body are combined into a single Write call to prevent
-// stream corruption if multiple goroutines write concurrently.
+// The header and body use one Write call. Callers must serialize writes unless
+// the writer itself supports concurrent writes, as net.Conn does.
 func WriteFrame(w io.Writer, v interface{}) error {
 	data, err := json.Marshal(v)
 	if err != nil {
@@ -23,15 +23,19 @@ func WriteFrame(w io.Writer, v interface{}) error {
 		return fmt.Errorf("frame too large: %d bytes", len(data))
 	}
 
-	// Combine header + body into one buffer for an atomic write.
+	// Combine header + body so the transport receives one contiguous frame.
 	// len(data) <= maxFrameSize (1 MiB) checked above, so the cast to
 	// uint32 cannot overflow.
 	buf := make([]byte, 4+len(data))
 	binary.BigEndian.PutUint32(buf[:4], uint32(len(data))) //nolint:gosec // G115: len bounded by maxFrameSize
 	copy(buf[4:], data)
 
-	if _, err := w.Write(buf); err != nil {
+	n, err := w.Write(buf)
+	if err != nil {
 		return fmt.Errorf("write frame: %w", err)
+	}
+	if n != len(buf) {
+		return fmt.Errorf("write frame: %w", io.ErrShortWrite)
 	}
 	return nil
 }
