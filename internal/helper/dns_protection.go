@@ -133,19 +133,22 @@ func (h *Helper) dnsReconcileLoop() {
 		case <-h.done:
 			return
 		case now := <-ticker.C:
-			h.connectMu.Lock()
-			h.manager.RetryPendingDNSCleanup()
-			h.retryKillSwitchPermitRemovals(now)
-			h.repairFirewallEnforcement()
-			if err := h.reconcileKillSwitch(false, now); err != nil {
-				slog.Warn("kill-switch reconciliation failed; will retry", "error", err)
-			}
-			err := h.reconcileDNSProtection(false, now)
-			h.connectMu.Unlock()
-			if err != nil {
-				slog.Warn("DNS protection reconciliation failed; will retry", "error", err)
-			}
+			h.reconcileFirewallTick(now)
 		}
+	}
+}
+
+func (h *Helper) reconcileFirewallTick(now time.Time) {
+	h.connectMu.Lock()
+	defer h.connectMu.Unlock()
+	h.manager.RetryPendingDNSCleanup()
+	h.retryKillSwitchPermitRemovals(now)
+	h.repairFirewallEnforcement(now)
+	if err := h.reconcileKillSwitch(false, now); err != nil {
+		slog.Warn("kill-switch reconciliation failed; will retry", "error", err)
+	}
+	if err := h.reconcileDNSProtection(false, now); err != nil {
+		slog.Warn("DNS protection reconciliation failed; will retry", "error", err)
 	}
 }
 
@@ -154,15 +157,21 @@ func (h *Helper) dnsReconcileLoop() {
 // reports it active; model comparisons alone would never notice. Runs before
 // the reconciliations so they compare against enforced state. Caller holds
 // connectMu.
-func (h *Helper) repairFirewallEnforcement() {
+func (h *Helper) repairFirewallEnforcement(now time.Time) {
 	r, ok := h.firewall.(firewall.EnforcementRepairer)
-	if !ok || h.fwSuspendDepth > 0 {
+	if !ok || h.fwSuspendDepth > 0 || now.Before(h.fwRepairRetryAt) {
 		// A reconnect suspended the rules on purpose; its resume reapplies.
 		return
 	}
 	if repaired, err := r.RepairEnforcement(); err != nil {
+		h.fwRepairRetryDelay = min(30*time.Second, max(time.Second, h.fwRepairRetryDelay*2))
+		h.fwRepairRetryAt = now.Add(h.fwRepairRetryDelay)
 		slog.Error("firewall enforcement lost and not yet restored; will retry", "error", err)
-	} else if repaired {
-		slog.Warn("firewall enforcement was lost outside WireGuide and has been restored")
+	} else {
+		h.fwRepairRetryAt = time.Time{}
+		h.fwRepairRetryDelay = 0
+		if repaired {
+			slog.Warn("firewall enforcement was lost outside WireGuide and has been restored")
+		}
 	}
 }

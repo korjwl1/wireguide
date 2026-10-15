@@ -27,6 +27,8 @@ func stubPF(t *testing.T) *[]string {
 			return []byte("anchor \"com.apple/*\" all\n"), nil
 		case "-si":
 			return []byte("Status: Enabled"), nil
+		case "-s":
+			return []byte("TOKENS:\nPID Process Name TOKEN TIMESTAMP\n42 pfctl 1234567890123456789 0 days 00:00:01\n"), nil
 		}
 		return nil, nil
 	}
@@ -51,7 +53,7 @@ func TestPFLeaseDoesNotDisableOtherOwnersOrAccumulateReferences(t *testing.T) {
 	}
 	// The second enable verifies PF still runs instead of trusting the cached
 	// token; it must not take another reference.
-	if got := strings.Join(*calls, ","); got != "-E,-si,-X 1234567890123456789" {
+	if got := strings.Join(*calls, ","); got != "-E,-s References,-X 1234567890123456789" {
 		t.Fatalf("ownership calls = %s", got)
 	}
 }

@@ -24,9 +24,10 @@ func TestPeriodicPassRepairsLostFirewallEnforcement(t *testing.T) {
 	h := newPendingTestHelper(t)
 	fw := &repairingFirewall{pendingTestFirewall: dnsFW(h), err: errors.New("pfctl -E failed")}
 	h.firewall = fw
-	h.repairFirewallEnforcement()
+	now := time.Now()
+	h.reconcileFirewallTick(now)
 	fw.err = nil
-	h.repairFirewallEnforcement()
+	h.reconcileFirewallTick(now.Add(time.Second))
 	if fw.calls != 2 {
 		t.Fatalf("repair calls = %d, want a retry after failure", fw.calls)
 	}
@@ -37,7 +38,7 @@ func TestRepairSkippedWhileReconnectSuspendsFirewall(t *testing.T) {
 	fw := &repairingFirewall{pendingTestFirewall: dnsFW(h)}
 	h.firewall = fw
 	h.fwSuspendDepth = 1
-	h.repairFirewallEnforcement()
+	h.repairFirewallEnforcement(time.Now())
 	if fw.calls != 0 {
 		t.Fatal("repair re-enabled rules a reconnect deliberately suspended")
 	}
@@ -45,7 +46,30 @@ func TestRepairSkippedWhileReconnectSuspendsFirewall(t *testing.T) {
 
 func TestRepairIgnoresBackendsWithoutRepairer(t *testing.T) {
 	h := newPendingTestHelper(t)
-	h.repairFirewallEnforcement() // pendingTestFirewall has no repairer: must not panic
+	h.repairFirewallEnforcement(time.Now()) // pendingTestFirewall has no repairer: must not panic
+}
+
+func TestFirewallRepairBackoffIsBoundedAndResetsOnSuccess(t *testing.T) {
+	h := newPendingTestHelper(t)
+	f := &repairingFirewall{pendingTestFirewall: dnsFW(h), err: errors.New("bad pf.conf")}
+	h.firewall = f
+	now := time.Now()
+	for attempt := 0; attempt < 8; attempt++ {
+		h.repairFirewallEnforcement(now)
+		if f.calls != attempt+1 || h.fwRepairRetryDelay > 30*time.Second {
+			t.Fatal("repair backoff did not advance within its bound")
+		}
+		h.repairFirewallEnforcement(now.Add(time.Millisecond))
+		if f.calls != attempt+1 {
+			t.Fatal("repair ignored its retry deadline")
+		}
+		now = h.fwRepairRetryAt
+	}
+	f.err = nil
+	h.repairFirewallEnforcement(now)
+	if !h.fwRepairRetryAt.IsZero() || h.fwRepairRetryDelay != 0 {
+		t.Fatal("successful repair retained stale backoff")
+	}
 }
 
 // Backend contract after review M-10: a failed removal leaves the backend

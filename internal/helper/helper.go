@@ -112,12 +112,14 @@ type Helper struct {
 	ksRestoreOn bool
 	// Successful suspend calls own one level each. Only the last resume may
 	// apply rules. Guarded by connectMu, like the KS reconciliation journal.
-	fwSuspendDepth int
-	ksIfaces       map[string]struct{}
-	ksApplied      string
-	ksPending      string
-	ksRetryAt      time.Time
-	ksRetryDelay   time.Duration
+	fwSuspendDepth     int
+	ksIfaces           map[string]struct{}
+	ksApplied          string
+	ksPending          string
+	ksRetryAt          time.Time
+	ksRetryDelay       time.Duration
+	fwRepairRetryAt    time.Time
+	fwRepairRetryDelay time.Duration
 
 	// dnsProtectionWanted is the user's DNS-protection setting as last sent
 	// by the GUI/CLI (or carried over by a crash restore). The rules

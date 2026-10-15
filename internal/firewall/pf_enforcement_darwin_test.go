@@ -54,6 +54,15 @@ func stubPFKernel(t *testing.T) *fakePFKernel {
 				return []byte("Status: Enabled for 0 days 00:00:01"), nil
 			}
 			return []byte("Status: Disabled for 0 days 00:00:01"), nil
+		case "-s":
+			if len(k.tokens) == 0 {
+				return []byte("No pf starter references held\n"), nil
+			}
+			out := "TOKENS:\nPID Process Name TOKEN TIMESTAMP\n"
+			for token := range k.tokens {
+				out += "123 pfctl " + token + " 0 days 00:00:01\n"
+			}
+			return []byte(out), nil
 		case "-sr":
 			return []byte("anchor \"com.apple/*\" all\n"), nil
 		case "-a":
@@ -92,14 +101,14 @@ func TestPFHeldTokenIsRetakenAfterExternalDisable(t *testing.T) {
 	}
 }
 
-func TestPFStatusQueryFailureKeepsHeldToken(t *testing.T) {
+func TestPFReferenceQueryFailureKeepsHeldToken(t *testing.T) {
 	k := stubPFKernel(t)
 	if err := enablePf(); err != nil {
 		t.Fatal(err)
 	}
 	good := runPfctl
 	runPfctl = func(args ...string) ([]byte, error) {
-		if args[0] == "-si" {
+		if args[0] == "-s" {
 			return nil, errors.New("pfctl timed out")
 		}
 		return good(args...)
@@ -241,7 +250,7 @@ func TestRepairEnforcementIsNoopWithoutProtectionOrWhilePFRuns(t *testing.T) {
 		t.Fatal(err)
 	}
 	k.calls = nil
-	if repaired, err := f.RepairEnforcement(); repaired || err != nil || strings.Join(k.calls, ",") != "-si" {
+	if repaired, err := f.RepairEnforcement(); repaired || err != nil || strings.Join(k.calls, ",") != "-s References" {
 		t.Fatalf("healthy PF was modified: %v %v %v", repaired, err, k.calls)
 	}
 }

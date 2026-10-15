@@ -44,14 +44,14 @@ func enablePf() error {
 		// `pfctl -d` (another VPN, the user) stops PF and invalidates every
 		// reference, ours included (xnu DIOCSTOP: invalidate_all_tokens).
 		// A cached token therefore proves nothing about enforcement.
-		running, err := pfRunning()
+		live, err := pfReferenceHeld(pfLease.state.Token)
 		if err != nil {
-			return fmt.Errorf("verify PF is running: %w", err)
+			return fmt.Errorf("verify PF reference: %w", err)
 		}
-		if running {
+		if live {
 			return nil
 		}
-		slog.Warn("PF is stopped although a reference is held; taking a new one", "token", pfLease.state.Token)
+		slog.Warn("PF reference was invalidated; taking a new one", "token", pfLease.state.Token)
 		pfLease.state.Token, pfLease.state.Boot = "", ""
 		if err := writePfLease(pfLease.state); err != nil {
 			slog.Warn("failed to drop stale PF token from journal", "error", err)
@@ -131,7 +131,74 @@ func pfRunning() (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("pfctl -si: %w (%s)", err, strings.TrimSpace(string(out)))
 	}
-	return strings.Contains(string(out), "Status: Enabled"), nil
+	if strings.Contains(string(out), "Status: Enabled") {
+		return true, nil
+	}
+	if strings.Contains(string(out), "Status: Disabled") {
+		return false, nil
+	}
+	return false, fmt.Errorf("unrecognized PF status")
+}
+
+// A running PF may belong only to another tool after an external stop/start.
+// Check our exact token, rather than confusing that tool's lease with ours.
+func livePfLease() (bool, error) {
+	pfLease.Lock()
+	defer pfLease.Unlock()
+	if pfLease.state.Token == "" {
+		return false, nil
+	}
+	boot, err := pfBootID()
+	if err != nil || pfLease.state.Boot != boot {
+		return false, err
+	}
+	return pfReferenceHeld(pfLease.state.Token)
+}
+
+func pfReferenceHeld(token string) (bool, error) {
+	out, err := runPfctl("-s", "References")
+	if err != nil {
+		return false, fmt.Errorf("pfctl -s References: %w", err)
+	}
+	return parsePfReferences(string(out), token)
+}
+
+func parsePfReferences(out, token string) (bool, error) {
+	if strings.Contains(out, "No pf starter references held") {
+		return false, nil
+	}
+	// pfctl prints PID, process name, TOKEN, and "N days HH:MM:SS".
+	// Process names may contain whitespace; take the token from the end.
+	header, found, rows := false, false, 0
+	for _, line := range strings.Split(out, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 0 {
+			continue
+		}
+		if fields[0] == "PID" && strings.Contains(line, "TOKEN") && strings.Contains(line, "TIMESTAMP") {
+			header = true
+			continue
+		}
+		if !header {
+			continue
+		}
+		if len(fields) < 6 || fields[len(fields)-2] != "days" {
+			return false, fmt.Errorf("unrecognized PF reference row")
+		}
+		if _, err := strconv.ParseUint(fields[0], 10, 64); err != nil {
+			return false, fmt.Errorf("invalid PF reference PID: %w", err)
+		}
+		rowToken := fields[len(fields)-4]
+		if _, err := strconv.ParseUint(rowToken, 10, 64); err != nil {
+			return false, fmt.Errorf("invalid PF reference token: %w", err)
+		}
+		rows++
+		found = found || rowToken == token
+	}
+	if !header || rows == 0 {
+		return false, fmt.Errorf("unrecognized PF reference listing")
+	}
+	return found, nil
 }
 
 // pfTokenGone reports whether a failed `pfctl -X` means the token can no

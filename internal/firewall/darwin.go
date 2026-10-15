@@ -672,8 +672,8 @@ func mainRulesetEvaluatesAppleAnchors(out string) bool {
 
 // RepairEnforcement restores the committed model when PF stopped enforcing it
 // outside WireGuide (an external `pfctl -d` stops PF and invalidates every
-// reference; the anchors keep their rules). It does nothing while PF runs, so
-// another tool's main ruleset is never reloaded behind its back.
+// reference; the anchors keep their rules). A running PF also needs a live
+// WireGuide reference, or another owner's Off could remove our protection.
 func (f *DarwinFirewall) RepairEnforcement() (bool, error) {
 	f.opMu.Lock()
 	defer f.opMu.Unlock()
@@ -685,12 +685,18 @@ func (f *DarwinFirewall) RepairEnforcement() (bool, error) {
 	if !ks && !dns {
 		return false, nil
 	}
-	running, err := pfRunning()
-	if err != nil || running {
+	live, err := livePfLease()
+	if err != nil || live {
 		return false, err
 	}
-	if err := loadDefaultPfRuleset(); err != nil {
-		return false, fmt.Errorf("preparing pf anchor: %w", err)
+	running, err := pfRunning()
+	if err != nil {
+		return false, err
+	}
+	if !running {
+		if err := loadDefaultPfRuleset(); err != nil {
+			return false, fmt.Errorf("preparing pf anchor: %w", err)
+		}
 	}
 	var mainRules string
 	if ks {
@@ -711,7 +717,7 @@ func (f *DarwinFirewall) RepairEnforcement() (bool, error) {
 	if err := enablePf(); err != nil {
 		return false, fmt.Errorf("re-enable pf: %w", err)
 	}
-	slog.Warn("PF was stopped outside WireGuide; protection restored", "kill_switch", ks, "dns_protection", dns)
+	slog.Warn("PF reference was lost outside WireGuide; protection restored", "kill_switch", ks, "dns_protection", dns)
 	return true, nil
 }
 
