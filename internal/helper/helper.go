@@ -22,6 +22,7 @@ package helper
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -238,6 +239,9 @@ type Helper struct {
 	// reconnect suspension. Guarded by mu, including desired-state reads.
 	killSwitchWanted bool
 	ksIntentKnown    bool
+	// Saved On applies only during valid crash recovery, never to an idle
+	// startup without tunnels. Live intent takes priority. Guarded by mu.
+	ksRestoreOn bool
 	// Successful suspend calls own one level each. Only the last resume may
 	// apply rules. Guarded by connectMu, like the KS reconciliation journal.
 	fwSuspendDepth int
@@ -255,6 +259,8 @@ type Helper struct {
 	// A loaded user setting or live IPC update takes precedence over a
 	// potentially older crash journal. Guarded by mu.
 	dnsIntentKnown bool
+	// A live update also vetoes replay of the journal's automatic-DNS Off.
+	dnsIntentExplicit bool
 	// dnsAutoOff records an explicit "off" from the user while a Windows
 	// full tunnel had DNS protection on automatically: it stays off until
 	// the next full-tunnel connect, as before issue #48. Guarded by mu.
@@ -1160,11 +1166,29 @@ func (h *Helper) automaticLANConflict(cfg *domain.WireGuardConfig) bool {
 
 func (h *Helper) restoreUserSettings() {
 	if settings, err := h.loadUserSettings(); err == nil {
-		h.mu.Lock()
-		h.dnsProtectionWanted = settings.DNSProtection
-		h.dnsIntentKnown = true
-		h.dnsAutoOff = !settings.DNSProtection
-		h.mu.Unlock()
+		// Defaults are not user intent. Only fields actually present in a
+		// readable config can supersede the crash journal. In particular,
+		// DNSProtection=false is the Windows default, not an explicit veto
+		// of full-tunnel automatic DNS protection.
+		var persisted struct {
+			DNSProtection *bool `json:"dns_protection"`
+			KillSwitch    *bool `json:"kill_switch"`
+		}
+		if raw, err := os.ReadFile(filepath.Join(h.userAppSupport, "config.json")); err == nil && json.Unmarshal(raw, &persisted) == nil {
+			h.mu.Lock()
+			if persisted.DNSProtection != nil {
+				h.dnsProtectionWanted = *persisted.DNSProtection
+				h.dnsIntentKnown = true
+			}
+			if persisted.KillSwitch != nil {
+				h.ksRestoreOn = *persisted.KillSwitch
+				if !*persisted.KillSwitch {
+					h.killSwitchWanted = false
+					h.ksIntentKnown = true
+				}
+			}
+			h.mu.Unlock()
+		}
 		h.monitor.SetHealthCheck(settings.HealthCheck)
 		if settings.PinInterface {
 			if err := h.manager.SetPinInterface(true); err != nil {

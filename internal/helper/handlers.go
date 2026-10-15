@@ -448,7 +448,11 @@ func (h *Helper) applyConnectedFirewall(cfg *domain.WireGuardConfig, newConnect 
 	if newConnect && cfg.IsFullTunnel() {
 		h.mu.Lock()
 		h.dnsAutoOff = false
+		h.dnsIntentExplicit = true
 		h.mu.Unlock()
+		// doConnectHeld wrote the previous override before this follow-up.
+		// A crash now must retain the new connection's automatic protection.
+		h.persistDesiredState()
 	}
 	if err := h.reapplyDNSProtection(); err != nil {
 		slog.Warn("DNS protection after connect failed", "tunnel", cfg.Name, "error", err)
@@ -709,6 +713,7 @@ func (h *Helper) handleSetDNSProtection(params json.RawMessage) (interface{}, er
 	h.mu.Lock()
 	h.dnsProtectionWanted = req.Enabled
 	h.dnsIntentKnown = true
+	h.dnsIntentExplicit = true
 	h.dnsAutoOff = !req.Enabled
 	h.mu.Unlock()
 	h.persistDesiredState()

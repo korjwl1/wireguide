@@ -89,6 +89,7 @@ type desiredStateJSON struct {
 	WatchdogBlocked []string `json:"watchdog_blocked,omitempty"`
 	KillSwitch      bool     `json:"kill_switch,omitempty"`
 	DNSProtection   bool     `json:"dns_protection,omitempty"`
+	DNSAutoOff      bool     `json:"dns_auto_off,omitempty"`
 }
 
 func desiredStatePath(dataDir string) string {
@@ -226,6 +227,7 @@ func (h *Helper) persistDesiredState() {
 	// The setting, not whether rules are installed right now: with no
 	// tunnel up, or mid-reconnect, there may be none (issue #48).
 	st.DNSProtection = h.dnsProtectionWanted
+	st.DNSAutoOff = h.dnsAutoOff
 	for name := range h.activeCfgs {
 		st.Tunnels = append(st.Tunnels, name)
 	}
@@ -494,14 +496,17 @@ func (h *Helper) restoreDesiredTunnels() {
 	if !h.dnsIntentKnown && intent.DNSProtection {
 		h.dnsProtectionWanted = true
 	}
+	if !h.dnsIntentExplicit {
+		h.dnsAutoOff = intent.DNSAutoOff
+	}
 
 	// Kill switch first: the user had the blockade up, and the crash
 	// recovery above removed it. doConnectHeld handles connecting under it.
-	restoreKillSwitch := intent.KillSwitch && !h.ksIntentKnown
-	if restoreKillSwitch {
+	if (intent.KillSwitch || h.ksRestoreOn) && !h.ksIntentKnown {
 		h.killSwitchWanted = true
 		h.ksIntentKnown = true
 	}
+	restoreKillSwitch := h.killSwitchWanted
 	h.mu.Unlock()
 	if restoreKillSwitch {
 		if err := h.reconcileKillSwitch(true, time.Now()); err != nil {
