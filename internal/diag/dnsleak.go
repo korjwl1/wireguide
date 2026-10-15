@@ -260,7 +260,9 @@ func readWindowsResolvers() ([]string, error) {
 	return servers, nil
 }
 
-// readDarwinResolvers uses `scutil --dns` to extract nameserver addresses.
+// readDarwinResolvers returns the DEFAULT resolvers from `scutil --dns`
+// (see darwinDefaultResolvers): scoped and supplemental resolvers answer
+// only their interface or domains and are not a global DNS leak.
 func readDarwinResolvers() ([]string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -268,22 +270,5 @@ func readDarwinResolvers() ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("scutil --dns: %w", err)
 	}
-
-	var servers []string
-	seen := make(map[string]bool)
-	for _, line := range strings.Split(string(out), "\n") {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "nameserver[") {
-			// Format: "nameserver[0] : 8.8.8.8"
-			parts := strings.SplitN(line, ":", 2)
-			if len(parts) == 2 {
-				ip := strings.TrimSpace(parts[1])
-				if net.ParseIP(ip) != nil && !seen[ip] {
-					seen[ip] = true
-					servers = append(servers, ip)
-				}
-			}
-		}
-	}
-	return servers, nil
+	return darwinDefaultResolvers(parseScutilDNS(string(out))), nil
 }

@@ -18,7 +18,7 @@ import (
 type scutilResolver struct {
 	Domain      string // match domain; empty for a default resolver
 	Nameservers []string
-	Scoped      bool // listed under "DNS configuration (for scoped queries)"
+	Scoped      bool // listed under "DNS configuration (for scoped queries)" or flagged Scoped
 }
 
 // parseScutilDNS parses `scutil --dns` output into resolver blocks. Pure.
@@ -45,6 +45,10 @@ func parseScutilDNS(out string) []scutilResolver {
 			switch {
 			case key == "domain":
 				blocks[cur].Domain = strings.ToLower(strings.TrimSuffix(val, "."))
+			case key == "flags":
+				if strings.Contains(val, "Scoped") {
+					blocks[cur].Scoped = true
+				}
 			case strings.HasPrefix(key, "nameserver["):
 				if net.ParseIP(val) != nil {
 					blocks[cur].Nameservers = append(blocks[cur].Nameservers, val)
@@ -53,6 +57,29 @@ func parseScutilDNS(out string) []scutilResolver {
 		}
 	}
 	return blocks
+}
+
+// darwinDefaultResolvers returns the nameservers of the unscoped resolvers
+// without a match domain — the resolvers ordinary names use. Scoped
+// per-interface resolvers and supplemental (per-domain) resolvers, including
+// other apps' such as a ts.net resolver, are not default resolvers. Every
+// macOS global check takes its probe set from here, so the verdict does not
+// depend on whether a split tunnel is also up. Pure.
+func darwinDefaultResolvers(blocks []scutilResolver) []string {
+	var defaults []string
+	seen := map[string]bool{}
+	for _, b := range blocks {
+		if b.Scoped || b.Domain != "" {
+			continue
+		}
+		for _, ns := range b.Nameservers {
+			if !seen[ns] {
+				seen[ns] = true
+				defaults = append(defaults, ns)
+			}
+		}
+	}
+	return defaults
 }
 
 // evaluateSplitDNS checks, for every split-DNS match domain, that an
@@ -185,19 +212,7 @@ func RunDNSLeakTestForTunnels(perTunnel [][]string) *DNSLeakResult {
 			return &DNSLeakResult{Error: fmt.Sprintf("scutil --dns: %v", err)}
 		}
 		blocks := parseScutilDNS(string(out))
-		var defaults []string
-		seen := map[string]bool{}
-		for _, b := range blocks {
-			if b.Scoped || b.Domain != "" {
-				continue
-			}
-			for _, ns := range b.Nameservers {
-				if !seen[ns] {
-					seen[ns] = true
-					defaults = append(defaults, ns)
-				}
-			}
-		}
+		defaults := darwinDefaultResolvers(blocks)
 		result := runGlobalDNSCheck(ctx, ExpectedDNSForTunnels(perTunnel), func() ([]string, error) { return defaults, nil })
 		return evaluateSplitDNSResult(result, plans, blocks)
 	}
