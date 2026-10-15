@@ -297,7 +297,7 @@ func (s *Scheduler) recordResult(res *CheckResult, err error) {
 	now := time.Now().Unix()
 
 	if err != nil {
-		_ = s.store.Update(func(st *State) {
+		saveErr := s.store.Update(func(st *State) {
 			st.LastErrorUnix = now
 			st.ConsecutiveErrors++
 			// Cap to avoid integer overflow on long-term offline runs.
@@ -305,10 +305,13 @@ func (s *Scheduler) recordResult(res *CheckResult, err error) {
 				st.ConsecutiveErrors = 1000
 			}
 		})
+		if saveErr != nil {
+			slog.Warn("persisting update check failure", "error", saveErr)
+		}
 		return
 	}
 
-	_ = s.store.Update(func(st *State) {
+	saveErr := s.store.Update(func(st *State) {
 		st.LastCheckUnix = now
 		st.LastErrorUnix = 0
 		st.ConsecutiveErrors = 0
@@ -322,6 +325,9 @@ func (s *Scheduler) recordResult(res *CheckResult, err error) {
 			st.LastSeenVersion = res.Info.Version
 		}
 	})
+	if saveErr != nil {
+		slog.Warn("persisting update check result", "error", saveErr)
+	}
 }
 
 // maybeNotify fires the notify callback at most once per (version, app

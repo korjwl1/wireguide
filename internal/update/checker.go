@@ -344,7 +344,7 @@ func CheckForUpdate() (*UpdateInfo, error) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != 200 {
-		return &UpdateInfo{Available: false, CurrentVer: currentVersion}, nil
+		return nil, fmt.Errorf("checking updates: unexpected HTTP status %s", resp.Status)
 	}
 
 	return parseReleaseBody(ctx, resp, client)

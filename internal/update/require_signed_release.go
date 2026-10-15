@@ -10,8 +10,10 @@ import "log/slog"
 // publishing an unsigned malicious release that clients silently install.
 //
 // To ship a real release: pass the public key via ldflags:
-//   go build -tags production -ldflags \
-//     "-X 'github.com/korjwl1/wireguide/internal/update.expectedPublicKey=<HEX>'"
+//
+//	go build -tags production -ldflags \
+//	  "-X 'github.com/korjwl1/wireguide/internal/update.expectedPublicKey=<HEX>'"
+//
 // (full signing/publishing procedure: see docs/release.md).
 const requireSignedUpdates = true
 

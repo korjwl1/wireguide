@@ -3,12 +3,13 @@ package update
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/korjwl1/wireguide/internal/atomicfile"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"sync"
 	"time"
+
+	"github.com/korjwl1/wireguide/internal/atomicfile"
 )
 
 // State is the persisted update-checker state.
@@ -105,8 +106,14 @@ func (s *StateStore) Get() State {
 func (s *StateStore) Update(fn func(*State)) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	previous := s.state
+	previous.DismissedVersions = append([]string(nil), previous.DismissedVersions...)
 	fn(&s.state)
-	return s.save()
+	if err := s.save(); err != nil {
+		s.state = previous
+		return err
+	}
+	return nil
 }
 
 // Dismiss appends version to the dismissed list (idempotent) and persists.

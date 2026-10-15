@@ -457,10 +457,10 @@ func TestCheckUpdateURLStrict(t *testing.T) {
 	}{
 		{"https://github.com/korjwl1/wireguide/releases/download/v1/asset.dmg", true},
 		{"https://objects.githubusercontent.com/x", true},
-		{"http://github.com/x", false},             // non-https
+		{"http://github.com/x", false},                // non-https
 		{"https://evil.example.com/asset.dmg", false}, // disallowed host
-		{"https://github.com.evil.com/x", false},   // lookalike host
-		{"ftp://github.com/x", false},              // non-https scheme
+		{"https://github.com.evil.com/x", false},      // lookalike host
+		{"ftp://github.com/x", false},                 // non-https scheme
 	}
 	for _, c := range cases {
 		u, err := url.Parse(c.url)
@@ -1028,12 +1028,7 @@ func TestVerifyChecksumSignature_TamperedSums(t *testing.T) {
 // helpers
 // ---------------------------------------------------------------------------
 
-// withTestPublicKey overrides the package-level expectedPublicKey
-// constant for the duration of a test. Returns a restore func.
-//
-// expectedPublicKey is a `const`, but Go test files in the same
-// package can reach private package state via a test-only mutable
-// shadow. We expose `testOverridePubKey` from checker.go for this.
+// withTestPublicKey selects a fixture key only inside go test binaries.
 func withTestPublicKey(t *testing.T, hexKey string) func() {
 	t.Helper()
 	orig := testOverridePubKey
