@@ -739,6 +739,13 @@ func (f *DarwinFirewall) RepairEnforcement() (bool, error) {
 func persistPfEnabledState(enabled bool) error {
 	pfLease.Lock()
 	defer pfLease.Unlock()
+	if pfLease.state.Token == "" {
+		state, err := readPfLease()
+		if err != nil {
+			return err
+		}
+		pfLease.state = state
+	}
 	pfLease.state.WasEnabled = enabled
 	return writePfLease(pfLease.state)
 }

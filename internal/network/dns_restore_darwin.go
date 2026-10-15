@@ -3,9 +3,8 @@
 package network
 
 import (
+	"errors"
 	"fmt"
-	"log/slog"
-	"strings"
 	"sync"
 )
 
@@ -13,24 +12,42 @@ import (
 // back to DHCP-provided defaults. Used by crash recovery when the process
 // has no memory of the pre-crash DNS state. Parallel across services.
 func (m *DarwinManager) ResetDNSToSystemDefault() error {
-	services := getAllNetworkServices()
-	var wg sync.WaitGroup
-	for _, svc := range services {
-		svc := svc
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			if err := run("networksetup", "-setdnsservers", svc, "Empty"); err != nil {
-				slog.Warn("reset DNS servers failed", "service", svc, "error", err)
-			}
-			if err := run("networksetup", "-setsearchdomains", svc, "Empty"); err != nil {
-				slog.Warn("reset search domains failed", "service", svc, "error", err)
-			}
-		}()
+	servers, search := map[string][]string{}, map[string][]string{}
+	for _, svc := range getAllNetworkServices() {
+		servers[svc] = nil
+		search[svc] = nil
 	}
+	return restoreServiceDNS(servers, search)
+}
+
+// restoreServiceDNS retains every write failure; a partial restore is retryable.
+func restoreServiceDNS(servers, search map[string][]string) error {
+	errs := make(chan error, len(servers)+len(search))
+	var wg sync.WaitGroup
+	apply := func(option string, values map[string][]string) {
+		for svc, values := range values {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				if len(values) == 0 {
+					values = []string{"Empty"}
+				}
+				if err := run("networksetup", append([]string{option, svc}, values...)...); err != nil {
+					errs <- fmt.Errorf("%s %s: %w", option, svc, err)
+				}
+			}()
+		}
+	}
+	apply("-setdnsservers", servers)
+	apply("-setsearchdomains", search)
 	wg.Wait()
+	close(errs)
+	var failures []error
+	for err := range errs {
+		failures = append(failures, err)
+	}
 	flushDNSCache()
-	return nil
+	return errors.Join(failures...)
 }
 
 // RestoreDNS restores original DNS for every service we touched. Parallel
@@ -40,9 +57,8 @@ func (m *DarwinManager) ResetDNSToSystemDefault() error {
 // Returns a non-nil error listing the services whose networksetup call failed,
 // so the caller (and ultimately the user) knows DNS may still point at the
 // tunnel's resolver instead of the original. The in-memory dnsActive flag is
-// still cleared on partial failure: the saved entries no longer reflect a
-// consistent system snapshot once we've started mutating, and re-running
-// RestoreDNS with the same stale map would just repeat the same failed call.
+// retained on partial failure so the original settings remain available
+// for another restore attempt.
 func (m *DarwinManager) RestoreDNS(ifaceName string) error {
 	// Split-DNS keys are derived from the interface name alone and must go
 	// even when dnsActive is false (split mode never sets it, and
@@ -60,7 +76,7 @@ func (m *DarwinManager) RestoreDNS(ifaceName string) error {
 	// during the restore: a concurrent SetDNS racing in here would otherwise
 	// re-snapshot the *partially-restored* system DNS as if it were the
 	// pristine original, permanently losing the real baseline. We clear the
-	// flag at the end after networksetup finishes (success or fail).
+	// flag only after every restore write succeeds.
 	m.mu.Lock()
 	if !m.dnsActive {
 		m.mu.Unlock()
@@ -70,71 +86,19 @@ func (m *DarwinManager) RestoreDNS(ifaceName string) error {
 	savedSearch := m.savedSearch
 	m.mu.Unlock()
 
-	// Fan out networksetup calls in parallel — each is ~200ms, so for 5+
-	// services we save multiple seconds vs serial. errCh is buffered to the
-	// total work count so each goroutine sends without blocking even when no
-	// reader is yet draining.
-	totalOps := len(savedDNS) + len(savedSearch)
-	errCh := make(chan error, totalOps)
-	var wg sync.WaitGroup
-	for svc, orig := range savedDNS {
-		svc, orig := svc, orig
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			var err error
-			if len(orig) == 0 {
-				err = run("networksetup", "-setdnsservers", svc, "Empty")
-			} else {
-				args := append([]string{"-setdnsservers", svc}, orig...)
-				err = run("networksetup", args...)
-			}
-			if err != nil {
-				errCh <- fmt.Errorf("setdnsservers %s: %w", svc, err)
-			}
-		}()
+	if err := restoreServiceDNS(savedDNS, savedSearch); err != nil {
+		return err
 	}
-	for svc, search := range savedSearch {
-		svc, search := svc, search
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			var err error
-			if len(search) == 0 {
-				err = run("networksetup", "-setsearchdomains", svc, "Empty")
-			} else {
-				args := append([]string{"-setsearchdomains", svc}, search...)
-				err = run("networksetup", args...)
-			}
-			if err != nil {
-				errCh <- fmt.Errorf("setsearchdomains %s: %w", svc, err)
-			}
-		}()
-	}
-	wg.Wait()
-	close(errCh)
+	m.clearRestoredDNS()
+	return nil
+}
 
-	// Clear state regardless of success — the saved maps no longer match
-	// any consistent system state after partial mutation, and keeping the
-	// flag would block future SetDNS from re-capturing a fresh baseline.
+func (m *DarwinManager) clearRestoredDNS() {
 	m.mu.Lock()
-	m.savedDNS = make(map[string][]string)
-	m.savedSearch = make(map[string][]string)
+	defer m.mu.Unlock()
+	m.savedDNS, m.savedSearch = map[string][]string{}, map[string][]string{}
 	m.dnsActive = false
 	m.lastDNS = nil
-	m.mu.Unlock()
-
-	flushDNSCache()
-
-	var failures []string
-	for e := range errCh {
-		failures = append(failures, e.Error())
-	}
-	if len(failures) > 0 {
-		return fmt.Errorf("RestoreDNS: %d service(s) failed: %s",
-			len(failures), strings.Join(failures, "; "))
-	}
-	return nil
 }
 
 // SavedDNSSnapshot returns the current per-service DNS snapshot (servers
@@ -182,67 +146,38 @@ func (m *DarwinManager) savedDNSSnapshotLocked() DNSSnapshot {
 // (covers mid-session services the global snapshot predates) → "Empty".
 func (m *DarwinManager) RestoreDNSFromSnapshot(snap DNSSnapshot) error {
 	m.mu.Lock()
-	savedDNS := m.savedDNS
-	savedSearch := m.savedSearch
-	m.dnsActive = false
-	m.savedDNS = make(map[string][]string)
-	m.savedSearch = make(map[string][]string)
-	m.lastDNS = nil
+	savedDNS, savedSearch := m.savedDNS, m.savedSearch
 	m.mu.Unlock()
-
-	svcSet := make(map[string]struct{})
+	services := map[string]bool{}
 	for svc := range snap.Servers {
-		svcSet[svc] = struct{}{}
+		services[svc] = true
 	}
 	for svc := range snap.Search {
-		svcSet[svc] = struct{}{}
+		services[svc] = true
 	}
 	for svc := range savedDNS {
-		svcSet[svc] = struct{}{}
+		services[svc] = true
 	}
 	for svc := range savedSearch {
-		svcSet[svc] = struct{}{}
+		services[svc] = true
 	}
 	for _, svc := range getAllNetworkServices() {
-		svcSet[svc] = struct{}{}
+		services[svc] = true
 	}
-
-	var wg sync.WaitGroup
-	for svc := range svcSet {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			servers, ok := snap.Servers[svc]
-			if !ok {
-				servers = savedDNS[svc]
-			}
-			if len(servers) > 0 {
-				args := append([]string{"-setdnsservers", svc}, servers...)
-				if err := run("networksetup", args...); err != nil {
-					slog.Warn("RestoreDNSFromSnapshot: setting DNS failed", "service", svc, "error", err)
-				}
-			} else {
-				if err := run("networksetup", "-setdnsservers", svc, "Empty"); err != nil {
-					slog.Warn("RestoreDNSFromSnapshot: clearing DNS failed", "service", svc, "error", err)
-				}
-			}
-			search, ok := snap.Search[svc]
-			if !ok {
-				search = savedSearch[svc]
-			}
-			if len(search) > 0 {
-				args := append([]string{"-setsearchdomains", svc}, search...)
-				if err := run("networksetup", args...); err != nil {
-					slog.Warn("RestoreDNSFromSnapshot: setting search domains failed", "service", svc, "error", err)
-				}
-			} else {
-				if err := run("networksetup", "-setsearchdomains", svc, "Empty"); err != nil {
-					slog.Warn("RestoreDNSFromSnapshot: clearing search domains failed", "service", svc, "error", err)
-				}
-			}
-		}()
+	servers, search := map[string][]string{}, map[string][]string{}
+	for svc := range services {
+		servers[svc] = snap.Servers[svc]
+		if _, ok := snap.Servers[svc]; !ok {
+			servers[svc] = savedDNS[svc]
+		}
+		search[svc] = snap.Search[svc]
+		if _, ok := snap.Search[svc]; !ok {
+			search[svc] = savedSearch[svc]
+		}
 	}
-	wg.Wait()
-	flushDNSCache()
+	if err := restoreServiceDNS(servers, search); err != nil {
+		return err
+	}
+	m.clearRestoredDNS()
 	return nil
 }

@@ -37,6 +37,13 @@ var pfTokenPattern = regexp.MustCompile(`(?m)Token\s*:\s*([0-9]+)`)
 func enablePf() error {
 	pfLease.Lock()
 	defer pfLease.Unlock()
+	if pfLease.state.Token == "" {
+		state, err := readPfLease()
+		if err != nil {
+			return err
+		}
+		pfLease.state = state
+	}
 	boot, err := pfBootID()
 	if err != nil {
 		return err
@@ -88,19 +95,9 @@ func disablePf() error {
 	defer pfLease.Unlock()
 	state := pfLease.state
 	if state.Token == "" {
-		data, err := os.ReadFile(savedPfStateFile)
-		if errors.Is(err, os.ErrNotExist) {
-			return nil
-		}
+		var err error
+		state, err = readPfLease()
 		if err != nil {
-			return err
-		}
-		// Old releases persisted just 0/1. They supplied no ownership
-		// token, so never globally disable PF based on that snapshot.
-		if text := strings.TrimSpace(string(data)); text == "0" || text == "1" {
-			return nil
-		}
-		if err := json.Unmarshal(data, &state); err != nil {
 			return err
 		}
 	}
@@ -119,6 +116,24 @@ func disablePf() error {
 	}
 	pfLease.state = pfLeaseState{}
 	return nil
+}
+
+func readPfLease() (pfLeaseState, error) {
+	var state pfLeaseState
+	data, err := os.ReadFile(savedPfStateFile)
+	if errors.Is(err, os.ErrNotExist) {
+		return state, nil
+	}
+	if err != nil {
+		return state, err
+	}
+	text := strings.TrimSpace(string(data))
+	if text == "0" || text == "1" {
+		state.WasEnabled = text == "1"
+		return state, nil
+	}
+	err = json.Unmarshal(data, &state)
+	return state, err
 }
 
 // pfRunning reports whether PF is enabled. A failed query is an error, not
