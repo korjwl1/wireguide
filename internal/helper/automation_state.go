@@ -269,6 +269,7 @@ func (h *Helper) recordManualOverride(name string, disconnected bool) {
 	if name == "" {
 		return
 	}
+	h.clearAutomationSkip(name)
 	st := h.currentNetworkState()
 	h.wifiMu.Lock()
 	if h.manualOverride == nil {

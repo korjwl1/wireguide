@@ -135,6 +135,12 @@ type AutoConnectPayload struct {
 	TunnelName string `json:"tunnel_name"`
 }
 
+// AutomationSkippedPayload explains why a rule's connection was deferred.
+type AutomationSkippedPayload struct {
+	TunnelName string `json:"tunnel_name"`
+	Reason     string `json:"reason"`
+}
+
 // ForcedDisconnectPayload names a tunnel the helper tore down on its own
 // and why (EventForcedDisconnect).
 type ForcedDisconnectPayload struct {

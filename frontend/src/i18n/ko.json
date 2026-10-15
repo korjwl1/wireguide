@@ -1,5 +1,6 @@
 {
   "app": {
+    "automation_lan_overlap": "{name}: 터널 경로가 현재 로컬 네트워크와 겹쳐 자동 연결을 보류했어요.",
     "disconnected": "연결 안 됨",
     "connecting": "연결 중…",
     "connected": "연결됨",

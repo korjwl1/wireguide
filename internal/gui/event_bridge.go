@@ -168,6 +168,13 @@ func (b *eventBridge) handleEvent(method string, params json.RawMessage) {
 		} else {
 			b.app.Event.Emit("auto_connected", payload)
 		}
+	case ipc.EventAutomationSkipped:
+		var payload ipc.AutomationSkippedPayload
+		if err := json.Unmarshal(params, &payload); err != nil {
+			slog.Debug("event bridge: unmarshal automation_skipped failed", "error", err)
+		} else {
+			b.app.Event.Emit("automation_skipped", payload)
+		}
 	case ipc.EventForcedDisconnect:
 		// The helper tore a tunnel down on its own (loop watchdog, issue
 		// #49). EventStatus already shows it as down; the frontend tells

@@ -168,8 +168,9 @@ type Helper struct {
 	// was last activated by a wifi rule on this SSID" so a later
 	// SSID change can tell auto-managed tunnels apart from manually
 	// connected ones and only touch the former.
-	wifiMu          sync.Mutex
-	autoConnectedBy map[string]string
+	wifiMu            sync.Mutex
+	autoConnectedBy   map[string]string
+	automationSkipped map[string]string // last reported LAN overlap, guarded by wifiMu
 	// ssidStampGW is the gateway MAC observed when the GUI last reported
 	// the SSID. macOS only: the root helper can't read the SSID itself, so
 	// if the GUI exits and the machine then moves networks, the reported

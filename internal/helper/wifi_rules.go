@@ -228,10 +228,10 @@ func (h *Helper) automationConnect(name, reason, ssid string) {
 		return
 	}
 	if cidr, addr, overlaps := overlapsLocalNetwork(cfg); overlaps {
-		slog.Info("automation: not connecting, tunnel AllowedIPs overlap the local network",
-			"tunnel", name, "cidr", cidr, "local_address", addr.String())
+		h.reportAutomationOverlap(name, cidr, addr)
 		return
 	}
+	h.clearAutomationSkip(name)
 	slog.Info("automation: rule connect", "tunnel", name, "reason", reason, "ssid", ssid)
 	h.connectMu.Lock()
 	// A manual connect/disconnect may have landed while we waited for
@@ -242,7 +242,7 @@ func (h *Helper) automationConnect(name, reason, ssid string) {
 		slog.Info("automation: connect skipped, manual override latched", "tunnel", name)
 		return
 	}
-	err = h.doConnectHeld(cfg)
+	err = h.doConnectWithOwnerHeld(cfg, &ssid)
 	if err == nil {
 		// Same firewall follow-up a manual connect does — otherwise a
 		// headless automation connect gets no DNS protection and, if the
@@ -255,9 +255,6 @@ func (h *Helper) automationConnect(name, reason, ssid string) {
 		slog.Warn("automation connect failed", "tunnel", name, "error", err)
 		return
 	}
-	h.wifiMu.Lock()
-	h.autoConnectedBy[name] = ssid
-	h.wifiMu.Unlock()
 	// Notify GUI so it runs the same post-connect refresh as a manual connect.
 	h.server.Broadcast(ipc.EventAutoConnect, ipc.AutoConnectPayload{TunnelName: name})
 }

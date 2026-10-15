@@ -1,5 +1,6 @@
 {
   "app": {
+    "automation_lan_overlap": "{name}: 経路がローカルネットワークと重複するため、自動接続を保留しました。",
     "disconnected": "未接続",
     "connecting": "接続中…",
     "connected": "接続済み",

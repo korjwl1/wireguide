@@ -235,6 +235,18 @@ func (h *Helper) handleRename(params json.RawMessage) (interface{}, error) {
 // monitor sees the config during Connect), then rolls back on failure.
 // Caller MUST hold h.connectMu.
 func (h *Helper) doConnectHeld(cfg *domain.WireGuardConfig) error {
+	h.wifiMu.Lock()
+	owner, automatic := h.autoConnectedBy[cfg.Name]
+	h.wifiMu.Unlock()
+	if automatic {
+		return h.doConnectWithOwnerHeld(cfg, &owner)
+	}
+	return h.doConnectWithOwnerHeld(cfg, nil)
+}
+
+// A nil owner denotes manual intent; recovery retains the recorded owner.
+// Ownership is committed with the first successful desired-state snapshot.
+func (h *Helper) doConnectWithOwnerHeld(cfg *domain.WireGuardConfig, owner *string) error {
 	if err := h.manager.PreflightConnect(cfg); err != nil {
 		return err
 	}
@@ -301,6 +313,16 @@ func (h *Helper) doConnectHeld(cfg *domain.WireGuardConfig) error {
 	h.mu.Lock()
 	delete(h.pendingDesired, cfg.Name)
 	h.mu.Unlock()
+	h.wifiMu.Lock()
+	if owner == nil {
+		delete(h.autoConnectedBy, cfg.Name)
+	} else {
+		if h.autoConnectedBy == nil {
+			h.autoConnectedBy = make(map[string]string)
+		}
+		h.autoConnectedBy[cfg.Name] = *owner
+	}
+	h.wifiMu.Unlock()
 	h.persistDesiredState()
 	return nil
 }
@@ -420,7 +442,7 @@ func (h *Helper) handleConnect(params json.RawMessage) (interface{}, error) {
 		}
 	}
 
-	if err := h.doConnectHeld(req.Config); err != nil {
+	if err := h.doConnectWithOwnerHeld(req.Config, nil); err != nil {
 		return nil, err
 	}
 	h.clearWatchdogBlockHeld(req.Config.Name)

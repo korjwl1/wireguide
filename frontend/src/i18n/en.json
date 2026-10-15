@@ -1,5 +1,6 @@
 {
   "app": {
+    "automation_lan_overlap": "{name}: automatic connection paused because its routes overlap the local network.",
     "disconnected": "Disconnected",
     "connecting": "Connecting...",
     "connected": "Connected",

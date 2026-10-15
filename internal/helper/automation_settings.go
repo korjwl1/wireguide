@@ -74,7 +74,12 @@ func (h *Helper) automaticLANConflict(cfg *domain.WireGuardConfig) bool {
 	if !owned {
 		return false
 	}
-	_, _, conflict := overlapsLocalNetwork(cfg)
+	cidr, addr, conflict := overlapsLocalNetwork(cfg)
+	if conflict {
+		h.reportAutomationOverlap(cfg.Name, cidr, addr)
+	} else {
+		h.clearAutomationSkip(cfg.Name)
+	}
 	return conflict
 }
 

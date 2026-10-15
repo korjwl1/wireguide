@@ -208,6 +208,13 @@
       await applyFirewallSettings();
     });
 
+    appEvents.on('automation_skipped', (event) => {
+      const { tunnel_name, reason } = event.data || {};
+      if (reason === 'lan_overlap') {
+        showToast($t('app.automation_lan_overlap', { name: tunnel_name || 'Tunnel' }), 10000);
+      }
+    });
+
     // The helper tore a tunnel down on its own (routing-loop watchdog).
     // It won't come back by itself, so say why it went down.
     appEvents.on('forced_disconnect', (event) => {

@@ -169,11 +169,12 @@ const (
 
 // Event names (server → client notifications)
 const (
-	EventStatus      = "event.status"
-	EventReconnect   = "event.reconnect"
-	EventLog         = "event.log"
-	EventWifiSSID    = "event.wifi_ssid"
-	EventAutoConnect = "event.auto_connect"
+	EventStatus            = "event.status"
+	EventReconnect         = "event.reconnect"
+	EventLog               = "event.log"
+	EventWifiSSID          = "event.wifi_ssid"
+	EventAutoConnect       = "event.auto_connect"
+	EventAutomationSkipped = "event.automation_skipped"
 	// EventForcedDisconnect tells the GUI the helper tore a tunnel down on
 	// its own — the endpoint-route watchdog found a routing loop (#49) —
 	// so the user learns why it went down and that it won't come back by

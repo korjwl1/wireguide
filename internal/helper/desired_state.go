@@ -13,6 +13,7 @@ import (
 	"github.com/korjwl1/wireguide/internal/atomicfile"
 	"github.com/korjwl1/wireguide/internal/domain"
 	"github.com/korjwl1/wireguide/internal/ipc"
+	"github.com/korjwl1/wireguide/internal/reconnect"
 	"github.com/korjwl1/wireguide/internal/wifi"
 )
 
@@ -87,6 +88,7 @@ const bootTimeSlack = 2 * time.Second
 
 type desiredStateJSON struct {
 	Tunnels         []string `json:"tunnels"`
+	Automatic       []string `json:"automatic_tunnels,omitempty"`
 	WatchdogBlocked []string `json:"watchdog_blocked,omitempty"`
 	KillSwitch      bool     `json:"kill_switch,omitempty"`
 	DNSProtection   bool     `json:"dns_protection,omitempty"`
@@ -143,6 +145,17 @@ func saveDesiredIntent(dataDir string, st desiredStateJSON) error {
 		return nil
 	}
 	st.Tunnels = normalizeTunnelNames(st.Tunnels)
+	wanted := make(map[string]bool, len(st.Tunnels))
+	for _, name := range st.Tunnels {
+		wanted[name] = true
+	}
+	automatic := st.Automatic[:0]
+	for _, name := range normalizeTunnelNames(st.Automatic) {
+		if wanted[name] {
+			automatic = append(automatic, name)
+		}
+	}
+	st.Automatic = automatic
 	st.WatchdogBlocked = normalizeTunnelNames(st.WatchdogBlocked)
 	if len(st.Tunnels) == 0 && len(st.WatchdogBlocked) == 0 {
 		clearDesiredState(dataDir)
@@ -228,6 +241,13 @@ func (h *Helper) persistDesiredState() {
 		st.KillSwitch = st.KillSwitch || h.killSwitchWanted
 	}
 	h.mu.Unlock()
+	h.wifiMu.Lock()
+	for _, name := range st.Tunnels {
+		if _, automatic := h.autoConnectedBy[name]; automatic {
+			st.Automatic = append(st.Automatic, name)
+		}
+	}
+	h.wifiMu.Unlock()
 	h.desiredMu.Lock()
 	defer h.desiredMu.Unlock()
 	select {
@@ -286,6 +306,11 @@ func (h *Helper) pendingDesiredCfgs() map[string]*domain.WireGuardConfig {
 			delete(h.pendingDesired, name)
 		}
 		h.mu.Unlock()
+		h.wifiMu.Lock()
+		for _, name := range dropped {
+			delete(h.autoConnectedBy, name)
+		}
+		h.wifiMu.Unlock()
 		// Rewrite so the same failures aren't re-logged on every trigger.
 		h.persistDesiredState()
 		h.maybeArmShutdownAfterTeardown("pending configs removed, no GUI attached")
@@ -301,6 +326,9 @@ func (h *Helper) withdrawPendingDesired(name string) {
 	delete(h.pendingDesired, name)
 	h.mu.Unlock()
 	if ok {
+		h.wifiMu.Lock()
+		delete(h.autoConnectedBy, name)
+		h.wifiMu.Unlock()
 		slog.Info("automation: rule says off, withdrawing pending restore", "tunnel", name)
 		h.persistDesiredState()
 		h.maybeArmShutdownAfterTeardown("pending restore withdrawn, no GUI attached")
@@ -327,6 +355,9 @@ func (h *Helper) connectPendingDesired(ctx context.Context, cfg *domain.WireGuar
 	h.mu.Unlock()
 	if !stillPending {
 		return nil
+	}
+	if h.automaticLANConflict(cfg) {
+		return reconnect.ErrNothingToReconnect
 	}
 	return restoreConnect(h, cfg)
 }
@@ -457,6 +488,10 @@ func (h *Helper) restoreDesiredTunnels() {
 	}
 
 	restored, failed, missing, ruledOff := 0, 0, 0, 0
+	automatic := make(map[string]bool, len(intent.Automatic))
+	for _, name := range intent.Automatic {
+		automatic[name] = true
+	}
 
 	// Same lock order as automation (reevalMu → connectMu): no rule pass
 	// can interleave with the restore, and one that ran before it already
@@ -522,6 +557,23 @@ func (h *Helper) restoreDesiredTunnels() {
 			ruledOff++
 			slog.Info("desired-state: automation rule says off on this network, not restoring",
 				"tunnel", name)
+			continue
+		}
+		if automatic[name] {
+			h.wifiMu.Lock()
+			if h.autoConnectedBy == nil {
+				h.autoConnectedBy = make(map[string]string)
+			}
+			h.autoConnectedBy[name] = ""
+			h.wifiMu.Unlock()
+		}
+		if h.automaticLANConflict(cfg) {
+			h.mu.Lock()
+			if h.pendingDesired == nil {
+				h.pendingDesired = make(map[string]struct{})
+			}
+			h.pendingDesired[name] = struct{}{}
+			h.mu.Unlock()
 			continue
 		}
 		if err := restoreConnect(h, cfg); err != nil {
