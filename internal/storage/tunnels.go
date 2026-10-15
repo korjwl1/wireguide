@@ -33,7 +33,11 @@ func (s *TunnelStore) Save(cfg *config.WireGuardConfig) error {
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.saveLocked(cfg)
+}
 
+// saveLocked publishes a validated config. Caller holds s.mu for writing.
+func (s *TunnelStore) saveLocked(cfg *config.WireGuardConfig) error {
 	// Refuse to overwrite a differently-cased existing tunnel: on a
 	// case-insensitive filesystem that write would replace the other
 	// tunnel's file (and its private key). An exact-case match is a
@@ -349,8 +353,12 @@ func (s *TunnelStore) caseVariantLocked(name string) (string, bool) {
 	return "", false
 }
 
-// ImportFromContent parses content, assigns a name, and saves.
+// ImportFromContent creates a new config. Concurrent GUI/CLI imports serialize
+// their existence check and publication; importing cannot replace existing keys.
 func (s *TunnelStore) ImportFromContent(name, content string) (*config.WireGuardConfig, error) {
+	if err := ValidateTunnelName(name); err != nil {
+		return nil, err
+	}
 	cfg, err := config.Parse(content)
 	if err != nil {
 		return nil, err
@@ -362,7 +370,21 @@ func (s *TunnelStore) ImportFromContent(name, content string) (*config.WireGuard
 		return nil, fmt.Errorf("validation failed: %s", strings.Join(result.ErrorMessages(), "; "))
 	}
 
-	if err := s.Save(cfg); err != nil {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	lf, err := os.OpenFile(filepath.Join(s.dir, ".imports.lock"), os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		return nil, err
+	}
+	defer lf.Close()
+	if err := flockExclusive(int(lf.Fd())); err != nil {
+		return nil, err
+	}
+	defer flockUnlock(int(lf.Fd())) //nolint:errcheck
+	if s.exists(name) {
+		return nil, fmt.Errorf("tunnel %q already exists", name)
+	}
+	if err := s.saveLocked(cfg); err != nil {
 		return nil, err
 	}
 	return cfg, nil
