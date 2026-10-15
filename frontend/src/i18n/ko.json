@@ -59,7 +59,7 @@
     "dns_servers": "DNS 서버",
     "dns_search": "검색 도메인",
     "dns_split": "스플릿 DNS 도메인",
-    "dns_split_note": "스플릿 DNS: 터널의 서버는 이 도메인에 대해서만 응답하며, 시스템 DNS는 그대로 유지됩니다.",
+    "dns_split_note": "지원 플랫폼에서 이 도메인에만 터널 DNS를 사용합니다. macOS 또는 systemd-resolved를 사용하는 Linux가 필요하며, Windows에서는 지원하지 않습니다.",
     "handshake": "핸드셰이크",
     "duration": "연결 시간",
     "rx": "다운로드",

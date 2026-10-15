@@ -59,7 +59,7 @@
     "dns_servers": "DNS servers",
     "dns_search": "Search domains",
     "dns_split": "Split DNS domains",
-    "dns_split_note": "Split DNS: the tunnel's servers answer only for these domains. Your system DNS stays in place.",
+    "dns_split_note": "Only these domains use the tunnel DNS on supported platforms. Requires macOS or Linux with systemd-resolved; unavailable on Windows.",
     "handshake": "Handshake",
     "duration": "Duration",
     "rx": "Download",

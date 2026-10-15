@@ -26,6 +26,12 @@ import (
 // measure. The config parser still accepts these fields so existing configs
 // import without error, but the scripts are silently ignored.
 func (m *Manager) connectPhases(ctx context.Context, cfg *domain.WireGuardConfig, netMgr network.NetworkManager) (*Engine, error) {
+	if validator, ok := netMgr.(interface{ ValidateDNSConfig([]string) error }); ok {
+		if err := validator.ValidateDNSConfig(cfg.Interface.DNS); err != nil {
+			return nil, newTunnelError(ErrNetwork, "validating DNS support", err)
+		}
+	}
+
 	// Compute fullTunnel early — needed by the rollback closure and later
 	// by AddRoutes. It only depends on cfg which is a parameter.
 	fullTunnel := cfg.IsFullTunnel()
@@ -486,7 +492,7 @@ func (m *Manager) removeSplitDNS(name string, netMgr network.NetworkManager, ifa
 		if m.pendingDNSCleanup == nil {
 			m.pendingDNSCleanup = make(map[string]pendingDNSCleanup)
 		}
-		m.pendingDNSCleanup[ifaceName] = pendingDNSCleanup{name, r}
+		m.pendingDNSCleanup[ifaceName] = pendingDNSCleanup{name: name, remover: r}
 		m.mu.Unlock()
 		return err
 	}

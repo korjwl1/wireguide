@@ -426,6 +426,15 @@ func (m *WindowsManager) RemoveRoutes(ifaceName string, allowedIPs []string, ful
 	return nil
 }
 
+// ValidateDNSConfig runs before TUN creation or route changes. Portable
+// configs can still be imported and edited; unsupported activation fails early.
+func (m *WindowsManager) ValidateDNSConfig(entries []string) error {
+	if len(domain.ParseDNSEntries(entries).Match) > 0 {
+		return ErrSplitDNSUnsupported
+	}
+	return nil
+}
+
 func (m *WindowsManager) SetDNS(ifaceName string, servers []string) error {
 	if len(servers) == 0 {
 		return nil
@@ -436,6 +445,9 @@ func (m *WindowsManager) SetDNS(ifaceName string, servers []string) error {
 	parsed := domain.ParseDNSEntries(servers)
 	if len(parsed.Match) > 0 {
 		return ErrSplitDNSUnsupported
+	}
+	if len(parsed.Search) > 0 {
+		slog.Warn("DNS search domains are not supported on Windows", "domains", parsed.Search)
 	}
 	servers = parsed.Servers
 	if len(servers) == 0 {

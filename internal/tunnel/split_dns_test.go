@@ -4,6 +4,7 @@ import (
 	"errors"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/korjwl1/wireguide/internal/domain"
 	"github.com/korjwl1/wireguide/internal/network"
@@ -187,6 +188,7 @@ func TestSplitDNSCleanupFailureKeepsJournalAndRetries(t *testing.T) {
 	if err := mgr.Connect(splitCfg("s")); err != nil {
 		t.Fatal(err)
 	}
+	now := time.Now()
 	s.removeErr = errors.New("dynamic store busy")
 	if err := mgr.DisconnectTunnel("s"); err != nil {
 		t.Fatal(err)
@@ -194,12 +196,12 @@ func TestSplitDNSCleanupFailureKeepsJournalAndRetries(t *testing.T) {
 	if len(LoadActiveState(dir)) != 1 {
 		t.Fatal("failed cleanup lost recovery journal")
 	}
-	mgr.RetryPendingDNSCleanup()
+	mgr.RetryPendingDNSCleanupAt(now)
 	if len(LoadActiveState(dir)) != 1 {
 		t.Fatal("failed retry lost recovery journal")
 	}
 	s.removeErr = nil
-	mgr.RetryPendingDNSCleanup()
+	mgr.RetryPendingDNSCleanupAt(now.Add(2 * time.Second))
 	if len(LoadActiveState(dir)) != 0 {
 		t.Fatal("successful retry retained stale journal")
 	}

@@ -142,6 +142,23 @@ func validateInterface(iface *InterfaceConfig, result *ValidationResult) {
 		result.addError("Interface.DNS", fmt.Sprintf("too many split-DNS domains (%d, max %d)", len(matchSeen), maxSplitDomains))
 	}
 
+	if len(matchSeen) > 0 {
+		parsed := iface.ParseDNS()
+		if len(parsed.Match)+len(parsed.Search) > maxSplitDomains {
+			result.addError("Interface.DNS", "too many split DNS match/search domains (max 32 total)")
+		}
+		for _, line := range []string{
+			"d.add ServerAddresses * " + strings.Join(parsed.Servers, " "),
+			"d.add SupplementalMatchDomains * " + strings.Join(parsed.Match, " "),
+			"d.add SupplementalMatchDomains * " + strings.Join(parsed.Search, " "),
+		} {
+			if len(line) > 2000 {
+				result.addError("Interface.DNS", "split DNS list exceeds the 2000-byte platform command limit")
+				break
+			}
+		}
+	}
+
 	// MTU: optional, valid range
 	if iface.MTU != 0 && (iface.MTU < 576 || iface.MTU > 65535) {
 		result.addError("Interface.MTU", fmt.Sprintf("MTU must be between 576 and 65535, got %d", iface.MTU))

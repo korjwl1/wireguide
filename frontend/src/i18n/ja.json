@@ -59,7 +59,7 @@
     "dns_servers": "DNS サーバー",
     "dns_search": "検索ドメイン",
     "dns_split": "スプリット DNS ドメイン",
-    "dns_split_note": "スプリット DNS: トンネルのサーバーはこれらのドメインにのみ応答し、システムの DNS はそのまま維持されます。",
+    "dns_split_note": "対応環境ではこれらのドメインだけにトンネル DNS を使用します。macOS または systemd-resolved を使用する Linux が必要です。Windows は非対応です。",
     "handshake": "ハンドシェイク",
     "duration": "接続時間",
     "rx": "ダウンロード",

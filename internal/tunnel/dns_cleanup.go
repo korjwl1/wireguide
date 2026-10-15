@@ -2,6 +2,7 @@ package tunnel
 
 import (
 	"log/slog"
+	"time"
 
 	"github.com/korjwl1/wireguide/internal/network"
 )
@@ -9,11 +10,15 @@ import (
 type pendingDNSCleanup struct {
 	name    string
 	remover network.SplitDNSRemover
+	retryAt time.Time
+	delay   time.Duration
 }
 
 // RetryPendingDNSCleanup runs under the helper's connect lock. The journal
 // remains until cleanup succeeds, so a crash can retry it at startup too.
-func (m *Manager) RetryPendingDNSCleanup() {
+func (m *Manager) RetryPendingDNSCleanup() { m.RetryPendingDNSCleanupAt(time.Now()) }
+
+func (m *Manager) RetryPendingDNSCleanupAt(now time.Time) {
 	m.mu.Lock()
 	pending := make(map[string]pendingDNSCleanup, len(m.pendingDNSCleanup))
 	for iface, entry := range m.pendingDNSCleanup {
@@ -21,6 +26,9 @@ func (m *Manager) RetryPendingDNSCleanup() {
 	}
 	m.mu.Unlock()
 	for iface, entry := range pending {
+		if now.Before(entry.retryAt) {
+			continue
+		}
 		m.mu.Lock()
 		reused := false
 		for _, live := range m.tunnels {
@@ -32,7 +40,12 @@ func (m *Manager) RetryPendingDNSCleanup() {
 		m.mu.Unlock()
 		if !reused {
 			if err := entry.remover.RemoveSplitDNS(iface); err != nil {
-				slog.Warn("split DNS cleanup pending", "interface", iface, "error", err)
+				entry.delay = min(30*time.Second, max(time.Second, entry.delay*2))
+				entry.retryAt = now.Add(entry.delay)
+				m.mu.Lock()
+				m.pendingDNSCleanup[iface] = entry
+				m.mu.Unlock()
+				slog.Warn("split DNS cleanup pending", "interface", iface, "retry_in", entry.delay, "error", err)
 				continue
 			}
 		}
