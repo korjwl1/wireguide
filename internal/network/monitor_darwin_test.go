@@ -78,7 +78,7 @@ func TestLoop_TriggersOnRTMEvent(t *testing.T) {
 	done := make(chan struct{})
 	go func() { rm.loop(r); close(done) }()
 
-	r.feed("got message of size 1 on ...\n")   // noise
+	r.feed("got message of size 1 on ...\n")     // noise
 	r.feed("RTM_NEWADDR: address being added\n") // triggers
 	time.Sleep(700 * time.Millisecond)           // > debounce window
 

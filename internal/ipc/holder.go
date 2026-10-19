@@ -18,6 +18,8 @@ import (
 type ClientHolder struct {
 	mu     sync.RWMutex
 	client *Client
+	closed bool
+	done   chan struct{}
 
 	// inflight tracks the number of RPCs currently in-flight (Connect,
 	// Disconnect, etc.). The health monitor checks this to avoid falsely
@@ -29,7 +31,7 @@ type ClientHolder struct {
 
 // NewClientHolder wraps an initial client.
 func NewClientHolder(c *Client) *ClientHolder {
-	return &ClientHolder{client: c}
+	return &ClientHolder{client: c, done: make(chan struct{})}
 }
 
 // Get returns the current client. Callers must not retain the pointer across
@@ -50,6 +52,13 @@ func (h *ClientHolder) Get() *Client {
 // path forever.
 func (h *ClientHolder) Set(c *Client) {
 	h.mu.Lock()
+	if h.closed {
+		h.mu.Unlock()
+		if c != nil {
+			c.Close()
+		}
+		return
+	}
 	prev := h.client
 	h.client = c
 	h.mu.Unlock()
@@ -57,8 +66,15 @@ func (h *ClientHolder) Set(c *Client) {
 		return
 	}
 	deadline := time.Now().Add(inflightDrainDeadline)
+	ticker := time.NewTicker(20 * time.Millisecond)
+	defer ticker.Stop()
 	for h.inflight.Load() > 0 && time.Now().Before(deadline) {
-		time.Sleep(20 * time.Millisecond)
+		select {
+		case <-h.done:
+			prev.Close()
+			return
+		case <-ticker.C:
+		}
 	}
 	if h.inflight.Load() > 0 {
 		slog.Warn("ipc holder: closing previous client with in-flight RPCs after drain timeout",
@@ -77,6 +93,12 @@ const inflightDrainDeadline = 20 * time.Second
 // Close closes the current client. Safe to call multiple times.
 func (h *ClientHolder) Close() {
 	h.mu.Lock()
+	if !h.closed {
+		h.closed = true
+		if h.done != nil {
+			close(h.done)
+		}
+	}
 	prev := h.client
 	h.client = nil
 	h.mu.Unlock()

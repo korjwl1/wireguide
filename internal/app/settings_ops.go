@@ -11,7 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/korjwl1/wireguide/internal/autostart"
+	"github.com/korjwl1/wireguide/internal/automation"
 	"github.com/korjwl1/wireguide/internal/ipc"
 	"github.com/korjwl1/wireguide/internal/storage"
 	"github.com/korjwl1/wireguide/internal/update"
@@ -77,7 +77,13 @@ func (s *TunnelService) CheckSSIDPermission() wifi.SSIDPermissionStatus {
 // the user can grant SSID access without navigating there manually.
 func (s *TunnelService) OpenLocationSettings() {
 	if runtime.GOOS == "darwin" {
-		exec.Command("open", "x-apple.systempreferences:com.apple.preference.security?Privacy_LocationServices").Start() //nolint:errcheck
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if err := exec.CommandContext(ctx, "open", "x-apple.systempreferences:com.apple.preference.security?Privacy_LocationServices").Run(); err != nil {
+				slog.Debug("open Location Services settings failed", "error", err)
+			}
+		}()
 	}
 }
 
@@ -103,6 +109,10 @@ func getGUILogLevelSetter() func(string) {
 
 // --- Settings (all local, no IPC) ---
 
+func (s *TunnelService) GetAutomationBackupStatus() storage.AutomationBackupStatus {
+	return s.settingsStore.AutomationBackupStatus()
+}
+
 func (s *TunnelService) GetSettings() (*storage.Settings, error) {
 	settings, err := s.settingsStore.Load()
 	if err != nil {
@@ -119,58 +129,6 @@ func (s *TunnelService) GetSettings() (*storage.Settings, error) {
 	return settings, nil
 }
 
-// SaveSettings persists the settings file AND applies any side effects:
-// currently, pushing the new log level to both the GUI's slog handler and
-// the helper's slog handler. Without those side effects a user lowering the
-// level to Debug wouldn't see any new records — the saved file would match
-// the UI but the running process would still be at Info.
-func (s *TunnelService) SaveSettings(settings *storage.Settings) error {
-	// Read the previous state first so we only (un)install the autostart
-	// entry when the user actually toggles it. This avoids rewriting the
-	// LaunchAgent plist / desktop file on every unrelated setting change.
-	prev, _ := s.settingsStore.Load()
-
-	if err := s.settingsStore.Save(settings); err != nil {
-		return err
-	}
-
-	if prev == nil || prev.AutoStart != settings.AutoStart {
-		if settings.AutoStart {
-			exe, err := os.Executable()
-			if err != nil {
-				return fmt.Errorf("autostart: cannot resolve exe path: %w", err)
-			}
-			if err := autostart.InstallAutostart(exe); err != nil {
-				return fmt.Errorf("autostart: install failed: %w", err)
-			}
-		} else {
-			if err := autostart.RemoveAutostart(); err != nil && !os.IsNotExist(err) {
-				return fmt.Errorf("autostart: remove failed: %w", err)
-			}
-		}
-	}
-	if settings.LogLevel != "" {
-		if fn := getGUILogLevelSetter(); fn != nil {
-			fn(settings.LogLevel)
-		}
-		// Best-effort: the helper may be unreachable during shutdown, and
-		// the level change is not critical to Save succeeding.
-		_ = s.call(ipc.MethodSetLogLevel, ipc.SetLogLevelRequest{Level: settings.LogLevel}, nil)
-	}
-
-	// Auto-update toggle OFF→ON: nudge the scheduler so the user doesn't
-	// have to wait up to 24 h for the next regular tick. The force flag
-	// on Kick bypasses the focusRecheckThreshold gate (we *want* to
-	// re-check immediately after the user opts back in, regardless of
-	// when the last check ran). OFF→OFF, ON→ON, and ON→OFF all skip.
-	prevEnabled := prev == nil || prev.AutoUpdateCheckEnabled()
-	if !prevEnabled && settings.AutoUpdateCheckEnabled() && s.updateScheduler != nil {
-		s.updateScheduler.Kick(true)
-	}
-
-	return nil
-}
-
 // SaveAutomationRules atomically replaces one tunnel's Automation rules.
 // It goes through SettingsStore.Update — the cross-process locked
 // read-modify-write — instead of a whole-object SaveSettings, so a
@@ -178,7 +136,7 @@ func (s *TunnelService) SaveSettings(settings *storage.Settings) error {
 // be clobbered by a stale GUI snapshot (issue #27 review follow-up).
 // An empty rules slice removes the tunnel's entry entirely. The helper
 // re-reads settings from disk on every evaluation, so no push is needed.
-func (s *TunnelService) SaveAutomationRules(tunnel string, rules []wifi.Rule) error {
+func (s *TunnelService) SaveAutomationRules(tunnel string, rules []automation.Rule) error {
 	if tunnel == "" {
 		return fmt.Errorf("automation: empty tunnel name")
 	}
@@ -186,7 +144,7 @@ func (s *TunnelService) SaveAutomationRules(tunnel string, rules []wifi.Rule) er
 	// no-ops on rules it can't interpret, so a bad save would otherwise
 	// look accepted while doing nothing.
 	for i, r := range rules {
-		if err := wifi.ValidateRule(r); err != nil {
+		if err := automation.ValidateRule(r); err != nil {
 			return fmt.Errorf("automation: rule %d: %w", i+1, err)
 		}
 	}
@@ -197,7 +155,7 @@ func (s *TunnelService) SaveAutomationRules(tunnel string, rules []wifi.Rule) er
 			return nil
 		}
 		if st.Automation.PerTunnel == nil {
-			st.Automation.PerTunnel = map[string][]wifi.Rule{}
+			st.Automation.PerTunnel = map[string][]automation.Rule{}
 		}
 		st.Automation.PerTunnel[tunnel] = rules
 		return nil
@@ -221,26 +179,11 @@ func (s *TunnelService) SetKillSwitch(enabled bool) error {
 	return s.call(ipc.MethodSetKillSwitch, ipc.KillSwitchRequest{Enabled: enabled}, nil)
 }
 
-// SetDNSProtection asks the helper to lock DNS to the active tunnel's servers.
-// When enabling, we look up the active tunnel's DNS list from local storage
-// and pass it along (the helper never touches user-space storage).
+// SetDNSProtection asks the helper to lock DNS to the connected tunnels'
+// servers. The helper works out the servers for every connected tunnel
+// itself (issue #48).
 func (s *TunnelService) SetDNSProtection(enabled bool) error {
-	var dnsServers []string
-	if enabled {
-		var active ipc.StringResponse
-		if err := s.call(ipc.MethodActiveName, nil, &active); err != nil {
-			return fmt.Errorf("cannot verify tunnel state: %w", err)
-		}
-		if active.Value != "" {
-			if cfg, err := s.tunnelStore.Load(active.Value); err == nil {
-				dnsServers = cfg.Interface.DNS
-			}
-		}
-	}
-	return s.call(ipc.MethodSetDNSProtection, ipc.DNSProtectionRequest{
-		Enabled:    enabled,
-		DNSServers: dnsServers,
-	}, nil)
+	return s.call(ipc.MethodSetDNSProtection, ipc.DNSProtectionRequest{Enabled: enabled}, nil)
 }
 
 // --- Auto-update ---
@@ -452,4 +395,15 @@ func installedBundleVersion() string {
 		return ""
 	}
 	return strings.TrimSpace(string(out))
+}
+
+// GUI preferences can change from a Wails RPC; the composition root owns
+// native UI refresh, while this package owns persistence.
+var guiPreferencesChanged atomic.Value // func()
+
+func SetGUIPreferencesChanged(refresh func()) { guiPreferencesChanged.Store(refresh) }
+func notifyGUIPreferencesChanged() {
+	if callback := guiPreferencesChanged.Load(); callback != nil {
+		callback.(func())()
+	}
 }

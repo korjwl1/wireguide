@@ -7,7 +7,8 @@ import (
 	"path/filepath"
 	"sync"
 
-	"github.com/korjwl1/wireguide/internal/wifi"
+	"github.com/korjwl1/wireguide/internal/atomicfile"
+	"github.com/korjwl1/wireguide/internal/automation"
 )
 
 // Settings holds application-wide settings.
@@ -44,13 +45,13 @@ type Settings struct {
 	// policy. Retained for migration; superseded by Automation. Once
 	// Automation is populated it is the source of truth and WifiRules is
 	// no longer consulted by the rule engine.
-	WifiRules wifi.Rules `json:"wifi_rules"`
+	WifiRules automation.Rules `json:"wifi_rules"`
 
 	// Automation is the per-tunnel condition→action rule model (issue
 	// #12). A nil pointer means "not yet migrated from WifiRules";
 	// EnsureAutomation() populates it once from the legacy rules. A
 	// non-nil (possibly empty) value means the user is on the new model.
-	Automation *wifi.Automation `json:"automation,omitempty"`
+	Automation *automation.Automation `json:"automation,omitempty"`
 }
 
 // EnsureAutomation lazily migrates the legacy WifiRules into the
@@ -64,7 +65,7 @@ func (s *Settings) EnsureAutomation() {
 	if s.Automation != nil {
 		return
 	}
-	s.Automation = wifi.MigrateFromLegacy(&s.WifiRules)
+	s.Automation = automation.MigrateFromLegacy(&s.WifiRules)
 }
 
 // RenameTunnelRules moves a tunnel's Automation (and legacy WifiRules)
@@ -118,10 +119,10 @@ func DefaultSettings() *Settings {
 		ListSort:        "name_asc",
 		ListActiveOnTop: true,
 		ListPaneWidth:   240,
-		WifiRules: wifi.Rules{
+		WifiRules: automation.Rules{
 			// Initialize the map so JSON serialization round-trips
 			// produce {} rather than null for an empty mapping.
-			PerTunnel: make(map[string]wifi.TunnelSSIDs),
+			PerTunnel: make(map[string]automation.TunnelSSIDs),
 		},
 	}
 }
@@ -150,15 +151,14 @@ func NewSettingsStore(configDir string) *SettingsStore {
 }
 
 // Load reads settings from disk. Returns defaults if file doesn't exist.
-func (s *SettingsStore) Load() (*Settings, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.loadLocked()
+func (s *SettingsStore) Load() (settings *Settings, err error) {
+	err = s.withWriteLock(func() error { var readErr error; settings, readErr = s.loadLocked(); return readErr })
+	return settings, err
 }
 
 // loadLocked is Load without the mutex, for callers (Update) that already
 // hold s.mu. Writes are atomic renames, so a concurrent writer never
-// exposes a torn file to a reader — no file lock is needed just to read.
+// exposes a torn file. The file lock also protects corrupt-file quarantine.
 func (s *SettingsStore) loadLocked() (*Settings, error) {
 	data, err := os.ReadFile(s.path)
 	if err != nil {
@@ -203,6 +203,25 @@ func (s *SettingsStore) loadLocked() (*Settings, error) {
 // delete) should use this rather than Load-then-Save. mutate sees the
 // freshest on-disk state.
 func (s *SettingsStore) Update(mutate func(*Settings) error) error {
+	return s.withWriteLock(func() error {
+		settings, err := s.loadLocked()
+		if err != nil {
+			return err
+		}
+		if err := mutate(settings); err != nil {
+			return err
+		}
+		return s.saveLocked(settings)
+	})
+}
+
+// Save writes a complete settings snapshot under the same cross-process lock
+// as Update. Call Update for edits that must preserve other writers' fields.
+func (s *SettingsStore) Save(settings *Settings) error {
+	return s.withWriteLock(func() error { return s.saveLocked(settings) })
+}
+
+func (s *SettingsStore) withWriteLock(write func() error) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err := os.MkdirAll(filepath.Dir(s.path), 0700); err != nil {
@@ -217,32 +236,7 @@ func (s *SettingsStore) Update(mutate func(*Settings) error) error {
 		return err
 	}
 	defer flockUnlock(int(lf.Fd())) //nolint:errcheck
-	settings, err := s.loadLocked()
-	if err != nil {
-		return err
-	}
-	if err := mutate(settings); err != nil {
-		return err
-	}
-	return s.saveLocked(settings)
-}
-
-// Save writes settings to disk atomically. It takes the same
-// cross-process file lock as Update so a whole-object GUI write can't
-// interleave with an in-progress CLI Update at the file level.
-func (s *SettingsStore) Save(settings *Settings) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if err := os.MkdirAll(filepath.Dir(s.path), 0700); err != nil {
-		return err
-	}
-	if lf, err := os.OpenFile(s.path+".lock", os.O_CREATE|os.O_RDWR, 0600); err == nil {
-		defer lf.Close()
-		if flockExclusive(int(lf.Fd())) == nil {
-			defer flockUnlock(int(lf.Fd())) //nolint:errcheck
-		}
-	}
-	return s.saveLocked(settings)
+	return write()
 }
 
 // saveLocked is Save's body without the mutex/flock, for callers (Update)
@@ -252,38 +246,23 @@ func (s *SettingsStore) saveLocked(settings *Settings) error {
 	if err != nil {
 		return err
 	}
+	retireBackup, err := s.prepareAutomationBackup(settings)
+	if err != nil {
+		return err
+	}
 	// Ensure the config directory exists before writing (matches history's
 	// saveLocked). Without this, os.CreateTemp fails when EnsureDirs hasn't
 	// run or the directory was removed out from under us.
 	if err := os.MkdirAll(filepath.Dir(s.path), 0700); err != nil {
 		return err
 	}
-	tmpFile, err := os.CreateTemp(filepath.Dir(s.path), ".wireguide-*.tmp")
-	if err != nil {
+	if err := atomicfile.WriteFile(s.path, data, 0600); err != nil {
 		return err
 	}
-	tmpPath := tmpFile.Name()
-	if _, err := tmpFile.Write(data); err != nil {
-		tmpFile.Close()
-		os.Remove(tmpPath)
-		return err
-	}
-	if err := tmpFile.Sync(); err != nil {
-		tmpFile.Close()
-		os.Remove(tmpPath)
-		return err
-	}
-	if err := tmpFile.Close(); err != nil {
-		os.Remove(tmpPath)
-		return err
-	}
-	if err := os.Chmod(tmpPath, 0600); err != nil {
-		os.Remove(tmpPath)
-		return err
-	}
-	if err := atomicRenameDurable(tmpPath, s.path); err != nil {
-		os.Remove(tmpPath)
-		return err
+	if retireBackup {
+		if err := os.Remove(s.path + ".automation-v2-backup"); err != nil && !os.IsNotExist(err) {
+			slog.Warn("could not remove retired automation backup", "error", err)
+		}
 	}
 	return nil
 }

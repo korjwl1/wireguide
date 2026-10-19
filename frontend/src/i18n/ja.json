@@ -1,9 +1,31 @@
 {
   "app": {
+    "automation_lan_overlap": "{name}: 経路がローカルネットワークと重複するため、自動接続を保留しました。",
     "disconnected": "未接続",
     "connecting": "接続中…",
     "connected": "接続済み",
-    "no_handshake": "ハンドシェイクなし"
+    "no_handshake": "ハンドシェイクなし",
+    "disconnecting": "切断中...",
+    "profile_rules_warning": "プロファイルは変更されましたが、自動化ルールを更新できませんでした。再接続する前にルールを確認してください。",
+    "supported_imports": ".conf、.zip、QR画像ファイルのみ対応しています",
+    "helper_disconnected": "ヘルパーとの接続が切れました",
+    "helper_reconnected": "ヘルパーに再接続しました",
+    "import_failed": "インポート失敗",
+    "qr_import_failed": "QRインポート失敗",
+    "invalid_config": "無効な設定",
+    "imported": "「{name}」をインポートしました",
+    "edit_failed": "編集失敗",
+    "rename_rollback_failed": "名前変更の取り消し失敗",
+    "exported": "{path}にエクスポートしました",
+    "export_failed": "エクスポート失敗",
+    "connect_failed": "接続失敗",
+    "helper_subsystem_failure": "ヘルパー内部機能のエラー",
+    "dismiss": "閉じる",
+    "helper_restart_hint": "該当機能を復旧するにはアプリを再起動してください。",
+    "forced_disconnect": "⚠ {name}の接続が解除されました: {reason}",
+    "tunnel": "トンネル",
+    "helper_forced": "ヘルパーが接続を解除しました",
+    "recovery_warning": "{name}: 元のDNS設定の復旧が保留中です。設定は保持され、新しい接続は利用できます。"
   },
   "nav": {
     "tunnels": "トンネル",
@@ -56,6 +78,10 @@
     "latency_target_placeholder": "自動",
     "allowed_ips": "許可 IP",
     "public_key": "公開鍵",
+    "dns_servers": "DNS サーバー",
+    "dns_search": "検索ドメイン",
+    "dns_split": "スプリット DNS ドメイン",
+    "dns_split_note": "対応環境ではこれらのドメインだけにトンネル DNS を使用します。macOS または systemd-resolved を使用する Linux が必要です。Windows は非対応です。",
     "handshake": "ハンドシェイク",
     "duration": "接続時間",
     "rx": "ダウンロード",
@@ -82,6 +108,8 @@
     "name_required": "トンネル名を入力してください"
   },
   "settings": {
+    "automation_backup_recovery": "以前の自動化ルールの復旧コピーがconfig.jsonの隣にあります。自動適用はされません。内容を確認してから復元してください。",
+    "automation_backup_error": "自動化ルールの復旧バックアップを利用できません。現在のルールは維持されますが、旧バージョンに戻す前にバックアップを確認してください。",
     "title": "設定",
     "general": "一般",
     "auto_start": "起動時に自動実行",
@@ -102,7 +130,7 @@
     "log_level_warn": "警告",
     "log_level_error": "エラー",
     "kill_switch": "キルスイッチ",
-    "kill_switch_hint": "VPN が切断されるとすべてのトラフィックをブロックします。接続時に自動適用。",
+    "kill_switch_hint": "VPN接続中はOSのファイアウォールで保護します。接続準備・再接続中は保護が一時的に解除されます。",
     "dns_protection": "DNS 保護",
     "dns_protection_hint": "DNS を VPN トンネル経由のみに強制します。接続時に自動適用。",
     "health_check": "ヘルスチェック",
@@ -126,11 +154,15 @@
     "section_security": "セキュリティ",
     "section_connection": "接続",
     "section_logging": "ログ",
-    "up_to_date": "最新バージョンです。"
+    "up_to_date": "最新バージョンです。",
+    "load_failed": "設定を読み込めないため編集を無効にしました。",
+    "save_failed": "設定の保存または適用に失敗しました。もう一度お試しください。",
+    "retry": "再試行",
+    "list_width": "トンネル一覧の幅"
   },
   "confirm": {
     "delete_title": "トンネルを削除",
-    "delete_message": "\"{name}\" を削除しますか?",
+    "delete_message": "「{name}」を削除しますか？保留中の再接続と復旧も取り消されます。",
     "yes": "削除",
     "no": "キャンセル",
     "disconnect_first": "先にトンネルを切断してください"
@@ -143,6 +175,8 @@
     "copy": "コピー"
   },
   "tools": {
+    "dns_resolver_scoped": "インターフェース専用",
+    "dns_resolver_supplemental": "ドメイン専用",
     "tab_dns_leak": "DNS 漏洩テスト",
     "tab_routes": "ルート",
     "dns_leak_title": "DNS 漏洩テスト",
@@ -151,6 +185,8 @@
     "dns_leak_checking": "DNS 設定を確認中…",
     "dns_leak_safe": "DNS 漏洩は検出されませんでした",
     "dns_leak_leaked": "DNS 漏洩を検出しました",
+    "dns_leak_split": "スプリット DNS のリゾルバー設定を確認しました（パケット漏洩テストではありません）",
+    "dns_leak_split_failed": "DNS 設定を確認できないか、この検査はサポートされていません",
     "dns_servers_detected": "検出された DNS サーバー",
     "route_title": "ルートテーブル",
     "route_desc": "ネットワークトラフィックの経路を表示します。VPN と表示された経路はトンネルを通過し、それ以外は直接インターネットに送信されます。",
@@ -208,7 +244,7 @@
   },
   "automation": {
     "title": "オートメーション",
-    "hint": "ルールは上から順に評価され、最初に一致した条件が適用されます。条件を選んで値を入力するか、現在のネットワークの候補を使用してください。「このネットワーク」はゲートウェイMACで特定のルーターを正確に識別し（サブネットが重複しても区別）、「サブネット」はIP範囲で一致します。接続/切断のルールを個別に追加できます。",
+    "hint": "ルールは上から順に評価され、最初に一致した条件が適用されます。条件を選んで値を入力するか、現在のネットワークの候補を使用してください。「このネットワーク」はゲートウェイMACで特定のルーターを正確に識別し（サブネットが重複しても区別）、「サブネット」はIP範囲で一致します。接続/切断のルールを個別に追加できます。「でない」は値が判明していて異なる場合にのみ一致します。値が不明な間（ローミング中にWi-Fi名が空になる場合や、ネットワーク変更から約15秒が経過していない場合など）は、トンネルをそのままにし、以降のルールも評価しません。",
     "empty": "ルールなし — このトンネルは自動管理されません。下にルールを追加してください。",
     "add_rule": "ルールを追加",
     "action": "アクション",
@@ -225,7 +261,11 @@
     "mac_placeholder": "ゲートウェイMAC (例: b0:38:6c:54:8b:ab)",
     "drag_hint": "ドラッグで並べ替え — 最上位の一致ルールが優先",
     "mac_invalid": "有効なMACアドレスではありません (例: b0:38:6c:54:8b:ab)",
-    "subnet_invalid": "有効なCIDRではありません (例: 192.168.0.0/24)"
+    "subnet_invalid": "有効なCIDRではありません (例: 192.168.0.0/24)",
+    "is": "である",
+    "is_not": "でない",
+    "negate": "一致方法",
+    "negated_hint": "「でない」は値が判明していて異なる場合にのみ一致し、不明な間はトンネルをそのままにします。"
   },
   "ping_health": {
     "title": "ping 失敗時に再接続",

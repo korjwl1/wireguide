@@ -8,10 +8,59 @@ import { Create as $Create } from "@wailsio/runtime";
 
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
-import * as wifi$0 from "../wifi/models.js";
+import * as automation$0 from "../automation/models.js";
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
 import * as time$0 from "../../../../../time/models.js";
+
+export class AutomationBackupStatus {
+    /**
+     * Creates a new AutomationBackupStatus instance.
+     * @param {Partial<AutomationBackupStatus>} [$$source = {}] - The source object to create the AutomationBackupStatus.
+     */
+    constructor($$source = {}) {
+        if (!("available" in $$source)) {
+            /**
+             * @member
+             * @type {boolean}
+             */
+            this["available"] = false;
+        }
+        if (!("different" in $$source)) {
+            /**
+             * @member
+             * @type {boolean}
+             */
+            this["different"] = false;
+        }
+        if (!("recovery_copies" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["recovery_copies"] = 0;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {string | undefined}
+             */
+            this["error"] = undefined;
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new AutomationBackupStatus instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {AutomationBackupStatus}
+     */
+    static createFrom($$source = {}) {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new AutomationBackupStatus(/** @type {Partial<AutomationBackupStatus>} */($$parsedSource));
+    }
+}
 
 /**
  * Session is one VPN session record. EndTime is a pointer so a still-active
@@ -231,9 +280,9 @@ export class Settings {
              * Automation is populated it is the source of truth and WifiRules is
              * no longer consulted by the rule engine.
              * @member
-             * @type {wifi$0.Rules}
+             * @type {automation$0.Rules}
              */
-            this["wifi_rules"] = (new wifi$0.Rules());
+            this["wifi_rules"] = (new automation$0.Rules());
         }
         if (/** @type {any} */(false)) {
             /**
@@ -242,7 +291,7 @@ export class Settings {
              * EnsureAutomation() populates it once from the legacy rules. A
              * non-nil (possibly empty) value means the user is on the new model.
              * @member
-             * @type {wifi$0.Automation | null | undefined}
+             * @type {automation$0.Automation | null | undefined}
              */
             this["automation"] = undefined;
         }
@@ -257,19 +306,13 @@ export class Settings {
      */
     static createFrom($$source = {}) {
         const $$createField14_0 = $$createType0;
-        const $$createField15_0 = $$createType2;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("wifi_rules" in $$parsedSource) {
             $$parsedSource["wifi_rules"] = $$createField14_0($$parsedSource["wifi_rules"]);
-        }
-        if ("automation" in $$parsedSource) {
-            $$parsedSource["automation"] = $$createField15_0($$parsedSource["automation"]);
         }
         return new Settings(/** @type {Partial<Settings>} */($$parsedSource));
     }
 }
 
 // Private type creation functions
-const $$createType0 = wifi$0.Rules.createFrom;
-const $$createType1 = wifi$0.Automation.createFrom;
-const $$createType2 = $Create.Nullable($$createType1);
+const $$createType0 = automation$0.Rules.createFrom;

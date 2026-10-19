@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/korjwl1/wireguide/internal/domain"
 	"github.com/korjwl1/wireguide/internal/sysexec"
 )
 
@@ -22,14 +23,23 @@ type DNSLeakResult struct {
 	DNSServers []DNSServer `json:"dns_servers"`
 	TestDomain string      `json:"test_domain"`
 	Error      string      `json:"error,omitempty"`
+	// SplitMode is true when the tunnel uses split DNS ("~domain" entries):
+	// default system resolvers are expected there, so they are not leaks.
+	SplitMode           bool     `json:"split_mode,omitempty"`
+	MissingMatchDomains []string `json:"missing_match_domains,omitempty"`
 }
 
 // DNSServer represents a detected DNS resolver.
 type DNSServer struct {
 	IP       string `json:"ip"`
 	Hostname string `json:"hostname"`
-	IsVPN    bool   `json:"is_vpn"` // true if this is the expected VPN DNS
+	IsVPN    bool   `json:"is_vpn"`          // true if this is the expected VPN DNS
+	Leaked   bool   `json:"leaked"`          // this unexpected resolver actually answered
+	Scope    string `json:"scope,omitempty"` // scoped or supplemental; neither is a default resolver
 }
+
+// The expectedDNS arguments below are the tunnel's raw `DNS=` entries. Any
+// "~domain" token switches the test to split mode (see runSplitDNSCheck).
 
 // RunDNSLeakTest is a context-less convenience wrapper for callers that
 // don't have one. Bounded by a hard 10-second cap so a hung resolver
@@ -53,6 +63,16 @@ func RunDNSLeakTest(expectedDNS []string) *DNSLeakResult {
 func RunDNSLeakTestContext(ctx context.Context, expectedDNS []string) *DNSLeakResult {
 	result := &DNSLeakResult{}
 
+	if parsed := domain.ParseDNSEntries(expectedDNS); len(parsed.Match) > 0 {
+		result.SplitMode = true
+		return runSplitDNSCheck(ctx, result, parsed)
+	}
+
+	return runGlobalDNSCheck(ctx, expectedDNS, systemResolverReader)
+}
+
+func runGlobalDNSCheck(ctx context.Context, expectedDNS []string, readResolvers func() ([]string, error)) *DNSLeakResult {
+	result := &DNSLeakResult{}
 	// Generate a fresh random subdomain so the test query can't be
 	// served from any resolver's cache. crypto/rand (16 bytes hex)
 	// gives 128 bits of randomness — far beyond any feasible cache
@@ -69,7 +89,15 @@ func RunDNSLeakTestContext(ctx context.Context, expectedDNS []string) *DNSLeakRe
 
 	// Check system resolver configuration
 	// On macOS: scutil --dns, on Linux: /etc/resolv.conf
-	systemDNS := getSystemDNSServers()
+	systemDNS, err := readResolvers()
+	if err != nil {
+		result.Error = fmt.Sprintf("cannot read system DNS resolvers: %v", err)
+		return result
+	}
+	if len(systemDNS) == 0 {
+		result.Error = "no system DNS resolvers found; cannot verify DNS leakage"
+		return result
+	}
 
 	expectedSet := make(map[string]bool)
 	for _, dns := range expectedDNS {
@@ -77,7 +105,7 @@ func RunDNSLeakTestContext(ctx context.Context, expectedDNS []string) *DNSLeakRe
 	}
 
 	type probeResult struct {
-		idx     int
+		idx      int
 		hostname string
 		responds bool
 	}
@@ -108,12 +136,13 @@ func RunDNSLeakTestContext(ctx context.Context, expectedDNS []string) *DNSLeakRe
 			if names, err := (&net.Resolver{}).LookupAddr(lookupCtx, dnsIP); err == nil && len(names) > 0 {
 				hn = names[0]
 			}
-			responds := testDNSServerCtx(lookupCtx, dnsIP, testDomain)
+			responds := probeDNSServer(lookupCtx, dnsIP, testDomain)
 			probes <- probeResult{idx: idx, hostname: hn, responds: responds}
 		}(i, dns)
 	}
 
 	leaked := false
+	responses := 0
 	for range systemDNS {
 		select {
 		case <-ctx.Done():
@@ -121,14 +150,21 @@ func RunDNSLeakTestContext(ctx context.Context, expectedDNS []string) *DNSLeakRe
 			result.Leaked = leaked
 			return result
 		case p := <-probes:
+			if p.responds {
+				responses++
+			}
 			result.DNSServers[p.idx].Hostname = p.hostname
 			if !result.DNSServers[p.idx].IsVPN && p.responds {
+				result.DNSServers[p.idx].Leaked = true
 				leaked = true
 			}
 		}
 	}
 
 	result.Leaked = leaked
+	if responses == 0 {
+		result.Error = "no DNS server responded; cannot verify DNS leakage"
+	}
 	return result
 }
 
@@ -156,13 +192,10 @@ func testDNSServerCtx(ctx context.Context, server, domain string) bool {
 	return true
 }
 
-func getSystemDNSServers() []string {
-	servers, err := readSystemResolvers()
-	if err != nil {
-		return nil
-	}
-	return servers
-}
+// OS enumeration and packet probing are separate so tests can exercise
+// failure/empty/unresponsive results without changing host networking.
+var systemResolverReader = readSystemResolvers
+var probeDNSServer = testDNSServerCtx
 
 // readSystemResolvers detects configured DNS servers using OS-specific methods.
 func readSystemResolvers() ([]string, error) {
@@ -186,9 +219,12 @@ func readLinuxResolvers() ([]string, error) {
 	}
 	defer f.Close()
 
+	return linuxResolverUpstreams(f, readResolvedSnapshot)
+}
+
+func parseResolvConf(scanner *bufio.Scanner) ([]string, error) {
 	var servers []string
 	seen := make(map[string]bool)
-	scanner := bufio.NewScanner(f)
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		if strings.HasPrefix(line, "#") || line == "" {
@@ -230,7 +266,9 @@ func readWindowsResolvers() ([]string, error) {
 	return servers, nil
 }
 
-// readDarwinResolvers uses `scutil --dns` to extract nameserver addresses.
+// readDarwinResolvers returns the DEFAULT resolvers from `scutil --dns`
+// (see darwinDefaultResolvers): scoped and supplemental resolvers answer
+// only their interface or domains and are not a global DNS leak.
 func readDarwinResolvers() ([]string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -238,22 +276,5 @@ func readDarwinResolvers() ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("scutil --dns: %w", err)
 	}
-
-	var servers []string
-	seen := make(map[string]bool)
-	for _, line := range strings.Split(string(out), "\n") {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "nameserver[") {
-			// Format: "nameserver[0] : 8.8.8.8"
-			parts := strings.SplitN(line, ":", 2)
-			if len(parts) == 2 {
-				ip := strings.TrimSpace(parts[1])
-				if net.ParseIP(ip) != nil && !seen[ip] {
-					seen[ip] = true
-					servers = append(servers, ip)
-				}
-			}
-		}
-	}
-	return servers, nil
+	return darwinDefaultResolvers(parseScutilDNS(string(out))), nil
 }

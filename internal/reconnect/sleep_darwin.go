@@ -235,7 +235,7 @@ func (d *darwinSleepDetector) sendWake() {
 func (d *darwinSleepDetector) poll() {
 	// Fallback: detect sleep by checking if wall clock advanced much more than
 	// expected between iterations.
-	lastCheck := time.Now()
+	lastCheck := time.Now().Round(0)
 	const pollInterval = 10 * time.Second
 	const sleepThreshold = 30 * time.Second // if 30s+ gap, assume sleep
 
@@ -247,7 +247,7 @@ func (d *darwinSleepDetector) poll() {
 		case <-d.stopCh:
 			return
 		case <-ticker.C:
-			now := time.Now()
+			now := time.Now().Round(0) // suspend detection requires wall time
 			elapsed := now.Sub(lastCheck)
 			lastCheck = now
 
@@ -260,7 +260,6 @@ func (d *darwinSleepDetector) poll() {
 		}
 	}
 }
-
 
 //export goWakeCallback
 func goWakeCallback(handle C.uintptr_t) {

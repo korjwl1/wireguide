@@ -1,5 +1,6 @@
 import { writable, get } from 'svelte/store';
 import { Events } from '@wailsio/runtime';
+import { connectedTunnelNames } from '../lib/tunnel-state.js';
 
 export const tunnels = writable([]);
 export const selectedTunnel = writable(null);
@@ -33,7 +34,7 @@ export function subscribeToEvents() {
     // Sync is_connected flag on tunnel objects. The backend now sends
     // active_tunnels (array of connected tunnel names) to support
     // multiple simultaneous tunnels.
-    const activeSet = new Set(status?.active_tunnels || []);
+    const activeSet = new Set(connectedTunnelNames(status));
 
     const list = get(tunnels);
     let changed = false;

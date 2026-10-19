@@ -25,9 +25,10 @@ function configure() {
         "helper": $$createType1,
         "log": $$createType2,
         "reconnect": $$createType3,
-        "settings_changed": $$createType4,
-        "status": $$createType5,
-        "update-available": $$createType6,
+        "recovery_warning": $$createType4,
+        "settings_changed": $$createType5,
+        "status": $$createType6,
+        "update-available": $$createType7,
         "update_progress": $$createType0,
     }));
 }
@@ -37,8 +38,9 @@ const $$createType0 = $Create.Map($Create.Any, $Create.Any);
 const $$createType1 = gui$0.HelperEvent.createFrom;
 const $$createType2 = ipc$0.LogEntry.createFrom;
 const $$createType3 = gui$0.ReconnectEvent.createFrom;
-const $$createType4 = ipc$0.SettingsChangedPayload.createFrom;
-const $$createType5 = domain$0.ConnectionStatus.createFrom;
-const $$createType6 = update$0.UpdateInfo.createFrom;
+const $$createType4 = ipc$0.RecoveryWarningPayload.createFrom;
+const $$createType5 = ipc$0.SettingsChangedPayload.createFrom;
+const $$createType6 = domain$0.ConnectionStatus.createFrom;
+const $$createType7 = update$0.UpdateInfo.createFrom;
 
 configure();

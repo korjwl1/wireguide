@@ -1,9 +1,31 @@
 {
   "app": {
+    "automation_lan_overlap": "{name}: 터널 경로가 현재 로컬 네트워크와 겹쳐 자동 연결을 보류했어요.",
     "disconnected": "연결 안 됨",
     "connecting": "연결 중…",
     "connected": "연결됨",
-    "no_handshake": "핸드셰이크 없음"
+    "no_handshake": "핸드셰이크 없음",
+    "disconnecting": "연결 해제 중...",
+    "profile_rules_warning": "프로필은 변경됐지만 자동화 규칙을 갱신하지 못했습니다. 다시 연결하기 전에 규칙을 확인하세요.",
+    "supported_imports": ".conf, .zip, QR 이미지 파일만 지원합니다",
+    "helper_disconnected": "헬퍼와의 연결이 끊겼습니다",
+    "helper_reconnected": "헬퍼와 다시 연결됐습니다",
+    "import_failed": "가져오기 실패",
+    "qr_import_failed": "QR 가져오기 실패",
+    "invalid_config": "잘못된 설정",
+    "imported": "“{name}”을 가져왔습니다",
+    "edit_failed": "편집 실패",
+    "rename_rollback_failed": "이름 변경 되돌리기 실패",
+    "exported": "{path}에 내보냈습니다",
+    "export_failed": "내보내기 실패",
+    "connect_failed": "연결 실패",
+    "helper_subsystem_failure": "헬퍼 내부 기능 오류",
+    "dismiss": "닫기",
+    "helper_restart_hint": "해당 기능을 복구하려면 앱을 다시 시작하세요.",
+    "forced_disconnect": "⚠ {name} 연결이 해제됐습니다: {reason}",
+    "tunnel": "터널",
+    "helper_forced": "헬퍼에서 연결을 해제했습니다",
+    "recovery_warning": "{name}: 기존 DNS 복구가 대기 중입니다. 원래 설정은 보관되며 새 연결은 가능합니다."
   },
   "nav": {
     "tunnels": "터널",
@@ -56,6 +78,10 @@
     "latency_target_placeholder": "자동",
     "allowed_ips": "허용 IP",
     "public_key": "공개 키",
+    "dns_servers": "DNS 서버",
+    "dns_search": "검색 도메인",
+    "dns_split": "스플릿 DNS 도메인",
+    "dns_split_note": "지원 플랫폼에서 이 도메인에만 터널 DNS를 사용합니다. macOS 또는 systemd-resolved를 사용하는 Linux가 필요하며, Windows에서는 지원하지 않습니다.",
     "handshake": "핸드셰이크",
     "duration": "연결 시간",
     "rx": "다운로드",
@@ -82,6 +108,8 @@
     "name_required": "터널 이름을 입력하세요"
   },
   "settings": {
+    "automation_backup_recovery": "이전 자동화 규칙의 복구 사본이 config.json 옆에 남아 있어요. 자동으로 적용하지 않으니 내용을 확인한 뒤 필요한 규칙을 복원하세요.",
+    "automation_backup_error": "자동화 규칙의 복구 백업을 사용할 수 없어요. 현재 규칙은 유지되지만 WireGuide를 이전 버전으로 내리기 전에 백업을 확인하세요.",
     "title": "설정",
     "general": "일반",
     "auto_start": "시작 시 자동 실행",
@@ -102,7 +130,7 @@
     "log_level_warn": "경고",
     "log_level_error": "오류",
     "kill_switch": "킬 스위치",
-    "kill_switch_hint": "VPN이 끊기면 모든 트래픽을 차단합니다. 연결 시 자동 적용.",
+    "kill_switch_hint": "VPN 연결 중 OS 방화벽 보호를 적용합니다. 연결 준비·재연결 중에는 보호가 잠시 해제됩니다.",
     "dns_protection": "DNS 보호",
     "dns_protection_hint": "DNS를 VPN 터널로만 강제합니다. 연결 시 자동 적용.",
     "health_check": "헬스 체크",
@@ -126,11 +154,15 @@
     "section_security": "보안",
     "section_connection": "연결",
     "section_logging": "로깅",
-    "up_to_date": "최신 버전입니다."
+    "up_to_date": "최신 버전입니다.",
+    "load_failed": "설정을 불러오지 못해 편집을 잠갔습니다.",
+    "save_failed": "설정 저장 또는 적용에 실패했습니다. 다시 시도해 주세요.",
+    "retry": "다시 시도",
+    "list_width": "터널 목록 너비"
   },
   "confirm": {
     "delete_title": "터널 삭제",
-    "delete_message": "\"{name}\"을(를) 삭제하시겠습니까?",
+    "delete_message": "“{name}”을 삭제할까요? 대기 중인 재연결과 복구도 취소됩니다.",
     "yes": "삭제",
     "no": "취소",
     "disconnect_first": "먼저 연결을 해제하세요"
@@ -143,6 +175,8 @@
     "copy": "복사"
   },
   "tools": {
+    "dns_resolver_scoped": "인터페이스 전용",
+    "dns_resolver_supplemental": "도메인 전용",
     "tab_dns_leak": "DNS 유출 검사",
     "tab_routes": "라우트",
     "dns_leak_title": "DNS 유출 검사",
@@ -151,6 +185,8 @@
     "dns_leak_checking": "DNS 설정 확인 중…",
     "dns_leak_safe": "DNS 유출이 감지되지 않았습니다",
     "dns_leak_leaked": "DNS 유출이 감지되었습니다",
+    "dns_leak_split": "스플릿 DNS 리졸버 설정 확인됨 (실제 패킷 유출 검사는 아님)",
+    "dns_leak_split_failed": "DNS 설정을 확인하지 못했거나 검사를 지원하지 않습니다",
     "dns_servers_detected": "감지된 DNS 서버",
     "route_title": "라우트 테이블",
     "route_desc": "네트워크 트래픽의 경로를 보여줍니다. VPN으로 표시된 경로는 터널을 통해, 나머지는 직접 인터넷으로 전송됩니다.",
@@ -208,7 +244,7 @@
   },
   "automation": {
     "title": "자동화",
-    "hint": "규칙은 위에서 아래로 평가되며 먼저 맞는 조건이 적용됩니다. 조건을 고르고 값을 직접 입력하거나, 현재 네트워크의 자동완성을 쓰세요. \"이 네트워크\"는 게이트웨이 MAC으로 특정 공유기를 정확히 식별하고(서브넷이 겹쳐도 구분), \"서브넷\"은 IP 대역으로 매칭합니다. 연결/해제 규칙을 각각 추가하세요.",
+    "hint": "규칙은 위에서 아래로 평가되며 먼저 맞는 조건이 적용됩니다. 조건을 고르고 값을 직접 입력하거나, 현재 네트워크의 자동완성을 쓰세요. \"이 네트워크\"는 게이트웨이 MAC으로 특정 공유기를 정확히 식별하고(서브넷이 겹쳐도 구분), \"서브넷\"은 IP 대역으로 매칭합니다. 연결/해제 규칙을 각각 추가하세요. \"아님\"은 값을 알 수 있고 다를 때만 일치합니다. 값을 알 수 없는 동안(예: 로밍 중 Wi-Fi 이름이 비어 있거나, 네트워크가 바뀐 지 약 15초가 지나지 않은 경우)에는 터널을 그대로 두며 이후 규칙도 평가하지 않습니다.",
     "empty": "규칙 없음 — 이 터널은 자동으로 관리되지 않습니다. 아래에서 규칙을 추가하세요.",
     "add_rule": "규칙 추가",
     "action": "동작",
@@ -225,7 +261,11 @@
     "mac_placeholder": "게이트웨이 MAC (예: b0:38:6c:54:8b:ab)",
     "drag_hint": "드래그해서 순서 변경 — 맨 위의 일치 규칙이 우선",
     "mac_invalid": "올바른 MAC 주소가 아닙니다 (예: b0:38:6c:54:8b:ab)",
-    "subnet_invalid": "올바른 CIDR이 아닙니다 (예: 192.168.0.0/24)"
+    "subnet_invalid": "올바른 CIDR이 아닙니다 (예: 192.168.0.0/24)",
+    "is": "일치",
+    "is_not": "아님",
+    "negate": "일치 방식",
+    "negated_hint": "\"아님\"은 값을 알 수 있고 다를 때만 일치하며, 알 수 없는 동안에는 터널을 그대로 둡니다."
   },
   "ping_health": {
     "title": "ping 실패 시 재연결",

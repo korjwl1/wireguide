@@ -1,23 +1,22 @@
 <script>
-  // Per-tunnel Automation rule editor (issue #12). Each rule is an
-  // ordered condition→action: on a matching network the tunnel is
-  // connected or disconnected. Connect and disconnect conditions are set
-  // independently (just add rules with the action you want). Persisted to
-  // Settings.automation.per_tunnel_rules[tunnelName]; the whole settings
-  // object is re-fetched and spread on save so other screens' edits (and
-  // other tunnels' rules) are never clobbered.
+ import { modal, backdrop } from './modal.js';
+  // Ordered per-tunnel rules are saved through the scoped backend API.
   import { afterUpdate, onMount, onDestroy } from 'svelte';
   import { Events } from '@wailsio/runtime';
   import Icon from './Icon.svelte';
+  import ErrorNotice from './ErrorNotice.svelte';
   import { t } from '../i18n/index.js';
   import { errText } from './errors.js';
   import SSIDPermissionBanner from './SSIDPermissionBanner.svelte';
+  import { loadSettings } from '../stores/settings.js';
 
   export let TunnelService;
   export let tunnelName = '';
   export let open = false;
 
   let rules = [];
+  let rulesLoaded = false;
+  let loadError = "";
   // Local-only row identity for the {#each} key; never persisted
   // (persistSet() rebuilds plain objects). Monotonic and never reset, so
   // keys stay unique across loads. Note this does NOT preserve DOM across
@@ -48,17 +47,20 @@
     // Persist any pending edit for the tunnel we're leaving BEFORE we
     // overwrite `rules`, so switching tunnels never drops the last change.
     await flush();
+    rulesLoaded = false;
+    loadError = '';
     saveError = '';
     try {
-      const s = await TunnelService.GetSettings();
+      const s = await loadSettings(TunnelService);
       if (gen !== loadGen) return; // a newer load superseded this one
-      const per = s?.automation?.per_tunnel_rules || {};
+      const per = { ...(s?.automation?.per_tunnel_rules || {}), ...(s?.automation?.per_tunnel_rules_v2 || {}) };
       // Deep-copy so edits don't mutate the fetched object before save.
       rules = (per[name] || []).map(r => {
         const row = {
           _id: ++ruleId,
           when: {
             type: r.when?.type || 'network',
+            negate: !!r.when?.negate,
             ssid: r.when?.ssid || '',
             subnet: r.when?.subnet || '',
             gateway_mac: r.when?.gateway_mac || '',
@@ -73,8 +75,9 @@
         row._committed = cleanedRule(row);
         return row;
       });
+      rulesLoaded = true;
     } catch (e) {
-      if (gen === loadGen) rules = [];
+      if (gen === loadGen) { rules = []; rulesLoaded = false; loadError = errText(e); }
       console.error('automation load:', e);
     }
     try {
@@ -97,11 +100,12 @@
 
   const MAX_RULES = 50;
   function addRule() {
+    if (!rulesLoaded) return;
     if (rules.length >= MAX_RULES) return;
     // No save() here: a blank draft is not a configuration change — it
     // becomes persistable on the first input that completes it. Saving
     // now would also manufacture a self-write config_changed echo.
-    rules = [...rules, { _id: ++ruleId, when: { type: 'network', ssid: '', subnet: '', gateway_mac: '', label: '' }, do: 'connect' }];
+    rules = [...rules, { _id: ++ruleId, when: { type: 'network', negate: false, ssid: '', subnet: '', gateway_mac: '', label: '' }, do: 'connect' }];
   }
 
   function removeRule(i) {
@@ -203,6 +207,8 @@
     else if (t === 'subnet' && r.when.subnet.trim() !== '') when = { type: 'subnet', subnet: r.when.subnet.trim() };
     else if (t === 'network' && r.when.gateway_mac.trim() !== '') when = { type: 'network', gateway_mac: macCanon(r.when.gateway_mac) };
     if (!when) return null;
+    // "is not" only applies to concrete conditions; else can't be negated.
+    if (r.when.negate && t !== 'none_match') when.negate = true;
     if (r.when.label) when.label = r.when.label;
     return { when, do: r.do };
   }
@@ -226,7 +232,20 @@
   let pending = null;             // { name, rules } snapshot to persist
   let saveChain = Promise.resolve();
 
+  function moveRuleByKey(event, index) {
+    const offset = event.key === 'ArrowUp' ? -1 : event.key === 'ArrowDown' ? 1 : 0;
+    if (!offset) return;
+    event.preventDefault();
+    const destination = index + offset;
+    if (destination < 0 || destination >= rules.length) return;
+    const next = [...rules];
+    [next[index], next[destination]] = [next[destination], next[index]];
+    rules = next;
+    save();
+  }
+
   function save() {
+    if (!rulesLoaded || loadError) return;
     pending = { name: tunnelName, rules: persistSet() };
     if (saveTimer) clearTimeout(saveTimer);
     saveTimer = setTimeout(runSave, 300);
@@ -289,6 +308,7 @@
     return {
       do: d?.do || 'connect',
       type: d?.when?.type || 'network',
+      negate: !!d?.when?.negate && d?.when?.type !== 'none_match',
       ssid: (d?.when?.ssid || '').trim(),
       subnet: (d?.when?.subnet || '').trim(),
       mac: macCanon(d?.when?.gateway_mac || ''),
@@ -301,7 +321,7 @@
     // Positional compare is intentional: order is rule priority.
     return disk.some((d, i) => {
       const a = normRule(d), b = normRule(local[i]);
-      return a.do !== b.do || a.type !== b.type || a.ssid !== b.ssid ||
+      return a.do !== b.do || a.type !== b.type || a.negate !== b.negate || a.ssid !== b.ssid ||
         a.subnet !== b.subnet || a.mac !== b.mac || a.label !== b.label;
     });
   }
@@ -318,9 +338,9 @@
       if (!name || busy()) return;
       try {
         await saveChain; // let an in-flight persist settle before comparing
-        const s = await TunnelService.GetSettings();
+        const s = await loadSettings(TunnelService);
         if (busy()) return; // state moved while we awaited
-        const disk = (s?.automation?.per_tunnel_rules || {})[name] || [];
+        const disk = ({ ...(s?.automation?.per_tunnel_rules || {}), ...(s?.automation?.per_tunnel_rules_v2 || {}) })[name] || [];
         if (!diskDiffers(disk)) return;
       } catch (e) {
         // Can't tell what's on disk — keep the user's in-progress state
@@ -337,8 +357,8 @@
 </script>
 
 {#if open}
-  <div class="am-backdrop" on:click={close}>
-    <div class="am-dialog" on:click|stopPropagation role="dialog" aria-modal="true" aria-label={$t('automation.title')}>
+  <div class="am-backdrop" use:backdrop={close}>
+    <div class="am-dialog" use:modal={close} tabindex="-1" role="dialog" aria-modal="true" aria-label={$t('automation.title')}>
       <div class="am-header">
         <div class="am-icon"><Icon name="wifi" size={18} strokeWidth={2} /></div>
         <div class="am-header-text">
@@ -351,6 +371,8 @@
 
       <SSIDPermissionBanner {TunnelService} />
 
+      {#if loadError}<ErrorNotice message={$t('settings.load_failed') + ' ' + loadError} onRetry={() => load(tunnelName)}/>{/if}
+      <fieldset class="am-fields" disabled={!rulesLoaded}>
       <div class="am-rules-wrap">
         <div class="am-fade am-fade-top" class:show={canScrollUp}>
           <span class="am-chevron am-chevron-up"><Icon name="chevron-down" size={15} strokeWidth={2.5} /></span>
@@ -360,11 +382,11 @@
           <div class="am-empty">{$t('automation.empty')}</div>
         {:else}
           {#each rules as rule, i (rule._id)}
-            <div class="am-rule" class:am-dragging={dragIndex === i}
+            <div class="am-rule" role="group" class:am-dragging={dragIndex === i}
               on:dragover={(e) => onRowDragOver(e, i)}
               on:dragend={onDragEnd}>
-              <span class="am-handle" draggable="true" title={$t('automation.drag_hint')}
-                on:dragstart={(e) => onDragStart(e, i)}>⋮⋮</span>
+              <button type="button" class="am-handle" aria-label={$t('automation.drag_hint')} on:keydown={(e) => moveRuleByKey(e, i)} draggable="true" title={$t('automation.drag_hint')}
+                on:dragstart={(e) => onDragStart(e, i)}>⋮⋮</button>
               <span class="am-priority">{i + 1}</span>
               <select class="am-do" bind:value={rule.do} on:change={save} aria-label={$t('automation.action')}>
                 <option value="connect">{$t('automation.connect')}</option>
@@ -377,6 +399,13 @@
                 <option value="ssid">{$t('automation.cond_ssid')}</option>
                 <option value="none_match">{$t('automation.cond_none')}</option>
               </select>
+              {#if rule.when.type !== 'none_match'}
+                <select class="am-neg" bind:value={rule.when.negate} on:change={save} aria-label={$t('automation.negate')}
+                  title={rule.when.negate ? $t('automation.negated_hint') : ''}>
+                  <option value={false}>{$t('automation.is')}</option>
+                  <option value={true}>{$t('automation.is_not')}</option>
+                </select>
+              {/if}
               {#if rule.when.type === 'network'}
                 <input
                   class="am-val" class:am-invalid={macInvalid(rule.when.gateway_mac)}
@@ -423,16 +452,18 @@
         {#if currentGatewayMAC}<option value={currentGatewayMAC}></option>{/if}
       </datalist>
 
-      {#if saveError}<div class="am-error">{saveError}</div>{/if}
+      {#if saveError}<ErrorNotice message={saveError}/>{/if}
 
-      <button class="am-add" on:click={addRule} disabled={rules.length >= MAX_RULES}>
+      <button class="am-add" on:click={addRule} disabled={!rulesLoaded || rules.length >= MAX_RULES}>
         <Icon name="plus" size={13} strokeWidth={2.25} /> {$t('automation.add_rule')}
       </button>
+      </fieldset>
     </div>
   </div>
 {/if}
 
 <style>
+  .am-fields { border: 0; padding: 0; margin: 0; min-width: 0; display: flex; flex-direction: column; flex: 1; min-height: 0; }
   .am-backdrop {
     position: fixed; inset: 0; z-index: 1000;
     background: color-mix(in srgb, #000 45%, transparent);
@@ -530,6 +561,7 @@
     border-radius: 7px; padding: 5px 7px;
   }
   .am-do { font-weight: 600; }
+  .am-neg { font-weight: 600; }
   .am-when { font: 400 11px var(--font-sans); color: var(--text-muted); }
   .am-val { flex: 1; min-width: 120px; }
   .am-val-none { color: var(--text-muted); border: 0 !important; background: transparent !important; }
@@ -548,5 +580,4 @@
   }
   .am-add:hover:not(:disabled) { background: color-mix(in srgb, var(--accent) 10%, transparent); }
   .am-add:disabled { opacity: 0.45; cursor: not-allowed; }
-  .am-error { margin-top: 8px; font: 400 12px var(--font-sans); color: var(--error-text, #ff453a); flex-shrink: 0; }
 </style>

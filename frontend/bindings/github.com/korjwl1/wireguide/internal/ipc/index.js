@@ -4,5 +4,6 @@
 
 export {
     LogEntry,
+    RecoveryWarningPayload,
     SettingsChangedPayload
 } from "./models.js";

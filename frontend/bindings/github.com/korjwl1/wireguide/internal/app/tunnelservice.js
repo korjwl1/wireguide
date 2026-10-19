@@ -4,7 +4,7 @@
 
 /**
  * TunnelService is the Wails-bound service.
- * Storage (tunnel files, settings) stays in the GUI process.
+ * GUI edits use local storage; the helper also reads it for automation/recovery.
  * Tunnel operations go through the helper via an ipc.ClientHolder (so the
  * helper can be re-spawned and the connection swapped without rebuilding
  * the whole service graph).
@@ -15,6 +15,9 @@
 // @ts-ignore: Unused imports
 import { Call as $Call, CancellablePromise as $CancellablePromise, Create as $Create } from "@wailsio/runtime";
 
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore: Unused imports
+import * as automation$0 from "../automation/models.js";
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
 import * as diag$0 from "../diag/models.js";
@@ -102,7 +105,7 @@ export function ClearConnectionHistory() {
  * CloseHistorySessions closes any open history sessions with the given reason.
  * Called from gui.Run during shutdown so the UI doesn't show phantom "Active"
  * rows after a quit.
- * 
+ *
  * Single GetStatus probe — the previous one-IPC-per-session pattern made
  * shutdown latency scale linearly with active tunnel count. The status
  * response carries every active tunnel's rx/tx, so one round-trip is enough.
@@ -119,7 +122,7 @@ export function CloseHistorySessions(reason) {
 /**
  * Connect loads a tunnel config from local storage and asks the helper to
  * bring it up. The helper re-validates server-side.
- * 
+ *
  * Session lifecycle is owned entirely by ReconcileHistoryFromStatus —
  * opening here would race the helper's StateConnecting status broadcast,
  * which already includes the tunnel name in ActiveTunnels. The race
@@ -136,17 +139,19 @@ export function Connect(name) {
  * DeleteTunnel removes a tunnel from local storage. Rejects deletion of the
  * currently connected tunnel (would orphan the interface).
  * @param {string} name
- * @returns {$CancellablePromise<void>}
+ * @returns {$CancellablePromise<$models.ProfileMutationResult | null>}
  */
 export function DeleteTunnel(name) {
-    return $Call.ByID(3822542112, name);
+    return $Call.ByID(3822542112, name).then(/** @type {($result: any) => any} */(($result) => {
+        return $$createType6($result);
+    }));
 }
 
 /**
  * Disconnect tears down whatever tunnel the helper currently has active.
  * If the call fails with a "client closed" error (the health monitor may have
  * swapped the client during a recovery), retry once with the fresh client.
- * 
+ *
  * We mark lastKnownStats with reason "user" so the upcoming Reconcile (after
  * the next status event with the tunnel gone) labels the closed session as
  * a user disconnect. Existing fresh rx/tx counters from Reconcile's per-tick
@@ -203,6 +208,15 @@ export function ExportTunnel(name) {
 }
 
 /**
+ * @returns {$CancellablePromise<storage$0.AutomationBackupStatus>}
+ */
+export function GetAutomationBackupStatus() {
+    return $Call.ByID(4265972532).then(/** @type {($result: any) => any} */(($result) => {
+        return $$createType7($result);
+    }));
+}
+
+/**
  * GetConfigText returns the serialized form of a stored tunnel's config.
  * @param {string} name
  * @returns {$CancellablePromise<string>}
@@ -219,7 +233,7 @@ export function GetConfigText(name) {
  */
 export function GetConnectionHistory() {
     return $Call.ByID(3062937901).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType6($result);
+        return $$createType9($result);
     }));
 }
 
@@ -232,7 +246,7 @@ export function GetConnectionHistory() {
  */
 export function GetCurrentNetwork() {
     return $Call.ByID(2742143266).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType7($result);
+        return $$createType10($result);
     }));
 }
 
@@ -245,7 +259,7 @@ export function GetCurrentNetwork() {
  */
 export function GetCurrentSubnets() {
     return $Call.ByID(2824239734).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType8($result);
+        return $$createType11($result);
     }));
 }
 
@@ -257,7 +271,7 @@ export function GetCurrentSubnets() {
  */
 export function GetKnownSSIDs() {
     return $Call.ByID(57262338).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType9($result);
+        return $$createType12($result);
     }));
 }
 
@@ -267,7 +281,7 @@ export function GetKnownSSIDs() {
  */
 export function GetRoutingTable() {
     return $Call.ByID(3049102509).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType11($result);
+        return $$createType14($result);
     }));
 }
 
@@ -276,7 +290,7 @@ export function GetRoutingTable() {
  */
 export function GetSettings() {
     return $Call.ByID(2393200110).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType13($result);
+        return $$createType16($result);
     }));
 }
 
@@ -288,7 +302,7 @@ export function GetSettings() {
  */
 export function GetStatus() {
     return $Call.ByID(3544552149).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType15($result);
+        return $$createType18($result);
     }));
 }
 
@@ -300,7 +314,7 @@ export function GetStatus() {
  */
 export function GetTunnelDetail(name) {
     return $Call.ByID(3171898132, name).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType17($result);
+        return $$createType20($result);
     }));
 }
 
@@ -310,7 +324,7 @@ export function GetTunnelDetail(name) {
  */
 export function GetTunnelPingHealth(name) {
     return $Call.ByID(3816721483, name).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType18($result);
+        return $$createType21($result);
     }));
 }
 
@@ -320,7 +334,7 @@ export function GetTunnelPingHealth(name) {
  */
 export function GetUpdateState() {
     return $Call.ByID(3155746791).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType19($result);
+        return $$createType22($result);
     }));
 }
 
@@ -341,7 +355,7 @@ export function GetVersion() {
  */
 export function ImportConfig(name, content) {
     return $Call.ByID(2459134310, name, content).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType21($result);
+        return $$createType24($result);
     }));
 }
 
@@ -355,7 +369,7 @@ export function ImportConfig(name, content) {
  */
 export function ImportQRFromBytes(data, name) {
     return $Call.ByID(3817928306, data, name).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType21($result);
+        return $$createType24($result);
     }));
 }
 
@@ -368,7 +382,7 @@ export function ImportQRFromBytes(data, name) {
  */
 export function ImportQRFromPath(path, name) {
     return $Call.ByID(2544386800, path, name).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType21($result);
+        return $$createType24($result);
     }));
 }
 
@@ -380,7 +394,7 @@ export function ImportQRFromPath(path, name) {
  */
 export function ImportZip(path) {
     return $Call.ByID(976469479, path).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType23($result);
+        return $$createType26($result);
     }));
 }
 
@@ -392,25 +406,18 @@ export function ImportZip(path) {
  */
 export function ImportZipData(data) {
     return $Call.ByID(2432663343, data).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType23($result);
+        return $$createType26($result);
     }));
 }
 
 /**
- * ListTunnels returns every stored tunnel with its summary info.
- * 
- * The active-tunnel marker used to come from an IPC round-trip on every call.
- * That made the tray's rebuild-menu path slow when it was being invoked on
- * the status event stream. The frontend now learns the active tunnel from
- * the status event itself, and the tray caches it internally — so this
- * function stays fully local (disk-only, no IPC) and returns IsConnected
- * purely as a best-effort flag based on a single active-name probe that is
- * safe to skip entirely on slow paths.
+ * ListTunnels decorates the local summaries with the helper's complete
+ * active set. A failed probe leaves a useful local list for offline editing.
  * @returns {$CancellablePromise<$models.TunnelInfo[]>}
  */
 export function ListTunnels() {
     return $Call.ByID(3587038916).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType24($result);
+        return $$createType27($result);
     }));
 }
 
@@ -425,7 +432,7 @@ export function ListTunnels() {
  */
 export function ListTunnelsLocal() {
     return $Call.ByID(3031176175).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType24($result);
+        return $$createType27($result);
     }));
 }
 
@@ -462,19 +469,19 @@ export function ReadFile(path) {
  * ReconcileHistoryFromStatus is the SINGLE source of truth for opening and
  * closing history sessions. The event bridge calls it on every status event;
  * it diffs the active set against activeSessions and:
- * 
+ *
  *   - opens a session for any active tunnel not currently tracked (covers
  *     both user-initiated Connect and helper-driven auto-reconnect / wifi
  *     rules engine / sleep-wake)
  *   - closes a session for any tracked tunnel that has disappeared (using
  *     cached rx/tx + cached reason from lastKnownStats; falls back to
  *     disappearReason — defaults to "reconnect")
- * 
+ *
  * Stats cache is always refreshed for currently-active tunnels so disconnect
  * closes have ≤ 1 status-event-tick stale counters. Reason hints set by
  * user-initiated Disconnect / DisconnectTunnel are preserved across cache
  * refreshes — only LoadAndDelete on close clears them.
- * 
+ *
  * Fast-path: if the sorted active set hasn't changed since the prior call
  * (the steady-state case at 1 Hz), we skip the activeSessions Range and the
  * open-session loop. The stats cache still gets updated so the eventual
@@ -492,20 +499,22 @@ export function ReconcileHistoryFromStatus(activeNames, rxByTunnel, txByTunnel, 
 /**
  * RenameTunnel changes a tunnel's name. Rejects rename of the connected
  * tunnel since the interface name is derived from it.
- * 
+ *
  * Routes through the helper's Tunnel.Rename so the active-tunnel check and
  * the file rename both happen under the helper's connectMu — closing the
  * race where a Connect arriving between the GUI's check and the rename
  * could leave the new name in activeCfgs while the file path moved.
- * 
+ *
  * Falls back to a direct local rename if the helper rejects the method
  * (older helper that hasn't been upgraded yet).
  * @param {string} oldName
  * @param {string} newName
- * @returns {$CancellablePromise<void>}
+ * @returns {$CancellablePromise<$models.ProfileMutationResult | null>}
  */
 export function RenameTunnel(oldName, newName) {
-    return $Call.ByID(576069505, oldName, newName);
+    return $Call.ByID(576069505, oldName, newName).then(/** @type {($result: any) => any} */(($result) => {
+        return $$createType6($result);
+    }));
 }
 
 /**
@@ -516,13 +525,13 @@ export function RenameTunnel(oldName, newName) {
  */
 export function RunDNSLeakTest() {
     return $Call.ByID(2469114850).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType26($result);
+        return $$createType29($result);
     }));
 }
 
 /**
  * RunUpdate performs the update end-to-end:
- * 
+ *
  *   - Homebrew installs → `brew update && brew upgrade --cask wireguide`,
  *     then verifying the installed version and restarting the app.
  *   - Non-brew installs → open the GitHub Releases page in the browser.
@@ -546,24 +555,11 @@ export function RunUpdate(info) {
  * An empty rules slice removes the tunnel's entry entirely. The helper
  * re-reads settings from disk on every evaluation, so no push is needed.
  * @param {string} tunnel
- * @param {wifi$0.Rule[]} rules
+ * @param {automation$0.Rule[]} rules
  * @returns {$CancellablePromise<void>}
  */
 export function SaveAutomationRules(tunnel, rules) {
     return $Call.ByID(657403010, tunnel, rules);
-}
-
-/**
- * SaveSettings persists the settings file AND applies any side effects:
- * currently, pushing the new log level to both the GUI's slog handler and
- * the helper's slog handler. Without those side effects a user lowering the
- * level to Debug wouldn't see any new records — the saved file would match
- * the UI but the running process would still be at Info.
- * @param {storage$0.Settings | null} settings
- * @returns {$CancellablePromise<void>}
- */
-export function SaveSettings(settings) {
-    return $Call.ByID(3676285513, settings);
 }
 
 /**
@@ -587,9 +583,9 @@ export function SetApp(app) {
 }
 
 /**
- * SetDNSProtection asks the helper to lock DNS to the active tunnel's servers.
- * When enabling, we look up the active tunnel's DNS list from local storage
- * and pass it along (the helper never touches user-space storage).
+ * SetDNSProtection asks the helper to lock DNS to the connected tunnels'
+ * servers. The helper works out the servers for every connected tunnel
+ * itself (issue #48).
  * @param {boolean} enabled
  * @returns {$CancellablePromise<void>}
  */
@@ -651,7 +647,7 @@ export function SetTunnelLatencyProbeTarget(name, target) {
  * SetTunnelNotes persists a freeform note for a tunnel. Empty notes still
  * write an empty .meta.json — that matches the contract the frontend
  * expects (write always succeeds, no special-case for "clear").
- * 
+ *
  * Existence check first to avoid orphaning a .meta.json sidecar after the
  * .conf was deleted: TunnelDetail's onDestroy can fire-and-forget a
  * pending-edit flush after the user deletes a tunnel, and writing the
@@ -699,6 +695,17 @@ export function UpdateConfig(name, content) {
 }
 
 /**
+ * UpdateSettings persists intent under the process lock, then applies only
+ * requested side effects. Apply failures are explicit; stored intent remains
+ * available for retry/recovery, matching the helper's wanted/applied model.
+ * @param {$models.SettingsPatch} p
+ * @returns {$CancellablePromise<void>}
+ */
+export function UpdateSettings(p) {
+    return $Call.ByID(4079272253, p);
+}
+
+/**
  * ValidateConfig parses and validates a raw config string. Returns a list of
  * human-readable error messages, or nil if the config is valid.
  * @param {string} content
@@ -706,7 +713,7 @@ export function UpdateConfig(name, content) {
  */
 export function ValidateConfig(content) {
     return $Call.ByID(592398029, content).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType8($result);
+        return $$createType11($result);
     }));
 }
 
@@ -716,25 +723,28 @@ const $$createType1 = $Create.Array($$createType0);
 const $$createType2 = update$0.UpdateInfo.createFrom;
 const $$createType3 = $Create.Nullable($$createType2);
 const $$createType4 = wifi$0.SSIDPermissionStatus.createFrom;
-const $$createType5 = storage$0.Session.createFrom;
-const $$createType6 = $Create.Array($$createType5);
-const $$createType7 = $models.CurrentNetwork.createFrom;
-const $$createType8 = $Create.Array($Create.Any);
-const $$createType9 = $models.KnownSSIDs.createFrom;
-const $$createType10 = $models.RouteEntry.createFrom;
-const $$createType11 = $Create.Array($$createType10);
-const $$createType12 = storage$0.Settings.createFrom;
-const $$createType13 = $Create.Nullable($$createType12);
-const $$createType14 = domain$0.ConnectionStatus.createFrom;
-const $$createType15 = $Create.Nullable($$createType14);
-const $$createType16 = domain$0.WireGuardConfig.createFrom;
-const $$createType17 = $Create.Nullable($$createType16);
-const $$createType18 = healthcheck$0.Config.createFrom;
-const $$createType19 = $models.UpdateState.createFrom;
-const $$createType20 = $models.TunnelInfo.createFrom;
-const $$createType21 = $Create.Nullable($$createType20);
-const $$createType22 = $models.ZipImportResult.createFrom;
-const $$createType23 = $Create.Array($$createType22);
-const $$createType24 = $Create.Array($$createType20);
-const $$createType25 = $models.DNSLeakResult.createFrom;
-const $$createType26 = $Create.Nullable($$createType25);
+const $$createType5 = $models.ProfileMutationResult.createFrom;
+const $$createType6 = $Create.Nullable($$createType5);
+const $$createType7 = storage$0.AutomationBackupStatus.createFrom;
+const $$createType8 = storage$0.Session.createFrom;
+const $$createType9 = $Create.Array($$createType8);
+const $$createType10 = $models.CurrentNetwork.createFrom;
+const $$createType11 = $Create.Array($Create.Any);
+const $$createType12 = $models.KnownSSIDs.createFrom;
+const $$createType13 = $models.RouteEntry.createFrom;
+const $$createType14 = $Create.Array($$createType13);
+const $$createType15 = storage$0.Settings.createFrom;
+const $$createType16 = $Create.Nullable($$createType15);
+const $$createType17 = domain$0.ConnectionStatus.createFrom;
+const $$createType18 = $Create.Nullable($$createType17);
+const $$createType19 = domain$0.WireGuardConfig.createFrom;
+const $$createType20 = $Create.Nullable($$createType19);
+const $$createType21 = healthcheck$0.Config.createFrom;
+const $$createType22 = $models.UpdateState.createFrom;
+const $$createType23 = $models.TunnelInfo.createFrom;
+const $$createType24 = $Create.Nullable($$createType23);
+const $$createType25 = $models.ZipImportResult.createFrom;
+const $$createType26 = $Create.Array($$createType25);
+const $$createType27 = $Create.Array($$createType23);
+const $$createType28 = $models.DNSLeakResult.createFrom;
+const $$createType29 = $Create.Nullable($$createType28);

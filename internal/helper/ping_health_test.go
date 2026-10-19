@@ -6,7 +6,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/korjwl1/wireguide/internal/app"
 	"github.com/korjwl1/wireguide/internal/config"
 	"github.com/korjwl1/wireguide/internal/healthcheck"
 	"github.com/korjwl1/wireguide/internal/reconnect"
@@ -35,12 +34,14 @@ func TestSavedPingSettingsInvalidatePendingRetry(t *testing.T) {
 			if err := store.Save(cfg); err != nil {
 				t.Fatal(err)
 			}
-			service := app.NewTunnelService(store, nil, nil, nil)
+			saveHealth := func(name string, settings healthcheck.Config) error {
+				return store.UpdateMeta(name, func(meta *storage.TunnelMeta) { meta.PingHealth = &settings })
+			}
 			settings, err := (healthcheck.Config{Enabled: true, Targets: []string{"10.0.0.1"}}).Normalize()
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := service.SaveTunnelPingHealth("review", settings); err != nil {
+			if err := saveHealth("review", settings); err != nil {
 				t.Fatal(err)
 			}
 			h := &Helper{userTunnelStore: store}
@@ -69,10 +70,10 @@ func TestSavedPingSettingsInvalidatePendingRetry(t *testing.T) {
 			switch change {
 			case "disable":
 				settings.Enabled = false
-				err = service.SaveTunnelPingHealth("review", settings)
+				err = saveHealth("review", settings)
 			case "targets":
 				settings.Targets = []string{"10.0.0.3"}
-				err = service.SaveTunnelPingHealth("review", settings)
+				err = saveHealth("review", settings)
 			case "rename":
 				err = store.Rename("review", "renamed")
 			case "delete":

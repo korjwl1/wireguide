@@ -41,9 +41,9 @@ import (
 )
 
 var (
-	procCreateIpForwardEntry2     = modIphlpapi.NewProc("CreateIpForwardEntry2")
-	procDeleteIpForwardEntry2     = modIphlpapi.NewProc("DeleteIpForwardEntry2")
-	procInitializeIpForwardEntry  = modIphlpapi.NewProc("InitializeIpForwardEntry")
+	procCreateIpForwardEntry2    = modIphlpapi.NewProc("CreateIpForwardEntry2")
+	procDeleteIpForwardEntry2    = modIphlpapi.NewProc("DeleteIpForwardEntry2")
+	procInitializeIpForwardEntry = modIphlpapi.NewProc("InitializeIpForwardEntry")
 )
 
 // Win32 status codes we surface specifically.

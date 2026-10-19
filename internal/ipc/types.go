@@ -7,10 +7,15 @@ type Empty struct{}
 
 // PingResponse is returned from Helper.Ping.
 type PingResponse struct {
-	Version    string `json:"version"`     // IPC protocol version
-	AppVersion string `json:"app_version"` // Application version (e.g. "0.1.5")
-	PID        int    `json:"pid"`
+	Version       string   `json:"version"`     // IPC protocol version
+	AppVersion    string   `json:"app_version"` // Application version (e.g. "0.1.5")
+	PID           int      `json:"pid"`
+	GUIAttached   bool     `json:"gui_attached"`
+	WantedTunnels []string `json:"wanted_tunnels,omitempty"`
 }
+
+// GUIKnown distinguishes absent metadata in older helpers.
+func (p PingResponse) GUIKnown() bool { return MinorOf(p.Version) >= 2 }
 
 // ConnectRequest is the parameter for Tunnel.Connect.
 type ConnectRequest struct {
@@ -31,7 +36,9 @@ type KillSwitchRequest struct {
 
 // DNSProtectionRequest is the parameter for Firewall.SetDNSProtection.
 type DNSProtectionRequest struct {
-	Enabled    bool     `json:"enabled"`
+	Enabled bool `json:"enabled"`
+	// DNSServers is ignored: the helper derives the servers from every
+	// connected tunnel (issue #48). Kept so older clients still decode.
 	DNSServers []string `json:"dns_servers,omitempty"`
 }
 
@@ -83,6 +90,13 @@ type RenameRequest struct {
 	NewName string `json:"new_name"`
 }
 
+// DeleteRequest serializes profile removal with connection/recovery work.
+// The GUI rejects active tunnels; the CLI may explicitly disconnect first.
+type DeleteRequest struct {
+	TunnelName string `json:"tunnel_name"`
+	Disconnect bool   `json:"disconnect,omitempty"`
+}
+
 // ActiveTunnelsResponse lists all currently active tunnel names.
 type ActiveTunnelsResponse struct {
 	Names []string `json:"names"`
@@ -128,6 +142,19 @@ type AutoConnectPayload struct {
 	TunnelName string `json:"tunnel_name"`
 }
 
+// AutomationSkippedPayload explains why a rule's connection was deferred.
+type AutomationSkippedPayload struct {
+	TunnelName string `json:"tunnel_name"`
+	Reason     string `json:"reason"`
+}
+
+// ForcedDisconnectPayload names a tunnel the helper tore down on its own
+// and why (EventForcedDisconnect).
+type ForcedDisconnectPayload struct {
+	TunnelName string `json:"tunnel_name"`
+	Reason     string `json:"reason"`
+}
+
 // CriticalErrorPayload describes a permanently-dead helper goroutine.
 // Where is the goSafe name (e.g. "eventLoop", "latencyLoop"); Detail is a
 // short human-readable summary of the last panic / restart-budget breach.
@@ -151,17 +178,36 @@ type SettingsChangedPayload struct {
 // the network context the helper currently sees plus each rule-bearing
 // tunnel's evaluated decision. No connect/disconnect is performed.
 type AutomationPreviewResponse struct {
-	SSID        string                     `json:"ssid"`
-	PhysicalIPs []string                   `json:"physical_ips"`
-	GatewayMAC  string                     `json:"gateway_mac"`
-	Tunnels     []AutomationTunnelDecision `json:"tunnels"`
+	SSID        string   `json:"ssid"`
+	PhysicalIPs []string `json:"physical_ips"`
+	GatewayMAC  string   `json:"gateway_mac"`
+	// PrimaryIface is the default-route interface ("" when unknown).
+	PrimaryIface  string `json:"primary_iface,omitempty"`
+	PrimaryIsWiFi bool   `json:"primary_is_wifi,omitempty"`
+	Online        bool   `json:"online"`
+	// Settled is true once the network has been stable long enough for
+	// negated rules to act; SettleRemainingSec counts down otherwise.
+	Settled            bool                       `json:"settled"`
+	SettleRemainingSec int                        `json:"settle_remaining_sec,omitempty"`
+	Tunnels            []AutomationTunnelDecision `json:"tunnels"`
 }
 
 // AutomationTunnelDecision is one tunnel's evaluated desired state.
 type AutomationTunnelDecision struct {
 	Name      string `json:"name"`
 	RuleCount int    `json:"rule_count"`
-	Decision  string `json:"decision"` // "connect" | "disconnect" | "unmanaged"
-	Active    bool   `json:"active"`
+	// Decision is "connect" | "disconnect" | "unmanaged", or "held" (a
+	// negated rule's input is unknown, so the tunnel is left alone) or
+	// "latched" (a manual connect/disconnect overrides rules until the
+	// network changes).
+	Decision string `json:"decision"`
+	Active   bool   `json:"active"`
+	Held     bool   `json:"held,omitempty"`
+	Latched  bool   `json:"latched,omitempty"`
 }
 
+// RecoveryWarningPayload reports retained OS cleanup without disabling new connections.
+type RecoveryWarningPayload struct {
+	TunnelName string `json:"tunnel_name"`
+	Detail     string `json:"detail"`
+}

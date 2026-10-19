@@ -160,7 +160,11 @@ func NewEngine(cfg *config.WireGuardConfig) (*Engine, error) {
 	// rejections / MTU issues aren't invisible. Previously this was
 	// LogLevelSilent which made debugging impossible.
 	logger := newWireguardSlogLogger(ifaceName)
-	bind := conn.NewDefaultBind()
+	bind, err := newPlatformBind(ifaceName)
+	if err != nil {
+		tunDev.Close()
+		return nil, err
+	}
 	wgDev := device.NewDevice(tunDev, bind, logger)
 
 	engine := &Engine{
@@ -336,6 +340,34 @@ func (e *Engine) IpcGet() (string, error) {
 		return "", fmt.Errorf("engine wgDevice is nil")
 	}
 	return e.wgDevice.IpcGet()
+}
+
+// CurrentEndpointIPs reads live peer endpoints in-process, including peer
+// roaming. It never resolves a hostname through the tunnel's DNS.
+func (e *Engine) CurrentEndpointIPs() ([]string, error) {
+	state, err := e.IpcGet()
+	if err != nil {
+		return nil, err
+	}
+	return endpointIPsFromUAPI(state), nil
+}
+
+func endpointIPsFromUAPI(state string) []string {
+	seen := make(map[string]bool)
+	var endpoints []string
+	for _, line := range strings.Split(state, "\n") {
+		value, ok := strings.CutPrefix(line, "endpoint=")
+		if !ok {
+			continue
+		}
+		host, _, err := net.SplitHostPort(value)
+		if err != nil || net.ParseIP(host) == nil || seen[host] {
+			continue
+		}
+		seen[host] = true
+		endpoints = append(endpoints, host)
+	}
+	return endpoints
 }
 
 // buildIpcConfig creates the WireGuard IPC config string.

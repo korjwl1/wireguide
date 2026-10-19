@@ -19,19 +19,8 @@ import (
 	"golang.org/x/image/draw"
 )
 
-// Tray icon variants. macOS uses plain (non-template) coloured icons so
-// the connected state can keep its GREEN dot badge — template images are
-// alpha-only masks and cannot carry colour, which is why this design was
-// chosen originally. Legibility across menu-bar appearances (issue #18:
-// a fixed white W is invisible on a light menu bar) is handled the way
-// native colour-icon apps do it: a KVO observation of the status-item
-// button's effectiveAppearance (menubar_appearance_darwin.go), which
-// tracks the menu bar's ACTUAL rendered appearance — wallpaper-driven,
-// not the system theme — and swaps between the white-W and black-W
-// sets. The default is white (historical behaviour); black is used only
-// when the observer verifiably reports a light menu bar. We never call
-// SetTemplateIcon, so the Wails v3 sticky-isTemplateIcon bug (once set,
-// later SetIcon calls render monochrome) is never triggered.
+// macOS uses an AppKit template glyph and a separate green connection
+// badge, so inactive displays and menu-bar appearance are rendered natively.
 // appQuitting latches once the user picks Quit from the tray. Package-level
 // (unlike trayManager.quitting, which is per-instance) so the window-show
 // retry goroutines in the dock_* files can observe teardown without holding
@@ -41,7 +30,6 @@ var appQuitting atomic.Bool
 var (
 	trayOnIconDark   []byte // white W + green dot (dark menu bar)
 	trayOffIconDark  []byte // white W, no badge
-	trayOnIconLight  []byte // black W + green dot (light menu bar)
 	trayOffIconLight []byte // black W, no badge
 
 	// Windows-only variants rendered from the full app icon (rounded
@@ -51,7 +39,7 @@ var (
 	trayOnIconWindows  []byte // app icon + green dot badge
 	trayOffIconWindows []byte // app icon, no badge
 
-	// customTrayIconPNG is the source the Windows builders read from. Set
+	// customTrayIconPNG is the source for color tray and application icons. Set
 	// by SetTrayIconPNG before gui.Run; init can't read it because Go
 	// runs package init() at load time, well before main wires this up.
 	customTrayIconPNG []byte
@@ -59,18 +47,19 @@ var (
 
 // SetTrayIconPNG hands the GUI package the raw bytes of the source app
 // icon (a 1024×1024 RGBA PNG today). main.go embeds the file and calls
-// this before invoking Run. The package keeps a copy so the Windows
-// tray-icon builders can read it later. Calling with an empty slice
-// disables the custom Windows tray icon (we fall back to the template).
-func SetTrayIconPNG(b []byte) { customTrayIconPNG = b }
+// this before invoking Run. An empty source disables custom icon rendering.
+func SetTrayIconPNG(b []byte) { customTrayIconPNG = bytes.Clone(b) }
 
-func init() {
-	white := color.NRGBA{255, 255, 255, 255}
-	black := color.NRGBA{0, 0, 0, 255}
-	trayOnIconDark = buildTrayOnIcon(white)
-	trayOffIconDark = buildTrayOffIcon(white)
-	trayOnIconLight = buildTrayOnIcon(black)
-	trayOffIconLight = buildTrayOffIcon(black)
+var trayIconsOnce sync.Once
+
+func initializeTrayIcons() {
+	trayIconsOnce.Do(func() {
+		white := color.NRGBA{255, 255, 255, 255}
+		black := color.NRGBA{0, 0, 0, 255}
+		trayOnIconDark = buildTrayOnIcon(white)
+		trayOffIconDark = buildTrayOffIcon(white)
+		trayOffIconLight = buildTrayOffIcon(black)
+	})
 }
 
 // buildWindowsTrayIcons renders the rounded-red app icon at tray size
@@ -220,10 +209,18 @@ func trimAndSquare(src image.Image) *image.NRGBA {
 		for x := b.Min.X; x < b.Max.X; x++ {
 			_, _, _, a := src.At(x, y).RGBA()
 			if a > 0 {
-				if x < minX { minX = x }
-				if y < minY { minY = y }
-				if x > maxX { maxX = x }
-				if y > maxY { maxY = y }
+				if x < minX {
+					minX = x
+				}
+				if y < minY {
+					minY = y
+				}
+				if x > maxX {
+					maxX = x
+				}
+				if y > maxY {
+					maxY = y
+				}
 			}
 		}
 	}
@@ -234,7 +231,9 @@ func trimAndSquare(src image.Image) *image.NRGBA {
 	cropH := maxY - minY + 1
 	// Square canvas: use the larger dimension
 	side := cropW
-	if cropH > side { side = cropH }
+	if cropH > side {
+		side = cropH
+	}
 	dst := image.NewNRGBA(image.Rect(0, 0, side, side))
 	offX := (side - cropW) / 2
 	offY := (side - cropH) / 2
@@ -278,7 +277,9 @@ func buildTrayOnIcon(wColor color.NRGBA) []byte {
 	// Green badge: bottom-left corner.
 	w, h := bounds.Dx(), bounds.Dy()
 	cx, cy, r := w/5, h-h/5, h/8
-	if r < 3 { r = 3 }
+	if r < 3 {
+		r = 3
+	}
 	green := color.NRGBA{52, 199, 89, 255} // macOS systemGreen
 	for y := cy - r; y <= cy+r; y++ {
 		for x := cx - r; x <= cx+r; x++ {
@@ -347,12 +348,14 @@ func buildTrayOffIcon(wColor color.NRGBA) []byte {
 // did an IPC round-trip to the helper inside ListTunnels — that blocked the
 // event stream, making the UI feel sluggish under a 1 Hz status broadcast.
 type trayManager struct {
-	app        *application.App
-	win        *application.WebviewWindow
-	tray       *application.SystemTray
-	svc        *wgapp.TunnelService
-	doShutdown func()
+	app            *application.App
+	win            *application.WebviewWindow
+	tray           *application.SystemTray
+	svc            *wgapp.TunnelService
+	doShutdown     func()
+	connectionIcon *connectionIcon
 
+	indicatorMu   sync.Mutex // serializes cached state with native icon updates
 	mu            sync.Mutex
 	activeTunnels map[string]bool // cached from status events
 	hasHandshake  map[string]bool // per-tunnel handshake status
@@ -374,55 +377,6 @@ type trayManager struct {
 	// set, so a late-firing timer can't call SetMenu on a tray that
 	// has already been Destroy()'d.
 	quitting atomic.Bool
-	// darkMenuBar tracks the menu bar's current rendered appearance
-	// (macOS only) so setIconState can pick the icon variant whose W
-	// glyph contrasts with the menu bar. Initialised to true (white W —
-	// the app's historical behaviour, correct on the common dark menu
-	// bar) and updated by the KVO observer in startAppearanceWatch; it
-	// only ever becomes false when the menu bar is verifiably light.
-	darkMenuBar atomic.Bool
-}
-
-// macIcons returns the on/off icon pair matching the current menu-bar
-// appearance.
-func (t *trayManager) macIcons() (on, off []byte) {
-	if t.darkMenuBar.Load() {
-		return trayOnIconDark, trayOffIconDark
-	}
-	return trayOnIconLight, trayOffIconLight
-}
-
-// startAppearanceWatch installs the KVO-based menu-bar appearance
-// observer (menubar_appearance_darwin.go). The callback delivers the
-// exact appearance the menu bar is rendering us with — initial value
-// included — so the icon flips to the black-W set only when the menu
-// bar is genuinely light, and stays white everywhere else.
-func (t *trayManager) startAppearanceWatch() {
-	if runtime.GOOS != "darwin" {
-		return
-	}
-	watchMenuBarAppearance(func(dark bool) {
-		// KVO delivers on the AppKit main thread; hop to a goroutine so
-		// SetIcon's own main-thread dispatch can't deadlock against it.
-		go func() {
-			if t.quitting.Load() {
-				return
-			}
-			if t.darkMenuBar.Swap(dark) == dark {
-				return
-			}
-			slog.Debug("menubar appearance changed", "dark", dark)
-			t.mu.Lock()
-			anyConnected := len(t.activeTunnels) > 0
-			t.mu.Unlock()
-			on, off := t.macIcons()
-			if anyConnected {
-				t.tray.SetIcon(on)
-			} else {
-				t.tray.SetIcon(off)
-			}
-		}()
-	})
 }
 
 // quitApp is the single, platform-independent app teardown: stop the tray
@@ -447,7 +401,11 @@ func (t *trayManager) quitApp() {
 	}
 	t.mu.Unlock()
 	t.doShutdown()
-	t.tray.Destroy()
+	if runtime.GOOS == "darwin" {
+		destroyNativeTray()
+	} else {
+		t.tray.Destroy()
+	}
 	t.app.Quit()
 }
 
@@ -459,33 +417,30 @@ func newTrayManager(app *application.App, win *application.WebviewWindow, tray *
 		svc:        svc,
 		doShutdown: doShutdown,
 	}
-	// White W until the appearance observer proves the menu bar is light.
-	t.darkMenuBar.Store(true)
 	return t
 }
 
-// initialBuild draws the menu once at startup. No OnClick handler is
-// registered — with no custom click handler, Wails lets AppKit run its
-// native status-item menu tracking (the pre-click event monitor attaches
-// the cached menu before the mouse-down is processed). The previous
-// design intercepted the click and called OpenMenu, which synthesizes a
-// fake NSEvent mouseDown — an unsupported trick that needed two clicks
-// on some systems and stopped opening the menu at all on macOS 26
-// (Tahoe reworked NSStatusItem internals). Menu freshness is covered by
-// the status-driven scheduleRebuild path, and each item's OnClick reads
-// live state at click time, so a ≤1s-stale glyph is the worst case.
+// initialBuild creates the native macOS status item before filling its
+// persistent menu; other platforms use the Wails tray.
 func (t *trayManager) initialBuild() {
+	if runtime.GOOS == "darwin" {
+		createNativeTray(trayOffIconLight, t.handleNativeTrayAction)
+	}
 	t.rebuildMenu()
-	t.startAppearanceWatch()
 }
 
 // setIconState swaps the tray ICON (not a text label) based on connection
 // state, and updates the tooltip. Called from the status event stream, so
 // it must stay O(1) — no IPC, no disk I/O.
 //
-//   disconnected → W glyph (white on dark menu bars, black on light)
-//   connected    → same W with a green dot badge
+//	disconnected → W glyph (white on dark menu bars, black on light)
+//	connected    → same W with a green dot badge
 func (t *trayManager) setIconState(activeNames []string, handshakeMap map[string]bool) {
+	t.indicatorMu.Lock()
+	defer t.indicatorMu.Unlock()
+	if t.quitting.Load() {
+		return
+	}
 	newSet := make(map[string]bool, len(activeNames))
 	for _, n := range activeNames {
 		newSet[n] = true
@@ -500,6 +455,9 @@ func (t *trayManager) setIconState(activeNames []string, handshakeMap map[string
 	t.mu.Unlock()
 
 	anyConnected := len(activeNames) > 0
+	if t.connectionIcon != nil {
+		t.connectionIcon.SetConnected(anyConnected)
+	}
 
 	// Compute "did the active-set change" up front so we can both
 	// (a) gate the SetIcon/SetTooltip cgo calls (they're cheap but
@@ -516,21 +474,29 @@ func (t *trayManager) setIconState(activeNames []string, handshakeMap map[string
 	}
 
 	if activeChanged {
-		onIcon, offIcon := t.macIcons()
+		onIcon, offIcon := trayOnIconDark, trayOffIconDark
 		if (runtime.GOOS == "windows" || runtime.GOOS == "linux") && len(trayOnIconWindows) > 0 {
 			// Use the rounded-red app-icon variants on Windows and Linux so
 			// the tray icon stands out against light system-tray backgrounds.
 			onIcon, offIcon = trayOnIconWindows, trayOffIconWindows
 		}
 		if anyConnected {
-			t.tray.SetIcon(onIcon)
+			if runtime.GOOS == "darwin" {
+				setNativeTrayConnected(true)
+			} else {
+				t.tray.SetIcon(onIcon)
+			}
 			tooltip := "WireGuide — " + strings.Join(activeNames, ", ")
-			t.tray.SetTooltip(tooltip)
+			t.setTooltip(tooltip)
 		} else {
 			if runtime.GOOS == "darwin" || ((runtime.GOOS == "windows" || runtime.GOOS == "linux") && len(offIcon) > 0) {
-				t.tray.SetIcon(offIcon)
+				if runtime.GOOS == "darwin" {
+					setNativeTrayConnected(false)
+				} else {
+					t.tray.SetIcon(offIcon)
+				}
 			}
-			t.tray.SetTooltip("WireGuide")
+			t.setTooltip("WireGuide")
 		}
 		if runtime.GOOS != "darwin" {
 			if anyConnected {
@@ -543,7 +509,7 @@ func (t *trayManager) setIconState(activeNames []string, handshakeMap map[string
 		// Active names may have reordered without count changing.
 		// Refresh tooltip only when names differ from last broadcast.
 		newTooltip := "WireGuide — " + strings.Join(activeNames, ", ")
-		t.tray.SetTooltip(newTooltip)
+		t.setTooltip(newTooltip)
 	}
 
 	// Rebuild menu if active set changed OR if handshake state changed for
@@ -598,6 +564,7 @@ func (t *trayManager) rebuildMenu() {
 		return
 	}
 
+	labels := t.labels()
 	tunnels, err := t.svc.ListTunnelsLocal()
 	if err != nil {
 		slog.Debug("tray: list tunnels failed", "error", err)
@@ -613,6 +580,22 @@ func (t *trayManager) rebuildMenu() {
 	hsMap := t.hasHandshake
 	t.mu.Unlock()
 
+	if runtime.GOOS == "darwin" {
+		rows := []nativeTrayItem{{Title: "WireGuide"}, {Separator: true}}
+		for _, tun := range tunnels {
+			glyph := "○ "
+			if activeSet[tun.Name] {
+				glyph = "◐ "
+				if hsMap[tun.Name] {
+					glyph = "● "
+				}
+			}
+			rows = append(rows, nativeTrayItem{Title: glyph + tun.Name, Action: "tunnel:" + tun.Name, Enabled: true})
+		}
+		rows = append(rows, nativeTrayItem{Separator: true}, nativeTrayItem{Title: labels.show, Action: "show", Enabled: true}, nativeTrayItem{Separator: true}, nativeTrayItem{Title: labels.quit, Action: "quit", Enabled: true})
+		setNativeTrayMenu(rows)
+		return
+	}
 	// Refill the single persistent Menu in place (see the menu field
 	// doc): Wails reuses its NSMenu on Update(), and AppKit live-updates
 	// an NSMenu that is currently open — creating a fresh Menu here left
@@ -653,11 +636,11 @@ func (t *trayManager) rebuildMenu() {
 		})
 	}
 	m.AddSeparator()
-	m.Add("Show Window").OnClick(func(ctx *application.Context) {
+	m.Add(labels.show).OnClick(func(ctx *application.Context) {
 		showDock()
 	})
 	m.AddSeparator()
-	m.Add("Quit").OnClick(func(ctx *application.Context) {
+	m.Add(labels.quit).OnClick(func(ctx *application.Context) {
 		t.quitApp()
 	})
 	if created || runtime.GOOS == "windows" {
@@ -670,5 +653,42 @@ func (t *trayManager) rebuildMenu() {
 		// macOS: in-place refresh of the same NSMenu — live even while
 		// open, and repeated SetMenu there leaked the replaced NSMenu.
 		m.Update()
+	}
+}
+
+func (t *trayManager) setTooltip(text string) {
+	if runtime.GOOS == "darwin" {
+		setNativeTrayTooltip(text)
+	} else {
+		t.tray.SetTooltip(text)
+	}
+}
+
+func (t *trayManager) handleNativeTrayAction(action string) {
+	if t.quitting.Load() {
+		return
+	}
+	switch action {
+	case "show":
+		showDock()
+	case "quit":
+		t.quitApp()
+	default:
+		name, ok := strings.CutPrefix(action, "tunnel:")
+		if !ok {
+			return
+		}
+		t.mu.Lock()
+		active := t.activeTunnels[name]
+		t.mu.Unlock()
+		var err error
+		if active {
+			err = t.svc.DisconnectTunnel(name)
+		} else {
+			err = t.svc.Connect(name)
+		}
+		if err != nil {
+			slog.Warn("tray tunnel action failed", "tunnel", name, "error", err)
+		}
 	}
 }

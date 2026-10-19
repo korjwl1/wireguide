@@ -68,3 +68,54 @@ the tunnel was brought up.
       it doesn't crash or affect other rules.
 - [ ] Wi-Fi off / on Ethernet with only SSID rules — those rules simply
       don't match (SSID is empty); nothing happens.
+
+## Endpoint loop protection (issue #49, macOS and Windows)
+
+These checks remain pending. Loopback integration tests exercise the real
+WireGuard engine and UDP transport, but do not exercise a remote VPN peer,
+native Windows interface binding, or physical network changes.
+
+- [ ] With a real peer, verify split tunnel, IPv4 full tunnel and dual-stack
+      full tunnel. Sustain a fast one-way upload; the watchdog must not
+      disconnect merely because receive traffic is low.
+- [ ] Switch Wi-Fi/Ethernet and disable/re-enable the physical connection.
+      Verify recovery, the endpoint's physical forwarding path, and absence
+      of recursive outer traffic. Include an IPv4-only underlay.
+- [ ] On macOS, remove an owned endpoint bypass while keeping the same
+      gateway. Verify safe route repair; if repair fails, outer sends must
+      remain blocked until forwarding is verified or the tunnel is stopped.
+- [ ] On Windows, change the listen port while connected. Verify native
+      socket interface binding survives socket recreation. Disconnect under
+      sustained upload and confirm shutdown completes.
+- [ ] With two tunnels and DNS protection/kill switch enabled, stop one via
+      the watchdog. Verify the other tunnel's traffic and DNS still work,
+      while the stopped tunnel's permits and DNS rules are removed.
+- [ ] After a forced disconnect, exercise network rules, sleep/wake and a
+      helper restart. The stopped tunnel must stay blocked from automatic
+      reconnect; a successful manual connect must clear the block.
+- [ ] Disconnect the last tunnel and exit the helper. Verify system DNS,
+      endpoint routes and firewall rules are restored to their prior state.
+
+## macOS menu bar (issues #45 and #46)
+
+The standalone Cocoa fixture passes on macOS 26.3.1: persistent menu,
+action dispatch, template image, badge click passthrough, disabled emphasis
+and cleanup. These target scenarios still need hardware verification:
+
+- [ ] On macOS 27, open the menu with left/right click and keyboard; repeat
+      after selecting a tunnel and after dismissing the menu.
+- [ ] On two displays with different light/dark wallpapers, change the
+      focused display. Compare glyph contrast and inactive emphasis with
+      Apple's menu-bar icons in both connected and disconnected states.
+- [ ] Verify the green connected badge, absence of a persistent background
+      box, and VoiceOver's connection-state announcement.
+
+## macOS native networking follow-up (2026-10-15)
+
+[Execution report](analysis/macos-native-verification-20261015.md) records
+passed native split-route IPv4/IPv6 traffic, macOS resolver dispatch, DNS/KS
+packet enforcement, PF repair/coexistence, system launchd crash restoration
+and product cleanup. Forced-disconnect tests inject the event and validate
+real teardown/block persistence; genuine recursive-route detection and remote
+full-tunnel tests above remain unchecked. Actual sleep/wake was deferred by
+the user. The test runner is `scripts/macos_native_live_test.py`.

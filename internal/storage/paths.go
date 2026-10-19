@@ -14,14 +14,12 @@ const appName = "wireguide"
 // writing and immediately removing a temp file. Used by EnsureDirs to
 // distinguish "can't chmod but can still use" from "truly inaccessible".
 func canWriteDir(dir string) bool {
-	tmp := filepath.Join(dir, ".wireguide-write-test")
-	f, err := os.Create(tmp)
+	f, err := os.CreateTemp(dir, ".wireguide-write-test-*")
 	if err != nil {
 		return false
 	}
-	f.Close()
-	os.Remove(tmp)
-	return true
+	defer os.Remove(f.Name())
+	return f.Close() == nil
 }
 
 // Paths holds all OS-specific directory paths for the application.

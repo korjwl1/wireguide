@@ -32,17 +32,24 @@ export function applyTheme(name) {
 // initThemeWatcher hooks into the OS media query so a user sitting on
 // `system` gets instant updates when they toggle macOS dark mode etc.
 // Safe to call multiple times — the listener is attached once.
-let watcherInstalled = false;
+let stopWatcher = null;
 export function initThemeWatcher() {
-  if (watcherInstalled || typeof window === 'undefined' || !window.matchMedia) return;
-  watcherInstalled = true;
+  if (stopWatcher) return stopWatcher;
+  if (typeof window === 'undefined' || !window.matchMedia) return;
   const mql = window.matchMedia('(prefers-color-scheme: dark)');
   const update = () => {
     if (get(theme) === 'system') {
       resolvedTheme.set(mql.matches ? 'dark' : 'light');
     }
   };
-  // Some very old WebKits only support addListener; fall back if needed.
   if (mql.addEventListener) mql.addEventListener('change', update);
   else mql.addListener(update);
+  const stop = () => {
+    if (stopWatcher !== stop) return;
+    if (mql.removeEventListener) mql.removeEventListener('change', update);
+    else mql.removeListener(update);
+    stopWatcher = null;
+  };
+  stopWatcher = stop;
+  return stop;
 }

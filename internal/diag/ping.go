@@ -173,4 +173,3 @@ func parseIndividualPingTimes(output string) float64 {
 	}
 	return total / float64(count)
 }
-

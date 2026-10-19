@@ -7,7 +7,25 @@ WireGuide is a **two-process** WireGuard VPN client:
 - **GUI process** (unprivileged) — Wails v3 + Svelte webview, system tray, config editor
 - **Helper process** (root) — wireguard-go TUN, routing, DNS, firewall, reconnect
 
-They communicate over **JSON-RPC 2.0** on a Unix domain socket (`/var/run/wireguide/wireguide.sock`). The helper is installed as a macOS LaunchDaemon with `RunAtLoad=false` and `KeepAlive={AfterInitialDemand:true, SuccessfulExit:false}`: launchd never starts it at boot (a running GUI is what signals the user wants WireGuide active) and only restarts it after a crash. The helper's lifetime is tied to the GUI — a 60 s startup grace covers a helper whose GUI never attaches, and it exits shortly after the last GUI connection drops if no tunnels remain (CLI control connections are transient and don't extend its life).
+They communicate over **JSON-RPC 2.0**. On macOS, launchd owns
+`/var/run/com.wireguide.helper.sock` (0600, installing user as owner), and
+starts the root helper on contact. `RunAtLoad=false` prevents boot execution;
+`KeepAlive={AfterInitialDemand:true, SuccessfulExit:false}` restarts crashes
+after demand. The helper adopts the listener without unlinking it, verifies
+peer credentials, and gates automation until the first GUI control connection.
+A transient CLI probe does not grant that control lease. Same-boot desired recovery is separate from new automation and may run
+without a GUI. With no GUI or desired tunnels it exits after 15 seconds when activated (60 seconds for a direct
+start); after GUI detachment the grace is 10 seconds. Same-boot crash recovery
+retains existing desired tunnel intent. Clean quit cancels GUI probes before
+shutting down the helper, so they cannot activate it again.
+
+Installation, upgrades and repair can require administrator authorization;
+a healthy installed job starts through its socket. Legacy socket migration
+asks the old helper to shut down before replacing it. Temporary disappearance
+of the app bundle never deletes the helper or its recovery state. Uninstall
+requires a manual removal or Homebrew zap; no native app/CLI helper uninstaller
+is provided. Removing only the app leaves a dormant launchd registration. See
+[README removal instructions](../README.md#macos-removal-and-helper-cleanup).
 
 ```
 ┌──────────────────────────────┐     ┌──────────────────────────────┐
@@ -27,7 +45,7 @@ They communicate over **JSON-RPC 2.0** on a Unix domain socket (`/var/run/wiregu
 
 WireGuard requires root to create TUN devices and modify routing tables. Rather than running the entire GUI as root:
 
-- **GUI stays unprivileged** — a compromised webview can't touch the network stack
+- **GUI stays unprivileged** — it cannot modify the network stack directly. The helper authenticates the configured local user, who is authorized to request VPN operations over IPC; this is not binary attestation or a sandbox against a compromised GUI
 - **Helper does only privileged work** — smaller attack surface
 - **Helper survives GUI restarts** — closing the window doesn't kill the VPN
 - **LaunchDaemon KeepAlive (crash-only)** — helper auto-restarts on crash, but never runs at boot and exits on its own once no GUI and no tunnels remain
@@ -55,6 +73,93 @@ Each tunnel gets its **own `NetworkManager` instance** created via `netMgrFactor
 ### DNS Union
 
 When multiple tunnels are active, DNS servers are merged into a **union set**. On connect, the new tunnel's DNS is merged with all existing tunnels' DNS via `AllDNSServers()`. On disconnect, if other tunnels remain, their combined DNS is re-applied through one of the remaining tunnels' `NetworkManager` instances.
+
+On macOS, each global-DNS adapter checkpoints the exact service DNS/search
+snapshot before changing preferences. The manager shares one original baseline
+across those journals: a later tunnel must not record an earlier tunnel's VPN
+DNS as the user's original settings. Newly discovered services extend the
+baseline; failed checkpoints prevent writes and remain pending for retry.
+
+DNS protection derives per-resolver permits from the longest matching
+AllowedIPs prefix across all connected tunnels. A resolver outside every
+managed tunnel is permitted by address through normal system routing, so a
+split tunnel with a public resolver is usable. Table=off does not imply a
+managed route. Equal-prefix tunnel paths permit both interfaces; OS metrics
+choose between them. The kill switch remains an independent outer restriction.
+
+This adapts the per-resolver approach proposed in
+[PR #50](https://github.com/korjwl1/wireguide/pull/50), while retaining the
+existing helper, Windows address-based DNS permits and wg-quick routing model.
+A resolver's route is checked against all connected tunnel configs. Both
+the original PR source and this implementation retain /0-specific firewall
+auto-enable semantics ([WireGuard's documented distinction](https://git.zx2c4.com/wireguard-windows/tree/docs/netquirk.md)).
+
+A periodic helper reconciliation retries failed DNS and kill-switch changes
+with bounded backoff and skips healthy, unchanged sets. Kill-switch intent is
+separate from actual backend state: failed On/Off requests, connect rollback
+and resume retain the requested setting. Each successful reconnect suspension
+owns one level; only the last resume applies current rules. Explicit reapply
+cannot bypass suspension. Failed suspension rolls back without an owner and
+keeps the transport up for retry. Deferred resume also runs on reconnect panic;
+the dead retry slot is removed. Shutdown prevents later rule installation. Linux deletion errors retain the active state and
+propagate to the caller; startup removes stale kernel DNS tables even without
+a tunnel crash journal. Linux kernel integration tests run in an isolated
+container namespace with CAP_NET_ADMIN and WIREGUIDE_TEST_NFT=1.
+
+On macOS, WireGuide holds its own PF enable reference (`pfctl -E`) and
+releases only that token (`-X`). The atomically written recovery journal
+includes the boot-session UUID; tokens from an earlier boot are never used.
+Legacy enabled/disabled snapshots do not authorize globally disabling PF.
+Failed flush/release operations retain state for retry. Existing main rules
+with the required anchor are preserved, and DNS remains installed when the
+kill switch is replaced or disabled. Token lifecycle and operation failures
+are tested through a PF execution seam; live PF coexistence still requires
+target-machine verification.
+
+#### Coverage of the detailed #48 contributor report
+
+The [bitworks-io comment](https://github.com/korjwl1/wireguide/issues/48#issuecomment-6102386212)
+and [PR #50](https://github.com/korjwl1/wireguide/pull/50) were checked against
+this branch again on 2026-10-13. Reading the report did not mean every item
+had been implemented: the second audit found missing signal handling,
+journal-independent PF startup cleanup, PF activation rollback, and immediate
+firewall reconciliation on disconnect errors. These are now implemented.
+
+| Report item | Implementation / verification |
+|---|---|
+| Helper-owned wanted DNS state; ignore legacy GUI server list | `dns_protection.go`; handler and multi-tunnel tests |
+| Reconcile connect, disconnect, automation, watchdog, restore and resume | Serialized helper transitions plus periodic DNS retry; error returns now also rebuild rules immediately |
+| Retry failures without removing a surviving tunnel's permits | DNS and kill-switch wanted/applied journals retry failures with backoff; failed permit removals remain tracked; interface reuse cancels obsolete removals |
+| Per-resolver tunnel/physical permits; DNS-less/no protected tunnel | Longest prefix across connected configs; physical address permits; empty sets remove rules |
+| PF ordered anchor updates and rollback | DNS sub-anchor prepared before main replacement; failed activation restores the committed main rules; rollback failure is returned |
+| PF reference ownership and existing main rules | Same-boot `-E`/`-X` token; existing required wildcard preserved |
+| Flush both PF anchors at every helper start | `RecoverSavedRules` sweeps owned anchors even without a journal; no global PF disable |
+| Linux table replacement, `oifname`, stale-table cleanup and deletion errors | Implemented; replacement also verified against real nftables in an isolated kernel namespace |
+| Bounded SIGTERM/SIGINT graceful cleanup | Registered before initialization; normal helper cleanup, three-second deadline even during an already-running cleanup; real macOS and isolated Linux subprocess signal tests |
+
+The implementation retains the current separate kill-switch and DNS models
+under serialized firewall operations, rather than importing PR #50's entire
+unified reconciler. `/1` route pairs participate in resolver routing but do
+not change `/0`-specific automatic firewall policy, preserving the documented
+WireGuard distinction linked above.
+
+The comment also links separate feature PRs. [#51](https://github.com/korjwl1/wireguide/pull/51)
+(`~domain` split DNS), [#52](https://github.com/korjwl1/wireguide/pull/52)
+(negated automation, settle/manual-override and LAN-overlap policy), and
+[#53](https://github.com/korjwl1/wireguide/pull/53) (launchd socket activation)
+are integrated on this branch with the compatibility corrections documented
+in the review below. Split DNS keeps ordinary system resolvers available for
+unmatched names and preserves per-domain ownership in diagnostics. Negated
+rules wait for known, settled input; session manual overrides use the underlying
+network identity as well as the SSID. Transport recovery continues for manual
+On. Socket activation preserves the current shutdown, watchdog and crash
+recovery paths; automatic orphan self-uninstall is excluded. Native macOS
+resolver/PF coexistence, Linux systemd-resolved and Windows full/split
+coexistence still require target-machine execution.
+
+The [review of PRs #51, #52 and #53](analysis/pr-51-52-53-review.md) records
+merge conflicts, product fit, behavioral counterexamples and an integration
+sequence against the current branch.
 
 ### Full-Tunnel Conflict Detection
 
@@ -191,24 +296,29 @@ block drop in all
 
 ### Lifecycle: applied at connect time, not at boot
 
-The kill switch is a **connect-path state transition**, deliberately NOT
-restored when the helper (re)starts. With `kill_switch: true` in
-config.json, a reboot leaves the firewall open until the first tunnel
-comes up — at which point the connect path (GUI `applyFirewallSettings`,
-or helper-side `applyPostConnectFirewall` for automation connects)
-re-enables it. Auto-applying at boot would block ALL traffic on a machine
-with no tunnel up, which is "always-on VPN" semantics — a separate,
-opt-in feature if ever wanted, not a restore. (Other persisted
-helper-side settings — health check, pin-interface, log level — ARE
-restored at helper startup, because they only change behaviour while
-tunnels are up.)
+An idle helper start or reboot does not enable the kill switch from a saved
+setting alone. A subsequent manual or automation connect applies the setting.
+This preserves the user's normal connectivity when no VPN session is wanted.
+
+Same-boot crash recovery is different: eligible desired tunnel intent restores
+the previous kill-switch blockade **before** reconnecting. An explicit saved or
+live Off vetoes stale journal intent. Health check, pin-interface and log-level
+settings load at helper startup; they affect behavior while tunnels are up.
+
+On Windows, base and per-tunnel kill-switch filter IDs are tracked independently
+from DNS and endpoint-loop protection. Disabling the kill switch deletes only
+its filters and widens DNS permits in the same WFP transaction. It leaves
+endpoint protection installed in the existing dynamic session. DNS permits
+with an interface match that interface's LUID; normal-routing exceptions have
+no LUID condition and are excluded while the kill switch is on. A failed
+transaction preserves the previous filters and their tracked IDs for retry.
 
 ## Automation (per-tunnel connect/disconnect rules, issue #12)
 
 ### Model
 
 Each tunnel owns an ordered list of `condition → action` rules
-(`internal/wifi/automation.go`). A condition is one of:
+(`internal/automation/automation.go`). A condition is one of:
 
 - `ssid` — the current Wi-Fi SSID equals a value
 - `subnet` — a physical-interface IP is inside a CIDR
@@ -241,7 +351,7 @@ current network context = { SSID, physical IPs, gateway MAC }
   └─ poll (30s)       → Windows/Linux fallback (no process-wide monitor yet)
 
 for each tunnel with rules:
-  Evaluate(rules, ctx) → StateConnect  → doConnectHeld (same as manual)
+  Evaluate(rules, ctx) → StateConnect  → doConnectHeld (unless watchdog-blocked)
                          StateDisconnect → disconnectAutoManaged
                          StateUnmanaged  → leave as-is
 ```
@@ -287,9 +397,11 @@ The helper's locks:
 - `mu` — protects `activeCfgs` and other manager state
 - `wifiMu` — protects `autoConnectedBy`
 
-Rule: within an evaluation, always acquire in the order
-`connectMu → mu → wifiMu`. Never hold a lower-priority lock when acquiring
-a higher one.
+Within an evaluation, acquire `reevalMu → connectMu → mu → wifiMu`.
+Desired-state persistence acquires `desiredMu` before its `mu → wifiMu`
+snapshot and disk write; callers must release `mu`/`wifiMu` before persistence.
+The tunnel DNS checkpoint mutex serializes journals and baseline replacement;
+its slow fsync runs outside `Manager.mu`, keeping status queries responsive.
 
 ## Reconnect
 
@@ -337,9 +449,95 @@ Wake detected (all tunnels)
 
 **Exponential backoff**: 5s initial, 60s max, unlimited attempts.
 
-**Firewall suspend/resume**: on reconnect, utun name changes (utun4->utun5). Old kill switch rules block the new interface. Suspending before disconnect and resuming after connect with fresh interface/endpoints prevents this deadlock.
+**Firewall suspend/resume**: on reconnect, utun name changes (utun4->utun5).
+Old rules can block the new interface. Successful suspensions are counted;
+only the last matching resume rebuilds rules from current tunnels and wanted
+settings. Failed suspension preserves the old transport and retries later.
+Resume runs on success, failure, cancellation and panic. An OS apply failure
+keeps wanted state and remains pending for periodic retry. See the
+[PR adoption checklist](analysis/pr-adoption-checklist.md) for verified paths
+and deliberate differences from the contributor proposals.
+
+### Loop watchdog and forced disconnect
+
+Loop protection never uses a traffic-rate cutoff: a fast one-way upload
+is valid traffic.
+
+On Windows, every tunnel's outer UDP sender is guarded. The native
+`BindSocketToInterface` API constrains packets to a non-tunnel default-route
+interface, following the [official userspace client](https://github.com/WireGuard/wireguard-windows/blob/v0.1.1/tunnel/defaultroutemonitor.go).
+No underlay or a failed bind drops sends until protection succeeds. The
+binding is applied before the first handshake and reapplied when sockets
+reopen. Route notifications and a periodic fallback retry failed bindings;
+callbacks use a fixed pair of native trampolines across reconnects. Endpoint
+bypass routes and WFP filters remain additional protection.
+The bind serializes socket reopen with close, but close interrupts the native
+socket before waiting for guarded sends to finish. Windows RIO sends can wait
+for completion; waiting for them before closing the socket would deadlock.
+
+On macOS, endpoint host routes are maintained along the lines of
+[wg-quick](https://git.zx2c4.com/wireguard-tools/tree/src/wg-quick/darwin.bash).
+The route monitor checks for removed bypasses even if the gateway has not
+changed. Outer sends are paused during route replacement and resume only
+after kernel forwarding decisions are verified. This also covers transitions
+to and from blackhole routes: Darwin's RTM_CHANGE does not change those flags,
+so a blackhole must be replaced while sends are paused.
+The network manager owns reopening the send gate under its route lock,
+including initial verification. Connection completion must not reopen it
+independently: a subsequent route repair may already have paused traffic.
+
+A separate macOS watchdog queries RTM_GET every five seconds using live
+peer endpoints from the engine, including roaming. This uses the same
+[native route-query approach as Tailscale](https://github.com/tailscale/tailscale/blob/main/net/netns/netns_darwin.go).
+A route through the same tunnel immediately blocks outer sends and triggers
+forced disconnect. Missing routes and blackholes are safe outages, not loop
+evidence. Unknown query results pause sends and retry; they do not claim a
+loop. Initial route verification also rolls back unsafe connects.
+
+On a trip, `tunnel.Manager` sends the session identity to the helper. The
+helper checks that the same session is still connected, records a durable
+automation block, and tears the tunnel down through its normal state path:
+reconnect cache, desired-tunnel list, retry, kill-switch permit, and DNS rules.
+The block survives a helper restart. A successful manual Connect clears it;
+automatic rules and crash restore cannot bring the tunnel back first.
+
+Regression tests cover deleted endpoint routes with an unchanged gateway,
+blackhole promotion while sends are paused, failed repair remaining blocked,
+socket reopen, failed binding and recovery, and concurrent send/rebind. The
+macOS RTM_GET reader is also checked against live IPv4/IPv6 loopback routes.
+Integration tests run two wireguard-go devices over real loopback UDP sockets
+to verify handshakes, bidirectional encrypted traffic, gate pause/recovery,
+and socket recreation. They simulate interface-binding syscalls. Additional
+tests cover connect/repair gate ownership, close interrupting a stalled send,
+verification failure rolling back before DNS, and independent tunnel gates
+with DNS union, endpoint firewall cleanup and reconnect.
+Before release, verify a real peer on both OSes: sustained high-rate uploads,
+Wi-Fi/Ethernet handoff, endpoint bypass deletion, missing underlay recovery,
+and helper restart after a forced disconnect. Cross-builds do not validate
+Windows kernel behavior.
 
 ## Helper Version Sync
+
+### macOS menu bar (issue #45)
+
+The macOS tray uses a small Cocoa bridge with its own NSStatusItem and a
+permanently attached NSMenu. AppKit owns click/keyboard menu tracking and
+dismissal; no event monitor, synthesized mouse-down or private Wails handle
+is required. Menu mutations are dispatched to the main queue. Selected
+actions return to a Go goroutine before any helper RPC or shutdown work.
+Windows/Linux continue to use Wails' platform tray. A standalone Cocoa
+integration fixture validates menu persistence, action dispatch and cleanup
+with WIREGUIDE_TEST_TRAY=1; macOS 27 still requires reproduction testing.
+
+The macOS glyph is an NSImage template (issue #46), allowing AppKit to apply
+the correct per-display appearance and inactive emphasis. A separate
+transparent, non-interactive view draws the green connection badge and
+follows the button's appearsDisabled state. Accessibility exposes the
+connection state as text, and menu glyphs retain the existing connected /
+handshake distinction. No private status-window search or guessed icon
+color is required. The Cocoa fixture checks template mode, badge visibility,
+inactive emphasis and click passthrough; physical multi-monitor testing
+remains necessary.
 
 GUI and helper share the same binary (`wireguide` / `wireguide --helper`). On startup, `ensureHelper` pings the helper and compares `AppVersion`:
 
@@ -466,3 +664,95 @@ WireGuide chose wireguard-go for cross-platform support and full control over ne
 ### Why pf anchors instead of modifying main ruleset?
 
 macOS Tahoe's `pfctl -sr` outputs `scrub-anchor` directives that cause syntax errors when re-loaded. Using anchors avoids touching the main ruleset entirely — the `com.apple/*` wildcard evaluates our rules automatically.
+
+
+### Independent review follow-up (2026-10-15)
+
+The [Claude review of 68fdca0](analysis/claude-integration-review-20261015.md)
+found additional omissions; the [disposition](analysis/claude-review-disposition.md)
+records the fixes. Firewall snapshots now use manager lifecycle state rather
+than wgctrl telemetry; a failed stats query cannot erase a live permit. DNS
+intent is loaded before background workers start. Cached wanted transports
+keep the helper alive during retry gaps and are exposed through IPC 1.3 so
+headless recovery can be stopped from the CLI. Legacy connect locks unwind
+on panic. Signal shutdown reserves part of its deadline for parallel best-
+effort firewall/DNS fallback; stalled OS commands can still outlast that cap,
+so recovery journals remain necessary.
+
+PF enforcement is checked by the safety net and restored after an external
+PF disable. Invalid same-boot tokens do not wedge release. DNS permits cannot
+open off-tunnel exceptions through the kill switch on macOS/Windows; Windows
+KS activation and DNS narrowing commit in one transaction. WFP IDs and flags
+are updated only after commit. Mixed DNS diagnostics evaluate default and
+supplemental resolvers separately and retain both leak and incomplete-check
+results. Manual overrides use positive evidence of a network change; missing
+ARP and IPv6 prefix churn do not clear an explicit Off.
+
+## Review follow-up: profile and event ownership (2026-10-15)
+
+IPC 1.4 adds `Tunnel.Delete`. Like rename, deletion executes under the
+helper's `connectMu`: checking the active set and removing the config cannot
+be interleaved by automation or recovery. GUI deletion rejects an active
+transport. CLI deletion explicitly disconnects first and withdraws pending
+recovery intent. It uses a reachable headless helper too. Offline local
+removal is permitted only when the socket/pipe is absent or refuses a
+connection; timeout, permission and protocol failures do not authorize it.
+The GUI setup path upgrades helpers with older protocol minors even when
+the app version string is unchanged. Background recovery requests reopening
+for setup instead of authorizing an upgrade itself.
+
+Config and metadata mutations share the existing `.imports.lock` across
+processes. A metadata update verifies the config inside that lock. Paired
+config/metadata reads use it too; individual atomic snapshots remain cheap
+reads. A lock first created by a Unix root helper belongs to the user profile
+directory's owner. New profiles start with fresh metadata rather than
+inheriting an orphan from an earlier deletion.
+
+IPC event setup has a separate bounded context and an immutable
+connection/handler pair per subscription. Replacement and client shutdown
+close the previous stream. The existing GUI health tick repairs an event-only
+failure while retaining the working control connection. GUI history changes
+are serialized and stop accepting status events once shutdown closes history.
+Shared status and operation error types live in `domain`; `reconnect` depends
+on those types and its consumer-owned manager interface, not the engine package.
+
+
+### Firewall suspension during reconnect
+
+The current helper policy suspends kill switch and DNS protection during tunnel
+reconstruction so endpoint resolution and interface replacement can proceed.
+This creates an unprotected interval, including for other connected tunnels.
+Atomic replacement of an individual backend ruleset does not remove this
+higher-level policy gap. Preserving a default blockade while permitting only
+bootstrap DNS and endpoint UDP requires a separate cross-platform policy change;
+it must preserve multi-tunnel ownership and failure recovery.
+
+
+### Model and adapter boundaries
+
+`internal/automation` owns condition evaluation, legacy rule migration and
+settling. It uses only the standard library. `internal/wifi` owns OS detection
+and monitor lifetime; storage and CLI rule consumers do not import that adapter.
+`internal/version` supplies build identity without the update downloader.
+
+Helper intent persistence, pending restore and startup orchestration live in
+`desired_store.go`, `pending_restore.go` and `restore.go`. Linux and Windows
+network adapters separate DNS and routing in the same platform package.
+
+GUI preferences use optional-field `SettingsPatch` writes under the settings
+file lock. Saving a preference never replaces another writer's automation
+rules. A failed live apply retains saved intent and exposes a retryable error.
+Profile rename/delete return a structured warning if the committed file change
+succeeds but automation migration fails.
+
+The helper retries failed DNS cleanup while retaining its original baseline and
+crash journal under a separate retired-record identity. Failed cleanup does
+not block new connections or let a same-named profile overwrite its predecessor's
+journal. Retired work runs only when no transport is active; failed startup
+recovery also preserves its original baseline. All active macOS global-DNS
+monitors track the same resolver union.
+Linux interface DNS contributions are withdrawn even when siblings remain.
+
+The macOS GUI reservation uses the OS private per-user temporary directory,
+independent of TMPDIR. A new binary first contacts an old reservation when a
+pre-migration binary is still running, including after an in-place bundle update.

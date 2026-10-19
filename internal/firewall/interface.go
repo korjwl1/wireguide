@@ -60,8 +60,16 @@ type FirewallManager interface {
 	// called Enable).
 	DisableEndpointProtection(tunnelInterfaceName string) error
 
-	// EnableDNSProtection blocks DNS (port 53) except to specified servers via WG tunnel.
-	EnableDNSProtection(interfaceName string, dnsServers []string) error
+	// EnableDNSProtection blocks DNS (port 53) except to each entry's
+	// servers through that entry's interface (or normal routing if empty), replacing whatever DNS
+	// rules were installed before. Non-IP entries (search domains) are
+	// skipped. When nothing valid remains — no tunnel with DNS servers is
+	// up — the DNS rules are removed instead, the same state as
+	// DisableDNSProtection: blocking every resolver with no tunnel to
+	// route around it would just break name resolution. While the kill
+	// switch is on, entries without an interface are not installed: an
+	// off-tunnel resolver exception would bypass the kill switch.
+	EnableDNSProtection(allow []DNSAllow) error
 
 	// DisableDNSProtection removes DNS protection rules.
 	DisableDNSProtection() error
@@ -81,4 +89,13 @@ type FirewallManager interface {
 	// state exists. Called once during helper startup, before any tunnel
 	// brings new rules up.
 	RecoverFromCrash() bool
+}
+
+// EnforcementRepairer is implemented by backends whose enforcement can be
+// lost outside WireGuide while the in-memory model still reports it active.
+// RepairEnforcement re-applies the committed model in that case and reports
+// whether it changed anything; it is a no-op while enforcement is intact.
+// The helper's periodic reconciliation calls it before comparing models.
+type EnforcementRepairer interface {
+	RepairEnforcement() (bool, error)
 }

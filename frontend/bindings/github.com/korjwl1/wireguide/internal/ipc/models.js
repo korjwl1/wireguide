@@ -65,6 +65,44 @@ export class LogEntry {
 }
 
 /**
+ * RecoveryWarningPayload reports retained OS cleanup without disabling new connections.
+ */
+export class RecoveryWarningPayload {
+    /**
+     * Creates a new RecoveryWarningPayload instance.
+     * @param {Partial<RecoveryWarningPayload>} [$$source = {}] - The source object to create the RecoveryWarningPayload.
+     */
+    constructor($$source = {}) {
+        if (!("tunnel_name" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["tunnel_name"] = "";
+        }
+        if (!("detail" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["detail"] = "";
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new RecoveryWarningPayload instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {RecoveryWarningPayload}
+     */
+    static createFrom($$source = {}) {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new RecoveryWarningPayload(/** @type {Partial<RecoveryWarningPayload>} */($$parsedSource));
+    }
+}
+
+/**
  * SettingsChangedPayload carries a single applied setting so a running
  * GUI can reflect a change made through another client (the CLI). Only
  * the field for the changed setting is non-nil.

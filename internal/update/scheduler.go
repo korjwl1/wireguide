@@ -49,8 +49,8 @@ const (
 // dispatch onto another goroutine.
 //
 // The notify func is called at most once per discovered version: the
-// scheduler remembers LastSeenVersion in the StateStore and skips
-// re-notifying until a newer version appears.
+// scheduler remembers the last notified version for this process and
+// consults the StateStore for persistent user dismissals.
 type NotifyFunc func(info *UpdateInfo)
 
 // EnabledFunc is consulted on every scheduled tick to decide whether
@@ -64,6 +64,11 @@ type EnabledFunc func() bool
 // Scheduler holds the periodic-poll loop's state. Construct with
 // NewScheduler and call Start exactly once.
 type Scheduler struct {
+	checkGate chan struct{}
+	fetch     func(context.Context, string, string) (*CheckResult, error)
+	// cachedInfo belongs to the serialized check path, never to callers.
+	cachedInfo *UpdateInfo
+
 	store   *StateStore
 	notify  NotifyFunc
 	enabled EnabledFunc
@@ -97,10 +102,12 @@ func NewScheduler(store *StateStore, notify NotifyFunc, enabled EnabledFunc) *Sc
 		enabled = func() bool { return true }
 	}
 	return &Scheduler{
-		store:   store,
-		notify:  notify,
-		enabled: enabled,
-		kick:    make(chan struct{}, 1),
+		store:     store,
+		checkGate: make(chan struct{}, 1),
+		fetch:     CheckForUpdateConditional,
+		notify:    notify,
+		enabled:   enabled,
+		kick:      make(chan struct{}, 1),
 	}
 }
 
@@ -152,7 +159,7 @@ func (s *Scheduler) Kick(force bool) {
 func (s *Scheduler) Latest() *CheckResult {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.last
+	return cloneCheckResult(s.last)
 }
 
 // CheckNow performs a synchronous check, updates persisted state, and
@@ -165,9 +172,7 @@ func (s *Scheduler) Latest() *CheckResult {
 // caller-side cancellation; the http.Client's 10 s timeout still
 // applies, so a hung GitHub doesn't wedge the UI.
 func (s *Scheduler) CheckNow() (*CheckResult, error) {
-	st := s.store.Get()
-	res, err := CheckForUpdateConditional(context.Background(), st.ETag, st.LastModified)
-	s.recordResult(res, err)
+	res, err := s.check(context.Background())
 	if err != nil {
 		return res, err
 	}
@@ -180,11 +185,7 @@ func (s *Scheduler) loop(ctx context.Context) {
 	delay := jitterRange(initialDelayMin, initialDelayMax)
 	slog.Info("update scheduler: first check scheduled", "delay", delay)
 
-	// One reusable timer instead of a fresh time.After each iteration: a
-	// time.After timer isn't collected until it fires, so every Kick or
-	// ctx cancel that beat the timer left a live ~26h timer parked in the
-	// runtime. Start it stopped+drained so the loop-top Reset is always
-	// well-defined (Reset requires a stopped, drained timer).
+	// Reuse one timer for the scheduled delay and early focus/manual kicks.
 	timer := time.NewTimer(0)
 	if !timer.Stop() {
 		<-timer.C
@@ -213,9 +214,10 @@ func (s *Scheduler) loop(ctx context.Context) {
 			continue
 		}
 
-		st := s.store.Get()
-		res, err := CheckForUpdateConditional(ctx, st.ETag, st.LastModified)
-		s.recordResult(res, err)
+		res, err := s.check(ctx)
+		if ctx.Err() != nil {
+			return
+		}
 
 		if err != nil {
 			st2 := s.store.Get()
@@ -235,18 +237,67 @@ func (s *Scheduler) loop(ctx context.Context) {
 	}
 }
 
+// check serializes manual and scheduled fetches so an older response cannot
+// overwrite newer cache validators or persisted error state.
+func (s *Scheduler) check(ctx context.Context) (*CheckResult, error) {
+	select {
+	case s.checkGate <- struct{}{}:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	defer func() { <-s.checkGate }()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	st := s.store.Get()
+	// Validators alone cannot reconstruct an update banner after a restart.
+	// Fetch one complete response per process; later checks retain 304 caching.
+	if s.cachedInfo == nil {
+		st.ETag, st.LastModified = "", ""
+	}
+	res, err := s.fetch(ctx, st.ETag, st.LastModified)
+	if ctx.Err() != nil {
+		return res, ctx.Err()
+	}
+	if err == nil && res != nil {
+		res = cloneCheckResult(res)
+		if res.NotModified && s.cachedInfo != nil {
+			info := *s.cachedInfo
+			res.Info = &info
+		}
+		if res.Info != nil {
+			info := *res.Info
+			s.cachedInfo = &info
+		}
+	}
+	s.recordResult(res, err)
+	return res, err
+}
+
+func cloneCheckResult(res *CheckResult) *CheckResult {
+	if res == nil {
+		return nil
+	}
+	out := *res
+	if res.Info != nil {
+		info := *res.Info
+		out.Info = &info
+	}
+	return &out
+}
+
 // recordResult persists the outcome to the StateStore — ETag/Last-Modified
 // on every successful response (200 or 304), LastSeenVersion on a 200
 // with a newer build, and the error counters on failures.
 func (s *Scheduler) recordResult(res *CheckResult, err error) {
 	s.mu.Lock()
-	s.last = res
+	s.last = cloneCheckResult(res)
 	s.mu.Unlock()
 
 	now := time.Now().Unix()
 
 	if err != nil {
-		_ = s.store.Update(func(st *State) {
+		saveErr := s.store.Update(func(st *State) {
 			st.LastErrorUnix = now
 			st.ConsecutiveErrors++
 			// Cap to avoid integer overflow on long-term offline runs.
@@ -254,10 +305,13 @@ func (s *Scheduler) recordResult(res *CheckResult, err error) {
 				st.ConsecutiveErrors = 1000
 			}
 		})
+		if saveErr != nil {
+			slog.Warn("persisting update check failure", "error", saveErr)
+		}
 		return
 	}
 
-	_ = s.store.Update(func(st *State) {
+	saveErr := s.store.Update(func(st *State) {
 		st.LastCheckUnix = now
 		st.LastErrorUnix = 0
 		st.ConsecutiveErrors = 0
@@ -271,6 +325,9 @@ func (s *Scheduler) recordResult(res *CheckResult, err error) {
 			st.LastSeenVersion = res.Info.Version
 		}
 	})
+	if saveErr != nil {
+		slog.Warn("persisting update check result", "error", saveErr)
+	}
 }
 
 // maybeNotify fires the notify callback at most once per (version, app

@@ -2,62 +2,14 @@
 
 package firewall
 
-// Endpoint loop protection — always-on WFP filters that close the routing
-// loop the bypass /32 host route is meant to prevent.
+// Endpoint loop protection blocks encrypted UDP addressed to a peer when the
+// route sends it through its own tunnel adapter. Filters match UDP, peer IP,
+// peer port when known, and tunnel LUID, leaving the physical adapter unaffected.
 //
-// The bug class this guards against: when a full-tunnel WireGuide install
-// has the /1 split routes in place (0.0.0.0/1 + 128.0.0.0/1 through the
-// wintun adapter) but the bypass /32 host route to the peer endpoint has
-// NOT been installed — or has been installed against a stale/wrong
-// nexthop — WireGuard's own encrypted UDP traffic to the peer endpoint
-// matches a /1 prefix, re-enters the wintun adapter, gets re-encrypted,
-// and goes around again. Userspace wireguard-go on Windows has no fwmark-
-// based loop protection (Linux's wg-quick relies on fwmark policy
-// routing; macOS's bind uses IP_BOUND_IF), so the host route is the only
-// safety net in the default code path.
-//
-// We install BLOCK filters at TWO layers per IP family, matching the
-// same conditions:
-//
-//   protocol      = UDP (17)
-//   remote IP     = peer endpoint /32 or /128
-//   remote port   = peer endpoint port (when known)
-//   local LUID    = the tunnel adapter
-//
-//   - ALE_AUTH_CONNECT_V4 / V6 — per-FLOW classification. Fires once at
-//     the start of a 5-tuple's lifetime; the kernel caches the decision
-//     and subsequent packets bypass this layer entirely. Sufficient when
-//     wireguard-go's first send fires AFTER the filter is installed
-//     (which connect_phases sequences via engine.Start() ordering).
-//   - OUTBOUND_TRANSPORT_V4 / V6 — per-PACKET classification on the
-//     send path. Fires for every datagram, closing the residual race
-//     where the kernel's ALE flow cache locked in a PERMIT before our
-//     BLOCK arrived (typical of a third-party WFP sublayer installed
-//     after ours, or a network-state change that reclassifies the flow).
-//     Cost is slightly higher (per-packet vs once-per-flow) but the cost
-//     applies only to the narrow (UDP + peer endpoint + tunnel LUID)
-//     filter — i.e. only to packets that would already be inside a loop.
-//     Microsoft's own ALE Re-Authorization docs treat this layer as the
-//     correct site for per-packet enforcement that ALE_AUTH_CONNECT
-//     cannot provide.
-//
-// When the routing decision picks the tunnel (loop case) either filter
-// fires and the kernel drops the send, so wireguard-go sees a clean
-// send-error and retries — no exponential traffic amplification. When
-// the routing decision correctly picks the physical adapter (the normal
-// case), the local-LUID condition doesn't match and the filters are
-// inert. We do NOT install a corresponding PERMIT on the physical
-// adapter: that would only be necessary if the kill switch's catch-all
-// is also in force, and the kill switch's own per-tunnel endpoint
-// permit (installTunnelFiltersLocked) already covers that path.
-//
-// Weight 13 — strictly above the kill switch's per-tunnel permits
-// (weight 12) so the block wins even when both feature sets are active
-// on the same connect. Strictly below DNS protection's permits/blocks
-// (weights 14/15), but those match port-53 traffic only and our endpoint
-// port is never 53 in practice, so the relative ordering with DNS is
-// theoretical. Loopback (also weight 13) only matches 127.0.0.0/8 /
-// ::1 — disjoint from any real peer endpoint, no tie.
+// ALE_AUTH_CONNECT enforces flow authorization. OUTBOUND_TRANSPORT checks each
+// datagram, including flows with a previously cached ALE permit. The transport
+// filter also enforces loop blocking for a UDP:53 peer whose ALE classification
+// may match the higher-weight DNS permits. We install both layers per family.
 
 import (
 	"encoding/binary"
@@ -70,8 +22,8 @@ import (
 )
 
 // endpointProtectionWeight sits above weight 12 (kill switch's per-tunnel
-// permits) and below weight 14 (DNS block-all). See the file header for
-// the full ordering rationale.
+// permits). DNS weights apply at ALE; the independent outbound-transport
+// filter remains effective when an ALE DNS permit wins.
 const endpointProtectionWeight uint8 = 13
 
 // EnableEndpointProtection installs always-on routing-loop protection
@@ -100,22 +52,11 @@ func (f *WindowsFirewall) EnableEndpointProtection(tunnelInterfaceName string, e
 	return f.enableEndpointProtectionLocked(tunnelInterfaceName, endpoints)
 }
 
-// enableEndpointProtectionLocked is the lock-held implementation. Used
-// directly by DisableKillSwitch's snapshot-and-rebuild path, where the
-// caller is already inside f.mu.
+// enableEndpointProtectionLocked replaces one interface's filters in a single
+// transaction. Caller holds f.mu; failed replacement preserves the old set.
 func (f *WindowsFirewall) enableEndpointProtectionLocked(tunnelInterfaceName string, endpoints []string) error {
 	if err := f.ensureSession(); err != nil {
 		return fmt.Errorf("endpoint protection: ensureSession: %w", err)
-	}
-
-	// If we already have filters for this tunnel, remove them first so a
-	// reconnect with a different resolved endpoint IP doesn't leak the
-	// old filter forever.
-	if existing := f.endpointProtectionFilterIDs[tunnelInterfaceName]; len(existing) > 0 {
-		if err := f.removeEndpointProtectionFilters(tunnelInterfaceName); err != nil {
-			slog.Warn("endpoint protection: pre-install cleanup failed; continuing",
-				"interface", tunnelInterfaceName, "error", err)
-		}
 	}
 
 	luid, err := resolveInterfaceLUID(tunnelInterfaceName)
@@ -123,56 +64,50 @@ func (f *WindowsFirewall) enableEndpointProtectionLocked(tunnelInterfaceName str
 		return fmt.Errorf("endpoint protection: resolve tunnel LUID: %w", err)
 	}
 
-	if status := fwpmTransactionBegin0(f.sessionHandle); status != 0 {
-		return fmt.Errorf("endpoint protection: FwpmTransactionBegin0: 0x%x", status)
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			fwpmTransactionAbort0(f.sessionHandle)
-		}
-	}()
-
 	var ids []uint64
-	for _, ep := range endpoints {
-		ipStr, portStr, _ := net.SplitHostPort(ep)
-		if ipStr == "" {
-			// "ip:" or malformed → fall back to using the whole string as the IP
-			ipStr = ep
-			portStr = ""
+	err = runWFPTransaction(f.txnOps(), "endpoint-replace", func() error {
+		if err := deleteWFPFilters(f.deleteFilter, f.endpointProtectionFilterIDs[tunnelInterfaceName], "old endpoint"); err != nil {
+			return err
 		}
-		ip := net.ParseIP(ipStr)
-		if ip == nil {
-			slog.Warn("endpoint protection: skipping unparsable endpoint", "endpoint", ep)
-			continue
-		}
-		var port uint16
-		if portStr != "" {
-			p, err := strconv.ParseUint(portStr, 10, 16)
-			if err != nil {
-				slog.Warn("endpoint protection: skipping endpoint with bad port", "endpoint", ep, "error", err)
+		for _, ep := range endpoints {
+			ipStr, portStr, _ := net.SplitHostPort(ep)
+			if ipStr == "" {
+				// "ip:" or malformed → fall back to using the whole string as the IP
+				ipStr = ep
+				portStr = ""
+			}
+			ip := net.ParseIP(ipStr)
+			if ip == nil {
+				slog.Warn("endpoint protection: skipping unparsable endpoint", "endpoint", ep)
 				continue
 			}
-			port = uint16(p)
+			var port uint16
+			if portStr != "" {
+				p, err := strconv.ParseUint(portStr, 10, 16)
+				if err != nil {
+					slog.Warn("endpoint protection: skipping endpoint with bad port", "endpoint", ep, "error", err)
+					continue
+				}
+				port = uint16(p)
+			}
+			filterIDs, err := f.installEndpointBlockFilter(ip, port, luid)
+			if err != nil {
+				return fmt.Errorf("endpoint protection: install filter for %s: %w", ip, err)
+			}
+			ids = append(ids, filterIDs...)
 		}
-		filterIDs, err := f.installEndpointBlockFilter(ip, port, luid)
-		if err != nil {
-			return fmt.Errorf("endpoint protection: install filter for %s: %w", ip, err)
+
+		if len(ids) == 0 {
+			// Every endpoint was unparsable — refuse to commit an empty
+			// transaction; surface to the caller so connectPhases can roll
+			// back the tunnel rather than bring it up unprotected.
+			return fmt.Errorf("endpoint protection: no valid endpoints in %v", endpoints)
 		}
-		ids = append(ids, filterIDs...)
+		return nil
+	})
+	if err != nil {
+		return err
 	}
-
-	if len(ids) == 0 {
-		// Every endpoint was unparsable — refuse to commit an empty
-		// transaction; surface to the caller so connectPhases can roll
-		// back the tunnel rather than bring it up unprotected.
-		return fmt.Errorf("endpoint protection: no valid endpoints in %v", endpoints)
-	}
-
-	if status := fwpmTransactionCommit0(f.sessionHandle); status != 0 {
-		return fmt.Errorf("endpoint protection: FwpmTransactionCommit0: 0x%x", status)
-	}
-	committed = true
 
 	if f.endpointProtectionFilterIDs == nil {
 		f.endpointProtectionFilterIDs = make(map[string][]uint64, 1)
@@ -219,27 +154,11 @@ func (f *WindowsFirewall) removeEndpointProtectionFilters(tunnelInterfaceName st
 	if len(ids) == 0 {
 		return nil
 	}
-	if status := fwpmTransactionBegin0(f.sessionHandle); status != 0 {
-		return fmt.Errorf("endpoint protection: FwpmTransactionBegin0(rm): 0x%x", status)
+	if err := runWFPTransaction(f.txnOps(), "endpoint-remove", func() error {
+		return deleteWFPFilters(f.deleteFilter, ids, "endpoint")
+	}); err != nil {
+		return err
 	}
-	committed := false
-	defer func() {
-		if !committed {
-			fwpmTransactionAbort0(f.sessionHandle)
-		}
-	}()
-	for _, id := range ids {
-		if status := fwpmFilterDeleteById0(f.sessionHandle, id); status != 0 {
-			slog.Warn("endpoint protection: filter delete failed (continuing)",
-				"interface", tunnelInterfaceName,
-				"filter_id", id,
-				"status", fmt.Sprintf("0x%x", status))
-		}
-	}
-	if status := fwpmTransactionCommit0(f.sessionHandle); status != 0 {
-		return fmt.Errorf("endpoint protection: FwpmTransactionCommit0(rm): 0x%x", status)
-	}
-	committed = true
 	delete(f.endpointProtectionFilterIDs, tunnelInterfaceName)
 	delete(f.endpointProtectionState, tunnelInterfaceName)
 	return nil

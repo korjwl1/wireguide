@@ -18,6 +18,15 @@ import (
 // ownerSID is Windows-only and ignored here.
 func Listen(addr string, ownerUID int, ownerSID string) (net.Listener, error) {
 	_ = ownerSID
+	// Never manage a shared system runtime directory: this function chmods
+	// the parent and unlinks the path, which would alter /var/run itself or
+	// orphan a launchd-owned socket sitting directly in it. The launchd path
+	// is served through the launchd package; ipc.Listen is only for sockets
+	// in a directory WireGuide owns (LegacyDarwinSocketPath's subdirectory).
+	switch filepath.Dir(addr) {
+	case "/var/run", "/private/var/run", "/run":
+		return nil, fmt.Errorf("refusing to listen in shared runtime directory %s", filepath.Dir(addr))
+	}
 	// Ensure parent directory exists. On macOS the socket lives in
 	// /var/run/wireguide/ — the helper (root) creates it, and the GUI
 	// (unprivileged user) needs to traverse it to reach the socket.

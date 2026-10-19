@@ -8,11 +8,13 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+
+	"github.com/korjwl1/wireguide/internal/atomicfile"
 )
 
 // State is the persisted update-checker state.
 //
-// Lives alongside settings.json in ConfigDir so it survives app restarts
+// Lives alongside config.json in ConfigDir so it survives app restarts
 // without leaking into the system-wide DataDir owned by the root helper.
 // Only the GUI process reads/writes this file; the helper never touches
 // updates (update notifications are pure UI concerns — keep the root
@@ -90,12 +92,7 @@ func NewStateStore(dir string) (*StateStore, error) {
 func (s *StateStore) Get() State {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	// Copy the slice so the caller cannot mutate our internal one.
-	out := s.state
-	if len(s.state.DismissedVersions) > 0 {
-		out.DismissedVersions = append([]string(nil), s.state.DismissedVersions...)
-	}
-	return out
+	return s.state.clone()
 }
 
 // Update applies the given function to the state under the lock and
@@ -104,8 +101,13 @@ func (s *StateStore) Get() State {
 func (s *StateStore) Update(fn func(*State)) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	previous := s.state.clone()
 	fn(&s.state)
-	return s.save()
+	if err := s.save(); err != nil {
+		s.state = previous
+		return err
+	}
+	return nil
 }
 
 // Dismiss appends version to the dismissed list (idempotent) and persists.
@@ -157,11 +159,7 @@ func (s *StateStore) save() error {
 	if err != nil {
 		return err
 	}
-	tmp := s.path + ".tmp"
-	if err := os.WriteFile(tmp, raw, 0600); err != nil {
-		return err
-	}
-	return os.Rename(tmp, s.path)
+	return atomicfile.WriteFile(s.path, raw, 0600)
 }
 
 // LastCheckTime returns the timestamp of the last successful check as a
@@ -172,4 +170,10 @@ func (s *StateStore) LastCheckTime() time.Time {
 		return time.Time{}
 	}
 	return time.Unix(st.LastCheckUnix, 0)
+}
+
+// clone owns every reference field; extend it when adding slices or maps to State.
+func (state State) clone() State {
+	state.DismissedVersions = append([]string(nil), state.DismissedVersions...)
+	return state
 }

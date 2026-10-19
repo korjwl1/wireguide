@@ -4,8 +4,10 @@ package firewall
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net"
 	"os/exec"
 	"regexp"
@@ -60,13 +62,15 @@ func (f *LinuxFirewall) EnableKillSwitch(interfaceName string, ifaceAddresses []
 	if interfaceName != "" && !validIfaceName.MatchString(interfaceName) {
 		return fmt.Errorf("invalid interface name %q", interfaceName)
 	}
+	previousTunnels, previousAddresses := f.killSwitchTunnels, f.killSwitchAddresses
 	f.killSwitchTunnels = make(map[string][]string)
 	f.killSwitchAddresses = make(map[string][]string)
 	if interfaceName != "" {
 		f.killSwitchTunnels[interfaceName] = append([]string(nil), endpoints...)
 		f.killSwitchAddresses[interfaceName] = append([]string(nil), ifaceAddresses...)
 	}
-	if err := f.applyKillSwitchLocked(false); err != nil {
+	if err := f.applyKillSwitchLocked(f.killSwitchEnabled); err != nil {
+		f.killSwitchTunnels, f.killSwitchAddresses = previousTunnels, previousAddresses
 		return err
 	}
 	f.killSwitchEnabled = true
@@ -169,9 +173,9 @@ table inet %s {
 		forwardRules.String(), prerawRules.String(), fwmarkHex, fwmarkHex)
 
 	if replace {
-		if err := nftFlush(); err != nil && !isNftNotFound(err) {
-			return err
-		}
+		// nft commits a complete batch atomically, retaining the old blockade
+		// if parsing or installation of its replacement fails.
+		rules = "add table inet " + nftTable + "\ndelete table inet " + nftTable + "\n" + rules
 	}
 	if err := nftApply(rules); err != nil {
 		return err
@@ -190,9 +194,15 @@ func (f *LinuxFirewall) AddKillSwitchTunnel(interfaceName string, ifaceAddresses
 	if !validIfaceName.MatchString(interfaceName) {
 		return fmt.Errorf("invalid interface name %q", interfaceName)
 	}
+	previousTunnels, previousAddresses := f.killSwitchTunnels, f.killSwitchAddresses
+	f.killSwitchTunnels, f.killSwitchAddresses = maps.Clone(previousTunnels), maps.Clone(previousAddresses)
 	f.killSwitchTunnels[interfaceName] = append([]string(nil), endpoints...)
 	f.killSwitchAddresses[interfaceName] = append([]string(nil), ifaceAddresses...)
-	return f.applyKillSwitchLocked(true)
+	if err := f.applyKillSwitchLocked(true); err != nil {
+		f.killSwitchTunnels, f.killSwitchAddresses = previousTunnels, previousAddresses
+		return err
+	}
+	return nil
 }
 
 // RemoveKillSwitchTunnel drops only one tunnel's permits and leaves the base
@@ -203,9 +213,15 @@ func (f *LinuxFirewall) RemoveKillSwitchTunnel(interfaceName string) error {
 	if !f.killSwitchEnabled {
 		return nil
 	}
+	previousTunnels, previousAddresses := f.killSwitchTunnels, f.killSwitchAddresses
+	f.killSwitchTunnels, f.killSwitchAddresses = maps.Clone(previousTunnels), maps.Clone(previousAddresses)
 	delete(f.killSwitchTunnels, interfaceName)
 	delete(f.killSwitchAddresses, interfaceName)
-	return f.applyKillSwitchLocked(true)
+	if err := f.applyKillSwitchLocked(true); err != nil {
+		f.killSwitchTunnels, f.killSwitchAddresses = previousTunnels, previousAddresses
+		return err
+	}
+	return nil
 }
 
 // EnableEndpointProtection is a no-op on Linux. The loop class this guards
@@ -221,85 +237,49 @@ func (f *LinuxFirewall) DisableEndpointProtection(string) error { return nil }
 func (f *LinuxFirewall) DisableKillSwitch() error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	// Clear the in-memory flag regardless of the flush outcome: a "table
-	// not found" error means the kill switch is already gone, which is
-	// success for a disable. Leaving killSwitchEnabled=true on that error
-	// (the previous behaviour) made IsKillSwitchEnabled() report a rule
-	// that no longer exists.
+	return f.disableKillSwitchLocked()
+}
+
+func (f *LinuxFirewall) disableKillSwitchLocked() error {
+	if err := nftFlush(); err != nil && !isNftNotFound(err) {
+		return err
+	}
 	f.killSwitchEnabled = false
 	f.killSwitchTunnels = make(map[string][]string)
 	f.killSwitchAddresses = make(map[string][]string)
-	if err := nftFlush(); err != nil {
-		if isNftNotFound(err) {
-			return nil
-		}
-		return err
-	}
 	return nil
 }
 
-func (f *LinuxFirewall) EnableDNSProtection(interfaceName string, dnsServers []string) error {
+func (f *LinuxFirewall) EnableDNSProtection(allow []DNSAllow) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
-	if len(dnsServers) == 0 {
-		return nil
+	allow = normalizeDNSAllow(allow, validIfaceName.MatchString)
+	if len(allow) == 0 {
+		return f.disableDNSProtectionLocked()
 	}
-
-	// Validate interface name before interpolating into nft rules.
-	if !validIfaceName.MatchString(interfaceName) {
-		return fmt.Errorf("invalid interface name %q", interfaceName)
-	}
-
-	// H12: Detect IPv4 vs IPv6 for each DNS server
-	var dnsAllowed []string
-	for _, dns := range dnsServers {
-		if net.ParseIP(dns) == nil {
-			slog.Warn("skipping invalid DNS IP in nft rules", "dns", dns)
-			continue
-		}
-		addrKw := "ip"
-		if strings.Contains(dns, ":") {
-			addrKw = "ip6"
-		}
-		dnsAllowed = append(dnsAllowed,
-			fmt.Sprintf("%s daddr %s tcp dport 53 oif %s accept", addrKw, dns, interfaceName))
-		dnsAllowed = append(dnsAllowed,
-			fmt.Sprintf("%s daddr %s udp dport 53 oif %s accept", addrKw, dns, interfaceName))
-	}
-
-	rules := fmt.Sprintf(`
-table inet %s_dns {
-  chain dns_output {
-    type filter hook output priority -1; policy accept;
-    # Allow DNS to loopback (systemd-resolved stub at 127.0.0.53, local
-    # Pi-hole at 127.0.0.1, etc). Without this, systems using
-    # systemd-resolved would have ALL DNS blocked.
-    oif lo tcp dport 53 accept
-    oif lo udp dport 53 accept
-    %s
-    tcp dport 53 drop
-    udp dport 53 drop
-  }
-}
-`, nftTable, strings.Join(dnsAllowed, "\n    "))
-
-	if err := nftApply(rules); err != nil {
+	if err := nftApply(nftDNSRules(nftTable, allow)); err != nil {
 		return err
 	}
 	f.dnsProtectionEnabled = true
 	return nil
 }
 
-func (f *LinuxFirewall) DisableDNSProtection() error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	// LOW: Log errors from nft delete
+func (f *LinuxFirewall) disableDNSProtectionLocked() error {
 	if out, err := nftDeleteDNSTable(); err != nil {
-		slog.Warn("nft delete dns table failed", "error", err, "output", strings.TrimSpace(string(out)))
+		// "No such file or directory" in the output: already gone.
+		if !isNftNotFound(fmt.Errorf("%v: %s", err, out)) {
+			return fmt.Errorf("nft delete dns table: %w (%s)", err, strings.TrimSpace(string(out)))
+		}
 	}
 	f.dnsProtectionEnabled = false
 	return nil
+}
+
+func (f *LinuxFirewall) DisableDNSProtection() error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.disableDNSProtectionLocked()
 }
 
 func (f *LinuxFirewall) IsKillSwitchEnabled() bool {
@@ -314,27 +294,32 @@ func (f *LinuxFirewall) IsDNSProtectionEnabled() bool {
 	return f.dnsProtectionEnabled
 }
 
-// RecoverFromCrash is a no-op on Linux — nftables rules don't survive a
-// process crash to begin with, since they live in the kernel under our table
-// name and we recreate them on every EnableKillSwitch.
+// nftables tables live in the kernel and survive the creating process.
 func (f *LinuxFirewall) RecoverFromCrash() bool {
-	return false
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err := f.disableKillSwitchLocked(); err != nil {
+		f.killSwitchEnabled = true
+		slog.Warn("recovery: stale kill switch removal failed", "error", err)
+		return false
+	}
+	if err := f.disableDNSProtectionLocked(); err != nil {
+		f.dnsProtectionEnabled = true // retain dirty state so reconciliation retries
+		slog.Warn("recovery: stale DNS table removal failed", "error", err)
+		return false
+	}
+	return true
 }
 
 func (f *LinuxFirewall) Cleanup() error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.killSwitchEnabled = false
-	f.dnsProtectionEnabled = false
-	flushErr := nftFlush()
-	// Also clean up DNS table.
-	if out, err := nftDeleteDNSTable(); err != nil {
-		slog.Warn("nft delete dns table failed during cleanup", "error", err, "output", strings.TrimSpace(string(out)))
-	}
-	return flushErr
+	return errors.Join(f.disableKillSwitchLocked(), f.disableDNSProtectionLocked())
 }
 
-func nftApply(rules string) error {
+var nftApply = applyNftRules
+
+func applyNftRules(rules string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), nftCmdTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "nft", "-f", "-")
@@ -351,14 +336,16 @@ func nftApply(rules string) error {
 
 // nftDeleteDNSTable removes the wireguide_dns nftables table with a bounded
 // timeout. Returns the same (output, error) shape callers expect.
-func nftDeleteDNSTable() ([]byte, error) {
+var nftDeleteDNSTable = func() ([]byte, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), nftCmdTimeout)
 	defer cancel()
 	return exec.CommandContext(ctx, "nft", "delete", "table", "inet", nftTable+"_dns").CombinedOutput()
 }
 
 // nftFlush deletes the main wireguide nftables table and returns any error.
-func nftFlush() error {
+var nftFlush = flushNftTable
+
+func flushNftTable() error {
 	ctx, cancel := context.WithTimeout(context.Background(), nftCmdTimeout)
 	defer cancel()
 	if out, err := exec.CommandContext(ctx, "nft", "delete", "table", "inet", nftTable).CombinedOutput(); err != nil {

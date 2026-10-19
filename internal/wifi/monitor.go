@@ -18,6 +18,8 @@ type SSIDChangedFunc func(oldSSID, newSSID string)
 // setter here, but no caller ever read m.rules; it was set once with
 // nil and never used. Removed to simplify the API.
 type Monitor struct {
+	lifecycleMu     sync.Mutex
+	stopped         bool
 	mu              sync.Mutex
 	onChanged       SSIDChangedFunc
 	lastSSID        string
@@ -57,12 +59,15 @@ func (m *Monitor) LastSSID() string {
 // via Wails. The helper relies on the GUI's ReportExternalSSID anyway
 // when the GUI is connected; the 5 s poll is just a fallback.
 func (m *Monitor) Start() {
+	m.lifecycleMu.Lock()
+	defer m.lifecycleMu.Unlock()
 	m.mu.Lock()
 	if m.running {
 		m.mu.Unlock()
 		return
 	}
 	m.running = true
+	m.stopped = false
 	m.stopCh = make(chan struct{})
 	m.mu.Unlock()
 
@@ -109,19 +114,26 @@ func (m *Monitor) Start() {
 
 // checkNow forces an immediate SSID re-read outside the 5s tick. Used by the
 // Linux NetworkManager DBus watcher.
-func (m *Monitor) checkNow() {
-	current := CurrentSSID()
+func (m *Monitor) checkNow() { m.publishSSID(CurrentSSID(), "WiFi SSID changed") }
+
+// Add and Stop's lifecycle fence share mu, so Wait cannot miss a callback.
+func (m *Monitor) publishSSID(current, message string) {
 	m.mu.Lock()
-	if current == m.lastSSID {
+	if m.stopped || current == m.lastSSID {
 		m.mu.Unlock()
 		return
 	}
 	old := m.lastSSID
 	m.lastSSID = current
+	handler := m.onChanged
+	if handler != nil {
+		m.wg.Add(1)
+	}
 	m.mu.Unlock()
-	slog.Info("WiFi SSID changed (NM event)", "from", old, "to", current)
-	if m.onChanged != nil {
-		m.onChanged(old, current)
+	slog.Info(message, "from", old, "to", current)
+	if handler != nil {
+		defer m.wg.Done()
+		handler(old, current)
 	}
 }
 
@@ -130,13 +142,14 @@ func (m *Monitor) checkNow() {
 // helper begins teardown can dereference the helper's userTunnelStore /
 // manager fields after they've been niled.
 func (m *Monitor) Stop() {
+	m.lifecycleMu.Lock()
+	defer m.lifecycleMu.Unlock()
 	m.mu.Lock()
-	if !m.running {
-		m.mu.Unlock()
-		return
+	m.stopped = true
+	if m.running {
+		m.running = false
+		close(m.stopCh)
 	}
-	m.running = false
-	close(m.stopCh)
 	stopDBus := m.stopDBusWatcher
 	m.stopDBusWatcher = nil
 	m.mu.Unlock()
@@ -150,18 +163,7 @@ func (m *Monitor) Stop() {
 // on macOS, which holds Location Services permission) provides the current
 // SSID. If it differs from the last known value, onChanged is triggered.
 func (m *Monitor) ReportExternalSSID(ssid string) {
-	m.mu.Lock()
-	if ssid == m.lastSSID {
-		m.mu.Unlock()
-		return
-	}
-	old := m.lastSSID
-	m.lastSSID = ssid
-	m.mu.Unlock()
-	slog.Info("WiFi SSID updated via GUI report", "from", old, "to", ssid)
-	if m.onChanged != nil {
-		m.onChanged(old, ssid)
-	}
+	m.publishSSID(ssid, "WiFi SSID updated via GUI report")
 }
 
 func (m *Monitor) poll(interval time.Duration) {
@@ -186,19 +188,7 @@ func (m *Monitor) poll(interval time.Duration) {
 		case <-m.stopCh:
 			return
 		case <-ticker.C:
-			current := CurrentSSID()
-			m.mu.Lock()
-			if current != m.lastSSID {
-				slog.Info("WiFi SSID changed", "from", m.lastSSID, "to", current)
-				old := m.lastSSID
-				m.lastSSID = current
-				m.mu.Unlock()
-				if m.onChanged != nil {
-					m.onChanged(old, current)
-				}
-			} else {
-				m.mu.Unlock()
-			}
+			m.checkNow()
 		}
 	}
 }

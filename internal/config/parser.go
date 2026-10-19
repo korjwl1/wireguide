@@ -3,9 +3,12 @@ package config
 import (
 	"bufio"
 	"fmt"
+	"io"
 	"log/slog"
 	"strconv"
 	"strings"
+
+	"github.com/korjwl1/wireguide/internal/domain"
 )
 
 // MaxConfigSize is the hard cap on a single .conf file. A legitimate
@@ -16,11 +19,20 @@ import (
 const MaxConfigSize = 1 << 20 // 1 MiB
 
 // MaxAllowedIPsPerPeer is the per-peer cap on AllowedIPs entries. A
-// realistic peer has 1-10 CIDRs; 10K entries is far beyond legitimate
-// use but still lets a power user spell out every /32 in a /16 (65K
-// would be too permissive). Caps the O(N) work the validator does
-// per peer.
+// typical peer has 1-10 CIDRs; 10K leaves room for generated split-tunnel
+// policies while bounding validation and route installation work.
 const MaxAllowedIPsPerPeer = 10000
+
+// ParseReader reads at most MaxConfigSize+1 bytes before parsing. Files and
+// other streams must be bounded while reading, before allocating their entire
+// contents; Parse's string-size check alone cannot enforce that.
+func ParseReader(r io.Reader) (*WireGuardConfig, error) {
+	data, err := io.ReadAll(io.LimitReader(r, MaxConfigSize+1))
+	if err != nil {
+		return nil, err
+	}
+	return Parse(string(data))
+}
 
 // Parse parses a WireGuard .conf file content into a WireGuardConfig.
 func Parse(content string) (*WireGuardConfig, error) {
@@ -42,7 +54,7 @@ func Parse(content string) (*WireGuardConfig, error) {
 	// long AllowedIPs lists — legitimate when a peer covers a lot of
 	// /32 routes. Bump to 1 MiB; the file as a whole is already
 	// bounded by the config-import filesize check.
-	scanner.Buffer(make([]byte, 0, 64*1024), 1<<20)
+	scanner.Buffer(make([]byte, 0, min(len(content)+1, 4096)), MaxConfigSize)
 	lineNum := 0
 
 	for scanner.Scan() {
@@ -55,6 +67,9 @@ func Parse(content string) (*WireGuardConfig, error) {
 		if strings.ContainsRune(line, 0) {
 			return nil, fmt.Errorf("line %d: NUL byte in value", lineNum)
 		}
+
+		line, _, _ = strings.Cut(line, "#")
+		line = strings.TrimSpace(line)
 
 		// Skip empty lines and comments
 		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, ";") {
@@ -78,7 +93,7 @@ func Parse(content string) (*WireGuardConfig, error) {
 		// Key = Value pairs
 		parts := strings.SplitN(line, "=", 2)
 		if len(parts) != 2 {
-			return nil, fmt.Errorf("line %d: invalid syntax: %q", lineNum, line)
+			return nil, fmt.Errorf("line %d: expected key = value", lineNum)
 		}
 		key := strings.TrimSpace(parts[0])
 		value := strings.TrimSpace(parts[1])
@@ -90,13 +105,13 @@ func Parse(content string) (*WireGuardConfig, error) {
 			}
 		case "peer":
 			if currentPeer == nil {
-				return nil, fmt.Errorf("line %d: key %q outside of section", lineNum, key)
+				return nil, fmt.Errorf("line %d: key outside of section", lineNum)
 			}
 			if err := parsePeerKey(currentPeer, key, value, lineNum); err != nil {
 				return nil, err
 			}
 		default:
-			return nil, fmt.Errorf("line %d: key %q outside of any section", lineNum, key)
+			return nil, fmt.Errorf("line %d: key outside of any section", lineNum)
 		}
 	}
 
@@ -148,10 +163,8 @@ func parseInterfaceKey(iface *InterfaceConfig, key, value string, lineNum int) e
 		iface.PostDown = appendScriptLine(iface.PostDown, value)
 	default:
 		slog.Warn("ignoring unknown [Interface] key", "line", lineNum, "key", key)
-		if iface.ExtraKeys == nil {
-			iface.ExtraKeys = make(map[string]string)
-		}
-		iface.ExtraKeys[key] = value
+
+		iface.ExtraEntries = append(iface.ExtraEntries, domain.ConfigKey{Key: key, Value: value})
 	}
 	return nil
 }
@@ -180,16 +193,14 @@ func parsePeerKey(peer *PeerConfig, key, value string, lineNum int) error {
 		peer.PersistentKeepalive = n
 	default:
 		slog.Warn("ignoring unknown [Peer] key", "line", lineNum, "key", key)
-		if peer.ExtraKeys == nil {
-			peer.ExtraKeys = make(map[string]string)
-		}
-		peer.ExtraKeys[key] = value
+
+		peer.ExtraEntries = append(peer.ExtraEntries, domain.ConfigKey{Key: key, Value: value})
 	}
 	return nil
 }
 
 // Serialize converts a WireGuardConfig back to .conf file format.
-// Multiple Pre/PostUp/Down commands (joined with " ; " internally) are
+// Multiple Pre/PostUp/Down commands (joined with an internal NUL sentinel) are
 // written as separate lines, matching wg-quick's multi-line convention.
 func Serialize(cfg *WireGuardConfig) string {
 	var b strings.Builder
@@ -218,9 +229,7 @@ func Serialize(cfg *WireGuardConfig) string {
 	writeScriptLines(&b, "PostUp", cfg.Interface.PostUp)
 	writeScriptLines(&b, "PreDown", cfg.Interface.PreDown)
 	writeScriptLines(&b, "PostDown", cfg.Interface.PostDown)
-	for k, v := range cfg.Interface.ExtraKeys {
-		b.WriteString(k + " = " + v + "\n")
-	}
+	writeExtraEntries(&b, cfg.Interface.ExtraEntries)
 
 	for _, peer := range cfg.Peers {
 		b.WriteString("\n[Peer]\n")
@@ -237,9 +246,7 @@ func Serialize(cfg *WireGuardConfig) string {
 		if peer.PersistentKeepalive > 0 {
 			b.WriteString("PersistentKeepalive = " + strconv.Itoa(peer.PersistentKeepalive) + "\n")
 		}
-		for k, v := range peer.ExtraKeys {
-			b.WriteString(k + " = " + v + "\n")
-		}
+		writeExtraEntries(&b, peer.ExtraEntries)
 	}
 
 	return b.String()
@@ -281,4 +288,11 @@ func splitAndTrim(s string) []string {
 		}
 	}
 	return result
+}
+
+// writeExtraEntries preserves unknown fields and repeated entries verbatim.
+func writeExtraEntries(b *strings.Builder, entries []domain.ConfigKey) {
+	for _, entry := range entries {
+		b.WriteString(entry.Key + " = " + entry.Value + "\n")
+	}
 }

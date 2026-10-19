@@ -16,8 +16,9 @@ import (
 // specific network the machine is on. "" when it can't be determined.
 //
 // Two steps, both unprivileged and locale-independent (LC_ALL=C):
-//   route -n get default   → the gateway IP
-//   arp -n <gatewayIP>      → the gateway's MAC in the ARP cache
+//
+//	route -n get default   → the gateway IP
+//	arp -n <gatewayIP>      → the gateway's MAC in the ARP cache
 func GatewayMAC() string {
 	gw := defaultGatewayIP()
 	if gw == "" {
@@ -70,4 +71,3 @@ func parseARPMAC(out string) string {
 	}
 	return normalizeMAC(m)
 }
-
