@@ -32,7 +32,7 @@ func connectedStatusIndicators(status domain.ConnectionStatus) ([]string, map[st
 }
 
 type connectionIconImages struct {
-	base, connected, overlay []byte
+	base, connected []byte
 }
 
 func buildConnectionIconImages(source []byte) (connectionIconImages, error) {
@@ -51,14 +51,11 @@ func buildConnectionIconImages(source []byte) (connectionIconImages, error) {
 	if result.base, err = encode(img); err != nil {
 		return result, err
 	}
-	paintConnectionDot(img, 211, 211, 30, 4)
+	paintConnectionDot(img, 44, 212, 22, 3)
 	if result.connected, err = encode(img); err != nil {
 		return result, err
 	}
-	overlay := image.NewNRGBA(image.Rect(0, 0, 64, 64))
-	paintConnectionDot(overlay, 32, 32, 23, 4)
-	result.overlay, err = encode(overlay)
-	return result, err
+	return result, nil
 }
 
 // The outline keeps the green visible against the red tile and either shell

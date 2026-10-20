@@ -184,21 +184,14 @@ func TestConnectionIconRenderingPreservesBaseOutsideBadge(t *testing.T) {
 	}
 	for y := range 256 {
 		for x := range 256 {
-			if math.Hypot(float64(x)+0.5-211, float64(y)+0.5-211) > 35 && base.At(x, y) != connected.At(x, y) {
+			if math.Hypot(float64(x)+0.5-44, float64(y)+0.5-212) > 26 && base.At(x, y) != connected.At(x, y) {
 				t.Fatalf("base icon changed outside badge at %d,%d", x, y)
 			}
 		}
 	}
 	wantGreen := color.NRGBA{R: 52, G: 199, B: 89, A: 255}
-	if color.NRGBAModel.Convert(connected.At(211, 211)) != wantGreen {
+	if color.NRGBAModel.Convert(connected.At(44, 212)) != wantGreen {
 		t.Fatal("connection dot is not the tray's green")
-	}
-	overlay, err := png.Decode(bytes.NewReader(icons.overlay))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, _, _, alpha := overlay.At(0, 0).RGBA(); alpha != 0 {
-		t.Fatal("taskbar overlay background is not transparent")
 	}
 	if dir := os.Getenv("WIREGUIDE_TEST_ICON_EVIDENCE"); dir != "" {
 		if err := os.WriteFile(dir+"/application-connected.png", icons.connected, 0600); err != nil {
@@ -212,6 +205,6 @@ func BenchmarkPaintConnectionDot(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for range b.N {
-		paintConnectionDot(img, 211, 211, 30, 4)
+		paintConnectionDot(img, 44, 212, 22, 3)
 	}
 }
