@@ -16,8 +16,8 @@ int main(int argc, const char **argv) {
                 NSBitmapImageRep *bitmap = [NSBitmapImageRep imageRepWithData:[[NSApp applicationIconImage] TIFFRepresentation]];
                 // AppKit rasterizes the app image at the display's backing
                 // scale (512 pixels on this Retina Mac for a 256px source).
-                NSInteger x = 211 * bitmap.pixelsWide / source.pixelsWide;
-                NSInteger y = 211 * bitmap.pixelsHigh / source.pixelsHigh;
+                NSInteger x = 44 * bitmap.pixelsWide / source.pixelsWide;
+                NSInteger y = 212 * bitmap.pixelsHigh / source.pixelsHigh;
                 NSColor *dot = [[bitmap colorAtX:x y:y] colorUsingColorSpace:[NSColorSpace deviceRGBColorSpace]];
                 // Icon Services also converts the color profile. The Go
                 // test checks exact source RGB; here verify displayed green.
