@@ -516,9 +516,7 @@ Wi-Fi/Ethernet handoff, endpoint bypass deletion, missing underlay recovery,
 and helper restart after a forced disconnect. Cross-builds do not validate
 Windows kernel behavior.
 
-## Helper Version Sync
-
-### macOS menu bar (issue #45)
+## macOS Menu Bar (issues #45, #46)
 
 The macOS tray uses a small Cocoa bridge with its own NSStatusItem and a
 permanently attached NSMenu. AppKit owns click/keyboard menu tracking and
@@ -538,6 +536,14 @@ handshake distinction. No private status-window search or guessed icon
 color is required. The Cocoa fixture checks template mode, badge visibility,
 inactive emphasis and click passthrough; physical multi-monitor testing
 remains necessary.
+
+The glyph comes from Wails' `SystrayMacTemplate`, which carries a faint
+rounded-square outline (alpha 7–26) around the W. `trayGlyph` crops the canvas
+first, then clears everything outside the W's opaque body plus a 2px margin
+and scales the W to full alpha. Keeping that outline in a template image is
+what drew the low-opacity box around the icon in #45.
+
+## Helper Version Sync
 
 GUI and helper share the same binary (`wireguide` / `wireguide --helper`). On startup, `ensureHelper` pings the helper and compares `AppVersion`:
 

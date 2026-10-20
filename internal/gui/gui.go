@@ -146,11 +146,11 @@ func Run(assetsHandler http.Handler, dataDir string) error {
 			ApplicationShouldTerminateAfterLastWindowClosed: false,
 		},
 		Windows: application.WindowsOptions{
-			WndProcInterceptor: connectionIconMessages(func() {
+			WndProcInterceptor: sessionEndMessages(connectionIconMessages(func() {
 				if connectionIndicator != nil {
 					connectionIndicator.Refresh()
 				}
-			}),
+			})),
 		},
 	})
 	tunnelService.SetApp(app)

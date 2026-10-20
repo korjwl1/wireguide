@@ -139,6 +139,9 @@ Restart source differs by platform: on macOS launchd restarts a crashed
 helper (`KeepAlive`), so restore runs on startup subject to the boot-time
 check. On Windows/Linux nothing restarts the helper but the GUI's background
 recovery, which passes `--restore-desired`; any other start clears the file.
+(Superseded in #54: background recovery now only reconnects and asks the user
+to reopen the app, so it never spawns a helper and `--restore-desired` is not
+passed. A crashed helper on Windows/Linux comes back as a fresh start.)
 Boot time alone can't gate Windows: a Fast Startup shutdown keeps it.
 On Windows/Linux an in-app update is also a fresh start, so tunnels don't
 carry across it there (unchanged from before this branch).
