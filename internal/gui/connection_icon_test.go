@@ -184,7 +184,7 @@ func TestConnectionIconRenderingPreservesBaseOutsideBadge(t *testing.T) {
 	}
 	for y := range 256 {
 		for x := range 256 {
-			if math.Hypot(float64(x)+0.5-44, float64(y)+0.5-212) > 26 && base.At(x, y) != connected.At(x, y) {
+			if math.Hypot(float64(x)+0.5-44, float64(y)+0.5-212) > 30 && base.At(x, y) != connected.At(x, y) {
 				t.Fatalf("base icon changed outside badge at %d,%d", x, y)
 			}
 		}
@@ -192,6 +192,13 @@ func TestConnectionIconRenderingPreservesBaseOutsideBadge(t *testing.T) {
 	wantGreen := color.NRGBA{R: 52, G: 199, B: 89, A: 255}
 	if color.NRGBAModel.Convert(connected.At(44, 212)) != wantGreen {
 		t.Fatal("connection dot is not the tray's green")
+	}
+	for _, img := range []image.Image{base, connected} {
+		for _, corner := range []image.Point{{0, 0}, {255, 0}, {0, 255}, {255, 255}} {
+			if _, _, _, alpha := img.At(corner.X, corner.Y).RGBA(); alpha != 0 {
+				t.Fatal("application icon lost its rounded transparent corners")
+			}
+		}
 	}
 	if dir := os.Getenv("WIREGUIDE_TEST_ICON_EVIDENCE"); dir != "" {
 		if err := os.WriteFile(dir+"/application-connected.png", icons.connected, 0600); err != nil {
@@ -205,6 +212,6 @@ func BenchmarkPaintConnectionDot(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for range b.N {
-		paintConnectionDot(img, 44, 212, 22, 3)
+		paintConnectionDot(img, 44, 212, 26, 3)
 	}
 }

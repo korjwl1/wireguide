@@ -43,6 +43,8 @@ func buildConnectionIconImages(source []byte) (connectionIconImages, error) {
 	}
 	img := image.NewNRGBA(image.Rect(0, 0, 256, 256))
 	draw.CatmullRom.Scale(img, img.Bounds(), src, src.Bounds(), draw.Src, nil)
+	// Match the rounded alpha mask of the packaged Windows icon and tray.
+	applyRoundedCorners(img, 56)
 	encode := func(img image.Image) ([]byte, error) {
 		var buf bytes.Buffer
 		err := png.Encode(&buf, img)
@@ -51,7 +53,7 @@ func buildConnectionIconImages(source []byte) (connectionIconImages, error) {
 	if result.base, err = encode(img); err != nil {
 		return result, err
 	}
-	paintConnectionDot(img, 44, 212, 22, 3)
+	paintConnectionDot(img, 44, 212, 26, 3)
 	if result.connected, err = encode(img); err != nil {
 		return result, err
 	}
