@@ -60,15 +60,30 @@ func TestWindowsNativeListenPortRebind(t *testing.T) {
 	if engine.SocketPinV4 == 0 {
 		t.Fatal("the native IPv4 socket was not pinned to an underlay")
 	}
-	query := func() {
+	query := func(stage string) {
 		t.Helper()
-		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cancel()
 		r := &net.Resolver{PreferGo: true, Dial: func(ctx context.Context, _, _ string) (net.Conn, error) {
 			return (&net.Dialer{}).DialContext(ctx, "udp4", net.JoinHostPort(servers[0], "53"))
 		}}
-		if _, err := r.LookupHost(ctx, "example.com"); err != nil {
-			t.Fatal("DNS traffic through the live tunnel failed:", err)
+		// Adapter address/route readiness and the remote peer handshake may
+		// lag Connect or a socket rebind. Require working traffic within a
+		// bounded interval rather than failing on the first transient route.
+		started := time.Now()
+		for {
+			attempt, stop := context.WithTimeout(ctx, 3*time.Second)
+			_, err := r.LookupHost(attempt, "example.com")
+			stop()
+			if err == nil {
+				t.Logf("%s: tunnel DNS responded after %s", stage, time.Since(started))
+				return
+			}
+			select {
+			case <-ctx.Done():
+				t.Fatalf("%s: DNS traffic through the live tunnel failed: %v", stage, err)
+			case <-time.After(250 * time.Millisecond):
+			}
 		}
 	}
 	port := func() string {
@@ -85,7 +100,7 @@ func TestWindowsNativeListenPortRebind(t *testing.T) {
 		t.Fatal("the device did not report its listen port")
 		return ""
 	}
-	query()
+	query("before rebind")
 	before := port()
 	if err := engine.wgDevice.IpcSet("listen_port=0\n"); err != nil {
 		t.Fatal(err)
@@ -94,7 +109,7 @@ func TestWindowsNativeListenPortRebind(t *testing.T) {
 	if after == "0" || after == before {
 		t.Fatalf("listen port did not change: %s -> %s", before, after)
 	}
-	query()
+	query("after rebind")
 	t.Logf("native pinned socket rebind %s -> %s retained working tunnel traffic", before, after)
 	started := time.Now()
 	if err := m.DisconnectTunnel(cfg.Name); err != nil {
