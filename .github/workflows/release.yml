@@ -32,14 +32,16 @@ jobs:
       - uses: actions/checkout@v4
       - name: Compare version files with the tag
         run: |
-          want="${GITHUB_REF_NAME#v}"
-          want="${want%%-*}"
+          tag="${GITHUB_REF_NAME#v}"
+          # NSIS and Info.plist versions are numeric only; the app keeps
+          # any pre-release suffix.
+          want="${tag%%-*}"
           nsis=$(sed -n 's/.*define INFO_PRODUCTVERSION "\([^"]*\)".*/\1/p' build/windows/nsis/wails_tools.nsh | head -1)
           plist=$(grep -A1 '<key>CFBundleShortVersionString</key>' build/darwin/Info.plist | sed -n 's/.*<string>\(.*\)<\/string>.*/\1/p')
-          app=$(sed -n 's/^[[:space:]]*currentVersion *= *"\([^"]*\)".*/\1/p' internal/update/checker.go)
-          echo "tag=$want nsis=$nsis plist=$plist app=$app"
-          if [ "$nsis" != "$want" ] || [ "$plist" != "$want" ] || [ "$app" != "$want" ]; then
-            echo "::error::wails_tools.nsh, Info.plist and checker.go must all say $want"
+          app=$(sed -n 's/^const Current *= *"\([^"]*\)".*/\1/p' internal/version/version.go)
+          echo "tag=$tag nsis=$nsis plist=$plist app=$app"
+          if [ "$nsis" != "$want" ] || [ "$plist" != "$want" ] || [ "$app" != "$tag" ]; then
+            echo "::error::wails_tools.nsh and Info.plist must say $want, internal/version/version.go must say $tag"
             exit 1
           fi
 
