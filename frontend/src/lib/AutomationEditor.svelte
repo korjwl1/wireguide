@@ -365,7 +365,7 @@
           <h3>{$t('automation.title')}</h3>
           <p class="am-sub">{tunnelName}</p>
         </div>
-        <button class="am-close" on:click={close} aria-label="Close"><Icon name="x" size={16} strokeWidth={2} /></button>
+        <button class="am-close" on:click={close} aria-label={$t('settings.close')}><Icon name="x" size={16} strokeWidth={2} /></button>
       </div>
       <p class="am-hint">{$t('automation.hint')}</p>
 
@@ -432,7 +432,7 @@
               {:else}
                 <span class="am-val am-val-none">{$t('automation.cond_none_desc')}</span>
               {/if}
-              <button class="am-remove" on:click={() => removeRule(i)} aria-label="remove rule"><Icon name="x" size={12} strokeWidth={2} /></button>
+              <button class="am-remove" on:click={() => removeRule(i)} aria-label={$t('automation.remove_rule')}><Icon name="x" size={12} strokeWidth={2} /></button>
             </div>
           {/each}
         {/if}

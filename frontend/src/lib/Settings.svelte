@@ -509,7 +509,7 @@
                       <span class="pill-dot"></span>
                       {aboutUpdating ? $t('update.updating') : $t('update.update_now')}
                     </button>
-                  {:else}
+                  {:else if updateState?.last_check_unix && updateState.last_seen_version === appVersion && !aboutChecking && !aboutCheckResult}
                     <span class="pill pill-ok">
                       <Icon name="check" size={11} strokeWidth={2.5} />
                       {$t('settings.up_to_date')}
@@ -559,7 +559,6 @@
               <button class="link-btn" on:click={() => TunnelService.OpenURL('https://github.com/korjwl1/wireguide/blob/main/LICENSE')}>{$t('settings.about_license')}</button>
             </div>
 
-            <p class="about-credits-line">{$t('settings.about_credits')}</p>
           </div>
         {/if}
       </div>
@@ -1035,12 +1034,6 @@
   .link-btn:disabled { opacity: 0.5; cursor: wait; text-decoration: none; }
   .link-btn:focus, .link-btn:focus-visible { outline: none; }
 
-  /* Quiet credit line at the very bottom of the About tab. */
-  .about-credits-line {
-    margin: 4px 0 0;
-    font: 11px/15px var(--font-sans);
-    color: var(--text-muted);
-  }
 
   /* ========== Modal footer — credits row + close button on one line ==========
      The credit info shows in every tab now (not just About) — persistent
