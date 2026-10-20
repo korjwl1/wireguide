@@ -25,13 +25,21 @@ func askHelperRetry(cause error) bool {
 	const idRetry = 4 // IDRETRY — not exported by x/sys/windows
 	const style = windows.MB_RETRYCANCEL | windows.MB_ICONWARNING |
 		windows.MB_SETFOREGROUND | windows.MB_TOPMOST
-	msg := "WireGuide needs its helper service to manage VPN connections.\n\n" +
-		"Please grant administrator access when prompted."
+	msg := "The VPN service could not be started.\n\nAllow administrator access when prompted, then select Retry."
+	detailsLabel := "Details: "
+	switch preferredGUILanguage() {
+	case "ko":
+		msg = "VPN 서비스를 시작하지 못했습니다.\n\n관리자 권한 요청을 허용한 뒤 ‘다시 시도’를 선택하세요."
+		detailsLabel = "세부 정보: "
+	case "ja":
+		msg = "VPN サービスを起動できませんでした。\n\n管理者権限を許可してから「再試行」を選択してください。"
+		detailsLabel = "詳細: "
+	}
 	if d := strings.TrimSpace(detail); d != "" {
 		if r := []rune(d); len(r) > 400 {
 			d = "…" + string(r[len(r)-400:])
 		}
-		msg += "\n\nDetails: " + d
+		msg += "\n\n" + detailsLabel + d
 	}
 	text, err := windows.UTF16PtrFromString(msg)
 	if err != nil {

@@ -83,7 +83,7 @@
       placeholder={$t('tunnel.search')}
       bind:value={search} />
     {#if search}
-      <button class="search-clear" on:click={() => search = ''} aria-label="Clear search">
+      <button class="search-clear" on:click={() => search = ''} aria-label={$t('tunnel.clear_search')}>
         <Icon name="x" size={11} strokeWidth={2.5} />
       </button>
     {/if}

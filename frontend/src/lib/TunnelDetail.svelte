@@ -416,7 +416,7 @@
             />
           {:else}
             <h2 class="hero-name" on:dblclick={startRename} title={$t('tunnel.rename_hint')}>{$selectedTunnel.name}</h2>
-            <button class="btn-rename" on:click={startRename} title="Rename">
+            <button class="btn-rename" on:click={startRename} title={$t('tunnel.rename')}>
               <Icon name="pencil" size={12} strokeWidth={1.75} />
             </button>
           {/if}
