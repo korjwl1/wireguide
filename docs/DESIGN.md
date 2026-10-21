@@ -234,15 +234,19 @@ This is the same approach wg-quick uses (`wg show <iface> endpoints` before `rou
 
 ### DNS
 
-DNS is applied to **every** network service (`networksetup -listallnetworkservices`), not just the primary one. macOS can switch primary between Wi-Fi and Ethernet mid-session.
+Global DNS is applied to network services (`networksetup -listallnetworkservices`), not just the primary one. macOS can switch primary between Wi-Fi and Ethernet mid-session. Split DNS instead uses supplemental resolvers for the configured match domains.
 
-Original DNS per service is saved in memory, restored on disconnect. For crash recovery (no memory), `ResetDNSToSystemDefault()` clears to DHCP defaults.
+The original DNS/search preferences are checkpointed before the first OS
+write and persisted for crash recovery. Global-DNS tunnels share the original
+baseline, so later tunnels do not capture another tunnel's settings as the
+user's preferences. Normal disconnect and crash cleanup restore that exact
+baseline; failed cleanup keeps its journal for retry.
 
 **Post-write verification**: after applying DNS, we read back to confirm at least one service accepted the change. macOS can silently drop DNS changes (MDM profiles, permission issues).
 
 ### Routes
 
-**Split tunnel**: `0.0.0.0/1` + `128.0.0.0/1` via utunN (wg-quick approach).
+**IPv4 full tunnel**: `0.0.0.0/1` + `128.0.0.0/1` via utunN (wg-quick approach). Split tunnels install their configured narrower AllowedIPs routes.
 
 **Endpoint bypass**: host routes for each peer endpoint via the upstream gateway. This prevents encrypted WG packets from looping through the tunnel.
 
@@ -278,7 +282,7 @@ Per-platform backends, all driven by the same `Firewall.SetKillSwitch` IPC metho
 
 ### macOS pf
 
-Rules are loaded into the `com.apple/wireguide` anchor (slash, not dot — pf's `*` wildcard doesn't cross the `/` path separator, so a dot-named anchor would never match the system wildcard). macOS ships with `anchor "com.apple/*" all` in pf.conf, so our anchor is automatically evaluated — **we never modify the main ruleset**.
+Rules are loaded into the `com.apple/wireguide` anchor (slash, not dot — pf's `*` wildcard doesn't cross the `/` path separator, so a dot-named anchor would never match the system wildcard). macOS ships with `anchor "com.apple/*" all` in pf.conf. Existing master rules with that filter anchor are preserved; if it is missing, the backend loads `/etc/pf.conf` instead of synthesizing a master ruleset from `pfctl -sr` output.
 
 ```
 # WireGuide kill switch rules (loaded into anchor)
@@ -286,11 +290,16 @@ pass quick on lo0 all                           # loopback
 pass out quick proto udp to 1.2.3.4 port 443   # WG endpoint
 pass out quick proto udp from any port 68 to any port 67  # DHCP
 pass out quick proto udp from any port 546 to any port 547 # DHCPv6
+anchor "dns"                                    # DNS policy before tunnel-wide permits
 pass quick on utun6 all                         # tunnel interface
-anchor "dns"                                    # DNS sub-anchor (com.apple/wireguide/dns)
 block drop out all                              # block everything else
 block drop in all
 ```
+
+The DNS sub-anchor's quick rules permit configured resolvers and block other
+port-53 traffic before a tunnel-wide permit can accept it. Moving that anchor
+below the interface permit would bypass resolver restrictions when both
+protections are enabled.
 
 **Why anchor-only**: previous approach saved main pf rules via `pfctl -sr` and re-loaded with anchor reference. This broke on macOS Tahoe because `pfctl -sr` outputs `scrub-anchor` directives that cause syntax errors when fed back to `pfctl -f`.
 
