@@ -192,3 +192,81 @@ timeout; the fresh complete run after networking cleanup passed.
   [review disposition](claude-review-disposition.md).
 
 No main merge or original PR closure is part of this verification.
+
+## Full application verification — 2026-10-21
+
+Host: macOS 26.4.1 (25E253), arm64, Wi-Fi, one display. Local branch
+`test/macos-verify-20261021` combines main `d5a629b`, PR #55 `9c18a10`
+and PR #56 `91a7692` at merge `7c64ba3`, plus the two fixes below.
+Remote refs/tags were fetched; no remote branch or PR was changed.
+Sleep/wake was explicitly excluded. This section supersedes the older
+"Still open" entries only for the scenarios actually recorded here.
+
+Private evidence lives in the mode-0700 local directory
+`/private/tmp/wireguide-macos-verify-20261021-dokzvpbp`. It includes original
+app/user/helper backups, packet-test logs and before/after OS snapshots.
+Profiles, keys, network identifiers and private snapshots are not committed.
+The installed old app was stopped before testing. Production builds use
+the macOS 12.0 deployment target and ad-hoc signed app bundles.
+
+### Defects found and corrected
+
+- Connecting replaced the padded native Dock icon with an edge-to-edge
+  shared PNG, making the artwork grow. The macOS bridge now draws the badge
+  over the original AppKit icon and restores the default icon on disconnect.
+  The strengthened native test checks logical size, rendered pixels outside
+  the badge, green pixels and exact reset across 25 connect/disconnect cycles.
+- A real direct update replaced the bundle but hung during application quit.
+  Captured native samples and Go stacks showed Wails alpha.74 holding the
+  window-map read lock while waiting synchronously for AppKit; native cleanup
+  needed the same map's write lock. The custom transport keeps HTTP bindings
+  and queues event delivery on the GUI thread after taking a window snapshot
+  without retaining that lock. It ignores events before runtime readiness and
+  after shutdown. Regression tests cover lock release and both lifecycle
+  boundaries. The repeated direct update exited and automatically opened the
+  downloaded official app successfully.
+
+### Completed checks
+
+| Scenario | Result and evidence |
+|---|---|
+| Privileged native networking | `TestMacOSLiveProductionNetworking` passed in 33.98 s; runner exit 0. Real utun IPv4/IPv6 payloads, split/global/mixed DNS, resolver dispatch, DNS protection, KS packets, external PF stop/repair, second-owner token coexistence, cached reconnect, SIGKILL/launchd recovery, durable forced-stop veto, two global-DNS tunnels and sibling preservation. Exact network restoration and emergency cleanup passed. `native-evidence/result.json`. |
+| Remote IPv4 full tunnel | Real WAN handshake, counters, utun default forwarding and HTTPS 200. Configured DNS allowed, reachable alternate resolver blocked with protection and restored by Off. Sustained upload for 35 s at 512 KiB/s caused no false watchdog stop; disconnect completed in 0.938 s. Zero-tunnel KS blocked physical traffic, Off restored it. `runtime-remote-results.json`. |
+| Rules and CLI lifecycle | Import, rename, active delete, live edits, first-match precedence, else, subnet/not-subnet, MAC normalization/not-MAC, GUI-reported actual SSID and manual overrides passed. Manual Off persisted through a 36 s observation; manual On prevailed over a disconnect rule. Active CLI delete disconnected and removed the disposable tunnel in 0.915 s. `runtime-automation-results.json`. |
+| Physical outage | Wi-Fi disabled for 5 s and restored; the remote VPN recovered HTTPS in 19.94 s including the outage. `wifi-only-results.json`. |
+| Endpoint bypass | With the monitor armed, deleting the owned host route produced a repaired STATIC physical bypass and working WAN traffic. `bypass-steady-results.json`. An earlier combined early route deletion/outage test instead detected recursive forwarding, stopped safely and required manual recovery; it is not counted as automatic outage recovery. `network-transition-results.json` records that initial failure. |
+| Full GUI lifecycle | Minimized and hidden windows restored through another launch/app copy with the same GUI PID. GUI active-tunnel delete showed the disconnect-first warning and retained the connection. Idle operation exceeded 437 s without helper respawn/elevation loops. Window restoration and idle JSON evidence are retained. |
+| Full GUI helper crash | SIGKILL during a real WAN connection with DNS protection and KS recovered traffic in 5.027 s, preserving the GUI PID and requiring no further elevation. An explicitly unloaded helper produced reopen guidance without repeated authorization. `gui-helper-crash-result.private.json`. |
+| Explicit quit | Native Cmd+Q exited the GUI while connected with protection enabled; DNS/default routing returned to the stopped state. `native-quit-result.private.json`. Closing the window remains distinct from explicit Quit. |
+| Authorization cancel/retry | The user canceled the actual administrator prompt; error -128 produced a Retry/Quit dialog. Clicking Retry and approving the next prompt reached the working GUI. Exactly two authorization attempts, one canceled, occurred. `authorization-cancel-success.json`, native dialog snapshot and `gui-auth-ready.log`. Earlier accidentally approved attempts are not counted as cancellation checks. |
+| Direct signed update | A production-code fixture reporting 0.5.1 verified/downloaded the official 0.5.2 release, replaced the app, exited and automatically opened the new GUI. This passed after the shutdown fix; the original failing sample is retained. `direct-update-fixed-result.json`. |
+| Homebrew update | The equivalent in-app Homebrew flow updated the receipt/app to 0.5.2, exited the old GUI and opened the official new app. The temporarily hidden receipt used to select the direct-update path was restored. `brew-update-result.json`. |
+| Native desktop tests | Dock icon geometry/reset, Cocoa status item/menu lifecycle, hang capture, disabled launchd-state parsing, demand lifecycle, socket activation and DNS checkpoint-before-write opt-ins passed. These fixtures do not establish every hardware/UI scenario below. |
+| Automated checks after fixes | Complete `go test -race -count=1 ./...` with native icon/tray opt-ins and `go vet ./...` passed. Frontend 15 tests and build passed. Production update tests passed. Windows GUI test binary cross-compilation passed; no post-fix Windows runtime result is claimed. |
+
+### Remaining environment limits
+
+- Sleep/wake remains intentionally excluded.
+- No Ethernet uplink or second physical network was available: Wi-Fi/Ethernet
+  roaming, a changed gateway and duplicate-subnet routers remain unverified.
+- The WAN peer/underlay was IPv4. Native tunnel IPv6 payloads passed, but
+  IPv6 outer transport and remote dual-stack full-tunnel WAN were unavailable.
+- macOS 27, multiple displays with different wallpapers and spoken VoiceOver
+  output were unavailable. Native menu/badge tests and AX connection-state
+  attributes do not replace those checks.
+- Actual BTM denial/approval, deliberately long authorization, and a second
+  failed Retry were not reproduced. Cancellation followed by successful
+  Retry and repair after job removal were exercised.
+- This run does not establish new Windows or Linux runtime coverage, nor
+  exhaustive visual review of every locale/theme/window size.
+
+The Homebrew receipt remains at 0.5.2. The local patched 0.5.2 app is restored
+after update/cancellation fixtures; user tunnel configuration and settings
+are preserved byte for byte. Final stopped-state checks confirmed PF disabled,
+both WireGuide anchors empty, exact per-service DNS/search preferences,
+matching signed app/helper binaries and no temporary system launchd jobs.
+No updater swap staging directory remained. The original VPN was then
+reconnected with the patched app: connected state, real handshake/counters
+and public HTTPS 200 were confirmed, with one GUI process. Evidence:
+`final-cleanup-check.json`, `final-restored-result.json` and the private final
+status snapshot. No release, push or PR merge is part of this run.

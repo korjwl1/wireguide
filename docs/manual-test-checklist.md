@@ -5,6 +5,11 @@ before considering the related feature done. Items here are added when
 shipped without end-to-end verification — clear them out as you walk
 through each one.
 
+The [2026-10-21 execution report](analysis/macos-native-verification-20261015.md#full-application-verification--2026-10-21)
+records current macOS results and remaining hardware limits. Older combined
+platform checkboxes below are not a claim that those completed macOS cases
+still lack evidence; they also include Windows and unavailable hardware.
+
 ## Phase 4 — Automation rules (helper-side, issue #12)
 
 Rule evaluation lives in `internal/helper/wifi_rules.go`
@@ -12,8 +17,10 @@ Rule evaluation lives in `internal/helper/wifi_rules.go`
 `internal/wifi/automation.go` (`Evaluate`); rule data lives in
 `Settings.Automation` (`internal/storage/settings.go`). Legacy
 `Settings.WifiRules` is migrated once on first read. The helper evaluates
-rules itself, so these tests verify behavior **both with the GUI running
-and after Cmd+Q'ing the GUI**.
+rules itself. Verify with the window open and after closing it to the tray.
+Explicit Quit (Cmd+Q) now shuts down the helper and its tunnels; it is not a
+background-automation mode. Manual Connect/Disconnect overrides rule actions
+until the override is cleared; check `ctl automation` for that latch.
 
 Rules can be authored in the GUI (tunnel detail → **Automation**) or from
 the CLI (`wireguide ctl automation add/rm/rules`). The read-only preview
@@ -27,25 +34,24 @@ order = priority, and a rule can connect OR disconnect regardless of how
 the tunnel was brought up.
 
 ### Connect on a network (SSID)
-- [ ] Add `connect` when `ssid:<current-wifi>` for a tunnel; disconnect
-      it manually; rejoin/stay on that SSID. **Expected**: helper log
+- [ ] Add `connect` when `ssid:<current-wifi>` for a tunnel with no manual
+      Off override; rejoin/stay on that SSID. **Expected**: helper log
       `automation: rule connect ... reason=ssid-change`, tunnel up within
       ~6s. Confirm with `ctl automation` (decision=connect).
-- [ ] Repeat with the GUI fully quit (Cmd+Q, verify via
-      `pgrep -f WireGuide.app`). The rule must still fire — only the
-      helper log shows it; `ctl status` confirms.
+- [ ] Repeat after closing the window to the tray, with the app still
+      running. The rule must still fire; `ctl status` confirms.
 
 ### Disconnect on a specific network (gateway MAC)
 - [ ] On the target network, capture its gateway MAC (`ctl automation`
       shows `gateway-mac=`), add `disconnect` when `mac:<that-MAC>`.
-- [ ] Connect the tunnel; **Expected**: within a few seconds the
+- [ ] Clear any manual On override; **Expected**: within a few seconds the
       route-change trigger fires `automation: rule disconnect
       reason=network-change` and the tunnel goes down. Verify the MAC
       match is separator/case-insensitive (dash/upper-case forms match).
 
 ### Subnet condition + Ethernet
-- [ ] Add `disconnect` when `subnet:<your-current-CIDR>`; connect the
-      tunnel on that network (Ethernet is fine — no SSID needed).
+- [ ] Add `disconnect` when `subnet:<your-current-CIDR>` for a connected
+      tunnel without a manual On override (Ethernet needs no SSID).
       **Expected**: it disconnects. On macOS this fires via the route
       monitor instantly; on Windows/Linux within the 30s poll.
 
