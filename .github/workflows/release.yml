@@ -22,8 +22,32 @@ env:
   UPDATE_SIGNING_PUBKEY: ea2dda6d25dbcbbb9a4b16077c7138fa343a0775a3e718a333c0fbae31bded36
 
 jobs:
+  check-version:
+    name: Version files match the tag
+    # In-app updates refuse an installer/bundle whose embedded version
+    # differs from the release tag (issue #36), so a release that forgets
+    # to bump one of these would ship an update nobody can install.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compare version files with the tag
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          # NSIS and Info.plist versions are numeric only; the app keeps
+          # any pre-release suffix.
+          want="${tag%%-*}"
+          nsis=$(sed -n 's/.*define INFO_PRODUCTVERSION "\([^"]*\)".*/\1/p' build/windows/nsis/wails_tools.nsh | head -1)
+          plist=$(grep -A1 '<key>CFBundleShortVersionString</key>' build/darwin/Info.plist | sed -n 's/.*<string>\(.*\)<\/string>.*/\1/p')
+          app=$(sed -n 's/^const Current *= *"\([^"]*\)".*/\1/p' internal/version/version.go)
+          echo "tag=$tag nsis=$nsis plist=$plist app=$app"
+          if [ "$nsis" != "$want" ] || [ "$plist" != "$want" ] || [ "$app" != "$tag" ]; then
+            echo "::error::wails_tools.nsh and Info.plist must say $want, internal/version/version.go must say $tag"
+            exit 1
+          fi
+
   build-macos:
     name: macOS arm64
+    needs: check-version
     # arm64 only. Intel macs are a vanishing share of the target
     # audience and shipping a CGO/.m cross-compile from arm64 (or
     # standing up a parallel macos-13 runner) costs more in CI
@@ -69,6 +93,7 @@ jobs:
 
   build-windows:
     name: Windows ${{ matrix.arch }}
+    needs: check-version
     strategy:
       fail-fast: false
       matrix:
@@ -221,6 +246,7 @@ jobs:
 
   build-linux:
     name: Linux ${{ matrix.arch }}
+    needs: check-version
     strategy:
       fail-fast: false
       matrix:
@@ -351,7 +377,29 @@ jobs:
           config: cliff.toml
           args: --latest --strip header
         env:
-          OUTPUT: CHANGELOG.md
+          OUTPUT: RELEASE_NOTES.md
+
+      - name: Use curated changelog entry when available
+        run: |
+          python3 - <<'PY'
+          import os
+          import re
+          from pathlib import Path
+
+          version = os.environ["GITHUB_REF_NAME"].removeprefix("v")
+          changelog = Path("CHANGELOG.md").read_text()
+          entry = re.search(
+              r"^## \[" + re.escape(version) + r"\][^\n]*\n(.*?)(?=^## \[|\Z)",
+              changelog,
+              re.MULTILINE | re.DOTALL,
+          )
+          if entry:
+              notes = entry.group(1).strip()
+              Path("RELEASE_NOTES.md").write_text(notes + "\n")
+              print("Using curated release notes for " + version)
+          else:
+              print("No curated entry; retaining git-cliff notes")
+          PY
 
       - name: Publish release
         uses: softprops/action-gh-release@v2
@@ -359,7 +407,7 @@ jobs:
           files: artifacts/*
           draft: false
           prerelease: ${{ contains(github.ref_name, '-') }}
-          body_path: CHANGELOG.md
+          body_path: RELEASE_NOTES.md
           fail_on_unmatched_files: true
 
   update-cask:
@@ -427,7 +475,7 @@ jobs:
             homepage "https://github.com/korjwl1/wireguide"
 
             depends_on arch: :arm64
-            depends_on macos: :big_sur
+            depends_on macos: :monterey
 
             app "WireGuide.app"
 

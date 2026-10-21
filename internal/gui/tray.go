@@ -245,6 +245,74 @@ func trimAndSquare(src image.Image) *image.NRGBA {
 	return dst
 }
 
+// trayGlyph crops the W out of Wails' template icon for the menu bar. The
+// canvas is cropped by trimAndSquare before the faint outline is removed, so
+// the W keeps the size and padding it has always had.
+func trayGlyph(base image.Image) *image.NRGBA {
+	glyph := trimAndSquare(base)
+	clearFaintFrame(glyph)
+	normalizeAlpha(glyph)
+	return glyph
+}
+
+// clearFaintFrame zeroes every pixel outside the glyph proper. Wails'
+// DefaultMacTemplateIcon.png draws a faint rounded-square outline (alpha
+// 7–26 of 255) around the W; keeping that alpha is the "low opacity box"
+// around the menu-bar icon reported in issue #45. The glyph's solid body is
+// ~225 alpha, so its bounding box is found from clearly opaque pixels and
+// grown by a 2px margin to keep the W's own anti-aliased edge (the outline
+// sits at least 5px further out).
+func clearFaintFrame(img *image.NRGBA) {
+	const solidAlpha = 32
+	const margin = 2
+	b := img.Bounds()
+	minX, minY, maxX, maxY := b.Max.X, b.Max.Y, b.Min.X-1, b.Min.Y-1
+	for y := b.Min.Y; y < b.Max.Y; y++ {
+		for x := b.Min.X; x < b.Max.X; x++ {
+			if img.NRGBAAt(x, y).A >= solidAlpha {
+				minX, minY = min(minX, x), min(minY, y)
+				maxX, maxY = max(maxX, x), max(maxY, y)
+			}
+		}
+	}
+	if maxX < minX {
+		return
+	}
+	keep := image.Rect(minX-margin, minY-margin, maxX+margin+1, maxY+margin+1)
+	for y := b.Min.Y; y < b.Max.Y; y++ {
+		for x := b.Min.X; x < b.Max.X; x++ {
+			if !image.Pt(x, y).In(keep) {
+				img.SetNRGBA(x, y, color.NRGBA{})
+			}
+		}
+	}
+}
+
+// normalizeAlpha scales the glyph to full strength. The source W is only
+// ~88% opaque, and the menu bar uses template alpha as coverage, so it would
+// otherwise look dimmer than every neighbouring icon.
+func normalizeAlpha(img *image.NRGBA) {
+	b := img.Bounds()
+	var maxA uint8
+	for y := b.Min.Y; y < b.Max.Y; y++ {
+		for x := b.Min.X; x < b.Max.X; x++ {
+			maxA = max(maxA, img.NRGBAAt(x, y).A)
+		}
+	}
+	if maxA == 0 {
+		return
+	}
+	for y := b.Min.Y; y < b.Max.Y; y++ {
+		for x := b.Min.X; x < b.Max.X; x++ {
+			c := img.NRGBAAt(x, y)
+			if c.A != 0 {
+				c.A = uint8(min(255, int(c.A)*255/int(maxA)))
+				img.SetNRGBA(x, y, c)
+			}
+		}
+	}
+}
+
 // buildTrayOnIcon composites a W glyph (in wColor) with a green dot badge
 // at the bottom-left — the "connected" state. wColor should be white for
 // dark menu bars and black for light menu bars; the dot stays green in
@@ -256,7 +324,7 @@ func buildTrayOnIcon(wColor color.NRGBA) []byte {
 		return icons.SystrayMacTemplate
 	}
 
-	trimmed := trimAndSquare(base)
+	trimmed := trayGlyph(base)
 	bounds := trimmed.Bounds()
 
 	// Re-tint: replace black pixels with wColor, preserving alpha.
@@ -307,7 +375,7 @@ func buildTrayOffIcon(wColor color.NRGBA) []byte {
 		return icons.SystrayMacTemplate
 	}
 
-	trimmed := trimAndSquare(base)
+	trimmed := trayGlyph(base)
 	bounds := trimmed.Bounds()
 
 	for y := bounds.Min.Y; y < bounds.Max.Y; y++ {

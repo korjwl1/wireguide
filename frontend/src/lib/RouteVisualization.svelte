@@ -19,7 +19,7 @@
   }
 
   function isVPN(iface) {
-    return iface.startsWith('utun') || iface.startsWith('wg') || iface.startsWith('tun');
+    return iface.startsWith('WireGuide-') || iface.startsWith('utun') || iface.startsWith('wg') || iface.startsWith('tun');
   }
 
   onMount(loadRoutes);

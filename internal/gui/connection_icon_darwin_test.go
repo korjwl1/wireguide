@@ -35,25 +35,13 @@ func TestNativeApplicationConnectionIcon(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(contents, "Info.plist"), []byte(plist), 0600); err != nil {
 		t.Fatal(err)
 	}
-	source, err := os.ReadFile("../../build/appicon.png")
-	if err != nil {
-		t.Fatal(err)
-	}
-	images, err := buildConnectionIconImages(source)
-	if err != nil {
-		t.Fatal(err)
-	}
-	connected := filepath.Join(dir, "connected.png")
-	if err := os.WriteFile(connected, images.connected, 0600); err != nil {
-		t.Fatal(err)
-	}
 	exe := filepath.Join(contents, "MacOS", "probe")
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	if out, err := exec.CommandContext(ctx, "clang", "-framework", "Cocoa", "testdata/native_connection_icon_probe.m", "connection_icon_darwin.m", "-o", exe).CombinedOutput(); err != nil {
 		t.Fatalf("compile native icon fixture: %v\n%s", err, out)
 	}
-	if out, err := exec.CommandContext(ctx, exe, connected).CombinedOutput(); err != nil {
+	if out, err := exec.CommandContext(ctx, exe).CombinedOutput(); err != nil {
 		t.Fatalf("native application icon: %v\n%s", err, out)
 	} else {
 		t.Log(string(out))

@@ -329,3 +329,29 @@ func TestKillSwitchExcludesUnpinnedDNSPermits(t *testing.T) {
 		t.Fatalf("off-tunnel permit not restored without kill switch: %q", k.anchors[anchorName])
 	}
 }
+
+// A quick tunnel-wide permit must not bypass the DNS sub-anchor. This
+// escaped the DNS-only packet check: enabling KS retained the DNS rules,
+// but put them after a terminal permit for every packet on the tunnel.
+func TestKillSwitchEvaluatesDNSBeforeTunnelPermits(t *testing.T) {
+	for _, tunnels := range []map[string][]string{
+		nil,
+		{"utun4": {"192.0.2.1:51820"}},
+		{"utun4": {"192.0.2.1:51820"}, "utun5": {"[2001:db8::1]:51820"}},
+	} {
+		rules, err := buildKillSwitchRulesForTunnels(tunnels)
+		if err != nil {
+			t.Fatal(err)
+		}
+		dns := strings.Index(rules, "anchor \"dns\"\n")
+		if dns < 0 || dns > strings.Index(rules, "block drop out all\n") {
+			t.Fatalf("DNS policy is missing or unreachable:\n%s", rules)
+		}
+		for iface := range tunnels {
+			permit := strings.Index(rules, "pass quick on "+iface+" all\n")
+			if permit < 0 || permit < dns {
+				t.Fatalf("%s bypasses DNS filtering:\n%s", iface, rules)
+			}
+		}
+	}
+}

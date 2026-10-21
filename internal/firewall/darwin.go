@@ -160,11 +160,15 @@ func buildKillSwitchRulesForTunnels(tunnels map[string][]string) (string, error)
 	rules.WriteString("pass out quick proto udp from any port 68 to any port 67\n")
 	rules.WriteString("pass out quick proto udp from any port 546 to any port 547\n")
 
+	// DNS policy must run before the terminal tunnel-wide permits. A quick
+	// permit on utun would otherwise accept unconfigured DNS servers without
+	// ever evaluating the protection sub-anchor (including after wake).
+	fmt.Fprintf(&rules, "anchor \"%s\"\n", dnsSubAnchorRel)
+
 	for _, interfaceName := range interfaces {
 		fmt.Fprintf(&rules, "pass quick on %s all\n", interfaceName)
 	}
 
-	fmt.Fprintf(&rules, "anchor \"%s\"\n", dnsSubAnchorRel)
 	rules.WriteString("block drop out all\n")
 	rules.WriteString("block drop in all\n")
 	return rules.String(), nil

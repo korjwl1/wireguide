@@ -11,15 +11,13 @@ import (
 	"unsafe"
 )
 
-func applyConnectionIcon(_ unsafe.Pointer, connected bool, icons connectionIconImages) error {
-	if !connected {
-		if C.wgSetApplicationConnectionIcon(nil, 0, 0) == 0 {
-			return fmt.Errorf("Dock icon reset requires the AppKit thread")
-		}
-		return nil
+func applyConnectionIcon(_ unsafe.Pointer, connected bool, _ connectionIconImages) error {
+	var active C.int
+	if connected {
+		active = 1
 	}
-	if len(icons.connected) == 0 || C.wgSetApplicationConnectionIcon(unsafe.Pointer(&icons.connected[0]), C.size_t(len(icons.connected)), 1) == 0 {
-		return fmt.Errorf("cannot set connected Dock icon")
+	if C.wgSetApplicationConnectionIcon(active) == 0 {
+		return fmt.Errorf("cannot update Dock icon outside the AppKit thread or without a base icon")
 	}
 	return nil
 }

@@ -7,28 +7,54 @@ import (
 	"github.com/wailsapp/wails/v3/pkg/w32"
 )
 
+// Accessed only on the GUI thread. WM_SETICON retains the supplied handles,
+// so keep our icons alive until replacement and never destroy Wails' originals.
+var windowConnectionIcons = make(map[w32.HWND]windowConnectionIcon)
+
+type windowConnectionIcon struct {
+	originalSmall, originalLarge w32.HICON
+	small, large                 w32.HICON
+}
+
 func applyConnectionIcon(window unsafe.Pointer, connected bool, icons connectionIconImages) error {
 	if window == nil {
 		return fmt.Errorf("taskbar window is unavailable")
 	}
-	// Creation, use and Release stay in the same UI-thread COM apartment.
-	taskbar, err := w32.NewTaskbarList3()
+	return applyWindowsConnectionIcon(w32.HWND(uintptr(window)), connected, icons)
+}
+
+func applyWindowsConnectionIcon(hwnd w32.HWND, connected bool, icons connectionIconImages) error {
+	previous, exists := windowConnectionIcons[hwnd]
+	if !connected {
+		if exists {
+			w32.SendMessage(hwnd, w32.WM_SETICON, w32.ICON_SMALL, uintptr(previous.originalSmall))
+			w32.SendMessage(hwnd, w32.WM_SETICON, w32.ICON_BIG, uintptr(previous.originalLarge))
+			w32.DestroyIcon(previous.small)
+			w32.DestroyIcon(previous.large)
+			delete(windowConnectionIcons, hwnd)
+		}
+		return nil
+	}
+	// Compose the badge into the application icon: the shell's overlay is
+	// too large and fixes its position instead of following our lower-left dot.
+	small, err := w32.CreateSmallHIconFromImage(icons.connected)
 	if err != nil {
 		return err
 	}
-	defer taskbar.Release()
-	var icon w32.HICON
-	var description *uint16
-	if connected {
-		icon, err = w32.CreateSmallHIconFromImage(icons.overlay)
-		if err != nil {
-			return err
-		}
-		// SetOverlayIcon copies the image; the caller still owns this HICON.
-		defer w32.DestroyIcon(icon)
-		description = w32.MustStringToUTF16Ptr("WireGuide VPN connected")
+	large, err := w32.CreateLargeHIconFromImage(icons.connected)
+	if err != nil {
+		w32.DestroyIcon(small)
+		return err
 	}
-	return taskbar.SetOverlayIcon(w32.HWND(uintptr(window)), icon, description)
+	originalSmall := w32.HICON(w32.SendMessage(hwnd, w32.WM_SETICON, w32.ICON_SMALL, uintptr(small)))
+	originalLarge := w32.HICON(w32.SendMessage(hwnd, w32.WM_SETICON, w32.ICON_BIG, uintptr(large)))
+	if exists {
+		originalSmall, originalLarge = previous.originalSmall, previous.originalLarge
+		w32.DestroyIcon(previous.small)
+		w32.DestroyIcon(previous.large)
+	}
+	windowConnectionIcons[hwnd] = windowConnectionIcon{originalSmall, originalLarge, small, large}
+	return nil
 }
 
 func connectionIconMessages(refresh func()) func(uintptr, uint32, uintptr, uintptr) (uintptr, bool) {

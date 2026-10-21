@@ -659,8 +659,8 @@
       <div class="critical-banner-title">⚠ {$t('app.helper_subsystem_failure')}</div>
       {#each criticalErrors as e, i}
         <div class="critical-banner-row">
-          <span class="critical-banner-where">{e.where}</span>
-          <span class="critical-banner-detail">{e.detail}</span>
+          <span class="critical-banner-where">{e.where === 'Helper connection' ? $t('settings.section_connection') : e.where}</span>
+          <span class="critical-banner-detail">{e.where === 'Helper connection' ? $t('app.helper_disconnected') : e.detail}</span>
           <span class="critical-banner-time">{e.at}</span>
           <button class="critical-banner-close" on:click={() => dismissCriticalError(i)} aria-label={$t('app.dismiss')}>×</button>
         </div>
@@ -759,7 +759,7 @@
                 listPaneWidth.set(Math.min(LIST_PANE_MAX, Math.max(LIST_PANE_MIN, $listPaneWidth + (e.key === 'ArrowRight' ? 10 : -10))));
                 saveListPrefs();
               } else if (e.key === 'Home') { e.preventDefault(); onResizeReset(); }
-            }} title="Drag to resize · double-click to reset"></div>
+            }} title={$t('tunnel.resize_hint')}></div>
           <div class="tunnel-detail-pane">
             {#if $selectedTunnel}
               <TunnelDetail {TunnelService}

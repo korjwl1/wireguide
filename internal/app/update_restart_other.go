@@ -1,9 +1,12 @@
-//go:build !darwin
+//go:build !darwin && !windows
 
 package app
 
 import "fmt"
 
-func (s *TunnelService) restartAfterUpdate() error {
-	return fmt.Errorf("Homebrew update restart is only available on macOS")
+// Linux never self-updates (package-managed; RunUpdate opens the Releases
+// page), so there is nothing to restart.
+func (s *TunnelService) restartAfterUpdate(appPath string) error {
+	_ = appPath
+	return fmt.Errorf("in-app update restart is not available on this platform")
 }

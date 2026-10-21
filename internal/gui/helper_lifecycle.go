@@ -251,6 +251,21 @@ func spawnAndConnectHelper(ctx context.Context, args elevate.Args, spawn func(co
 	}
 }
 
+// keepControlConnAlive sends a Ping over the long-lived control connection.
+// Liveness comes from ProbeHelper's separate connection, so a long RPC
+// in flight can't fake an outage; but the helper drops a control
+// connection that sends nothing for 10s (ipc/server.go readDeadline), and
+// without this the GUI would lose and re-dial it every ~15s whenever it
+// has nothing else to send. The result is ignored: a timeout behind a
+// busy RPC is expected and leaves the client open.
+func keepControlConnAlive(c *ipc.Client) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := c.CallWithContext(ctx, ipc.MethodPing, nil, nil); err != nil {
+		slog.Debug("control connection keepalive failed", "error", err)
+	}
+}
+
 // startHelperHealthMonitor runs a background goroutine that pings the helper
 // every 5 seconds. On failure it:
 //  1. Emits a "helper" event to notify the frontend
@@ -287,6 +302,9 @@ func startHelperHealthMonitor(app *application.App, clients *ipc.ClientHolder, d
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 			_, err := ipc.ProbeHelper(ctx, c.Address())
 			cancel()
+			if err == nil {
+				keepControlConnAlive(c)
+			}
 			if c.IsClosed() {
 				err = ipc.ErrClientClosed
 			}

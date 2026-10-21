@@ -126,10 +126,13 @@ func Run(assetsHandler http.Handler, dataDir string) error {
 		defer connectionIndicator.Close()
 	}
 	var shutdown *guiShutdown
+	transport := newGUIEventTransport()
 
 	app := application.New(application.Options{
 		Name:        "WireGuide",
 		Description: "Cross-platform WireGuard desktop client",
+		Transport:   transport,
+		Logger:      slog.Default(),
 		ShouldQuit: func() bool {
 			if shutdown != nil {
 				shutdown.run()
@@ -146,13 +149,14 @@ func Run(assetsHandler http.Handler, dataDir string) error {
 			ApplicationShouldTerminateAfterLastWindowClosed: false,
 		},
 		Windows: application.WindowsOptions{
-			WndProcInterceptor: connectionIconMessages(func() {
+			WndProcInterceptor: sessionEndMessages(connectionIconMessages(func() {
 				if connectionIndicator != nil {
 					connectionIndicator.Refresh()
 				}
-			}),
+			})),
 		},
 	})
+	transport.windows = app.Window.GetAll
 	tunnelService.SetApp(app)
 	bindAppToLogHandler(app)
 
@@ -198,6 +202,7 @@ func Run(assetsHandler http.Handler, dataDir string) error {
 		BackgroundColour: application.NewRGB(30, 30, 30), // matches --bg-primary dark (#1E1E1E)
 		URL:              "/",
 	})
+	win.OnWindowEvent(events.Common.WindowRuntimeReady, func(*application.WindowEvent) { transport.Ready() })
 	if connectionIndicator != nil {
 		win.OnWindowEvent(events.Common.WindowRuntimeReady, func(*application.WindowEvent) { connectionIndicator.Ready() })
 		win.OnWindowEvent(events.Common.WindowShow, func(*application.WindowEvent) { connectionIndicator.Refresh() })
@@ -308,6 +313,10 @@ func Run(assetsHandler http.Handler, dataDir string) error {
 	// reflect in a running GUI. Shares the shutdown channel/WaitGroup.
 	healthWg.Add(1)
 	startConfigWatcher(app, configFilePath(paths.ConfigDir), paths.TunnelsDir, healthDone, &healthWg)
+
+	// Remove what a self-update kept for after its restart (the replaced
+	// macOS bundle). Best-effort; off the startup path.
+	go update.CleanupPreviousUpdate()
 
 	// Update scheduler — periodic GitHub Releases check. Lives in the GUI
 	// process (not the helper) because update notifications are a pure UI

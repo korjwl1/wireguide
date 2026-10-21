@@ -100,8 +100,8 @@ WireGuide ships fewer knobs than most desktop VPN clients on purpose. The trade 
 - **Privilege separation.** A single binary runs in two modes. The GUI runs unprivileged. A small helper runs as root / Administrator. They talk over a local Unix socket (macOS/Linux) or named pipe (Windows). Nothing is exposed over HTTP or the network.
 - **macOS helper activation.** After installation, launchd starts the helper on socket contact. Administrator authorization is reserved for installation, upgrades or repair. A CLI probe cannot activate automation.
 - **OS-native firewall.** The kill switch uses `pf` (macOS), WFP (Windows), or `nftables` (Linux). The [reconnect policy](docs/DESIGN.md#firewall-suspension-during-reconnect) describes when protection is suspended.
-- **Up-to-date crypto.** Built on a May 2026 build of [wireguard-go](https://git.zx2c4.com/wireguard-go) — years ahead of the engine inside the official macOS app, which hasn't been updated since Feb 2023.
-- **Manual QA per release.** Every tagged release is exercised on macOS (Apple Silicon), Windows 11 (amd64), and Linux (Debian 13 / Raspberry Pi OS ARM64) before it goes out, on top of a 3-OS `go test` matrix that gates every PR.
+- **WireGuard engine.** Uses [wireguard-go](https://git.zx2c4.com/wireguard-go) and standard WireGuard configurations.
+- **Recorded verification.** Pull requests run a Windows/macOS/Linux test matrix. Runtime checks record the actual hardware and scenarios exercised; see [tested coverage](#tested-coverage) and the [0.6.0 verification report](docs/analysis/macos-native-verification-20261015.md#full-application-verification--2026-10-21).
 
 If something breaks, helper logs are plain text — not behind a paywall. Open an issue and attach them.
 
@@ -128,7 +128,8 @@ Download from [Releases](https://github.com/korjwl1/wireguide/releases), unzip, 
 
 Download the latest `WireGuide-windows-amd64.exe` (or `-arm64.exe`) installer from
 [Releases](https://github.com/korjwl1/wireguide/releases) and run it. The NSIS
-installer registers the helper service and shortcut.
+installer creates the app shortcut and uninstall entry. The app starts its
+privileged helper on demand with administrator authorization.
 
 > Windows SmartScreen may warn that the publisher is unknown — the binary is
 > currently unsigned. Click "More info" → "Run anyway".
@@ -144,6 +145,20 @@ sudo apt install ./WireGuide-linux-amd64.deb
 
 The package registers the app menu entry and tray integration; the privileged
 helper is started on demand through PolicyKit (no always-on service).
+
+### Updating
+
+Use the update notice or **Settings → About → Check for updates**. Homebrew
+installations update through Homebrew. Direct-download macOS apps and
+installer-managed Windows apps download the release, verify its signed
+checksums and artifact version, then install and relaunch. Unsupported
+installation layouts and Linux use the releases-page fallback.
+
+A terminal `brew upgrade` does not restart an already-running app; quit and
+reopen WireGuide afterward. Installation or helper upgrades can require
+administrator approval. On macOS, if its background service is disabled,
+allow WireGuide in **System Settings → General → Login Items & Extensions**
+and choose Retry; reinstalling does not override that choice.
 
 ### Build from Source
 
@@ -192,6 +207,14 @@ combination. What has actually been exercised:
 | macOS | macOS 26.4 (Tahoe), Apple Silicon | ✅ | ✅ |
 | Windows | Windows 11 (amd64), desktop PC | ✅ | ⚠️ not properly tested |
 | Linux | Raspberry Pi OS Lite (arm64) | ⚠️ not tested | ✅ |
+
+The table includes historical hardware coverage. For 0.6.0, Windows 11 runtime
+checks and macOS 26.4.1 arm64 Wi-Fi/sleep/wake checks were performed; Linux
+coverage comes from CI tests, an isolated nftables kernel check and native
+build/DEB packaging. The macOS sleep tests use short software-triggered cycles,
+not overnight standby or physical lid closure. The detailed
+[execution report](docs/analysis/macos-native-verification-20261015.md#completed-sleepwake-results)
+keeps those distinctions and the remaining hardware limits explicit.
 
 The untested cells matter most for Wi-Fi-dependent features — SSID-based
 Automation rules and Wi-Fi↔Ethernet handover on Windows, and wired

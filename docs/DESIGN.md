@@ -234,15 +234,19 @@ This is the same approach wg-quick uses (`wg show <iface> endpoints` before `rou
 
 ### DNS
 
-DNS is applied to **every** network service (`networksetup -listallnetworkservices`), not just the primary one. macOS can switch primary between Wi-Fi and Ethernet mid-session.
+Global DNS is applied to network services (`networksetup -listallnetworkservices`), not just the primary one. macOS can switch primary between Wi-Fi and Ethernet mid-session. Split DNS instead uses supplemental resolvers for the configured match domains.
 
-Original DNS per service is saved in memory, restored on disconnect. For crash recovery (no memory), `ResetDNSToSystemDefault()` clears to DHCP defaults.
+The original DNS/search preferences are checkpointed before the first OS
+write and persisted for crash recovery. Global-DNS tunnels share the original
+baseline, so later tunnels do not capture another tunnel's settings as the
+user's preferences. Normal disconnect and crash cleanup restore that exact
+baseline; failed cleanup keeps its journal for retry.
 
 **Post-write verification**: after applying DNS, we read back to confirm at least one service accepted the change. macOS can silently drop DNS changes (MDM profiles, permission issues).
 
 ### Routes
 
-**Split tunnel**: `0.0.0.0/1` + `128.0.0.0/1` via utunN (wg-quick approach).
+**IPv4 full tunnel**: `0.0.0.0/1` + `128.0.0.0/1` via utunN (wg-quick approach). Split tunnels install their configured narrower AllowedIPs routes.
 
 **Endpoint bypass**: host routes for each peer endpoint via the upstream gateway. This prevents encrypted WG packets from looping through the tunnel.
 
@@ -278,7 +282,7 @@ Per-platform backends, all driven by the same `Firewall.SetKillSwitch` IPC metho
 
 ### macOS pf
 
-Rules are loaded into the `com.apple/wireguide` anchor (slash, not dot — pf's `*` wildcard doesn't cross the `/` path separator, so a dot-named anchor would never match the system wildcard). macOS ships with `anchor "com.apple/*" all` in pf.conf, so our anchor is automatically evaluated — **we never modify the main ruleset**.
+Rules are loaded into the `com.apple/wireguide` anchor (slash, not dot — pf's `*` wildcard doesn't cross the `/` path separator, so a dot-named anchor would never match the system wildcard). macOS ships with `anchor "com.apple/*" all` in pf.conf. Existing master rules with that filter anchor are preserved; if it is missing, the backend loads `/etc/pf.conf` instead of synthesizing a master ruleset from `pfctl -sr` output.
 
 ```
 # WireGuide kill switch rules (loaded into anchor)
@@ -286,11 +290,16 @@ pass quick on lo0 all                           # loopback
 pass out quick proto udp to 1.2.3.4 port 443   # WG endpoint
 pass out quick proto udp from any port 68 to any port 67  # DHCP
 pass out quick proto udp from any port 546 to any port 547 # DHCPv6
+anchor "dns"                                    # DNS policy before tunnel-wide permits
 pass quick on utun6 all                         # tunnel interface
-anchor "dns"                                    # DNS sub-anchor (com.apple/wireguide/dns)
 block drop out all                              # block everything else
 block drop in all
 ```
+
+The DNS sub-anchor's quick rules permit configured resolvers and block other
+port-53 traffic before a tunnel-wide permit can accept it. Moving that anchor
+below the interface permit would bypass resolver restrictions when both
+protections are enabled.
 
 **Why anchor-only**: previous approach saved main pf rules via `pfctl -sr` and re-loaded with anchor reference. This broke on macOS Tahoe because `pfctl -sr` outputs `scrub-anchor` directives that cause syntax errors when fed back to `pfctl -f`.
 
@@ -516,9 +525,7 @@ Wi-Fi/Ethernet handoff, endpoint bypass deletion, missing underlay recovery,
 and helper restart after a forced disconnect. Cross-builds do not validate
 Windows kernel behavior.
 
-## Helper Version Sync
-
-### macOS menu bar (issue #45)
+## macOS Menu Bar (issues #45, #46)
 
 The macOS tray uses a small Cocoa bridge with its own NSStatusItem and a
 permanently attached NSMenu. AppKit owns click/keyboard menu tracking and
@@ -538,6 +545,14 @@ handshake distinction. No private status-window search or guessed icon
 color is required. The Cocoa fixture checks template mode, badge visibility,
 inactive emphasis and click passthrough; physical multi-monitor testing
 remains necessary.
+
+The glyph comes from Wails' `SystrayMacTemplate`, which carries a faint
+rounded-square outline (alpha 7–26) around the W. `trayGlyph` crops the canvas
+first, then clears everything outside the W's opaque body plus a 2px margin
+and scales the W to full alpha. Keeping that outline in a template image is
+what drew the low-opacity box around the icon in #45.
+
+## Helper Version Sync
 
 GUI and helper share the same binary (`wireguide` / `wireguide --helper`). On startup, `ensureHelper` pings the helper and compares `AppVersion`:
 
@@ -630,7 +645,21 @@ All background goroutines wrapped in `goSafe()` — recovers panics, logs stack 
 | Install method | Update mechanism |
 |---------------|-----------------|
 | Homebrew | `brew upgrade --cask --greedy wireguide` (GUI triggers; `HOMEBREW_NO_AUTO_UPDATE=1` since the checker already knows the target version) |
-| Binary zip | Opens GitHub Releases page in browser |
+| macOS zip (bundle in a user-writable folder) | Download → verify → extract with `ditto` next to the running bundle → check bundle id / version / `codesign --verify` → rename-swap (rollback on failure) → relaunch |
+| Windows NSIS install (`uninstall.exe` beside `wireguide.exe`) | Download → verify → run the installer elevated and silent (`/S /D=<install dir>`) via a hidden PowerShell waiter that relaunches the app non-elevated |
+| Linux `.deb`, portable / dev binaries, translocated or read-only bundles | Opens GitHub Releases page in browser |
+
+Direct-download updates go through `update.Apply`: the release is re-fetched in
+the backend (the frontend only supplies the version the user approved), the
+asset is checked against `SHA256SUMS`, and `SHA256SUMS.sig` must verify against
+the Ed25519 key baked into production builds (`-tags production`); dev builds
+without a key fall back to checksum-only per `require_signed_dev.go`. Any
+verification failure aborts with an error — it never degrades to the Releases
+page or to an unverified install. `Install` re-hashes the file right before use
+(on Windows under a share-deny-write handle held across the UAC launch) and
+checks the artifact's own version (Windows PE version resource, macOS
+`CFBundleShortVersionString`) against the release tag, because the signed
+`SHA256SUMS` uses version-less asset names.
 
 The Homebrew path is verified, not trusted: after `brew` exits 0, the installed
 bundle's `CFBundleShortVersionString` is compared against the release version and

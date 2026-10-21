@@ -526,6 +526,8 @@ func TestMacOSLiveProductionNetworking(t *testing.T) {
 	}
 	t.Log("PASS kill switch blocks a fresh physical-network TCP connection that succeeds before activation")
 	t.Log("PASS multi-tunnel kill-switch permits preserve IPv4/IPv6 and DNS")
+	liveDNS(t, "198.18.241.3", false)
+	t.Log("PASS unconfigured reachable DNS remains blocked with DNS protection and kill switch both enabled")
 	if strings.Contains(pfBefore, "Status: Disabled") && os.Getenv("WIREGUIDE_LIVE_PF_DISABLE") == "1" {
 		stopOwnPF := func() livePFReference {
 			t.Helper()
@@ -549,6 +551,7 @@ func TestMacOSLiveProductionNetworking(t *testing.T) {
 		livePing(t, c, a)
 		liveDNS(t, "198.18.241.1", true)
 		t.Log("PASS actual external PF stop, invalidated reference and production 5-second repair loop")
+		liveDNS(t, "198.18.241.3", false)
 
 		oldRef := stopOwnPF()
 		otherRef := livePFCoowner(t, dir)
@@ -590,6 +593,7 @@ func TestMacOSLiveProductionNetworking(t *testing.T) {
 	livePing(t, c, a)
 	livePing(t, c, b)
 	t.Log("PASS native cached reconnect preserves sibling and reapplies firewall")
+	liveDNS(t, "198.18.241.3", false)
 	// Actual SIGKILL + system launchd restart, followed by production journal
 	// recovery and async desired restoration. No transport is mocked.
 	crash := func() {
@@ -612,6 +616,7 @@ func TestMacOSLiveProductionNetworking(t *testing.T) {
 	livePing(t, c, b)
 	liveDNS(t, "198.18.241.1", true)
 	t.Log("PASS actual SIGKILL, system launchd respawn, same-boot desired restore and protected packets")
+	liveDNS(t, "198.18.241.3", false)
 	liveCall(t, c, "Live.ForcedDisconnect", a.Name, nil)
 	livePing(t, c, b)
 	liveDNS(t, "198.18.242.1", true)

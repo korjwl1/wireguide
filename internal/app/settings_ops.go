@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -287,19 +288,38 @@ func (s *TunnelService) DismissUpdate(version string) error {
 	return s.updateStore.Dismiss(version)
 }
 
+// applyUpdate is the direct-download update chain; a package var so tests
+// can drive RunUpdate's routing without network access or installing.
+var applyUpdate = update.Apply
+
+const releasesPageURL = "https://github.com/korjwl1/wireguide/releases/latest"
+
 // RunUpdate performs the update end-to-end:
 //
 //   - Homebrew installs → `brew update && brew upgrade --cask wireguide`,
 //     then verifying the installed version and restarting the app.
-//   - Non-brew installs → open the GitHub Releases page in the browser.
-//     Auto-replacing an un-notarised `.app` bundle needs sudo and races
-//     with Gatekeeper quarantining of the new binary; redirecting the
-//     user to the download page is the honest path for an indie macOS
-//     app without an Apple Developer account.
+//   - Direct-download installs (Windows NSIS install, macOS .app in a
+//     user-writable folder) → update.Apply: re-fetch the release in the
+//     backend, download, verify SHA256SUMS + its Ed25519 signature, then
+//     run the silent installer (Windows) or swap the bundle (macOS) and
+//     relaunch. Verification failures are returned as errors — never
+//     "fixed" by falling back to anything else.
+//   - Installs that can't replace themselves (Linux packages, portable or
+//     dev binaries, translocated / read-only bundles) → open the GitHub
+//     Releases page in the browser.
+//
+// Only info.Version is taken from the caller: info arrives as JSON from
+// the frontend, so the download URLs and hashes are re-derived by Apply.
 func (s *TunnelService) RunUpdate(info *update.UpdateInfo) error {
 	if info == nil || !info.Available {
 		return fmt.Errorf("no update available")
 	}
+	// The banner and Settings → About can both start an update; two runs
+	// would download twice and race on the installer / bundle swap.
+	if !s.updateRunning.CompareAndSwap(false, true) {
+		return fmt.Errorf("an update is already in progress")
+	}
+	defer s.updateRunning.Store(false)
 
 	if runtime.GOOS == "darwin" && update.IsBrewInstall() {
 		brewBin := update.BrewPath()
@@ -366,18 +386,35 @@ func (s *TunnelService) RunUpdate(info *update.UpdateInfo) error {
 				"brew exited 0 but /Applications/WireGuide.app is still %s (expected %s) — brew output: %s",
 				installed, info.Version, strings.TrimSpace(string(out)))
 		}
-		return s.restartAfterUpdate()
+		return s.restartAfterUpdate("/Applications/WireGuide.app")
 	}
 
-	slog.Info("update: opening GitHub Releases page (non-brew install)")
-	if s.app != nil {
-		return s.app.Browser.OpenURL("https://github.com/korjwl1/wireguide/releases/latest")
+	// Generous ceiling: the download has its own 5-minute client timeout,
+	// and on Windows this also covers the user sitting on the UAC prompt
+	// and the silent installer run.
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
+	defer cancel()
+	slog.Info("update: starting direct-download update", "version", info.Version)
+	res, err := applyUpdate(ctx, info.Version, s.emitUpdateProgress)
+	if errors.Is(err, update.ErrSelfUpdateUnsupported) {
+		// Nothing was executed or swapped in; the only safe fallback is
+		// letting the user download the release themselves.
+		slog.Info("update: self-update unavailable, opening GitHub Releases page", "reason", err)
+		return s.OpenURL(releasesPageURL)
 	}
-	return exec.Command("open", "https://github.com/korjwl1/wireguide/releases/latest").Run()
+	if err != nil {
+		slog.Error("update: direct-download update failed", "version", info.Version, "error", err)
+		return err
+	}
+	if res != nil && res.RelaunchPath != "" {
+		return s.restartAfterUpdate(res.RelaunchPath)
+	}
+	return nil
 }
 
 // emitUpdateProgress tells the frontend which phase RunUpdate is in
-// ("refresh" = brew update, "install" = brew upgrade). Best-effort — a
+// ("refresh" = brew update, "install" = brew upgrade / installer run,
+// "download" = direct-download fetch + verification). Best-effort — a
 // nil app (tests) just skips the emit.
 func (s *TunnelService) emitUpdateProgress(phase string) {
 	if s.app != nil {

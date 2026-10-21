@@ -1,5 +1,30 @@
 # Release signing & rotation
 
+## Release preparation
+
+Run Windows/macOS/Linux CI on the final integrated release commit before
+pushing a version tag. CI is triggered by pull requests or manual dispatch;
+a plain branch push does not run it, and the tag workflow packages/releases
+without rerunning the full test matrix.
+
+Align `internal/version/version.go`, `build/config.yml`, both macOS plists,
+Windows executable/installer/manifest/MSIX metadata, and Linux nfpm metadata
+with the new version. The release job rejects a tag whose application, NSIS
+or macOS bundle version differs. Numeric packaging fields omit any prerelease
+suffix; the application version retains it.
+
+Add a dated entry to `CHANGELOG.md`. The release workflow uses the matching
+entry as its notes, with git-cliff as the fallback when no curated entry
+exists. Include user-visible changes, upgrade behavior and actual verification
+limits. Avoid automatic issue-closing keywords in release integration PRs
+when issues are meant to be closed only after the release is published.
+
+After publishing, verify all platform assets, `SHA256SUMS` and
+`SHA256SUMS.sig`, and confirm the Homebrew cask version and archive checksum.
+Close related issues only when their implementation and verification support
+resolution; retain reports whose original failure or required hardware is
+still unverified.
+
 The auto-update verifier in `internal/update/checker.go` defends
 against a compromised GitHub account by verifying an Ed25519
 signature over `SHA256SUMS` with a public key embedded in the binary

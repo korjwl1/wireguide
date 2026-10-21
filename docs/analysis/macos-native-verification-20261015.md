@@ -192,3 +192,216 @@ timeout; the fresh complete run after networking cleanup passed.
   [review disposition](claude-review-disposition.md).
 
 No main merge or original PR closure is part of this verification.
+
+## Full application verification — 2026-10-21
+
+Host: macOS 26.4.1 (25E253), arm64, Wi-Fi, one display. Local branch
+`test/macos-verify-20261021` combines main `d5a629b`, PR #55 `9c18a10`
+and PR #56 `91a7692` at merge `7c64ba3`, plus the two fixes below.
+Remote refs/tags were fetched; no remote branch or PR was changed.
+Sleep/wake was explicitly excluded. This section supersedes the older
+"Still open" entries only for the scenarios actually recorded here.
+
+Private evidence lives in the mode-0700 local directory
+`/private/tmp/wireguide-macos-verify-20261021-dokzvpbp`. It includes original
+app/user/helper backups, packet-test logs and before/after OS snapshots.
+Profiles, keys, network identifiers and private snapshots are not committed.
+The installed old app was stopped before testing. Production builds use
+the macOS 12.0 deployment target and ad-hoc signed app bundles.
+
+### Defects found and corrected
+
+- Connecting replaced the padded native Dock icon with an edge-to-edge
+  shared PNG, making the artwork grow. The macOS bridge now draws the badge
+  over the original AppKit icon and restores the default icon on disconnect.
+  The strengthened native test checks logical size, rendered pixels outside
+  the badge, green pixels and exact reset across 25 connect/disconnect cycles.
+- A real direct update replaced the bundle but hung during application quit.
+  Captured native samples and Go stacks showed Wails alpha.74 holding the
+  window-map read lock while waiting synchronously for AppKit; native cleanup
+  needed the same map's write lock. The custom transport keeps HTTP bindings
+  and queues event delivery on the GUI thread after taking a window snapshot
+  without retaining that lock. It ignores events before runtime readiness and
+  after shutdown. Regression tests cover lock release and both lifecycle
+  boundaries. The repeated direct update exited and automatically opened the
+  downloaded official app successfully.
+
+### Completed checks
+
+| Scenario | Result and evidence |
+|---|---|
+| Privileged native networking | `TestMacOSLiveProductionNetworking` passed in 33.98 s; runner exit 0. Real utun IPv4/IPv6 payloads, split/global/mixed DNS, resolver dispatch, DNS protection, KS packets, external PF stop/repair, second-owner token coexistence, cached reconnect, SIGKILL/launchd recovery, durable forced-stop veto, two global-DNS tunnels and sibling preservation. Exact network restoration and emergency cleanup passed. `native-evidence/result.json`. |
+| Remote IPv4 full tunnel | Real WAN handshake, counters, utun default forwarding and HTTPS 200. Configured DNS allowed, reachable alternate resolver blocked with protection and restored by Off. Sustained upload for 35 s at 512 KiB/s caused no false watchdog stop; disconnect completed in 0.938 s. Zero-tunnel KS blocked physical traffic, Off restored it. `runtime-remote-results.json`. |
+| Rules and CLI lifecycle | Import, rename, active delete, live edits, first-match precedence, else, subnet/not-subnet, MAC normalization/not-MAC, GUI-reported actual SSID and manual overrides passed. Manual Off persisted through a 36 s observation; manual On prevailed over a disconnect rule. Active CLI delete disconnected and removed the disposable tunnel in 0.915 s. `runtime-automation-results.json`. |
+| Physical outage | Wi-Fi disabled for 5 s and restored; the remote VPN recovered HTTPS in 19.94 s including the outage. `wifi-only-results.json`. |
+| Endpoint bypass | With the monitor armed, deleting the owned host route produced a repaired STATIC physical bypass and working WAN traffic. `bypass-steady-results.json`. An earlier combined early route deletion/outage test instead detected recursive forwarding, stopped safely and required manual recovery; it is not counted as automatic outage recovery. `network-transition-results.json` records that initial failure. |
+| Full GUI lifecycle | Minimized and hidden windows restored through another launch/app copy with the same GUI PID. GUI active-tunnel delete showed the disconnect-first warning and retained the connection. Idle operation exceeded 437 s without helper respawn/elevation loops. Window restoration and idle JSON evidence are retained. |
+| Full GUI helper crash | SIGKILL during a real WAN connection with DNS protection and KS recovered traffic in 5.027 s, preserving the GUI PID and requiring no further elevation. An explicitly unloaded helper produced reopen guidance without repeated authorization. `gui-helper-crash-result.private.json`. |
+| Explicit quit | Native Cmd+Q exited the GUI while connected with protection enabled; DNS/default routing returned to the stopped state. `native-quit-result.private.json`. Closing the window remains distinct from explicit Quit. |
+| Authorization cancel/retry | The user canceled the actual administrator prompt; error -128 produced a Retry/Quit dialog. Clicking Retry and approving the next prompt reached the working GUI. Exactly two authorization attempts, one canceled, occurred. `authorization-cancel-success.json`, native dialog snapshot and `gui-auth-ready.log`. Earlier accidentally approved attempts are not counted as cancellation checks. |
+| Direct signed update | A production-code fixture reporting 0.5.1 verified/downloaded the official 0.5.2 release, replaced the app, exited and automatically opened the new GUI. This passed after the shutdown fix; the original failing sample is retained. `direct-update-fixed-result.json`. |
+| Homebrew update | The equivalent in-app Homebrew flow updated the receipt/app to 0.5.2, exited the old GUI and opened the official new app. The temporarily hidden receipt used to select the direct-update path was restored. `brew-update-result.json`. |
+| Native desktop tests | Dock icon geometry/reset, Cocoa status item/menu lifecycle, hang capture, disabled launchd-state parsing, demand lifecycle, socket activation and DNS checkpoint-before-write opt-ins passed. These fixtures do not establish every hardware/UI scenario below. |
+| Automated checks after fixes | Complete `go test -race -count=1 ./...` with native icon/tray opt-ins and `go vet ./...` passed. Frontend 15 tests and build passed. Production update tests passed. Windows GUI test binary cross-compilation passed; no post-fix Windows runtime result is claimed. |
+
+### Remaining environment limits
+
+Other macOS versions and unavailable display arrangements are context limits,
+not additional release gates for the user's current-Mac verification scope.
+Display selection/appearance logic was not changed in this branch; menu glyph
+alpha/outline rendering was changed and tested on the available display.
+
+- Sleep/wake remains intentionally excluded.
+- No Ethernet uplink or second physical network was available: Wi-Fi/Ethernet
+  roaming, a changed gateway and duplicate-subnet routers remain unverified.
+- The WAN peer/underlay was IPv4. Native tunnel IPv6 payloads passed, but
+  IPv6 outer transport and remote dual-stack full-tunnel WAN were unavailable.
+- macOS 27, multiple displays with different wallpapers and spoken VoiceOver
+  output were unavailable. Native menu/badge tests and AX connection-state
+  attributes do not replace those checks.
+- Actual BTM denial/approval, deliberately long authorization, and a second
+  failed Retry were not reproduced. Cancellation followed by successful
+  Retry and repair after job removal were exercised.
+- This run does not establish new Windows or Linux runtime coverage, nor
+  exhaustive visual review of every locale/theme/window size.
+
+The Homebrew receipt remains at 0.5.2. The local patched 0.5.2 app is restored
+after update/cancellation fixtures; user tunnel configuration and settings
+are preserved byte for byte. Final stopped-state checks confirmed PF disabled,
+both WireGuide anchors empty, exact per-service DNS/search preferences,
+matching signed app/helper binaries and no temporary system launchd jobs.
+No updater swap staging directory remained. The original VPN was then
+reconnected with the patched app: connected state, real handshake/counters
+and public HTTPS 200 were confirmed, with one GUI process. Evidence:
+`final-cleanup-check.json`, `final-restored-result.json` and the private final
+status snapshot. No release, push or PR merge is part of this run.
+
+## BTM implementation comparison — 2026-10-21
+
+Following the user's request, background approval handling was compared with
+open-source implementations instead of changing this Mac's approval settings.
+This is source/native API verification, not a claim that the actual System
+Settings denial/reapproval UI was exercised.
+
+- [Mullvad's legacy daemon status query](https://github.com/mullvad/mullvadvpn-app/blob/209b0d6a65b04130868be6bc955b16a91619ee7c/mullvad-daemon/src/macos_launch_daemon.rs)
+  calls `SMAppService.statusForLegacyPlist(at:)` on macOS 13+, maps
+  `requiresApproval` to not authorized, and distinguishes missing/unknown
+  status. Its package installer still installs a conventional LaunchDaemon;
+  querying this API does not require migrating service registration.
+- [Pearcleaner's helper manager](https://github.com/alienator88/Pearcleaner/blob/7724df7111bff82ae243301cf701992ef05ecf19/Pearcleaner/Logic/HelperToolManager.swift)
+  uses modern `SMAppService.daemon`, directs approval-required users to Login
+  Items settings, and also checks actual helper responsiveness. Its
+  registration/reinstallation policy is different from WireGuide's legacy
+  install and is not copied wholesale.
+- [Apple's legacy status API](https://developer.apple.com/documentation/servicemanagement/smappservice/statusforlegacyplist(at:))
+  is specifically intended to detect user-disabled legacy helpers. The SDK
+  header recommends checking at launch and after connection errors. The
+  `launchctl print-disabled` override list alone is not equivalent to this
+  approval status.
+
+The comparison found one omission: WireGuide checked launchd disable
+overrides but did not query the legacy BTM approval API. A read-only native
+bridge now checks it before install/repair and after repair failures.
+`requiresApproval` uses the existing disabled-service error, Open Settings
+action and explicit Retry flow, avoiding unnecessary authorization/reinstall.
+Missing, unregistered or unknown API states do not assert user denial; the
+existing launchctl checks/readiness/one-repair policy still apply. macOS 12
+and non-CGo builds retain the launchctl fallback. No BTM reset, automatic
+enable, service registration migration or dependency was added.
+
+The native child test first queried the actual framework (this Mac reported
+Enabled), then replaced the query method only inside that disposable process
+to verify requiresApproval, enabled, missing, unregistered and unknown return
+values. It checks the exact plist URL and rejects empty paths without querying
+the framework. It never changes the system approval database. Run with
+`WIREGUIDE_TEST_BTM=1 go test ./internal/elevate -run TestNativeBackgroundApproval -v`.
+
+The elevate/GUI race suites including this probe, their vet checks and a full
+production build passed; the non-CGo macOS elevate test binary also
+cross-compiled. This source-only follow-up did not replace the running app;
+the original VPN connection stayed active through the review. Private
+sources/test evidence and the production executable are under
+`/private/tmp/wireguide-btm-review-20261021`.
+
+## Sleep/wake follow-up and combined DNS protection defect — 2026-10-21
+
+The user subsequently authorized real sleep/wake testing on the same macOS
+26.4.1 arm64 Mac. The current signed app/helper includes the BTM follow-up.
+Private evidence, original configuration/app backups and the supervised test
+scripts are in `/private/tmp/wireguide-macos-sleep-20261021-pz7q8zcd`.
+One-time wake events use a unique verification owner and are canceled
+individually; permanent power-management settings are not changed.
+
+The first completed plain-connection cycle recorded actual system Sleep/Wake,
+an approximately 63-second scheduler gap, IOKit notification and automatic
+reconnection. Completion plus eight seconds of stable HTTPS took 19.11 s
+after the supervising process resumed. GUI/helper PIDs stayed unchanged.
+An earlier driver advanced after transient post-wake traffic before the
+scheduled reconnect finished; its next setting transition was not a valid
+steady-state check. A separate protected attempt immediately returned from
+DarkWake on HID input and is not counted as a completed sleep test.
+
+A later actual protected sleep cycle recovered VPN traffic but exposed a
+DNS enforcement defect. This was reproduced independently while awake:
+DNS-only protection blocked the reachable alternate resolver, but enabling
+the kill switch allowed it. The main PF anchor put `pass quick on utunX all`
+before its DNS sub-anchor, so the terminal permit bypassed the DNS policy.
+The loaded DNS rule text and enabled flags could therefore look correct
+while packets escaped the intended resolver restriction. This observation
+does not establish cleartext DNS escaping the encrypted tunnel; it establishes
+that an unconfigured resolver was reachable through the VPN despite protection.
+
+The DNS sub-anchor now runs before tunnel-wide permits. Endpoint transport,
+DHCP/loopback exceptions and the final physical-network blockade remain in
+place. The ordering regression test failed before the fix and passes after
+it. The native packet matrix now checks the unconfigured but reachable
+resolver with both protections active, after PF repair, cached reconnect and
+actual SIGKILL recovery; the older matrix checked that negative case only
+before enabling the kill switch.
+
+Firewall/helper/reconnect race tests and vet passed, and the corrected
+production bundle was built, signed and installed with a matching helper.
+The expanded privileged packet matrix passed in **34.71 s**, independent
+runner exit **0**, with exact DNS/service/interface restoration and PF
+ownership cleanup. Evidence: `pf-fix-native-verified/native-test.log` and
+`result.json`. Awake WAN verification also confirmed that the corrected
+combined protections allow the configured resolver and block the alternate.
+The setup attempts denied Documents-folder access or started before the
+installed helper finished exiting did not run the native matrix and are
+not counted as product failures or successful test runs.
+
+### Completed sleep/wake results
+
+All three scenarios below completed with real macOS Sleep/FullWake records
+and IOKit notifications. The plain run used the BTM-follow-up build; the
+protected and manual-Off runs used the corrected PF build, committed as
+`5467e6c`. The plain path's protections were Off and its code was unchanged
+by that PF correction.
+
+| Scenario | OS evidence and observed result |
+|---|---|
+| Connected, original protection settings Off | 65 s of actual Sleep. VPN reconnected automatically; completion plus 8 s of stable HTTPS took 19.11 s after the supervisor resumed. GUI/helper PIDs unchanged. |
+| Connected, DNS protection and KS On | 65 s of actual Sleep, then FullWake. Automatic VPN recovery plus 8 s stable HTTPS was confirmed 25.54 s after the recorded FullWake. Configured DNS answered; reachable unconfigured DNS remained blocked; the KS and DNS anchors were restored. Same GUI/helper, no wake-time elevation or hang report. |
+| Manually disconnected, KS still On | Entered DarkWake, then 51 s of actual Sleep; scheduled wake went through DarkWake to FullWake. The tunnel stayed disconnected for the full 35 s observation, and a fresh physical-network HTTP connection remained blocked. Same GUI/helper and IOKit notification. |
+
+An intermediate driver rejected a valid maintenance-wake cycle because it
+required a continuous 20-second process scheduling gap. The power log showed
+actual Sleep, DarkWake, further Sleep and scheduled FullWake. The corrected
+driver waits through the scheduled wake and checks the actual Sleep and
+FullWake records, rather than treating a maintenance wake as a failed sleep
+test. This changes the fixture's power-state detection, not product behavior.
+The final protected run independently obtained an uninterrupted 65 s Sleep;
+the manual-Off run verified the maintenance-wake path as well.
+
+Final combined evidence: **25 checks passed**, `results.json`; all original
+settings/profile/power-settings comparisons passed, `restoration.json`.
+The original VPN is reconnected with a fresh handshake and HTTPS 200.
+WireGuide PF anchors are empty with the original protections Off, temporary
+wake events are absent, signed app/helper hashes match, and one GUI remains.
+After these cycles, native accessibility actions opened and closed Settings
+successfully (`gui-after-wake-result.json`), confirming interactive UI response.
+The latest BTM and PF fixes are installed in the running app/helper.
+
+This completes the requested short sleep/wake scenarios on this Mac. It
+does not establish overnight standby/hibernation, physical lid-close
+behavior or the historical macOS 27 hang's exact cause.

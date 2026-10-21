@@ -139,6 +139,9 @@ Restart source differs by platform: on macOS launchd restarts a crashed
 helper (`KeepAlive`), so restore runs on startup subject to the boot-time
 check. On Windows/Linux nothing restarts the helper but the GUI's background
 recovery, which passes `--restore-desired`; any other start clears the file.
+(Superseded in #54: background recovery now only reconnects and asks the user
+to reopen the app, so it never spawns a helper and `--restore-desired` is not
+passed. A crashed helper on Windows/Linux comes back as a fresh start.)
 Boot time alone can't gate Windows: a Fast Startup shutdown keeps it.
 On Windows/Linux an in-app update is also a fresh start, so tunnels don't
 carry across it there (unchanged from before this branch).
@@ -207,3 +210,15 @@ issue-41 doc), then, with the GUI running and a tunnel connected:
 
 Record macOS version, `launchctl print system/com.wireguide.helper` after
 each crash-restart, and the helper log tail.
+
+### Current-Mac sleep verification (2026-10-21)
+
+The [completed native application follow-up](macos-native-verification-20261015.md#completed-sleepwake-results)
+records actual software-triggered Sleep/FullWake on macOS 26.4.1 arm64:
+connected VPN with protections Off, with DNS protection/kill switch On,
+and manual-Off with the kill switch retained. Automatic reconnect and stable
+HTTPS, resolver restrictions, manual-Off persistence and native GUI response
+passed. A pre-existing PF rule ordering defect exposed by the protected
+cycle was fixed and packet-tested through reconnect/PF repair/helper crash.
+These results do not reproduce the historical macOS 27 hang or establish
+overnight standby/lid-close behavior.
