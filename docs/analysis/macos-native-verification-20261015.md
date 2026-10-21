@@ -246,6 +246,11 @@ the macOS 12.0 deployment target and ad-hoc signed app bundles.
 
 ### Remaining environment limits
 
+Other macOS versions and unavailable display arrangements are context limits,
+not additional release gates for the user's current-Mac verification scope.
+Display selection/appearance logic was not changed in this branch; menu glyph
+alpha/outline rendering was changed and tested on the available display.
+
 - Sleep/wake remains intentionally excluded.
 - No Ethernet uplink or second physical network was available: Wi-Fi/Ethernet
   roaming, a changed gateway and duplicate-subnet routers remain unverified.
@@ -270,3 +275,50 @@ reconnected with the patched app: connected state, real handshake/counters
 and public HTTPS 200 were confirmed, with one GUI process. Evidence:
 `final-cleanup-check.json`, `final-restored-result.json` and the private final
 status snapshot. No release, push or PR merge is part of this run.
+
+## BTM implementation comparison — 2026-10-21
+
+Following the user's request, background approval handling was compared with
+open-source implementations instead of changing this Mac's approval settings.
+This is source/native API verification, not a claim that the actual System
+Settings denial/reapproval UI was exercised.
+
+- [Mullvad's legacy daemon status query](https://github.com/mullvad/mullvadvpn-app/blob/209b0d6a65b04130868be6bc955b16a91619ee7c/mullvad-daemon/src/macos_launch_daemon.rs)
+  calls `SMAppService.statusForLegacyPlist(at:)` on macOS 13+, maps
+  `requiresApproval` to not authorized, and distinguishes missing/unknown
+  status. Its package installer still installs a conventional LaunchDaemon;
+  querying this API does not require migrating service registration.
+- [Pearcleaner's helper manager](https://github.com/alienator88/Pearcleaner/blob/7724df7111bff82ae243301cf701992ef05ecf19/Pearcleaner/Logic/HelperToolManager.swift)
+  uses modern `SMAppService.daemon`, directs approval-required users to Login
+  Items settings, and also checks actual helper responsiveness. Its
+  registration/reinstallation policy is different from WireGuide's legacy
+  install and is not copied wholesale.
+- [Apple's legacy status API](https://developer.apple.com/documentation/servicemanagement/smappservice/statusforlegacyplist(at:))
+  is specifically intended to detect user-disabled legacy helpers. The SDK
+  header recommends checking at launch and after connection errors. The
+  `launchctl print-disabled` override list alone is not equivalent to this
+  approval status.
+
+The comparison found one omission: WireGuide checked launchd disable
+overrides but did not query the legacy BTM approval API. A read-only native
+bridge now checks it before install/repair and after repair failures.
+`requiresApproval` uses the existing disabled-service error, Open Settings
+action and explicit Retry flow, avoiding unnecessary authorization/reinstall.
+Missing, unregistered or unknown API states do not assert user denial; the
+existing launchctl checks/readiness/one-repair policy still apply. macOS 12
+and non-CGo builds retain the launchctl fallback. No BTM reset, automatic
+enable, service registration migration or dependency was added.
+
+The native child test first queried the actual framework (this Mac reported
+Enabled), then replaced the query method only inside that disposable process
+to verify requiresApproval, enabled, missing, unregistered and unknown return
+values. It checks the exact plist URL and rejects empty paths without querying
+the framework. It never changes the system approval database. Run with
+`WIREGUIDE_TEST_BTM=1 go test ./internal/elevate -run TestNativeBackgroundApproval -v`.
+
+The elevate/GUI race suites including this probe, their vet checks and a full
+production build passed; the non-CGo macOS elevate test binary also
+cross-compiled. This source-only follow-up did not replace the running app;
+the original VPN connection stayed active through the review. Private
+sources/test evidence and the production executable are under
+`/private/tmp/wireguide-btm-review-20261021`.

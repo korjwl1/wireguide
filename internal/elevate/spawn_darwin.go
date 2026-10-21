@@ -379,6 +379,12 @@ func waitForHelper(ctx context.Context, addr string, timeout time.Duration) erro
 var disabledDaemonLine = regexp.MustCompile(`(?m)^\s*"` + regexp.QuoteMeta(daemonLabel) + `"\s*=>\s*(?:true|disabled)\s*[,;]?\s*$`)
 
 func checkDaemonEnabled(ctx context.Context) error {
+	// BTM can require approval even when launchctl has no disable override.
+	// This also covers legacy plists: migrating service registration is not
+	// required to query their approval through ServiceManagement on macOS 13+.
+	if backgroundApprovalRequired(daemonPlist) {
+		return fmt.Errorf("%w. Allow WireGuide in System Settings > General > Login Items & Extensions, then retry", ErrBackgroundDisabled)
+	}
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
 	out, err := exec.CommandContext(ctx, "launchctl", "print-disabled", "system").CombinedOutput()
