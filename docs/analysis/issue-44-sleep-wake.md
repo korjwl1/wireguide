@@ -210,3 +210,15 @@ issue-41 doc), then, with the GUI running and a tunnel connected:
 
 Record macOS version, `launchctl print system/com.wireguide.helper` after
 each crash-restart, and the helper log tail.
+
+### Current-Mac sleep verification (2026-10-21)
+
+The [completed native application follow-up](macos-native-verification-20261015.md#completed-sleepwake-results)
+records actual software-triggered Sleep/FullWake on macOS 26.4.1 arm64:
+connected VPN with protections Off, with DNS protection/kill switch On,
+and manual-Off with the kill switch retained. Automatic reconnect and stable
+HTTPS, resolver restrictions, manual-Off persistence and native GUI response
+passed. A pre-existing PF rule ordering defect exposed by the protected
+cycle was fixed and packet-tested through reconnect/PF repair/helper crash.
+These results do not reproduce the historical macOS 27 hang or establish
+overnight standby/lid-close behavior.

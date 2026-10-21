@@ -322,3 +322,86 @@ cross-compiled. This source-only follow-up did not replace the running app;
 the original VPN connection stayed active through the review. Private
 sources/test evidence and the production executable are under
 `/private/tmp/wireguide-btm-review-20261021`.
+
+## Sleep/wake follow-up and combined DNS protection defect — 2026-10-21
+
+The user subsequently authorized real sleep/wake testing on the same macOS
+26.4.1 arm64 Mac. The current signed app/helper includes the BTM follow-up.
+Private evidence, original configuration/app backups and the supervised test
+scripts are in `/private/tmp/wireguide-macos-sleep-20261021-pz7q8zcd`.
+One-time wake events use a unique verification owner and are canceled
+individually; permanent power-management settings are not changed.
+
+The first completed plain-connection cycle recorded actual system Sleep/Wake,
+an approximately 63-second scheduler gap, IOKit notification and automatic
+reconnection. Completion plus eight seconds of stable HTTPS took 19.11 s
+after the supervising process resumed. GUI/helper PIDs stayed unchanged.
+An earlier driver advanced after transient post-wake traffic before the
+scheduled reconnect finished; its next setting transition was not a valid
+steady-state check. A separate protected attempt immediately returned from
+DarkWake on HID input and is not counted as a completed sleep test.
+
+A later actual protected sleep cycle recovered VPN traffic but exposed a
+DNS enforcement defect. This was reproduced independently while awake:
+DNS-only protection blocked the reachable alternate resolver, but enabling
+the kill switch allowed it. The main PF anchor put `pass quick on utunX all`
+before its DNS sub-anchor, so the terminal permit bypassed the DNS policy.
+The loaded DNS rule text and enabled flags could therefore look correct
+while packets escaped the intended resolver restriction. This observation
+does not establish cleartext DNS escaping the encrypted tunnel; it establishes
+that an unconfigured resolver was reachable through the VPN despite protection.
+
+The DNS sub-anchor now runs before tunnel-wide permits. Endpoint transport,
+DHCP/loopback exceptions and the final physical-network blockade remain in
+place. The ordering regression test failed before the fix and passes after
+it. The native packet matrix now checks the unconfigured but reachable
+resolver with both protections active, after PF repair, cached reconnect and
+actual SIGKILL recovery; the older matrix checked that negative case only
+before enabling the kill switch.
+
+Firewall/helper/reconnect race tests and vet passed, and the corrected
+production bundle was built, signed and installed with a matching helper.
+The expanded privileged packet matrix passed in **34.71 s**, independent
+runner exit **0**, with exact DNS/service/interface restoration and PF
+ownership cleanup. Evidence: `pf-fix-native-verified/native-test.log` and
+`result.json`. Awake WAN verification also confirmed that the corrected
+combined protections allow the configured resolver and block the alternate.
+The setup attempts denied Documents-folder access or started before the
+installed helper finished exiting did not run the native matrix and are
+not counted as product failures or successful test runs.
+
+### Completed sleep/wake results
+
+All three scenarios below completed with real macOS Sleep/FullWake records
+and IOKit notifications. The plain run used the BTM-follow-up build; the
+protected and manual-Off runs used the corrected PF build, committed as
+`5467e6c`. The plain path's protections were Off and its code was unchanged
+by that PF correction.
+
+| Scenario | OS evidence and observed result |
+|---|---|
+| Connected, original protection settings Off | 65 s of actual Sleep. VPN reconnected automatically; completion plus 8 s of stable HTTPS took 19.11 s after the supervisor resumed. GUI/helper PIDs unchanged. |
+| Connected, DNS protection and KS On | 65 s of actual Sleep, then FullWake. Automatic VPN recovery plus 8 s stable HTTPS was confirmed 25.54 s after the recorded FullWake. Configured DNS answered; reachable unconfigured DNS remained blocked; the KS and DNS anchors were restored. Same GUI/helper, no wake-time elevation or hang report. |
+| Manually disconnected, KS still On | Entered DarkWake, then 51 s of actual Sleep; scheduled wake went through DarkWake to FullWake. The tunnel stayed disconnected for the full 35 s observation, and a fresh physical-network HTTP connection remained blocked. Same GUI/helper and IOKit notification. |
+
+An intermediate driver rejected a valid maintenance-wake cycle because it
+required a continuous 20-second process scheduling gap. The power log showed
+actual Sleep, DarkWake, further Sleep and scheduled FullWake. The corrected
+driver waits through the scheduled wake and checks the actual Sleep and
+FullWake records, rather than treating a maintenance wake as a failed sleep
+test. This changes the fixture's power-state detection, not product behavior.
+The final protected run independently obtained an uninterrupted 65 s Sleep;
+the manual-Off run verified the maintenance-wake path as well.
+
+Final combined evidence: **25 checks passed**, `results.json`; all original
+settings/profile/power-settings comparisons passed, `restoration.json`.
+The original VPN is reconnected with a fresh handshake and HTTPS 200.
+WireGuide PF anchors are empty with the original protections Off, temporary
+wake events are absent, signed app/helper hashes match, and one GUI remains.
+After these cycles, native accessibility actions opened and closed Settings
+successfully (`gui-after-wake-result.json`), confirming interactive UI response.
+The latest BTM and PF fixes are installed in the running app/helper.
+
+This completes the requested short sleep/wake scenarios on this Mac. It
+does not establish overnight standby/hibernation, physical lid-close
+behavior or the historical macOS 27 hang's exact cause.

@@ -125,3 +125,15 @@ and product cleanup. Forced-disconnect tests inject the event and validate
 real teardown/block persistence; genuine recursive-route detection and remote
 full-tunnel tests above remain unchecked. Actual sleep/wake was deferred by
 the user. The test runner is `scripts/macos_native_live_test.py`.
+
+## macOS sleep/wake follow-up (2026-10-21)
+
+[Completed execution report](analysis/macos-native-verification-20261015.md#completed-sleepwake-results):
+actual Sleep/FullWake with an ordinary connected VPN, with DNS protection
+and kill switch enabled, and with a manually disconnected VPN while the
+kill switch stays enabled. Automatic recovery, post-wake resolver filtering,
+continued manual-Off/physical blockade and interactive GUI response passed.
+An exposed combined-protection PF ordering defect was fixed and retested
+with live packets and the protected sleep cycle. Earlier sleep deferrals
+above describe the earlier runs; overnight standby and lid-close remain
+outside these short, software-triggered cycles.
