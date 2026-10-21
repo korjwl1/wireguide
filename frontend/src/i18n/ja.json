@@ -237,6 +237,7 @@
     "auto_off_hint": "更新の自動確認はオフです。",
     "install_failed": "アップデート失敗",
     "progress_refresh": "更新を確認中…",
+    "progress_download": "ファイルをダウンロード・検証中…",
     "progress_install": "インストール中…"
   },
   "wifi_permission": {

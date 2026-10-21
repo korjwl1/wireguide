@@ -237,6 +237,7 @@
     "auto_off_hint": "업데이트 자동 확인이 꺼져 있습니다.",
     "install_failed": "업데이트 실패",
     "progress_refresh": "업데이트 확인 중…",
+    "progress_download": "다운로드 및 파일 확인 중…",
     "progress_install": "설치 중…"
   },
   "wifi_permission": {

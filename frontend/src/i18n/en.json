@@ -237,6 +237,7 @@
     "auto_off_hint": "Automatic update checks are off.",
     "install_failed": "Update failed",
     "progress_refresh": "Checking for updates…",
+    "progress_download": "Downloading and verifying files…",
     "progress_install": "Installing…"
   },
   "wifi_permission": {

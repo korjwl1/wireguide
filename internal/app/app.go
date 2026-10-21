@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/korjwl1/wireguide/internal/domain"
@@ -36,6 +37,9 @@ type TunnelService struct {
 	// behaviour in that case.
 	updateScheduler *update.Scheduler
 	updateStore     *update.StateStore
+
+	// updateRunning guards RunUpdate against a second concurrent run.
+	updateRunning atomic.Bool
 
 	// activeSessions maps tunnel name → open history session ID. Used by
 	// ReconcileHistoryFromStatus to identify which row to close when a
