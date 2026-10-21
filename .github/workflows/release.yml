@@ -377,7 +377,29 @@ jobs:
           config: cliff.toml
           args: --latest --strip header
         env:
-          OUTPUT: CHANGELOG.md
+          OUTPUT: RELEASE_NOTES.md
+
+      - name: Use curated changelog entry when available
+        run: |
+          python3 - <<'PY'
+          import os
+          import re
+          from pathlib import Path
+
+          version = os.environ["GITHUB_REF_NAME"].removeprefix("v")
+          changelog = Path("CHANGELOG.md").read_text()
+          entry = re.search(
+              r"^## \[" + re.escape(version) + r"\][^\n]*\n(.*?)(?=^## \[|\Z)",
+              changelog,
+              re.MULTILINE | re.DOTALL,
+          )
+          if entry:
+              notes = entry.group(1).strip()
+              Path("RELEASE_NOTES.md").write_text(notes + "\n")
+              print("Using curated release notes for " + version)
+          else:
+              print("No curated entry; retaining git-cliff notes")
+          PY
 
       - name: Publish release
         uses: softprops/action-gh-release@v2
@@ -385,7 +407,7 @@ jobs:
           files: artifacts/*
           draft: false
           prerelease: ${{ contains(github.ref_name, '-') }}
-          body_path: CHANGELOG.md
+          body_path: RELEASE_NOTES.md
           fail_on_unmatched_files: true
 
   update-cask:

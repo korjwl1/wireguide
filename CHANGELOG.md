@@ -2,6 +2,33 @@
 
 All notable changes to WireGuide will be documented in this file.
 
+## [0.6.0] - 2026-10-21
+
+### Added
+- **Verified in-app updates (#36)** — direct-download macOS apps and installer-managed Windows apps can download, verify the Ed25519-signed checksums and artifact version, install, and relaunch. Homebrew installations continue to update through Homebrew; unsupported layouts retain the releases-page fallback.
+- **Split DNS** — `~domain` entries route matching names to macOS supplemental resolvers or Linux systemd-resolved. Unsupported configurations fail before network changes instead of silently ignoring the requested DNS behavior.
+- **Automation rules** — negated SSID/subnet/gateway-MAC conditions, a network-settle window, and explicit manual On/Off overrides. Extended rules are backed up for downgrade recovery.
+- **Connection indicators** — connected VPNs display a green indicator on the macOS Dock and Windows taskbar icons.
+
+### Fixed
+- **macOS sleep and helper recovery (#41, #44)** — restore wanted tunnels and protection after an unexpected helper restart, handle wake/network changes, and avoid repeated background elevation. Current helper installations use launchd socket activation without an administrator prompt on ordinary relaunch; installation, upgrades and repairs can still require authorization. Disabled background items direct users to System Settings.
+- **GUI shutdown** — remove a native event-delivery deadlock that could prevent macOS updates from quitting and relaunching. Keep the helper control connection alive while idle, restore hidden/minimized windows through a second launch, and respect canceled Windows session-end requests.
+- **DNS and firewall protection (#48)** — rebuild per-resolver rules for all active tunnels, preserve sibling traffic and original DNS/search settings, replace Linux nftables rules atomically, and retain independent PF ownership across repair and cleanup. On macOS, evaluate DNS restrictions before kill-switch tunnel-wide permits so enabling both protections cannot bypass the configured resolver list.
+- **Endpoint-loop safety (#49)** — forced disconnects now perform helper teardown, remove stale permits and wanted state, and prevent automatic restoration until a successful manual reconnect. Repair endpoint bypass routes safely and preserve Windows interface binding when its socket is recreated.
+- **macOS menu and Dock icons (#45, #46)** — use native menu ownership and template rendering, remove the faint menu-bar frame, and preserve the Dock icon's original size and padding when adding its green badge.
+- **Profiles and interface** — harden concurrent file operations and imports, preserve per-field edits and errors, clarify protection/update status in English, Korean and Japanese, and fix Windows tunnel recognition in route diagnostics.
+
+### Upgrade notes
+- Back up your tunnel configurations before downgrading. Older versions do not understand the extended automation rules; see the README's downgrade recovery instructions.
+- Closing the window keeps the app in the tray. Explicit Quit or `wireguide ctl stop` shuts down the helper and tunnels. A clean quit or reboot does not restore an old connection; an unexpected same-boot helper restart can.
+- macOS builds remain ad-hoc signed and Windows signing remains subject to SignPath availability. SHA256SUMS and its Ed25519 signature are published for every release.
+
+### Verification
+- Windows 11 runtime checks covered VPN lifecycle, protection, automation, pinned-socket port changes and signed in-app updates. macOS 26.4.1 arm64 checks additionally covered actual sleep/wake, Wi-Fi recovery, native PF/DNS packets, helper crashes and direct/Homebrew updates. Detailed scope is recorded in `docs/analysis/macos-native-verification-20261015.md`.
+- Other macOS versions, multi-display rendering, overnight standby and every physical-network combination are not established by these runs. The historical macOS 27 hang remains under investigation.
+
+Thanks to the contributors and reporters behind #41, #44–#46 and #50–#53.
+
 ## [0.5.2] - 2026-09-15
 
 ### Added

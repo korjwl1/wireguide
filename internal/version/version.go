@@ -1,4 +1,4 @@
 // Package version supplies build identity without update or GUI dependencies.
 package version
 
-const Current = "0.5.2"
+const Current = "0.6.0"
