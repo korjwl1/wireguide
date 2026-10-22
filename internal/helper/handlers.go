@@ -221,8 +221,15 @@ func (h *Helper) handleSetTunnelBackend(params json.RawMessage) (interface{}, er
 	if !kind.Supported() {
 		return nil, fmt.Errorf("tunnel backend %q is not supported on this platform", req.Backend)
 	}
+	// Serialize with Connect/Disconnect: a connect already in flight must
+	// finish before the selection changes, and a connect that starts later
+	// reads the new value from disk. Broadcast the normalized value so the
+	// GUI cannot show a spelling the helper did not accept.
+	h.connectMu.Lock()
 	h.manager.SetBackend(kind)
-	h.server.Broadcast(ipc.EventSettingsChanged, ipc.SettingsChangedPayload{TunnelBackend: &req.Backend})
+	h.connectMu.Unlock()
+	normalized := kind.String()
+	h.server.Broadcast(ipc.EventSettingsChanged, ipc.SettingsChangedPayload{TunnelBackend: &normalized})
 	return ipc.Empty{}, nil
 }
 
