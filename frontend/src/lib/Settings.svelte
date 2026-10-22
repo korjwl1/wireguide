@@ -142,6 +142,7 @@
     health_check: false,
     pin_interface: false,
     log_level: 'info',
+    tunnel_backend: 'userspace',
     tray_icon_style: 'color',
     auto_update_check: true,
     compact_list: false,
@@ -170,6 +171,7 @@
         settings.health_check = s.health_check ?? false;
         settings.pin_interface = s.pin_interface ?? false;
         settings.log_level = s.log_level || 'info';
+        settings.tunnel_backend = s.tunnel_backend || 'userspace';
         settings.tray_icon_style = s.tray_icon_style || 'color';
         settings.compact_list = s.compact_list ?? false;
         // Legacy settings.json predates this field — *bool null on
@@ -252,6 +254,7 @@
   }
 
   function onLogLevelChange(e) { applyField('log_level', e.target.value); }
+  function onTunnelBackendChange(e) { applyField('tunnel_backend', e.target.value); }
   function onKillSwitchChange(e) { applyField('kill_switch', e.target.checked); }
   function onDnsProtectionChange(e) { applyField('dns_protection', e.target.checked); }
   function onPinInterfaceChange(e) { applyField('pin_interface', e.target.checked); }
@@ -267,6 +270,7 @@
     if (p.health_check != null) settings.health_check = p.health_check;
     if (p.pin_interface != null) settings.pin_interface = p.pin_interface;
     if (p.log_level != null) settings.log_level = p.log_level;
+    if (p.tunnel_backend != null) settings.tunnel_backend = p.tunnel_backend;
     settings = settings; // trigger reactivity
   }
 
@@ -477,6 +481,18 @@
                   <span class="toggle-track"></span>
                 </label>
               </div>
+              {#if /Windows/i.test(navigator.userAgent)}
+                <div class="setting-row">
+                  <div class="setting-info">
+                    <label class="setting-label" for="tunnel-backend">{$t('settings.tunnel_backend')}</label>
+                    <p class="setting-desc">{$t('settings.tunnel_backend_hint')}</p>
+                  </div>
+                  <select id="tunnel-backend" disabled={busyFields.tunnel_backend} value={settings.tunnel_backend} on:change={onTunnelBackendChange}>
+                    <option value="userspace">{$t('settings.tunnel_backend_userspace')}</option>
+                    <option value="kernel">{$t('settings.tunnel_backend_kernel')}</option>
+                  </select>
+                </div>
+              {/if}
             </div>
           </div>
 

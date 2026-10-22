@@ -22,7 +22,11 @@ type Settings struct {
 	HealthCheck   bool   `json:"health_check"`  // periodic handshake age monitoring
 	PinInterface  bool   `json:"pin_interface"` // pin bypass routes to upstream interface (-ifscope)
 	LogLevel      string `json:"log_level"`     // "debug", "info", "warn", "error"
-	CompactList   bool   `json:"compact_list"`  // dense tunnel list: hide endpoint line, shorter rows
+	// TunnelBackend selects the WireGuard data plane: "userspace" (wireguard-go
+	// + Wintun, default) or "kernel" (WireGuardNT, Windows only). It applies to
+	// tunnels connected after the setting changes.
+	TunnelBackend string `json:"tunnel_backend"`
+	CompactList   bool   `json:"compact_list"` // dense tunnel list: hide endpoint line, shorter rows
 
 	// ListSort controls tunnel-list ordering: "name_asc" (default),
 	// "name_desc". ListActiveOnTop floats connected tunnels above the
@@ -115,6 +119,7 @@ func DefaultSettings() *Settings {
 		HealthCheck:     false,
 		PinInterface:    false, // off by default — enable for dual-network setups
 		LogLevel:        "info",
+		TunnelBackend:   "userspace",
 		AutoUpdateCheck: &on,
 		ListSort:        "name_asc",
 		ListActiveOnTop: true,

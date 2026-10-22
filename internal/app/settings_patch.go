@@ -21,6 +21,7 @@ type SettingsPatch struct {
 	HealthCheck     *bool   `json:"health_check,omitempty"`
 	PinInterface    *bool   `json:"pin_interface,omitempty"`
 	LogLevel        *string `json:"log_level,omitempty"`
+	TunnelBackend   *string `json:"tunnel_backend,omitempty"`
 	AutoUpdateCheck *bool   `json:"auto_update_check,omitempty"`
 	CompactList     *bool   `json:"compact_list,omitempty"`
 	ListSort        *string `json:"list_sort,omitempty"`
@@ -38,6 +39,7 @@ func (p SettingsPatch) apply(s *storage.Settings) {
 	assignSetting(&s.HealthCheck, p.HealthCheck)
 	assignSetting(&s.PinInterface, p.PinInterface)
 	assignSetting(&s.LogLevel, p.LogLevel)
+	assignSetting(&s.TunnelBackend, p.TunnelBackend)
 	assignSetting(&s.CompactList, p.CompactList)
 	assignSetting(&s.ListSort, p.ListSort)
 	assignSetting(&s.ListActiveOnTop, p.ListActiveOnTop)
@@ -104,6 +106,9 @@ func (s *TunnelService) UpdateSettings(p SettingsPatch) error {
 	}
 	if p.LogLevel != nil {
 		apply("log level", func() error { return s.SetLogLevel(current.LogLevel) })
+	}
+	if p.TunnelBackend != nil {
+		apply("tunnel backend", func() error { return s.SetTunnelBackend(current.TunnelBackend) })
 	}
 	if p.AutoUpdateCheck != nil && !previous.AutoUpdateCheckEnabled() && current.AutoUpdateCheckEnabled() && s.updateScheduler != nil {
 		s.updateScheduler.Kick(true)

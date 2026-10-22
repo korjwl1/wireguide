@@ -6,6 +6,7 @@ import (
 
 	"github.com/korjwl1/wireguide/internal/automation"
 	"github.com/korjwl1/wireguide/internal/domain"
+	"github.com/korjwl1/wireguide/internal/tunnel"
 )
 
 // anyNegatedRules reports whether any tunnel has a negated automation rule.
@@ -81,6 +82,18 @@ func (h *Helper) automaticLANConflict(cfg *domain.WireGuardConfig) bool {
 	return conflict
 }
 
+// applyTunnelBackendSetting re-reads the persisted backend before a connect.
+// The live IPC path usually already applied it; this also covers settings
+// edited while the helper was not watching and removes the race between a
+// settings save and an immediately following Connect.
+func (h *Helper) applyTunnelBackendSetting() {
+	settings, err := h.loadUserSettings()
+	if err != nil {
+		return
+	}
+	h.manager.SetBackend(tunnel.ParseBackendKind(settings.TunnelBackend))
+}
+
 func (h *Helper) restoreUserSettings() {
 	if settings, err := h.loadUserSettings(); err == nil {
 		// Defaults are not user intent. Only fields actually present in a
@@ -115,9 +128,11 @@ func (h *Helper) restoreUserSettings() {
 		if settings.LogLevel != "" {
 			h.logLevel.Set(parseLevel(settings.LogLevel))
 		}
+		h.manager.SetBackend(tunnel.ParseBackendKind(settings.TunnelBackend))
 		slog.Info("restored persisted helper settings",
 			"health_check", settings.HealthCheck,
 			"pin_interface", settings.PinInterface,
-			"log_level", settings.LogLevel)
+			"log_level", settings.LogLevel,
+			"tunnel_backend", settings.TunnelBackend)
 	}
 }
