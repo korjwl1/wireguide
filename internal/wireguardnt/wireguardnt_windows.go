@@ -364,25 +364,38 @@ func (a *Adapter) Snapshot() (*Snapshot, error) {
 	if a == nil || a.handle == 0 {
 		return nil, errors.New("WireGuard adapter is closed")
 	}
-	var size uint32
-	ok, _, callErr := a.api.getConfig.Call(a.handle, 0, uintptr(unsafe.Pointer(&size)))
-	if ok == 0 && !errors.Is(callError(callErr), windows.ERROR_MORE_DATA) {
-		return nil, fmt.Errorf("WireGuardGetConfiguration size query: %w", callError(callErr))
+	// The configuration can grow between the size query and the copy (for
+	// example a peer added by another configuration path). Retry once with
+	// the size the driver reports on ERROR_MORE_DATA instead of slicing past
+	// a buffer that is now too small.
+	for attempt := 0; attempt < 2; attempt++ {
+		var size uint32
+		ok, _, callErr := a.api.getConfig.Call(a.handle, 0, uintptr(unsafe.Pointer(&size)))
+		if ok == 0 && !errors.Is(callError(callErr), windows.ERROR_MORE_DATA) {
+			return nil, fmt.Errorf("WireGuardGetConfiguration size query: %w", callError(callErr))
+		}
+		if size < uint32(unsafe.Sizeof(wireguardInterface{})) {
+			return nil, fmt.Errorf("WireGuardGetConfiguration returned invalid size %d", size)
+		}
+		raw, backing := alignedBytes(int(size))
+		ok, _, callErr = a.api.getConfig.Call(
+			a.handle,
+			uintptr(unsafe.Pointer(&raw[0])),
+			uintptr(unsafe.Pointer(&size)),
+		)
+		runtime.KeepAlive(backing)
+		if ok == 0 {
+			if attempt == 0 && errors.Is(callError(callErr), windows.ERROR_MORE_DATA) {
+				continue
+			}
+			return nil, fmt.Errorf("WireGuardGetConfiguration: %w", callError(callErr))
+		}
+		if uint64(size) > uint64(len(raw)) {
+			return nil, fmt.Errorf("WireGuardGetConfiguration wrote %d bytes into a %d-byte buffer", size, len(raw))
+		}
+		return decodeConfiguration(raw[:size])
 	}
-	if size < uint32(unsafe.Sizeof(wireguardInterface{})) {
-		return nil, fmt.Errorf("WireGuardGetConfiguration returned invalid size %d", size)
-	}
-	raw, backing := alignedBytes(int(size))
-	ok, _, callErr = a.api.getConfig.Call(
-		a.handle,
-		uintptr(unsafe.Pointer(&raw[0])),
-		uintptr(unsafe.Pointer(&size)),
-	)
-	runtime.KeepAlive(backing)
-	if ok == 0 {
-		return nil, fmt.Errorf("WireGuardGetConfiguration: %w", callError(callErr))
-	}
-	return decodeConfiguration(raw[:size])
+	return nil, errors.New("WireGuardGetConfiguration kept growing while reading the adapter")
 }
 
 func alignedBytes(size int) ([]byte, []uint64) {
