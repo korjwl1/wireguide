@@ -7,6 +7,7 @@ import (
 
 	"github.com/korjwl1/wireguide/internal/autostart"
 	"github.com/korjwl1/wireguide/internal/storage"
+	"github.com/korjwl1/wireguide/internal/tunnel"
 )
 
 // SettingsPatch owns only explicitly changed preferences. Automation has its
@@ -60,6 +61,17 @@ func assignSetting[T any](target *T, value *T) {
 // requested side effects. Apply failures are explicit; stored intent remains
 // available for retry/recovery, matching the helper's wanted/applied model.
 func (s *TunnelService) UpdateSettings(p SettingsPatch) error {
+	// Reject an unsupported data plane before persisting it. Storing "kernel"
+	// on a platform that cannot use it would leave the UI showing a backend
+	// the helper silently replaces with userspace on the next connect.
+	if p.TunnelBackend != nil {
+		kind := tunnel.ParseBackendKind(*p.TunnelBackend)
+		if !kind.Supported() {
+			return fmt.Errorf("tunnel backend %q is not supported on this platform", *p.TunnelBackend)
+		}
+		normalized := kind.String()
+		p.TunnelBackend = &normalized
+	}
 	var previous, current storage.Settings
 	if err := s.settingsStore.Update(func(settings *storage.Settings) error {
 		previous = *settings

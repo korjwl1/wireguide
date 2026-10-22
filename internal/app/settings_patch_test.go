@@ -5,6 +5,7 @@ import (
 
 	"github.com/korjwl1/wireguide/internal/automation"
 	"github.com/korjwl1/wireguide/internal/storage"
+	"github.com/korjwl1/wireguide/internal/tunnel"
 )
 
 func TestSettingsPatchPreservesConcurrentChangesAndDeletedRules(t *testing.T) {
@@ -45,5 +46,24 @@ func TestSettingsPatchReportsUnconfirmedLiveApplyAndKeepsIntent(t *testing.T) {
 	settings, err := store.Load()
 	if err != nil || !settings.KillSwitch {
 		t.Fatalf("failed apply lost wanted intent: %+v, %v", settings, err)
+	}
+}
+
+func TestSettingsPatchRejectsUnsupportedTunnelBackend(t *testing.T) {
+	if tunnel.BackendKernel.Supported() {
+		t.Skip("kernel backend is available on this platform")
+	}
+	store := storage.NewSettingsStore(t.TempDir())
+	s := &TunnelService{settingsStore: store}
+	backend := "kernel"
+	if err := s.UpdateSettings(SettingsPatch{TunnelBackend: &backend}); err == nil {
+		t.Fatal("unsupported kernel backend was accepted")
+	}
+	settings, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settings.TunnelBackend == "kernel" {
+		t.Fatal("unsupported backend was persisted")
 	}
 }
