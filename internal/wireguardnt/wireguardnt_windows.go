@@ -159,6 +159,7 @@ type API struct {
 // Adapter is one WireGuardNT network adapter owned by this process.
 type Adapter struct {
 	api    *API
+	mu     sync.Mutex
 	handle uintptr
 }
 
@@ -265,17 +266,27 @@ func (a *API) CreateAdapter(name, tunnelType string, guid *GUID) (*Adapter, erro
 // Close releases the adapter. An adapter created by CreateAdapter is removed
 // from the system; the driver unloads once the last adapter is gone.
 func (a *Adapter) Close() {
-	if a == nil || a.handle == 0 {
+	if a == nil {
 		return
 	}
-	a.api.close.Call(a.handle)
+	a.mu.Lock()
+	handle := a.handle
 	a.handle = 0
+	a.mu.Unlock()
+	if handle != 0 {
+		a.api.close.Call(handle)
+	}
 }
 
 // LUID returns the adapter's network interface LUID. WireGuide's WFP and
 // route code key on this value.
 func (a *Adapter) LUID() uint64 {
-	if a == nil || a.handle == 0 {
+	if a == nil {
+		return 0
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.handle == 0 {
 		return 0
 	}
 	var luid uint64
@@ -286,7 +297,12 @@ func (a *Adapter) LUID() uint64 {
 // SetConfiguration applies keys, peers, endpoints, and allowed IPs. It does
 // not bring the adapter up.
 func (a *Adapter) SetConfiguration(cfg *Configuration) error {
-	if a == nil || a.handle == 0 {
+	if a == nil {
+		return errors.New("WireGuard adapter is nil")
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.handle == 0 {
 		return errors.New("WireGuard adapter is closed")
 	}
 	raw, backing, err := encodeConfiguration(cfg)
@@ -308,7 +324,12 @@ func (a *Adapter) SetConfiguration(cfg *Configuration) error {
 // SetUp transitions the adapter between down and up. The driver starts the
 // handshake state machine when the adapter goes up.
 func (a *Adapter) SetUp(up bool) error {
-	if a == nil || a.handle == 0 {
+	if a == nil {
+		return errors.New("WireGuard adapter is nil")
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.handle == 0 {
 		return errors.New("WireGuard adapter is closed")
 	}
 	state := uintptr(adapterStateDown)
@@ -324,7 +345,12 @@ func (a *Adapter) SetUp(up bool) error {
 
 // Up reports the adapter state from the driver.
 func (a *Adapter) Up() (bool, error) {
-	if a == nil || a.handle == 0 {
+	if a == nil {
+		return false, errors.New("WireGuard adapter is nil")
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.handle == 0 {
 		return false, errors.New("WireGuard adapter is closed")
 	}
 	var state uint32
@@ -338,7 +364,12 @@ func (a *Adapter) Up() (bool, error) {
 // SetLogging toggles driver-side diagnostic events for this adapter. The
 // process-wide callback is installed with SetLogger.
 func (a *Adapter) SetLogging(on bool) error {
-	if a == nil || a.handle == 0 {
+	if a == nil {
+		return errors.New("WireGuard adapter is nil")
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.handle == 0 {
 		return errors.New("WireGuard adapter is closed")
 	}
 	state := uintptr(adapterLogOff)
@@ -361,7 +392,12 @@ func (a *API) SetLogger(callback uintptr) {
 // expects a two-call protocol: first with a nil buffer to learn the required
 // size, then with an aligned buffer of that size.
 func (a *Adapter) Snapshot() (*Snapshot, error) {
-	if a == nil || a.handle == 0 {
+	if a == nil {
+		return nil, errors.New("WireGuard adapter is nil")
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.handle == 0 {
 		return nil, errors.New("WireGuard adapter is closed")
 	}
 	// The configuration can grow between the size query and the copy (for
