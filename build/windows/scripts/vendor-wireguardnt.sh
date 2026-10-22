@@ -47,4 +47,7 @@ fi
 mkdir -p "$OUT_DIR"
 cp "$SRC" "$OUT_DIR/wireguard.dll"
 cp "$TMP/extract/wireguard-nt/LICENSE.txt" "$OUT_DIR/wireguard-nt-LICENSE.txt"
+# Record the pin so the Taskfile re-downloads after a version or arch change.
+STAMP_HASH=$(printf '%s' "$EXPECT" | tr '[:upper:]' '[:lower:]')
+: > "$OUT_DIR/wireguardnt-$ARCH-$VERSION-$STAMP_HASH"
 echo "Bundled $DLL_ARCH wireguard.dll and its license to $OUT_DIR"

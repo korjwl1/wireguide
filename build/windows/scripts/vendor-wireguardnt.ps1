@@ -45,5 +45,8 @@ if (-not (Test-Path $src)) {
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 Copy-Item $src (Join-Path $OutDir 'wireguard.dll') -Force
 Copy-Item (Join-Path $tmpDir 'wireguard-nt\LICENSE.txt') (Join-Path $OutDir 'wireguard-nt-LICENSE.txt') -Force
+# Record the pin so the Taskfile re-downloads after a version or arch change.
+$stamp = Join-Path $OutDir ("wireguardnt-" + $Arch + "-" + $Version + "-" + $expect)
+New-Item -ItemType File -Force -Path $stamp | Out-Null
 Remove-Item -Recurse -Force $tmpDir
 Write-Host "Bundled $dllArch wireguard.dll and its license to $OutDir"
