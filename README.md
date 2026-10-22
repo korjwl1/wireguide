@@ -76,6 +76,7 @@ That means most of WireGuide runs silently in the background.
 - **Health check + auto-reconnect** — fixes a stalled handshake without the user noticing
 - **DNS protection** — DNS queries are pinned to the tunnel
 - **Conflict detection** — warns when another VPN (Tailscale, another WG interface) would step on routes
+- **Kernel-mode option (Windows)** — switch the data plane to the official WireGuardNT driver in Settings
 
 ### For the person who set up the server
 
@@ -100,7 +101,7 @@ WireGuide ships fewer knobs than most desktop VPN clients on purpose. The trade 
 - **Privilege separation.** A single binary runs in two modes. The GUI runs unprivileged. A small helper runs as root / Administrator. They talk over a local Unix socket (macOS/Linux) or named pipe (Windows). Nothing is exposed over HTTP or the network.
 - **macOS helper activation.** After installation, launchd starts the helper on socket contact. Administrator authorization is reserved for installation, upgrades or repair. A CLI probe cannot activate automation.
 - **OS-native firewall.** The kill switch uses `pf` (macOS), WFP (Windows), or `nftables` (Linux). The [reconnect policy](docs/DESIGN.md#firewall-suspension-during-reconnect) describes when protection is suspended.
-- **WireGuard engine.** Uses [wireguard-go](https://git.zx2c4.com/wireguard-go) and standard WireGuard configurations.
+- **WireGuard engine.** Uses [wireguard-go](https://git.zx2c4.com/wireguard-go) with Wintun by default; Windows can switch to the official WireGuardNT kernel driver in Settings. Standard WireGuard configurations.
 - **Recorded verification.** Pull requests run a Windows/macOS/Linux test matrix. Runtime checks record the actual hardware and scenarios exercised; see [tested coverage](#tested-coverage) and the [0.6.0 verification report](docs/analysis/macos-native-verification-20261015.md#full-application-verification--2026-10-21).
 
 If something breaks, helper logs are plain text — not behind a paywall. Open an issue and attach them.
