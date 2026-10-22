@@ -344,7 +344,7 @@ graph LR
 
 | Component | Technology |
 |-----------|-----------|
-| Language | Go 1.26.9+ |
+| Language | Go 1.26.10+ |
 | GUI | [Wails v3](https://wails.io) |
 | Frontend | Svelte + Vite |
 | WireGuard | [wireguard-go](https://git.zx2c4.com/wireguard-go) + [wgctrl-go](https://github.com/WireGuard/wgctrl-go) |
