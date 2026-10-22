@@ -17,5 +17,8 @@ import "time"
 // IpcGet() from the eventLoop goroutine killed the helper within
 // ~450ms of `tunnel connected` with no recoverable trace.
 func getStatusForEngine(engine *Engine, tunnelName string, connectedAt time.Time) (*ConnectionStatus, error) {
+	if engine.kernel != nil {
+		return engine.kernel.Status(tunnelName, connectedAt)
+	}
 	return GetStatusFromEngine(engine, tunnelName, connectedAt)
 }
