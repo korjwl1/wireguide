@@ -44,5 +44,6 @@ if (-not (Test-Path $src)) {
 
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 Copy-Item $src (Join-Path $OutDir 'wireguard.dll') -Force
+Copy-Item (Join-Path $tmpDir 'wireguard-nt\LICENSE.txt') (Join-Path $OutDir 'wireguard-nt-LICENSE.txt') -Force
 Remove-Item -Recurse -Force $tmpDir
-Write-Host "Bundled $dllArch wireguard.dll to $OutDir"
+Write-Host "Bundled $dllArch wireguard.dll and its license to $OutDir"

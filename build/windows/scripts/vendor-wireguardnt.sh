@@ -46,4 +46,5 @@ fi
 
 mkdir -p "$OUT_DIR"
 cp "$SRC" "$OUT_DIR/wireguard.dll"
-echo "Bundled $DLL_ARCH wireguard.dll to $OUT_DIR"
+cp "$TMP/extract/wireguard-nt/LICENSE.txt" "$OUT_DIR/wireguard-nt-LICENSE.txt"
+echo "Bundled $DLL_ARCH wireguard.dll and its license to $OUT_DIR"
