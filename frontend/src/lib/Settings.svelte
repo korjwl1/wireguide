@@ -154,6 +154,9 @@
   // Engine picked while at least one tunnel is connected. Nothing is
   // persisted until the confirmation dialog is accepted.
   let pendingBackend = null;
+  // A disconnect invalidates the confirmation's premise; do not leave a
+  // stale pending choice that the user could apply to a later connection.
+  $: if ($connectionStatus?.state !== 'connected') pendingBackend = null;
   let appVersion = '';
   let automationBackup = null;
 
