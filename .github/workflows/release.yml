@@ -63,7 +63,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: '20.19.2'
+          node-version-file: '.nvmrc'
 
       - name: Install wails3 + task
         run: |
@@ -117,7 +117,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: '20.19.2'
+          node-version-file: '.nvmrc'
 
       - name: Install wails3 + task
         shell: pwsh
@@ -267,7 +267,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: '20.19.2'
+          node-version-file: '.nvmrc'
 
       - name: Install Linux build dependencies
         run: |
