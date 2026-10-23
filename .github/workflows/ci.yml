@@ -128,6 +128,18 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+  # Keep the required check name stable while requiring both Linux architectures.
+  linux-status:
+    name: Linux (test + package)
+    needs: linux
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require all Linux architectures to pass
+        env:
+          LINUX_RESULT: ${{ needs.linux.result }}
+        run: test "$LINUX_RESULT" = success
+
   macos:
     name: macOS (test)
     runs-on: macos-latest
