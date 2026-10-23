@@ -107,7 +107,10 @@ func preferredExtensions(goos string) []string {
 	case "darwin":
 		return []string{".dmg", ".zip", ".pkg"}
 	case "linux":
-		return []string{".tar.gz", ".tar.xz", ".deb", ".rpm", ".appimage"}
+		if linuxPackageFormat() == "rpm" {
+			return []string{".rpm", ".tar.gz", ".tar.xz", ".deb", ".appimage"}
+		}
+		return []string{".deb", ".tar.gz", ".tar.xz", ".rpm", ".appimage"}
 	case "windows":
 		return []string{".exe", ".msi", ".zip"}
 	}

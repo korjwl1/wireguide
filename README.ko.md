@@ -61,14 +61,26 @@ brew install --cask wireguide
 > Windows SmartScreen에서 "확인되지 않은 게시자" 경고가 뜰 수 있습니다 — 현재 코드 서명이
 > 없습니다. "추가 정보" → "실행"을 클릭하세요.
 
-### Linux (DEB)
+### Linux (DEB / RPM)
 
-[Releases](https://github.com/korjwl1/wireguide/releases)에서 `WireGuide-linux-amd64.deb`
-(또는 `-arm64.deb`) 패키지를 다운로드 후 설치:
+[Releases](https://github.com/korjwl1/wireguide/releases)에서 배포판에 맞는 패키지를
+다운로드 후 설치합니다.
+
+Debian / Ubuntu — `WireGuide-linux-amd64.deb` (또는 `-arm64.deb`):
 
 ```bash
 sudo apt install ./WireGuide-linux-amd64.deb
 ```
+
+Fedora / 호환 RPM 배포판 — `WireGuide-linux-amd64.rpm` (또는 `-arm64.rpm`):
+
+```bash
+sudo dnf install ./WireGuide-linux-amd64.rpm
+```
+
+RPM 설치에는 GTK 3, WebKitGTK 4.1, Ayatana AppIndicator가 필요합니다.
+RHEL 계열에서는 버전과 활성화한 저장소에 따라 의존성 제공 여부가 다릅니다.
+업데이트는 패키지 관리자로 진행하며, 앱에서는 Linux 업데이트 시 Releases 페이지를 엽니다.
 
 앱 메뉴 등록과 트레이 연동이 함께 설치되며, 특권 헬퍼는 상시 서비스가 아니라
 PolicyKit을 통해 필요할 때만 기동됩니다.
@@ -124,7 +136,7 @@ task build
 | **진단 도구** | DNS 유출 검사, 라우트 테이블 시각화 |
 | **자동 업데이트** | GitHub Releases 확인; `brew upgrade` 및 직접 설치 지원 |
 | **속도 대시보드** | 실시간 RX/TX 그래프 |
-| **다국어** | 영어, 한국어, 일본어 |
+| **다국어** | 영어, 한국어, 일본어, 중국어 간체 |
 | **테마** | 다크 / 라이트 / 시스템 자동 |
 
 [wireguard-go](https://git.zx2c4.com/wireguard-go) 2026년 5월 빌드 사용 (공식 macOS 앱의 엔진은 2023년 2월에서 멈춰 있음).
