@@ -12,6 +12,8 @@ func labelsForLanguage(language string) trayLabels {
 			return trayLabels{show: "창 열기", quit: "종료"}
 		case "ja":
 			return trayLabels{show: "ウィンドウを表示", quit: "終了"}
+		case "zh":
+			return trayLabels{show: "显示窗口", quit: "退出"}
 		}
 	}
 	return trayLabels{show: "Show Window", quit: "Quit"}

@@ -13,7 +13,7 @@ import (
 
 // Settings holds application-wide settings.
 type Settings struct {
-	Language      string `json:"language"`        // "auto", "en", "ko", "ja"
+	Language      string `json:"language"`        // "auto", "en", "ko", "ja", "zh"
 	Theme         string `json:"theme"`           // "dark", "light", "system"
 	TrayIconStyle string `json:"tray_icon_style"` // "color" (MVP: color only)
 	AutoStart     bool   `json:"auto_start"`      // launch GUI on OS login

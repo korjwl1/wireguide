@@ -350,7 +350,7 @@ graph LR
 | WireGuard | [wireguard-go](https://git.zx2c4.com/wireguard-go) + [wgctrl-go](https://github.com/WireGuard/wgctrl-go) |
 | Editor | [CodeMirror 6](https://codemirror.net/) |
 | Firewall | macOS `pf` / Linux `nftables` / Windows WFP (Filtering Platform) |
-| i18n | English, Korean, Japanese |
+| i18n | English, Korean, Japanese, Simplified Chinese |
 
 ---
 
