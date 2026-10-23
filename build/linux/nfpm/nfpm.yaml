@@ -6,7 +6,7 @@
 name: "wireguide"
 arch: ${GOARCH}
 platform: "linux"
-version: "0.5.2"
+version: "0.6.0"
 section: "default"
 priority: "extra"
 maintainer: ${GIT_COMMITTER_NAME} <${GIT_COMMITTER_EMAIL}>
@@ -55,7 +55,11 @@ overrides:
       - polkit
       - iproute
       - nftables
-  
+    recommends:
+      - NetworkManager
+      - google-noto-sans-fonts
+      - google-noto-sans-cjk-fonts
+
   # Arch Linux package names.
   archlinux:
     depends:

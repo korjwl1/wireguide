@@ -49,6 +49,7 @@ func main() {
 	socketUID := flag.Int("uid", -1, "socket owner UID (Unix only)")
 	ownerSID := flag.String("owner-sid", "", "socket owner SID (Windows only)")
 	dataDir := flag.String("data-dir", "", "data directory for crash recovery")
+	restoreDesired := flag.Bool("restore-desired", false, "restore tunnels a crashed helper had up (GUI respawn after a mid-session crash)")
 	flag.Parse()
 
 	if *helperMode {
@@ -74,7 +75,7 @@ func main() {
 		// Optional: capture helper stderr (slog text + runtime fatal
 		// throws) to <dataDir>/helper-stderr.log when WIREGUIDE_HELPER_STDERR=1.
 		// Helper is spawned by `Start-Process -Verb RunAs -WindowStyle Hidden`
-		// on Windows / launchd on macOS / systemd on Linux, all of which
+		// on Windows / launchd on macOS / pkexec on Linux, all of which
 		// detach stderr from any console the user can read, so without this
 		// hook a crash leaves zero forensic trail. The file mode is append
 		// so a crash + relaunch cycle accumulates both runs in one place.
@@ -88,7 +89,7 @@ func main() {
 			}
 		}
 		log.Println("WireGuide helper starting...")
-		if err := helper.Run(*socketPath, *socketUID, *ownerSID, *dataDir); err != nil {
+		if err := helper.Run(*socketPath, *socketUID, *ownerSID, *dataDir, *restoreDesired); err != nil {
 			log.Fatal("helper error:", err)
 		}
 		return
@@ -97,6 +98,7 @@ func main() {
 	// GUI mode
 	gui.SetTrayIconPNG(trayIconBytes)
 	if err := gui.Run(application.AssetFileServerFS(assets), systemDataDir()); err != nil {
+		gui.ShowStartupError(err)
 		log.Fatal(err)
 	}
 }

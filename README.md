@@ -65,14 +65,14 @@ That means most of WireGuide runs silently in the background.
 - Drag-and-drop `.conf` import (also QR and ZIP)
 - A list of tunnels, each with one big toggle (sortable, resizable, optional compact mode)
 - A tray icon that shows whether you're connected
-- Per-tunnel **Automation** — connect or disconnect a tunnel automatically based on which network you're on (by Wi-Fi SSID, subnet, or the router's MAC address; rules are ordered by priority and drag-reorderable)
+- Per-tunnel **Automation** — connect or disconnect a tunnel automatically based on which network you're on (by Wi-Fi SSID, subnet, or the router's MAC address, with "is" / "is not" matching; rules are ordered by priority and drag-reorderable)
 - A **command-line interface** (`wireguide ctl …`) for scripting — see below
 
 ### What runs silently underneath
 
 - **Sleep/wake recovery** — the tunnel comes back after the lid closes
 - **Route monitor** — keeps working when you move between Wi-Fi and Ethernet
-- **Kill switch** — if the tunnel drops, nothing leaks while WireGuide is reconnecting. Uses the OS-native firewall (`pf` on macOS, WFP on Windows, `nftables` on Linux), not a userspace shim
+- **Kill switch** — uses the OS-native firewall (`pf` on macOS, WFP on Windows, `nftables` on Linux). The current reconnect path temporarily suspends firewall protection while rebuilding the tunnel; ordinary traffic can leave through the physical network during that interval. See [the reconnect policy](docs/DESIGN.md#firewall-suspension-during-reconnect).
 - **Health check + auto-reconnect** — fixes a stalled handshake without the user noticing
 - **DNS protection** — DNS queries are pinned to the tunnel
 - **Conflict detection** — warns when another VPN (Tailscale, another WG interface) would step on routes
@@ -98,9 +98,10 @@ That means most of WireGuide runs silently in the background.
 WireGuide ships fewer knobs than most desktop VPN clients on purpose. The trade is that the few it does ship are meant to be boring and reliable.
 
 - **Privilege separation.** A single binary runs in two modes. The GUI runs unprivileged. A small helper runs as root / Administrator. They talk over a local Unix socket (macOS/Linux) or named pipe (Windows). Nothing is exposed over HTTP or the network.
-- **OS-native firewall.** The kill switch uses `pf` (macOS), WFP (Windows), or `nftables` (Linux) — not a userspace packet filter that fails open.
-- **Up-to-date crypto.** Built on a May 2026 build of [wireguard-go](https://git.zx2c4.com/wireguard-go) — years ahead of the engine inside the official macOS app, which hasn't been updated since Feb 2023.
-- **Manual QA per release.** Every tagged release is exercised on macOS (Apple Silicon), Windows 11 (amd64), and Linux (Debian 13 / Raspberry Pi OS ARM64) before it goes out, on top of a 3-OS `go test` matrix that gates every PR.
+- **macOS helper activation.** After installation, launchd starts the helper on socket contact. Administrator authorization is reserved for installation, upgrades or repair. A CLI probe cannot activate automation.
+- **OS-native firewall.** The kill switch uses `pf` (macOS), WFP (Windows), or `nftables` (Linux). The [reconnect policy](docs/DESIGN.md#firewall-suspension-during-reconnect) describes when protection is suspended.
+- **WireGuard engine.** Uses [wireguard-go](https://git.zx2c4.com/wireguard-go) and standard WireGuard configurations.
+- **Recorded verification.** Pull requests run a Windows/macOS/Linux test matrix. Runtime checks record the actual hardware and scenarios exercised; see [tested coverage](#tested-coverage) and the [0.6.0 verification report](docs/analysis/macos-native-verification-20261015.md#full-application-verification--2026-10-21).
 
 If something breaks, helper logs are plain text — not behind a paywall. Open an issue and attach them.
 
@@ -127,7 +128,8 @@ Download from [Releases](https://github.com/korjwl1/wireguide/releases), unzip, 
 
 Download the latest `WireGuide-windows-amd64.exe` (or `-arm64.exe`) installer from
 [Releases](https://github.com/korjwl1/wireguide/releases) and run it. The NSIS
-installer registers the helper service and shortcut.
+installer creates the app shortcut and uninstall entry. The app starts its
+privileged helper on demand with administrator authorization.
 
 > Windows SmartScreen may warn that the publisher is unknown — the binary is
 > currently unsigned. Click "More info" → "Run anyway".
@@ -143,14 +145,32 @@ Debian / Ubuntu — `WireGuide-linux-amd64.deb` (or `-arm64.deb`):
 sudo apt install ./WireGuide-linux-amd64.deb
 ```
 
-Fedora / RHEL — `WireGuide-linux-amd64.rpm` (or `-arm64.rpm`):
+Fedora / compatible RPM distributions — `WireGuide-linux-amd64.rpm` (or `-arm64.rpm`):
 
 ```bash
 sudo dnf install ./WireGuide-linux-amd64.rpm
 ```
 
+RPM installations require GTK 3, WebKitGTK 4.1 and Ayatana AppIndicator.
+On RHEL-family systems, availability depends on the release and enabled repositories.
+Use the package manager to update; the app opens the Releases page for Linux updates.
+
 The package registers the app menu entry and tray integration; the privileged
 helper is started on demand through PolicyKit (no always-on service).
+
+### Updating
+
+Use the update notice or **Settings → About → Check for updates**. Homebrew
+installations update through Homebrew. Direct-download macOS apps and
+installer-managed Windows apps download the release, verify its signed
+checksums and artifact version, then install and relaunch. Unsupported
+installation layouts and Linux use the releases-page fallback.
+
+A terminal `brew upgrade` does not restart an already-running app; quit and
+reopen WireGuide afterward. Installation or helper upgrades can require
+administrator approval. On macOS, if its background service is disabled,
+allow WireGuide in **System Settings → General → Login Items & Extensions**
+and choose Retry; reinstalling does not override that choice.
 
 ### Build from Source
 
@@ -163,6 +183,32 @@ task build
 ./bin/wireguide
 ```
 
+### macOS removal and helper cleanup
+
+Deleting `WireGuide.app` alone leaves the privileged launchd helper installed.
+The app does not automatically delete its recovery executable when its bundle
+is temporarily missing. There is no in-app helper uninstaller.
+
+Before removing the app, disconnect all tunnels and run `wireguide ctl stop`.
+Complete shutdown before deleting the helper so its DNS/firewall cleanup can
+finish. If the app was already removed while connected, reinstall the same
+version temporarily and finish this shutdown first.
+
+For Homebrew installations, `brew uninstall --zap wireguide` also removes the
+helper registration and executable. **Back up your profiles and settings
+first: `--zap` removes user application data.** For manual installations,
+after successful shutdown, remove only the helper's registration and files:
+
+```sh
+sudo launchctl bootout system/com.wireguide.helper
+sudo rm -f /Library/LaunchDaemons/com.wireguide.helper.plist /Library/PrivilegedHelperTools/com.wireguide.helper
+sudo rm -f /var/run/com.wireguide.helper.sock /var/run/wireguide/wireguide.sock
+```
+
+Continue with file removal only after the job stopped (or launchctl confirmed
+it was already absent). Keep recovery journals if cleanup failed; deleting
+those files does not restore DNS or firewall state.
+
 ### Tested coverage
 
 Manual QA runs on real hardware, but the hardware doesn't cover every
@@ -174,11 +220,38 @@ combination. What has actually been exercised:
 | Windows | Windows 11 (amd64), desktop PC | ✅ | ⚠️ not properly tested |
 | Linux | Raspberry Pi OS Lite (arm64) | ⚠️ not tested | ✅ |
 
+The table includes historical hardware coverage. For 0.6.0, Windows 11 runtime
+checks and macOS 26.4.1 arm64 Wi-Fi/sleep/wake checks were performed; Linux
+coverage comes from CI tests, an isolated nftables kernel check and native
+build/DEB packaging. The macOS sleep tests use short software-triggered cycles,
+not overnight standby or physical lid closure. The detailed
+[execution report](docs/analysis/macos-native-verification-20261015.md#completed-sleepwake-results)
+keeps those distinctions and the remaining hardware limits explicit.
+
 The untested cells matter most for Wi-Fi-dependent features — SSID-based
 Automation rules and Wi-Fi↔Ethernet handover on Windows, and wired
 gateway/subnet detection on Linux. **If you hit an error in one of those
 gaps, please [open an issue](https://github.com/korjwl1/wireguide/issues/new/choose)**
 — reports from hardware we don't have are the only way those cells get fixed.
+
+---
+
+## DNS
+
+`DNS =` in `[Interface]` takes IP servers, search domains and split-DNS domains:
+
+```ini
+DNS = 10.0.0.1                          # all queries go to the tunnel (default)
+DNS = 10.0.0.1, corp.example            # plus a search domain
+DNS = 192.168.1.1, ~corp.lan, ~1.168.192.in-addr.arpa
+```
+
+- **No `~` token**: global mode. The tunnel's servers replace system DNS while connected and it is restored on disconnect.
+- **Any `~name` token**: split mode. The servers are added as a supplemental resolver for the `~` domains only. System DNS (and your own search domains) are never touched, and DNS protection is never applied to the tunnel. Plain hostnames in the list become match and search domains, so bare names expand. At least one server IP is required, and the server must be reachable through `AllowedIPs`.
+- Reverse zones (`~1.168.192.in-addr.arpa`) are not derived automatically; add them yourself.
+- Split DNS uses macOS supplemental resolvers or Linux systemd-resolved (`resolvectl`). An explicit split-DNS config fails to connect when that backend is unavailable, including on Windows; requested DNS handling is never silently skipped.
+
+On macOS a resolver for a matched domain does **not** fall back to your local DNS when it answers NXDOMAIN, so a name that only exists locally under a `~` domain will fail. `dig`, `nslookup` and `host` read `/etc/resolv.conf` and bypass supplemental resolvers; test with `dscacheutil -q host -a name <host>` (or `ping`/`curl`). Match domains ending in `.local` may be answered by mDNS instead of the tunnel.
 
 ---
 
@@ -206,6 +279,7 @@ wireguide ctl automation                # what the engine decides right now
 wireguide ctl automation rules <name>   # list a tunnel's rules
 wireguide ctl automation add <name> <connect|disconnect> <cond>
     #   cond = ssid:<wifi>  subnet:<CIDR>  mac:<gateway-MAC>  else
+    #   negated: not-ssid:<wifi>  not-subnet:<CIDR>  not-mac:<MAC>
 wireguide ctl automation rm <name> <n>
 
 # Settings & diagnostics:
@@ -223,7 +297,25 @@ wireguide ctl install-skills
 # e.g. turn the work VPN off on the office network, on everywhere else:
 wireguide ctl automation add work disconnect mac:b0:38:6c:54:8b:ab
 wireguide ctl automation add work connect else
+
+# e.g. a tunnel for a remote site: off at home, on anywhere else:
+wireguide ctl automation add remote disconnect ssid:HomeWiFi
+wireguide ctl automation add remote connect not-ssid:HomeWiFi
 ```
+
+**"is not" rules.** A negated rule matches only when the value is known and
+different. While it is unknown the tunnel is left alone and later rules are
+*not* tried: a blank Wi-Fi name during a roam, a network that changed less
+than ~15 seconds ago, or no default route. A blank Wi-Fi name on an Ethernet
+or USB-tethered connection counts as "no Wi-Fi" and matches. Positive rules
+are unchanged (no delay; unknown input just doesn't match). If you connect or
+disconnect a tunnel by hand, automation leaves that tunnel alone until the
+network settles on a different identity (SSID, interface, gateway and subnets).
+Manual On still permits sleep/wake transport repair; manual Off prevents restoration.
+Rule lists containing negation are stored separately so older versions cannot
+interpret them as positive rules; those lists are inactive after a downgrade.
+Automatic connects skip LAN-overlapping routes; explicit manual connects retain
+the configured routes.
 
 Connect/disconnect/status need the app (or its helper) running — start it with
 `wireguide ctl start` (or by opening the app); nothing else starts a VPN stack
@@ -264,7 +356,7 @@ graph LR
 
 | Component | Technology |
 |-----------|-----------|
-| Language | Go 1.25+ |
+| Language | Go 1.26.9+ |
 | GUI | [Wails v3](https://wails.io) |
 | Frontend | Svelte + Vite |
 | WireGuard | [wireguard-go](https://git.zx2c4.com/wireguard-go) + [wgctrl-go](https://github.com/WireGuard/wgctrl-go) |
@@ -281,6 +373,24 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup and guidelines.
 Found a bug? [Open an issue](https://github.com/korjwl1/wireguide/issues/new/choose).
 
 ---
+
+### Automation rules when downgrading
+
+An older version cannot execute the separate negated-rule lists, but it can
+drop their unknown fields when it rewrites `config.json`. Current versions save
+an inert `config.json.automation-v2-backup` beside that file before saving
+negated rules. This backup survives an older version's rewrite and unrelated
+settings saves after re-upgrading. It is never automatically executed.
+Saving new rules after re-upgrading preserves an older, different backup as
+`config.json.automation-v2-backup.recovery-<sha256>` before replacing the current
+backup. Settings shows recovery copies and backup errors. An unrelated setting
+change can still be saved if the backup is unavailable; changing extended rules
+requires a successful backup transition.
+
+Before downgrading, also copy `config.json` yourself. To recover after an older
+version erased negated rules, quit the app, inspect the backup, and explicitly
+restore its automation object into `config.json` before reopening the current
+version. Do not use an older binary to edit negated rules.
 
 ## Code signing
 

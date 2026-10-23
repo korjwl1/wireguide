@@ -102,6 +102,20 @@ export class DNSLeakResult {
              */
             this["error"] = undefined;
         }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {boolean | undefined}
+             */
+            this["split_mode"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {string[] | undefined}
+             */
+            this["missing_match_domains"] = undefined;
+        }
 
         Object.assign(this, $$source);
     }
@@ -113,9 +127,13 @@ export class DNSLeakResult {
      */
     static createFrom($$source = {}) {
         const $$createField1_0 = $$createType1;
+        const $$createField5_0 = $$createType2;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("dns_servers" in $$parsedSource) {
             $$parsedSource["dns_servers"] = $$createField1_0($$parsedSource["dns_servers"]);
+        }
+        if ("missing_match_domains" in $$parsedSource) {
+            $$parsedSource["missing_match_domains"] = $$createField5_0($$parsedSource["missing_match_domains"]);
         }
         return new DNSLeakResult(/** @type {Partial<DNSLeakResult>} */($$parsedSource));
     }
@@ -150,6 +168,20 @@ export class DNSServer {
              * @type {boolean}
              */
             this["is_vpn"] = false;
+        }
+        if (!("leaked" in $$source)) {
+            /**
+             * @member
+             * @type {boolean}
+             */
+            this["leaked"] = false;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {string | undefined}
+             */
+            this["scope"] = undefined;
         }
 
         Object.assign(this, $$source);
@@ -213,6 +245,38 @@ export class KnownSSIDs {
 }
 
 /**
+ * ProfileMutationResult reports a committed profile change whose auxiliary
+ * automation update failed. Callers must refresh the profile and show Warning.
+ */
+export class ProfileMutationResult {
+    /**
+     * Creates a new ProfileMutationResult instance.
+     * @param {Partial<ProfileMutationResult>} [$$source = {}] - The source object to create the ProfileMutationResult.
+     */
+    constructor($$source = {}) {
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {string | undefined}
+             */
+            this["warning"] = undefined;
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new ProfileMutationResult instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {ProfileMutationResult}
+     */
+    static createFrom($$source = {}) {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new ProfileMutationResult(/** @type {Partial<ProfileMutationResult>} */($$parsedSource));
+    }
+}
+
+/**
  * RouteEntry mirrors diag.RouteEntry for Wails JSON serialisation.
  */
 export class RouteEntry {
@@ -261,6 +325,129 @@ export class RouteEntry {
     static createFrom($$source = {}) {
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         return new RouteEntry(/** @type {Partial<RouteEntry>} */($$parsedSource));
+    }
+}
+
+/**
+ * SettingsPatch owns only explicitly changed preferences. Automation has its
+ * own per-tunnel API and cannot be resurrected by a stale settings window.
+ */
+export class SettingsPatch {
+    /**
+     * Creates a new SettingsPatch instance.
+     * @param {Partial<SettingsPatch>} [$$source = {}] - The source object to create the SettingsPatch.
+     */
+    constructor($$source = {}) {
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {string | null | undefined}
+             */
+            this["language"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {string | null | undefined}
+             */
+            this["theme"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {string | null | undefined}
+             */
+            this["tray_icon_style"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {boolean | null | undefined}
+             */
+            this["auto_start"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {boolean | null | undefined}
+             */
+            this["kill_switch"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {boolean | null | undefined}
+             */
+            this["dns_protection"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {boolean | null | undefined}
+             */
+            this["health_check"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {boolean | null | undefined}
+             */
+            this["pin_interface"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {string | null | undefined}
+             */
+            this["log_level"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {boolean | null | undefined}
+             */
+            this["auto_update_check"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {boolean | null | undefined}
+             */
+            this["compact_list"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {string | null | undefined}
+             */
+            this["list_sort"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {boolean | null | undefined}
+             */
+            this["list_active_on_top"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {number | null | undefined}
+             */
+            this["list_pane_width"] = undefined;
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new SettingsPatch instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {SettingsPatch}
+     */
+    static createFrom($$source = {}) {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new SettingsPatch(/** @type {Partial<SettingsPatch>} */($$parsedSource));
     }
 }
 
@@ -344,15 +531,15 @@ export class TunnelInfo {
  * UpdateState is the frontend-facing snapshot of persisted check state.
  * Exposed so Settings → About can render the "Last checked …" line and
  * the first-check placeholder correctly.
- * 
+ *
  * IsDevBuild + AutoEnabled together let the UI distinguish three
  * "not-yet-checked" cases that look identical to a naive `last_check==0`
  * gate:
- * 
+ *
  * 	dev build  → scheduler is intentionally inert, show "Never checked"
  * 	auto off   → user disabled the scheduler, show "Never checked"
  * 	auto on    → first tick is 30–120 s away, show "scheduled" hint
- * 
+ *
  * CurrentVersion is duplicated here (also in GetVersion()) so the About
  * tab doesn't need two round-trips to render.
  */

@@ -14,10 +14,10 @@ import (
 	"net/http"
 	"runtime"
 	"sync"
-	"time"
 
 	wgapp "github.com/korjwl1/wireguide/internal/app"
 	"github.com/korjwl1/wireguide/internal/domain"
+	"github.com/korjwl1/wireguide/internal/guiinstance"
 	"github.com/korjwl1/wireguide/internal/ipc"
 	"github.com/korjwl1/wireguide/internal/storage"
 	"github.com/korjwl1/wireguide/internal/update"
@@ -51,10 +51,21 @@ func init() {
 	application.RegisterEvent[ipc.SettingsChangedPayload]("settings_changed")
 	application.RegisterEvent[struct{}]("config_changed")
 	application.RegisterEvent[struct{}]("tunnels_changed")
+	application.RegisterEvent[ipc.RecoveryWarningPayload]("recovery_warning")
 }
 
 // Run starts the GUI process. Blocks until the Wails app exits.
 func Run(assetsHandler http.Handler, dataDir string) error {
+	// Reserve the GUI before touching history, helper authorization or tray.
+	instance, err := guiinstance.Acquire()
+	if err != nil {
+		return err
+	}
+	if instance == nil {
+		return nil // Existing GUI accepted the activation.
+	}
+	defer instance.Close()
+
 	// 0. Install the slog handler that broadcasts to the LogViewer. Do this
 	// first so every subsequent log call (path init, helper spawn, etc.) is
 	// captured. The Wails app isn't built yet; bindAppToLogHandler wires
@@ -66,8 +77,9 @@ func Run(assetsHandler http.Handler, dataDir string) error {
 
 	// Pre-render the Windows tray icon variants now that main.go has
 	// populated customTrayIconPNG via SetTrayIconPNG. macOS uses the
-	// template path built in tray.go's init(); the Windows builder
-	// needs the embedded app icon, which init() can't see.
+	// template path initialized here; the Windows builder
+	// needs the embedded app icon.
+	initializeTrayIcons()
 	buildWindowsTrayIcons()
 
 	// 1. Local storage
@@ -87,47 +99,46 @@ func Run(assetsHandler http.Handler, dataDir string) error {
 	historyStore.CloseOpenSessions("app_quit")
 
 	// Apply persisted log level to the GUI side immediately (helper-side
-	// gets it after ensureHelper + the SaveSettings path).
+	// gets it after ensureHelper + the UpdateSettings path).
 	if s, err := settingsStore.Load(); err == nil && s != nil && s.LogLevel != "" {
 		setGUILogLevel(s.LogLevel)
 	}
 
-	// 2. Helper process (spawn if needed).
-	// If the user cancels the admin prompt, retry up to 3 times with a
-	// user-visible dialog explaining why the helper is required.
-	var initialClient *ipc.Client
-	for attempt := 0; attempt < 3; attempt++ {
-		// ensureHelper starts its readiness timeout after authorization.
-		helperCtx, helperCancel := context.WithCancel(context.Background())
-		var err error
-		initialClient, err = ensureHelper(helperCtx, dataDir)
-		helperCancel()
-		if err == nil {
-			break
-		}
-		slog.Warn("helper connection failed", "attempt", attempt+1, "error", err)
-		if attempt < 2 {
-			// Native per-OS retry dialog (retry_prompt_*.go) — the Wails
-			// app isn't running yet, so Wails dialogs are unavailable.
-			// On retry, ensureHelper first probes for an already-running
-			// helper, so a UAC prompt the user answered while this dialog
-			// was up connects instantly instead of re-prompting.
-			if !askHelperRetry(err) {
-				return fmt.Errorf("helper setup cancelled by user")
-			}
-			continue
-		}
-		return fmt.Errorf("helper connection failed after 3 attempts: %w", err)
+	initialClient, err := connectInitialHelper(dataDir)
+	if err != nil {
+		return err
 	}
+
 	clients := ipc.NewClientHolder(initialClient)
 
 	// 3. Wails service
 	tunnelService := wgapp.NewTunnelService(tunnelStore, settingsStore, historyStore, clients)
 
 	// 4. Wails app
+	var win *application.WebviewWindow
+	var connectionIndicator *connectionIcon
+	if images, err := buildConnectionIconImages(customTrayIconPNG); err != nil {
+		slog.Warn("cannot prepare application connection icons", "error", err)
+	} else {
+		connectionIndicator = newConnectionIcon(application.InvokeAsync, func(connected bool) error {
+			return applyConnectionIcon(win.NativeWindow(), connected, images)
+		})
+		defer connectionIndicator.Close()
+	}
+	var shutdown *guiShutdown
+	transport := newGUIEventTransport()
+
 	app := application.New(application.Options{
 		Name:        "WireGuide",
 		Description: "Cross-platform WireGuard desktop client",
+		Transport:   transport,
+		Logger:      slog.Default(),
+		ShouldQuit: func() bool {
+			if shutdown != nil {
+				shutdown.run()
+			}
+			return true
+		},
 		Services: []application.Service{
 			application.NewService(tunnelService),
 		},
@@ -137,7 +148,15 @@ func Run(assetsHandler http.Handler, dataDir string) error {
 		Mac: application.MacOptions{
 			ApplicationShouldTerminateAfterLastWindowClosed: false,
 		},
+		Windows: application.WindowsOptions{
+			WndProcInterceptor: sessionEndMessages(connectionIconMessages(func() {
+				if connectionIndicator != nil {
+					connectionIndicator.Refresh()
+				}
+			})),
+		},
 	})
+	transport.windows = app.Window.GetAll
 	tunnelService.SetApp(app)
 	bindAppToLogHandler(app)
 
@@ -168,7 +187,7 @@ func Run(assetsHandler http.Handler, dataDir string) error {
 	//
 	// Min size pins the smallest pretty-looking shape (≈1.44 ratio) while
 	// still leaving the detail pane wide enough that nothing wraps weirdly.
-	win := app.Window.NewWithOptions(application.WebviewWindowOptions{
+	win = app.Window.NewWithOptions(application.WebviewWindowOptions{
 		Title:          "WireGuide",
 		Width:          1200,
 		Height:         740,
@@ -183,6 +202,11 @@ func Run(assetsHandler http.Handler, dataDir string) error {
 		BackgroundColour: application.NewRGB(30, 30, 30), // matches --bg-primary dark (#1E1E1E)
 		URL:              "/",
 	})
+	win.OnWindowEvent(events.Common.WindowRuntimeReady, func(*application.WindowEvent) { transport.Ready() })
+	if connectionIndicator != nil {
+		win.OnWindowEvent(events.Common.WindowRuntimeReady, func(*application.WindowEvent) { connectionIndicator.Ready() })
+		win.OnWindowEvent(events.Common.WindowShow, func(*application.WindowEvent) { connectionIndicator.Refresh() })
+	}
 
 	// macOS standard: close button hides the window instead of destroying it.
 	// The app stays alive in the tray; "Show Window" brings it back.
@@ -210,6 +234,9 @@ func Run(assetsHandler http.Handler, dataDir string) error {
 
 	// Wire the window reference so showDock() can retry showing it.
 	dockWindow = win
+	// Activation can arrive during UAC or WebView startup. Do not call Show
+	// before the native window/runtime exists, or Wails may create it twice.
+	startInstanceActivation(instance, win)
 
 	// Native file drop forwarded to frontend
 	win.OnWindowEvent(events.Common.WindowFilesDropped, func(event *application.WindowEvent) {
@@ -217,90 +244,40 @@ func Run(assetsHandler http.Handler, dataDir string) error {
 		app.Event.Emit("files-dropped", map[string]any{"files": files})
 	})
 
-	// 6. System tray. macOS uses non-template coloured icons (the
-	// connected badge must stay green; template images are alpha-only),
-	// with the W glyph colour following the menu bar's actual rendered
-	// appearance via the KVO observer the tray manager installs. Never
-	// call SetTemplateIcon: Wails's sticky isTemplateIcon flag would
-	// render every later SetIcon monochrome.
-	tray := app.SystemTray.New()
-	if runtime.GOOS == "darwin" {
-		// White W first (historical default); the appearance observer
-		// swaps in the black set only if the menu bar is really light.
-		tray.SetIcon(trayOffIconDark)
-	} else {
+	// macOS owns a native status item with a permanently attached menu.
+	var tray *application.SystemTray
+	if runtime.GOOS != "darwin" {
+		tray = app.SystemTray.New()
 		tray.SetLabel("WireGuide")
-		// Windows and Linux need an explicit icon at startup. Without it,
-		// Linux StatusNotifier hosts display their own fallback icon and
-		// Windows falls back to Wails' embedded template. setIconState only
-		// runs on connection transitions, so it cannot initialise the icon.
-		if (runtime.GOOS == "windows" || runtime.GOOS == "linux") && len(trayOffIconWindows) > 0 {
+		if len(trayOffIconWindows) > 0 {
 			tray.SetIcon(trayOffIconWindows)
 		}
-		// Windows convention: left-click is the primary action and shows
-		// the main window; the context menu remains on right-click.
-		// Registered only here: on macOS any click opens the NSStatusItem
-		// menu natively, and an OnClick handler would fight it. On Linux,
-		// Wails' StatusNotifier fires the click handler for the dbusmenu
-		// "opened" event too, so registering it would raise the window on
-		// every right-click; Linux users get the "Show Window" menu item.
 		if runtime.GOOS == "windows" {
 			tray.OnClick(showDock)
 		}
-	}
-	tray.SetTooltip("WireGuide")
-
-	// 7. Shutdown coordination (declared upfront so closures can reference it)
-	var (
-		shutdownOnce sync.Once
-		doShutdown   func()
-	)
-	doShutdown = func() {
-		shutdownOnce.Do(func() {
-			slog.Info("shutting down GUI + helper")
-			// Close any in-flight history sessions BEFORE the helper goes
-			// away — snapshotActiveStats needs the helper alive to fetch
-			// last-known rx/tx counters.
-			tunnelService.CloseHistorySessions("app_quit")
-			// Flush any deferred history writes synchronously. The
-			// debounced writer would otherwise lose the last 100ms of
-			// records when the GUI process exits.
-			historyStore.Flush()
-			c := clients.Get()
-			if c != nil {
-				// Bounded timeouts so a hung helper can't keep the GUI
-				// alive forever — user clicked Quit, they expect the app
-				// to die. 2s is generous for a local Unix-socket RPC that
-				// just kicks off async teardown.
-				ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-				if err := c.CallWithContext(ctx, ipc.MethodDisconnect, nil, nil); err != nil {
-					slog.Warn("shutdown: Disconnect RPC failed", "error", err)
-				}
-				cancel()
-				ctx, cancel = context.WithTimeout(context.Background(), 2*time.Second)
-				if err := c.CallWithContext(ctx, ipc.MethodShutdown, nil, nil); err != nil {
-					slog.Warn("shutdown: Shutdown RPC failed", "error", err)
-				}
-				cancel()
-			}
-			// Close in a goroutine with a short delay so the helper has
-			// time to process the shutdown command without blocking the
-			// macOS main thread (AppKit requires the main thread to stay
-			// responsive during termination).
-			go func() {
-				time.Sleep(50 * time.Millisecond)
-				clients.Close()
-			}()
-		})
+		tray.SetTooltip("WireGuide")
 	}
 
-	trayMgr := newTrayManager(app, win, tray, tunnelService, doShutdown)
+	// Stop all socket probes before asking the helper to exit: a later dial
+	// would activate it again through launchd.
+	healthDone := make(chan struct{})
+	var stopHealthOnce sync.Once
+	stopHealth := func() { stopHealthOnce.Do(func() { close(healthDone) }) }
+	shutdown = &guiShutdown{instance: instance, indicator: connectionIndicator, stopHealth: stopHealth, service: tunnelService, history: historyStore, clients: clients}
+	defer shutdown.run()
+
+	trayMgr := newTrayManager(app, win, tray, tunnelService, shutdown.run)
+	trayMgr.connectionIcon = connectionIndicator
+	wgapp.SetGUIPreferencesChanged(func() {
+		if !appQuitting.Load() {
+			trayMgr.scheduleRebuild()
+		}
+	})
 	trayMgr.initialBuild()
 
 	if runtime.GOOS == "darwin" {
 		app.Event.OnApplicationEvent(events.Mac.ApplicationWillTerminate, func(_ *application.ApplicationEvent) {
-			doShutdown()
-			tray.Destroy()
+			destroyNativeTray()
 		})
 	}
 
@@ -322,8 +299,8 @@ func Run(assetsHandler http.Handler, dataDir string) error {
 		}
 	}
 
-	healthDone := make(chan struct{})
 	var healthWg sync.WaitGroup
+	startGUIHangMonitor(paths.LogsDir, healthDone, &healthWg)
 	healthWg.Add(1)
 	startHelperHealthMonitor(app, clients, dataDir, bridge, healthDone, &healthWg)
 	// SSID reporter shares the same shutdown channel + WaitGroup so app
@@ -336,6 +313,10 @@ func Run(assetsHandler http.Handler, dataDir string) error {
 	// reflect in a running GUI. Shares the shutdown channel/WaitGroup.
 	healthWg.Add(1)
 	startConfigWatcher(app, configFilePath(paths.ConfigDir), paths.TunnelsDir, healthDone, &healthWg)
+
+	// Remove what a self-update kept for after its restart (the replaced
+	// macOS bundle). Best-effort; off the startup path.
+	go update.CleanupPreviousUpdate()
 
 	// Update scheduler — periodic GitHub Releases check. Lives in the GUI
 	// process (not the helper) because update notifications are a pure UI
@@ -382,7 +363,9 @@ func Run(assetsHandler http.Handler, dataDir string) error {
 
 	// 9. Run (blocks)
 	err = app.Run()
-	close(healthDone)
+	appQuitting.Store(true)
+	instance.BeginShutdown()
+	stopHealth()
 	healthWg.Wait()
 	return err
 }

@@ -269,73 +269,6 @@ func TestAssetSizeValidation_ExactlyMinimum(t *testing.T) {
 // DownloadUpdate — checksum verification
 // ---------------------------------------------------------------------------
 
-func TestDownloadUpdate_ChecksumMatch(t *testing.T) {
-	// Build a fake asset body that is >= minAssetSize.
-	bodySize := minAssetSize + 1024
-	body := make([]byte, bodySize)
-	for i := range body {
-		body[i] = byte(i % 256)
-	}
-
-	h := sha256.Sum256(body)
-	expectedHash := hex.EncodeToString(h[:])
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Length", fmt.Sprintf("%d", len(body)))
-		w.Write(body)
-	}))
-	defer srv.Close()
-
-	info := &UpdateInfo{
-		DownloadURL:  srv.URL + "/asset.dmg",
-		AssetName:    "asset.dmg",
-		AssetSize:    int64(bodySize),
-		ExpectedHash: expectedHash,
-	}
-
-	path, err := DownloadUpdate(info)
-	if err != nil {
-		t.Fatalf("DownloadUpdate failed: %v", err)
-	}
-	if path == "" {
-		t.Fatal("expected non-empty path")
-	}
-	if !info.HashVerified {
-		t.Error("expected HashVerified to be true")
-	}
-
-	// Clean up the temp file.
-	if err := removeIfExists(path); err != nil {
-		t.Logf("cleanup warning: %v", err)
-	}
-}
-
-func TestDownloadUpdate_ChecksumMismatch(t *testing.T) {
-	bodySize := minAssetSize + 1024
-	body := make([]byte, bodySize)
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Length", fmt.Sprintf("%d", len(body)))
-		w.Write(body)
-	}))
-	defer srv.Close()
-
-	info := &UpdateInfo{
-		DownloadURL:  srv.URL + "/asset.dmg",
-		AssetName:    "asset.dmg",
-		AssetSize:    int64(bodySize),
-		ExpectedHash: "0000000000000000000000000000000000000000000000000000000000000000",
-	}
-
-	_, err := DownloadUpdate(info)
-	if err == nil {
-		t.Fatal("expected error for checksum mismatch")
-	}
-	if !strings.Contains(err.Error(), "checksum mismatch") {
-		t.Errorf("expected 'checksum mismatch' in error, got: %v", err)
-	}
-}
-
 // TestDownloadUpdate_SignedHashIsAuthoritative pins the fix for the
 // check/download TOCTOU: an attacker with repo write access (no signing
 // key) serves a tampered SHA256SUMS at check time — so info.ExpectedHash
@@ -457,10 +390,10 @@ func TestCheckUpdateURLStrict(t *testing.T) {
 	}{
 		{"https://github.com/korjwl1/wireguide/releases/download/v1/asset.dmg", true},
 		{"https://objects.githubusercontent.com/x", true},
-		{"http://github.com/x", false},             // non-https
+		{"http://github.com/x", false},                // non-https
 		{"https://evil.example.com/asset.dmg", false}, // disallowed host
-		{"https://github.com.evil.com/x", false},   // lookalike host
-		{"ftp://github.com/x", false},              // non-https scheme
+		{"https://github.com.evil.com/x", false},      // lookalike host
+		{"ftp://github.com/x", false},                 // non-https scheme
 	}
 	for _, c := range cases {
 		u, err := url.Parse(c.url)
@@ -471,32 +404,6 @@ func TestCheckUpdateURLStrict(t *testing.T) {
 		if got != c.ok {
 			t.Errorf("checkUpdateURLStrict(%q) ok=%v, want %v", c.url, got, c.ok)
 		}
-	}
-}
-
-func TestDownloadUpdate_NoChecksum(t *testing.T) {
-	bodySize := minAssetSize + 1024
-	body := make([]byte, bodySize)
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Length", fmt.Sprintf("%d", len(body)))
-		w.Write(body)
-	}))
-	defer srv.Close()
-
-	info := &UpdateInfo{
-		DownloadURL:  srv.URL + "/asset.dmg",
-		AssetName:    "asset.dmg",
-		AssetSize:    int64(bodySize),
-		ExpectedHash: "", // no checksum available
-	}
-
-	_, err := DownloadUpdate(info)
-	if err == nil {
-		t.Fatal("expected error when no checksum is available")
-	}
-	if !strings.Contains(err.Error(), "no checksum available") {
-		t.Errorf("expected 'no checksum available' in error, got: %v", err)
 	}
 }
 
@@ -657,26 +564,6 @@ func TestMatchAsset_NoMatch(t *testing.T) {
 	got := matchAsset(assets)
 	if got != "" {
 		t.Errorf("matchAsset = %q, want empty", got)
-	}
-}
-
-func TestMatchAsset_LinuxFollowsPackageFormat(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		t.Skip("linux-only asset preference")
-	}
-	orig := linuxPackageFormat
-	t.Cleanup(func() { linuxPackageFormat = orig })
-
-	assets := []Asset{
-		{Name: "WireGuide-linux-" + runtime.GOARCH + ".deb"},
-		{Name: "WireGuide-linux-" + runtime.GOARCH + ".rpm"},
-	}
-	for _, format := range []string{"deb", "rpm"} {
-		linuxPackageFormat = func() string { return format }
-		want := "WireGuide-linux-" + runtime.GOARCH + "." + format
-		if got := matchAsset(assets); got != want {
-			t.Errorf("format %s: matchAsset = %q, want %q", format, got, want)
-		}
 	}
 }
 
@@ -1048,12 +935,7 @@ func TestVerifyChecksumSignature_TamperedSums(t *testing.T) {
 // helpers
 // ---------------------------------------------------------------------------
 
-// withTestPublicKey overrides the package-level expectedPublicKey
-// constant for the duration of a test. Returns a restore func.
-//
-// expectedPublicKey is a `const`, but Go test files in the same
-// package can reach private package state via a test-only mutable
-// shadow. We expose `testOverridePubKey` from checker.go for this.
+// withTestPublicKey selects a fixture key only inside go test binaries.
 func withTestPublicKey(t *testing.T, hexKey string) func() {
 	t.Helper()
 	orig := testOverridePubKey

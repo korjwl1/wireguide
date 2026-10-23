@@ -1,18 +1,13 @@
-// Package app provides Wails bindings bridging the Svelte frontend to the
-// IPC helper client and local storage.
-//
-// The package is split across four files so that each has a single reason
-// to change:
-//   - app.go          (this file)    — TunnelService facade, constructor, shared types
-//   - tunnel_ops.go                  — tunnel lifecycle: connect, disconnect, list, status, rename, delete
-//   - file_ops.go                    — file/dialog operations: import, export, read, parse, edit
-//   - settings_ops.go                — settings + firewall toggles
+// Package app exposes the GUI's Wails service facade. It coordinates local
+// configuration/history storage and forwards privileged network operations to
+// the helper through a replaceable IPC client.
 package app
 
 import (
 	"context"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/korjwl1/wireguide/internal/domain"
@@ -23,7 +18,7 @@ import (
 )
 
 // TunnelService is the Wails-bound service.
-// Storage (tunnel files, settings) stays in the GUI process.
+// GUI edits use local storage; the helper also reads it for automation/recovery.
 // Tunnel operations go through the helper via an ipc.ClientHolder (so the
 // helper can be re-spawned and the connection swapped without rebuilding
 // the whole service graph).
@@ -43,6 +38,9 @@ type TunnelService struct {
 	updateScheduler *update.Scheduler
 	updateStore     *update.StateStore
 
+	// updateRunning guards RunUpdate against a second concurrent run.
+	updateRunning atomic.Bool
+
 	// activeSessions maps tunnel name → open history session ID. Used by
 	// ReconcileHistoryFromStatus to identify which row to close when a
 	// tunnel disappears from the active set; sync.Map keeps the per-event
@@ -58,12 +56,14 @@ type TunnelService struct {
 	// doesn't carry the gone tunnel's counters.
 	lastKnownStats sync.Map
 
-	// reconcileMu guards lastReconcileSig — used by ReconcileHistoryFromStatus
+	// reconcileMu serializes history reconciliation, reason hints and shutdown.
+	// lastReconcileSig is used by ReconcileHistoryFromStatus
 	// to fast-skip the active-set diff when nothing changed since the prior
 	// status event. The status stream is 1 Hz; without the skip every event
 	// would walk the activeSessions sync.Map even in the steady state.
 	reconcileMu      sync.Mutex
 	lastReconcileSig string
+	historyClosed    bool
 }
 
 // lastKnownTunnelStats is the value type for TunnelService.lastKnownStats.
@@ -115,11 +115,25 @@ var errHelperUnavailable = fmt.Errorf("helper connection not available")
 // been closed — this prevents nil-pointer panics in the narrow window
 // between doShutdown() and Wails app termination.
 func (s *TunnelService) call(method string, params interface{}, result interface{}) error {
+	if s.clients == nil {
+		return errHelperUnavailable
+	}
 	c := s.clients.Get()
 	if c == nil {
 		return errHelperUnavailable
 	}
 	return c.Call(method, params, result)
+}
+
+func (s *TunnelService) callWithContext(ctx context.Context, method string, params, result interface{}) error {
+	if s.clients == nil {
+		return errHelperUnavailable
+	}
+	c := s.clients.Get()
+	if c == nil {
+		return errHelperUnavailable
+	}
+	return c.CallWithContext(ctx, method, params, result)
 }
 
 // callLong performs an RPC with a generous timeout for operations that may

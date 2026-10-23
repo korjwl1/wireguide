@@ -3,6 +3,8 @@
 package network
 
 import (
+	"os"
+	"path/filepath"
 	"reflect"
 	"testing"
 )
@@ -65,5 +67,29 @@ func TestEndpointThrowRouteDeleteArgs(t *testing.T) {
 	got[0] = "mutated"
 	if mgr.endpointThrowRoutes[0] != "203.0.113.7/32" {
 		t.Fatal("InstalledEndpointRoutes returned aliased storage")
+	}
+}
+
+func TestLinuxDNSJournalFailuresRemainVisible(t *testing.T) {
+	dir := t.TempDir()
+	manager := &LinuxManager{dataDir: dir}
+	path := filepath.Join(dir, dnsStateFile)
+	if err := os.WriteFile(path, []byte("{invalid"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.loadPersistedDNS(); err == nil {
+		t.Fatal("corrupt baseline treated as no baseline")
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(path, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(path, "retained"), []byte("evidence"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.clearPersistedDNS(); err == nil {
+		t.Fatal("journal deletion failure concealed")
 	}
 }

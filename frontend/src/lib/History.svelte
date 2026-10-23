@@ -1,4 +1,5 @@
 <script>
+ import { modal, backdrop } from './modal.js';
   import { onMount } from 'svelte';
   import { t } from '../i18n/index.js';
   import { errText } from './errors.js';
@@ -209,8 +210,8 @@
 </div>
 
 {#if confirmingClear}
-  <div class="confirm-backdrop" on:click={() => confirmingClear = false}>
-    <div class="confirm-dialog" on:click|stopPropagation>
+  <div class="confirm-backdrop" use:backdrop={() => confirmingClear = false}>
+    <div class="confirm-dialog" use:modal={() => confirmingClear = false} role="dialog" aria-modal="true" aria-label={$t('history.confirm_clear_title')} tabindex="-1">
       <h3>{$t('history.confirm_clear_title')}</h3>
       <p>{$t('history.confirm_clear_message')}</p>
       <div class="confirm-footer">

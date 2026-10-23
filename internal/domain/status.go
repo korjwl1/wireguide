@@ -9,10 +9,11 @@ import (
 type State string
 
 const (
-	StateDisconnected State = "disconnected"
-	StateConnecting   State = "connecting"
-	StateConnected    State = "connected"
-	StateError        State = "error"
+	StateDisconnected  State = "disconnected"
+	StateConnecting    State = "connecting"
+	StateDisconnecting State = "disconnecting"
+	StateConnected     State = "connected"
+	StateError         State = "error"
 )
 
 // ConnectionStatus is the single source of truth for tunnel connection state

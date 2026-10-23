@@ -31,16 +31,15 @@ const DefaultCallTimeout = 10 * time.Second
 // Client is an IPC client with a control connection and optional event stream.
 type Client struct {
 	addr        string
-	controlMu   sync.Mutex
+	controlGate chan struct{}
 	controlConn net.Conn
 
 	nextID uint64
 
-	// eventMu guards both eventConn and onEvent so that Subscribe (writer),
-	// eventLoop (reader), and Close don't race on the event connection.
-	eventMu   sync.Mutex
-	eventConn net.Conn
-	onEvent   EventHandler
+	// Event stream setup and reads have separate lifetimes from control RPCs.
+	subscribeGate chan struct{}
+	eventMu       sync.Mutex
+	events        *eventSubscription
 
 	// Pending requests waiting for responses
 	pendingMu sync.Mutex
@@ -50,6 +49,7 @@ type Client struct {
 	// Request.Transient, keeping the helper from treating it as a control
 	// connection. Set by NewTransientClient; see Request.Transient.
 	transient bool
+	handshake PingResponse
 
 	// Lifecycle
 	closeOnce sync.Once
@@ -78,6 +78,13 @@ func NewTransientClient(addr string) (*Client, error) {
 	return newClient(ctx, addr, true)
 }
 
+// NewTransientClientContext is NewTransientClient with the caller's context
+// bounding the dial and initial Ping (the CLI needs longer than 5s on macOS,
+// where the dial itself may start the helper).
+func NewTransientClientContext(ctx context.Context, addr string) (*Client, error) {
+	return newClient(ctx, addr, true)
+}
+
 // NewClientContext bounds both connection and the initial RPC handshake.
 func NewClientContext(ctx context.Context, addr string) (*Client, error) {
 	return newClient(ctx, addr, false)
@@ -90,9 +97,7 @@ func ProbeHelper(ctx context.Context, addr string) (PingResponse, error) {
 		return PingResponse{}, err
 	}
 	defer c.Close()
-	var ping PingResponse
-	err = c.CallWithContext(ctx, MethodPing, nil, &ping)
-	return ping, err
+	return c.Handshake(), nil
 }
 
 func newClient(ctx context.Context, addr string, transient bool) (*Client, error) {
@@ -102,10 +107,12 @@ func newClient(ctx context.Context, addr string, transient bool) (*Client, error
 	}
 
 	c := &Client{
-		addr:        addr,
-		controlConn: conn,
-		pending:     make(map[uint64]chan *Response),
-		closed:      make(chan struct{}),
+		addr:          addr,
+		controlGate:   make(chan struct{}, 1),
+		subscribeGate: make(chan struct{}, 1),
+		controlConn:   conn,
+		pending:       make(map[uint64]chan *Response),
+		closed:        make(chan struct{}),
 		// Must be set before the initial Ping below: that Ping is the very
 		// request the server inspects to decide whether this connection is
 		// a control connection.
@@ -128,8 +135,18 @@ func newClient(ctx context.Context, addr string, transient bool) (*Client, error
 		return nil, fmt.Errorf("protocol major-version mismatch: helper=%q client=%q", ping.Version, ProtocolVersion)
 	}
 
+	c.handshake = ping
 	return c, nil
 }
+
+// Handshake returns the verified initial Ping without another round trip.
+func (c *Client) Handshake() PingResponse {
+	out := c.handshake
+	out.WantedTunnels = append([]string(nil), out.WantedTunnels...)
+	return out
+}
+
+func (c *Client) Address() string { return c.addr }
 
 // Close terminates all connections. Safe to call multiple times.
 func (c *Client) Close() error {
@@ -142,11 +159,11 @@ func (c *Client) Close() error {
 			c.controlConn.Close()
 		}
 		c.eventMu.Lock()
-		ec := c.eventConn
-		c.eventConn = nil
+		sub := c.events
+		c.events = nil
 		c.eventMu.Unlock()
-		if ec != nil {
-			ec.Close()
+		if sub != nil {
+			sub.conn.Close()
 		}
 	})
 	return nil
@@ -193,9 +210,7 @@ func (c *Client) CallWithContext(ctx context.Context, method string, params inte
 		c.pendingMu.Unlock()
 	}()
 
-	c.controlMu.Lock()
-	err = WriteFrame(c.controlConn, req)
-	c.controlMu.Unlock()
+	err = c.writeRequest(ctx, req)
 	if err != nil {
 		return fmt.Errorf("write request: %w", err)
 	}
@@ -219,38 +234,47 @@ func (c *Client) CallWithContext(ctx context.Context, method string, params inte
 	}
 }
 
-// Subscribe opens a second connection and subscribes to events.
-// The handler is called for each event notification received.
-func (c *Client) Subscribe(handler EventHandler) error {
-	conn, err := Dial(c.addr)
-	if err != nil {
-		return fmt.Errorf("dial event conn: %w", err)
+// writeRequest bounds both the serialization wait and socket write by ctx.
+// A peer that has stopped reading must not trap recovery, Quit or another
+// request behind a mutex after their advertised deadlines have expired.
+func (c *Client) writeRequest(ctx context.Context, req *Request) error {
+	select {
+	case c.controlGate <- struct{}{}:
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-c.closed:
+		return ErrClientClosed
 	}
-
-	// Send subscribe request (use ID=1 on event conn)
-	req, _ := NewRequest(1, MethodSubscribe, nil)
-	if err := WriteFrame(conn, req); err != nil {
-		conn.Close()
+	defer func() { <-c.controlGate }()
+	if err := ctx.Err(); err != nil {
 		return err
 	}
-
-	// Read ack
-	var resp Response
-	if err := ReadFrame(conn, &resp); err != nil {
-		conn.Close()
+	deadline, hasDeadline := ctx.Deadline()
+	if err := c.controlConn.SetWriteDeadline(deadline); err != nil {
 		return err
 	}
-	if resp.Error != nil {
-		conn.Close()
-		return resp.Error
+	woken := make(chan struct{})
+	stop := context.AfterFunc(ctx, func() {
+		_ = c.controlConn.SetWriteDeadline(time.Now())
+		close(woken)
+	})
+	err := WriteFrame(c.controlConn, req)
+	if !stop() {
+		<-woken
 	}
-
-	c.eventMu.Lock()
-	c.eventConn = conn
-	c.onEvent = handler
-	c.eventMu.Unlock()
-
-	go c.eventLoop()
+	resetErr := c.controlConn.SetWriteDeadline(time.Time{})
+	if err != nil || resetErr != nil {
+		// An interrupted frame may have been only partly written. Reusing
+		// this byte stream would corrupt framing for the next request.
+		_ = c.Close()
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if hasDeadline && !time.Now().Before(deadline) {
+			return context.DeadlineExceeded
+		}
+		return errors.Join(err, resetErr)
+	}
 	return nil
 }
 
@@ -288,32 +312,6 @@ func (c *Client) readLoop() {
 			default:
 				// Receiver gave up (timeout); drop
 			}
-		}
-	}
-}
-
-func (c *Client) eventLoop() {
-	c.eventMu.Lock()
-	conn := c.eventConn
-	c.eventMu.Unlock()
-	if conn == nil {
-		return
-	}
-
-	for {
-		data, err := ReadFrameRaw(conn)
-		if err != nil {
-			return
-		}
-		var notif Request
-		if err := json.Unmarshal(data, &notif); err != nil {
-			continue
-		}
-		c.eventMu.Lock()
-		handler := c.onEvent
-		c.eventMu.Unlock()
-		if handler != nil {
-			handler(notif.Method, notif.Params)
 		}
 	}
 }

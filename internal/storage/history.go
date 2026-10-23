@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"github.com/korjwl1/wireguide/internal/atomicfile"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -316,34 +317,7 @@ func (h *HistoryStore) saveLocked(sessions []Session) error {
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return err
 	}
-	tmpFile, err := os.CreateTemp(dir, ".wireguide-history-*.tmp")
-	if err != nil {
-		return err
-	}
-	tmpPath := tmpFile.Name()
-	if _, err := tmpFile.Write(data); err != nil {
-		tmpFile.Close()
-		os.Remove(tmpPath)
-		return err
-	}
-	if err := tmpFile.Sync(); err != nil {
-		tmpFile.Close()
-		os.Remove(tmpPath)
-		return err
-	}
-	if err := tmpFile.Close(); err != nil {
-		os.Remove(tmpPath)
-		return err
-	}
-	if err := os.Chmod(tmpPath, 0600); err != nil {
-		os.Remove(tmpPath)
-		return err
-	}
-	if err := atomicRenameDurable(tmpPath, h.path); err != nil {
-		os.Remove(tmpPath)
-		return err
-	}
-	return nil
+	return atomicfile.WriteFile(h.path, data, 0600)
 }
 
 // trimSessions keeps only the last HistoryMaxRecords entries (oldest-first

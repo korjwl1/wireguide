@@ -72,11 +72,15 @@ Debian / Ubuntu — `WireGuide-linux-amd64.deb` (또는 `-arm64.deb`):
 sudo apt install ./WireGuide-linux-amd64.deb
 ```
 
-Fedora / RHEL — `WireGuide-linux-amd64.rpm` (또는 `-arm64.rpm`):
+Fedora / 호환 RPM 배포판 — `WireGuide-linux-amd64.rpm` (또는 `-arm64.rpm`):
 
 ```bash
 sudo dnf install ./WireGuide-linux-amd64.rpm
 ```
+
+RPM 설치에는 GTK 3, WebKitGTK 4.1, Ayatana AppIndicator가 필요합니다.
+RHEL 계열에서는 버전과 활성화한 저장소에 따라 의존성 제공 여부가 다릅니다.
+업데이트는 패키지 관리자로 진행하며, 앱에서는 Linux 업데이트 시 Releases 페이지를 엽니다.
 
 앱 메뉴 등록과 트레이 연동이 함께 설치되며, 특권 헬퍼는 상시 서비스가 아니라
 PolicyKit을 통해 필요할 때만 기동됩니다.
@@ -171,7 +175,7 @@ graph LR
 
 | 구성 요소 | 기술 |
 |-----------|------|
-| 언어 | Go 1.25+ |
+| 언어 | Go 1.26.9+ |
 | GUI | [Wails v3](https://wails.io) |
 | 프론트엔드 | Svelte + Vite |
 | WireGuard | [wireguard-go](https://git.zx2c4.com/wireguard-go) + [wgctrl-go](https://github.com/WireGuard/wgctrl-go) |

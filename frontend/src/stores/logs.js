@@ -1,24 +1,8 @@
 import { writable } from 'svelte/store';
 import { Events } from '@wailsio/runtime';
 
-// Shared circular log buffer of entries received from the Go backend.
-// Both the GUI process and the helper process install slog handlers that
-// emit a "log" Wails event per record; we buffer the last N here so the
-// LogViewer can render them (and survive navigating away from the Logs
-// tab without losing history).
-//
-// IMPLEMENTATION — ring buffer:
-//   - `entries` is a pre-allocated, fixed-size array. Same reference for
-//     the lifetime of the store; we mutate slots in place.
-//   - `head` is the next write position (modulo SIZE).
-//   - `count` saturates at SIZE.
-//   - `version` increments every push so Svelte's reference-equality check
-//     fires reactivity — we set a NEW wrapper object on every update,
-//     while the inner `entries` array is reused.
-// This replaces the previous design that called `prev.slice(...)` on every
-// push (O(N) copy of up to 1000 elements per log record, GC pressure
-// during log bursts).
-
+// Keep the most recent backend records across LogViewer mounts. Slots are
+// reused; each push creates one record and a wrapper to notify Svelte stores.
 const SIZE = 1000;
 
 const initial = {
@@ -77,7 +61,7 @@ export function startLogListener() {
       s.head = (s.head + 1) % SIZE;
       if (s.count < SIZE) s.count += 1;
       // New wrapper object → Svelte subscribers fire. The inner `entries`
-      // array is reused (no per-push allocation), but consumers see a
+      // array is reused (no per-push array copy), but consumers see a
       // fresh top-level state.
       return { entries: s.entries, head: s.head, count: s.count, version: s.version + 1 };
     });

@@ -18,7 +18,7 @@ import (
 	"time"
 
 	"github.com/korjwl1/wireguide/internal/ipc"
-	"github.com/korjwl1/wireguide/internal/update"
+	"github.com/korjwl1/wireguide/internal/version"
 )
 
 const (
@@ -27,14 +27,21 @@ const (
 	daemonBinary = "/Library/PrivilegedHelperTools/" + daemonLabel
 )
 
-// SpawnHelper starts the privileged helper process.
+// SpawnHelper makes sure the privileged helper is reachable.
 //
-// Installs (or restarts) the LaunchDaemon via a macOS native admin dialog.
-// RunAtLoad=false plus AfterInitialDemand=true prevent launchd starting it on its
-// own — the helper's lifetime is tied to the GUI's. That means the admin
-// prompt appears on first launch and again on any launch that finds no live
-// helper socket (i.e. after the helper self-exited when the GUI closed).
-// This is the intended trade: no invisible root process outliving the app.
+// The LaunchDaemon owns the helper's socket (launchd socket activation,
+// RunAtLoad=false): launchd binds /var/run/com.wireguide.helper.sock from
+// boot and starts the helper when something connects to it. So with an
+// up-to-date install no administrator authorization is needed at all — after
+// confirming the job is loaded (unprivileged `launchctl print`), the dial in
+// waitForHelper IS the start request. The helper's lifetime is still tied to
+// the GUI (it idles out after the GUI goes away), and it stays dormant — no
+// automation — until a GUI attaches, so no invisible root process acts on its
+// own.
+//
+// The administrator prompt appears only to install or repair: first install,
+// an app update (new binary or plist), a job that is not loaded or whose
+// socket launchd could not bind, or a helper that does not come up in time.
 //
 // A compatible RPC response short-circuits the whole path (step 1), so relaunching the
 // GUI while a tunnel is still up does NOT re-prompt.
@@ -42,9 +49,9 @@ const (
 // ctx cancels readiness polling, but authorization is allowed to complete
 // without a deadline so a slow password entry does not become a failed install.
 //
-// An identical binary and plist use kickstart only. Upgrades unload the old
-// job before replacing its files. This avoids rewriting a running executable;
-// it does not guarantee that macOS will reset background-item approval.
+// Upgrades unload the old job before replacing its files. This avoids
+// rewriting a running executable; it does not guarantee that macOS will reset
+// background-item approval.
 func SpawnHelper(ctx context.Context, args Args) error {
 	if err := ValidateArgs(args); err != nil {
 		return fmt.Errorf("invalid spawn args: %w", err)
@@ -87,25 +94,43 @@ func generatePlistContent(exe string, args Args) string {
     </array>
     <!-- RunAtLoad is deliberately false. The job stays loaded across
          reboots (the plist lives in /Library/LaunchDaemons), but launchd
-         must NOT start it at boot: a running GUI is what signals the user
-         wants WireGuide active. A root helper running at boot with no
-         window and no tray icon would evaluate Wi-Fi automation rules —
-         and could bring a tunnel up — while the user believes the app is
-         closed. Users who want WireGuide from boot enable auto_start,
-         which installs the GUI LaunchAgent; the GUI then spawns the
-         helper through the normal path. installAndLoadDaemon kickstarts
-         the job explicitly after bootstrap, since with RunAtLoad=false
-         bootstrap only loads it. -->
+         must NOT start it at boot: a root helper running at boot with no
+         window and no tray icon is exactly what a user who closed the app
+         does not expect. The Sockets entry below is what starts it: launchd
+         binds the socket at boot and launches the helper when something
+         connects, so the app brings it up just by dialing — no
+         administrator prompt. The helper adopts that socket
+         (launch_activate_socket) instead of creating its own, serves only
+         the owning uid (SockPathOwner, mode 0600, plus the peer-credential
+         check), stays dormant until a GUI attaches, and idles out when the
+         GUI goes away. -->
     <key>RunAtLoad</key>
     <false/>
     <key>KeepAlive</key>
     <dict>
         <!-- SuccessfulExit alone implies an initial launch even when
-             RunAtLoad is false. Gate crash restarts on explicit demand. -->
+             RunAtLoad is false. Gate crash restarts on demand (a connect
+             to the socket below). -->
         <key>AfterInitialDemand</key>
         <true/>
         <key>SuccessfulExit</key>
         <false/>
+    </dict>
+    <key>Sockets</key>
+    <dict>
+        <key>Listeners</key>
+        <dict>
+            <!-- Directly in /var/run: launchd does not create parent
+                 directories. 384 is 0600 (plists have no octal). -->
+            <key>SockPathName</key>
+            <string>%s</string>
+            <key>SockType</key>
+            <string>stream</string>
+            <key>SockPathMode</key>
+            <integer>384</integer>
+            <key>SockPathOwner</key>
+            <integer>%d</integer>
+        </dict>
     </dict>
     <!-- ProcessType omitted to inherit Standard (priority ~31). The
          previous Background setting (priority ~4) caused packet-handling
@@ -120,7 +145,7 @@ func generatePlistContent(exe string, args Args) string {
     <string>/var/log/wireguide-helper.log</string>
 </dict>
 </plist>
-`, daemonLabel, daemonBinary, args.SocketPath, uid, args.DataDir)
+`, daemonLabel, daemonBinary, args.SocketPath, uid, args.DataDir, ipc.DarwinSocketPath, uid)
 }
 
 // PlistNeedsReinstall reports whether the on-disk LaunchDaemon plist differs
@@ -147,9 +172,18 @@ func PlistNeedsReinstall(args Args) bool {
 	return string(existing) != expected
 }
 
-// installAndLoadDaemon writes the plist to a temp file (no escaping issues),
-// then runs a shell script as root via osascript that copies everything into
-// place and bootstraps the daemon. A failed fast start can request one full repair.
+// installAndLoadDaemon brings the LaunchDaemon to a state where the helper
+// answers on its socket.
+//
+// Up-to-date install (same binary and plist): no authorization. The job is
+// loaded from boot and owns the socket, so confirming that with unprivileged
+// launchctl and then waiting on the socket is enough — the connect starts the
+// helper. Only if that fails (job not loaded, socket error, wait timed out) does
+// it fall back to the administrator full repair, once.
+//
+// Anything else: write the plist to a temp file (no escaping issues), then run
+// a shell script as root via osascript that copies everything into place and
+// bootstraps the daemon.
 //
 // ctx is used only for post-install socket-readiness polling. Authorization
 // is synchronous and has no deadline; the GUI starts its readiness deadline
@@ -181,11 +215,13 @@ func installAndLoadDaemon(ctx context.Context, args Args) error {
 	}
 
 	upToDate := !args.ForceReinstall && daemonUpToDate(exe, plist)
+	ops := daemonOps{
+		checkEnabled: checkDaemonEnabled,
+		loaded:       checkDaemonLoaded,
+		authorize:    runDaemonAuthorization,
+	}
 	err = startDaemonWithRepair(ctx, upToDate, func(fast bool) error {
-		if err := checkDaemonEnabled(ctx); err != nil {
-			return err
-		}
-		return runDaemonAuthorization(daemonInstallScript(exe, tmpPlist, fast))
+		return startDaemonStep(ctx, ops, exe, tmpPlist, fast)
 	}, func(ctx context.Context) error {
 		return waitForHelper(ctx, args.SocketPath, 30*time.Second)
 	})
@@ -198,8 +234,31 @@ func installAndLoadDaemon(ctx context.Context, args Args) error {
 	return fmt.Errorf("%w\nHelper state: %s. Check /var/log/wireguide-helper.log and System Settings > General > Login Items & Extensions; allow WireGuide if macOS has blocked it", err, daemonStateSummary(ctx))
 }
 
-// A failed kickstart or an unresponsive process gets one full repair. A failed
-// full repair returns to the user's Retry/Quit decision; it never loops itself.
+// daemonOps are the external effects of a start attempt, injectable so the
+// no-prompt fast path can be tested without launchd or osascript.
+type daemonOps struct {
+	checkEnabled func(context.Context) error
+	loaded       func(context.Context) error
+	authorize    func(shellScript string) error
+}
+
+// startDaemonStep is one start attempt. The fast attempt never authorizes: it
+// only confirms the job is loaded with a healthy socket, because the dial that
+// follows is what makes launchd start the helper. The full attempt runs the
+// root install script behind one administrator prompt.
+func startDaemonStep(ctx context.Context, ops daemonOps, exe, tmpPlist string, fast bool) error {
+	if err := ops.checkEnabled(ctx); err != nil {
+		return err
+	}
+	if fast {
+		return ops.loaded(ctx)
+	}
+	return ops.authorize(daemonInstallScript(exe, tmpPlist))
+}
+
+// A failed fast attempt (job not loaded, socket error, helper not responding)
+// gets one full administrator repair. A failed full repair returns to the
+// user's Retry/Quit decision; it never loops itself.
 func startDaemonWithRepair(ctx context.Context, fast bool, start func(bool) error, ready func(context.Context) error) error {
 	for {
 		if err := ctx.Err(); err != nil {
@@ -215,9 +274,48 @@ func startDaemonWithRepair(ctx context.Context, fast bool, start func(bool) erro
 		if !fast || errors.Is(err, ErrAuthorizationCanceled) || errors.Is(err, ErrBackgroundDisabled) || ctx.Err() != nil {
 			return err
 		}
-		slog.Warn("helper fast start failed; attempting one full repair", "error", err)
+		slog.Warn("helper passive start failed; attempting one full repair", "error", err)
 		fast = false
 	}
+}
+
+// checkDaemonLoaded confirms, without privileges, that the LaunchDaemon is
+// loaded and launchd bound its socket. `launchctl print system/...` works for
+// an ordinary user.
+func checkDaemonLoaded(ctx context.Context) error {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "launchctl", "print", "system/"+daemonLabel).CombinedOutput()
+	return daemonLoadedFromPrint(out, err)
+}
+
+// daemonLoadedFromPrint interprets `launchctl print` output. A missing
+// `sockets` block is not an error (the readiness wait decides); an `error =`
+// inside it means launchd failed to bind the socket and no connect will ever
+// start the helper.
+func daemonLoadedFromPrint(out []byte, err error) error {
+	if err != nil {
+		return fmt.Errorf("LaunchDaemon %s is not loaded: %w", daemonLabel, err)
+	}
+	inSockets, depth := false, 0
+	for _, line := range strings.Split(string(out), "\n") {
+		t := strings.TrimSpace(line)
+		if !inSockets {
+			// Top-level job field only: tab-indented once, not a nested block.
+			if t == "sockets = {" && strings.HasPrefix(line, "\t") && !strings.HasPrefix(line, "\t\t") {
+				inSockets, depth = true, 1
+			}
+			continue
+		}
+		if strings.HasPrefix(t, "error =") {
+			return fmt.Errorf("launchd could not bind the helper socket: %s", t)
+		}
+		depth += strings.Count(t, "{") - strings.Count(t, "}")
+		if depth <= 0 {
+			break
+		}
+	}
+	return nil
 }
 
 func runDaemonAuthorization(shellScript string) error {
@@ -237,15 +335,24 @@ func runDaemonAuthorization(shellScript string) error {
 
 // A reachable Unix socket is not sufficient: verify a compatible, responsive
 // helper without creating a GUI lease that changes the shutdown grace period.
+//
+// With socket activation the probe's connect is what starts the helper, so
+// when launchd's socket file exists the probe waits long enough to cover
+// launchd's ThrottleInterval plus helper startup (crash recovery runs before
+// Serve); otherwise there is nothing to wait for.
 func helperResponsive(ctx context.Context, addr string) error {
-	probeCtx, cancel := context.WithTimeout(ctx, time.Second)
+	timeout := time.Second
+	if _, err := os.Stat(addr); err == nil {
+		timeout = 15 * time.Second
+	}
+	probeCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	ping, err := ipc.ProbeHelper(probeCtx, addr)
 	if err != nil {
 		return err
 	}
-	if ping.AppVersion != update.CurrentVersion() {
-		return fmt.Errorf("helper version %q does not match app %q", ping.AppVersion, update.CurrentVersion())
+	if ping.AppVersion != version.Current {
+		return fmt.Errorf("helper version %q does not match app %q", ping.AppVersion, version.Current)
 	}
 	return nil
 }
@@ -272,6 +379,12 @@ func waitForHelper(ctx context.Context, addr string, timeout time.Duration) erro
 var disabledDaemonLine = regexp.MustCompile(`(?m)^\s*"` + regexp.QuoteMeta(daemonLabel) + `"\s*=>\s*(?:true|disabled)\s*[,;]?\s*$`)
 
 func checkDaemonEnabled(ctx context.Context) error {
+	// BTM can require approval even when launchctl has no disable override.
+	// This also covers legacy plists: migrating service registration is not
+	// required to query their approval through ServiceManagement on macOS 13+.
+	if backgroundApprovalRequired(daemonPlist) {
+		return fmt.Errorf("%w. Allow WireGuide in System Settings > General > Login Items & Extensions, then retry", ErrBackgroundDisabled)
+	}
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
 	out, err := exec.CommandContext(ctx, "launchctl", "print-disabled", "system").CombinedOutput()
@@ -308,13 +421,16 @@ func daemonStateSummary(ctx context.Context) string {
 	return strings.Join(fields, "; ")
 }
 
-// daemonInstallScript is separated from authorization so its failure paths
-// can be exercised with shell command stubs without touching launchd.
-func daemonInstallScript(exe, tmpPlist string, upToDate bool) string {
-	fullInstall := fmt.Sprintf(
+// daemonInstallScript is the full root install/repair. It is separated from
+// authorization so its failure paths can be exercised with shell command stubs
+// without touching launchd. (bootstrap binds the launchd socket; kickstart then
+// starts the helper right away rather than waiting for the first connect. A
+// stale socket file left by bootout is simply rebound by launchd.)
+func daemonInstallScript(exe, tmpPlist string) string {
+	return fmt.Sprintf(
 		`launchctl bootout system/%s 2>/dev/null; `+
-			`i=0; while [ $i -lt 50 ] && launchctl print system/%s >/dev/null 2>&1; do sleep 0.1; i=$((i+1)); done; `+
-			`if [ $i -ge 50 ]; then echo 'WireGuide helper did not unload within 5s; no files were changed' >&2; exit 1; fi; `+
+			`i=0; while [ $i -lt 150 ] && launchctl print system/%s >/dev/null 2>&1; do sleep 0.1; i=$((i+1)); done; `+
+			`if [ $i -ge 150 ]; then echo 'WireGuide helper did not unload within 15s; no files were changed' >&2; exit 1; fi; `+
 			`rm -f %s %s && `+
 			`mkdir -p /Library/PrivilegedHelperTools && `+
 			`cp -f %s %s && `+
@@ -339,16 +455,11 @@ func daemonInstallScript(exe, tmpPlist string, upToDate bool) string {
 		shellQuote(daemonPlist),
 		daemonLabel,
 	)
-
-	if upToDate {
-		return fmt.Sprintf(`launchctl kickstart system/%s`, daemonLabel)
-	}
-	return fullInstall
 }
 
 // daemonUpToDate reports whether the installed daemon is byte-identical to
 // what this build would install: same binary content (SHA-256) and same
-// plist content. Used to route SpawnHelper onto the kickstart-only path.
+// plist content. Used to route SpawnHelper onto the no-authorization path.
 // Any read error (not installed yet, permissions) → false → full install.
 func daemonUpToDate(exe, wantPlist string) bool {
 	onDisk, err := os.ReadFile(daemonPlist)

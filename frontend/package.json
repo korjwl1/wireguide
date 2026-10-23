@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "test": "node --test",
     "build:dev": "vite build --minify false --mode development",
     "build": "vite build --mode production",
     "preview": "vite preview"

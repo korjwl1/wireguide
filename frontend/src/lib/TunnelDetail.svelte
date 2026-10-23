@@ -1,8 +1,11 @@
 <script>
+ import { modal, backdrop } from './modal.js';
+  import { tunnelState, tunnelStatus } from './tunnel-state.js';
   import { tunnels, selectedTunnel, connectionStatus, refreshTunnels, refreshStatus } from '../stores/tunnels.js';
   import Icon from './Icon.svelte';
   import { t } from '../i18n/index.js';
   import { errText } from './errors.js';
+  import { createFieldWriter } from './field-writer.js';
   import { createEventDispatcher, tick, onDestroy } from 'svelte';
   import AutomationEditor from './AutomationEditor.svelte';
   import PingHealthSettings from './PingHealthSettings.svelte';
@@ -70,34 +73,22 @@
   let latencyTargetEditing = false;
   let latencyTargetInput = null;
 
-  // flushNotes is the single write path used by both the debounce/blur
-  // saver and the cross-tunnel-switch flush. It patches BOTH stores —
-  // selectedTunnel for the immediate UI, tunnels for the list — so
-  // re-selecting the same tunnel before the next ListTunnels refresh
-  // doesn't show stale (pre-edit) notes.
-  async function flushNotes(name, value) {
-    if (!name) return false;
-    try {
-      await TunnelService.SetTunnelNotes(name, value);
-      tunnels.update(list => list.map(t => t.name === name ? { ...t, notes: value } : t));
-      selectedTunnel.update(sel => sel && sel.name === name ? { ...sel, notes: value } : sel);
-      // Only update local UI state if the user is still on this tunnel —
-      // otherwise we'd overwrite the new tunnel's notesSaved with the
-      // wrong value (this flush could be the cross-switch fire-and-forget).
-      if ($selectedTunnel && $selectedTunnel.name === name) {
-        notesSaved = value;
-        notesError = '';
-      }
-      return true;
-    } catch (e) {
-      if ($selectedTunnel && $selectedTunnel.name === name) {
-        notesError = errText(e);
-      } else {
-        console.error('flushNotes for', name, e);
-      }
-      return false;
-    }
+  function patchProfileField(name, field, value) {
+    tunnels.update(list => list.map(t => t.name === name ? { ...t, [field]: value } : t));
+    selectedTunnel.update(sel => sel?.name === name ? { ...sel, [field]: value } : sel);
   }
+
+  const flushNotes = createFieldWriter(
+    (name, value) => TunnelService.SetTunnelNotes(name, value),
+    (name, value) => {
+      patchProfileField(name, 'notes', value);
+      if ($selectedTunnel?.name === name) { notesSaved = value; notesError = ''; }
+    },
+    (name, failure) => {
+      if ($selectedTunnel?.name === name) notesError = errText(failure);
+      else dispatch('warning', errText(failure));
+    },
+  );
 
   async function saveNotes() {
     if (!$selectedTunnel) return;
@@ -112,27 +103,24 @@
     notesSaveTimer = setTimeout(saveNotes, 800);
   }
 
-  async function flushLatencyTarget(name, value) {
-    if (!name) return false;
-    const normalized = (value || '').trim();
-    try {
-      await TunnelService.SetTunnelLatencyProbeTarget(name, normalized);
-      tunnels.update(list => list.map(t => t.name === name ? { ...t, latency_probe_target: normalized } : t));
-      selectedTunnel.update(sel => sel && sel.name === name ? { ...sel, latency_probe_target: normalized } : sel);
-      if ($selectedTunnel && $selectedTunnel.name === name) {
-        latencyTargetSaved = normalized;
-        latencyTargetValue = normalized;
+  const writeLatencyTarget = createFieldWriter(
+    (name, value) => TunnelService.SetTunnelLatencyProbeTarget(name, value),
+    (name, value) => {
+      patchProfileField(name, 'latency_probe_target', value);
+      if ($selectedTunnel?.name === name) {
+        latencyTargetSaved = value;
+        // An earlier save must not replace what the user is typing now.
+        if (latencyTargetValue.trim() === value) latencyTargetValue = value;
         latencyTargetError = '';
       }
-      return true;
-    } catch (e) {
-      if ($selectedTunnel && $selectedTunnel.name === name) {
-        latencyTargetError = errText(e);
-      } else {
-        console.error('flushLatencyTarget for', name, e);
-      }
-      return false;
-    }
+    },
+    (name, failure) => {
+      if ($selectedTunnel?.name === name) latencyTargetError = errText(failure);
+      else dispatch('warning', errText(failure));
+    },
+  );
+  function flushLatencyTarget(name, value) {
+    return writeLatencyTarget(name, (value || '').trim());
   }
 
   async function saveLatencyTarget() {
@@ -152,19 +140,34 @@
   // once — which froze this on the first tunnel's endpoint forever.
   function autoLatencyTarget(det, sel) {
     if (!det) return { label: sel?.endpoint || '—', fallback: true };
-    for (const peer of det.Peers || []) {
-      for (const allowed of peer.AllowedIPs || []) {
+    for (const peer of det.peers || []) {
+      for (const allowed of peer.allowed_ips || []) {
         if (allowed.endsWith('/32')) return { label: allowed.slice(0, -3), fallback: false };
         if (allowed.endsWith('/128')) return { label: allowed.slice(0, -4), fallback: false };
       }
     }
-    const fullTunnel = (det.Peers || []).some(peer =>
-      (peer.AllowedIPs || []).some(ip => ip === '0.0.0.0/0' || ip === '::/0')
+    const fullTunnel = (det.peers || []).some(peer =>
+      (peer.allowed_ips || []).some(ip => ip === '0.0.0.0/0' || ip === '::/0')
     );
     if (fullTunnel) return { label: '8.8.8.8', fallback: false };
     return { label: sel?.endpoint || '—', fallback: true };
   }
 
+  // Splits an [Interface] DNS= list into servers, search domains and
+  // "~domain" split-DNS (routing-only) domains, mirroring domain.ParseDNSEntries.
+  function parseDnsEntries(list) {
+    const out = { servers: [], search: [], match: [] };
+    for (const raw of list || []) {
+      const tok = String(raw).trim();
+      if (!tok) continue;
+      if (tok.startsWith('~')) out.match.push(tok.slice(1));
+      else if (tok.includes(':') || /^[0-9.]+$/.test(tok)) out.servers.push(tok);
+      else out.search.push(tok);
+    }
+    return out;
+  }
+
+  $: dnsInfo = parseDnsEntries(detail?.interface?.dns);
   $: autoLatency = autoLatencyTarget(detail, $selectedTunnel);
   $: latencyTargetDisplay = latencyTargetSaved
     ? latencyTargetSaved
@@ -210,32 +213,22 @@
     }
   });
 
-  // Single source of truth for "is this tunnel currently active?" —
-  // combine the selected-tunnel flag with the live connection status so the
-  // UI can't show a stale "connected" chip briefly after disconnect.
-  $: isConnected = $selectedTunnel?.is_connected
-    && ($connectionStatus?.active_tunnels || []).includes($selectedTunnel?.name);
-  $: isConnecting = !isConnected
-    && $connectionStatus?.state === 'connecting'
-    && $connectionStatus?.tunnel_name === $selectedTunnel?.name;
-  $: noHandshake = isConnected && !status?.last_handshake;
-  // Use the primary status if it matches the selected tunnel (has full stats).
-  // Otherwise fall back to the lightweight per-tunnel info from the tunnels array
-  // (name + state + handshake only, no rx/tx/duration).
-  $: status = (() => {
-    if ($connectionStatus?.tunnel_name === $selectedTunnel?.name) {
-      return $connectionStatus;
-    }
-    const tunnels = $connectionStatus?.tunnels || [];
-    const match = tunnels.find(t => t.tunnel_name === $selectedTunnel?.name);
-    return match || $connectionStatus;
-  })();
+  $: state = tunnelState($connectionStatus, $selectedTunnel?.name);
+  $: isConnected = state === 'connected';
+  $: isConnecting = state === 'connecting' || state === 'disconnecting';
+  $: status = tunnelStatus($connectionStatus, $selectedTunnel?.name) || { state: 'disconnected' };
+  $: noHandshake = isConnected && !status.last_handshake;
 
+  let detailGeneration = 0;
   async function loadDetail(name) {
+    const generation = ++detailGeneration;
     try {
-      detail = await TunnelService.GetTunnelDetail(name);
+      const value = await TunnelService.GetTunnelDetail(name);
+      if (generation !== detailGeneration || $selectedTunnel?.name !== name) return;
+      detail = value;
       error = '';
     } catch (e) {
+      if (generation !== detailGeneration || $selectedTunnel?.name !== name) return;
       detail = null;
       // Surface the failure rather than silently leaving the panel
       // blank — most failures here are "tunnel was deleted" or
@@ -268,7 +261,7 @@
       if (/client closed|connection closed|broken pipe|EOF/i.test(raw)) {
         consecutiveClientClosed += 1;
         if (consecutiveClientClosed >= 2) {
-          error = $t('tunnel.helper_recovering') || 'Helper recovering, please retry in a moment.';
+          error = $t('tunnel.helper_recovering');
         } else {
           error = raw;
         }
@@ -298,7 +291,8 @@
   async function confirmDelete() {
     showDeleteConfirm = false;
     try {
-      await TunnelService.DeleteTunnel($selectedTunnel.name);
+      const result = await TunnelService.DeleteTunnel($selectedTunnel.name);
+      if (result?.warning) dispatch('warning', $t('app.profile_rules_warning') + ': ' + result.warning);
       selectedTunnel.set(null);
       dispatch('refresh');
     } catch (e) {
@@ -355,6 +349,7 @@
   }
 
   async function commitRename() {
+    if (!renaming) return;
     if (renameCancelled) {
       renameCancelled = false;
       return;
@@ -364,8 +359,9 @@
     renaming = false;
     if (!newName || newName === oldName) return;
     try {
-      await TunnelService.RenameTunnel(oldName, newName);
-      selectedTunnel.set({ ...$selectedTunnel, name: newName });
+      const result = await TunnelService.RenameTunnel(oldName, newName);
+      if (result?.warning) dispatch('warning', $t('app.profile_rules_warning') + ': ' + result.warning);
+      if ($selectedTunnel?.name === oldName) selectedTunnel.set({ ...$selectedTunnel, name: newName });
       dispatch('refresh');
     } catch (e) {
       error = errText(e);
@@ -420,7 +416,7 @@
             />
           {:else}
             <h2 class="hero-name" on:dblclick={startRename} title={$t('tunnel.rename_hint')}>{$selectedTunnel.name}</h2>
-            <button class="btn-rename" on:click={startRename} title="Rename">
+            <button class="btn-rename" on:click={startRename} title={$t('tunnel.rename')}>
               <Icon name="pencil" size={12} strokeWidth={1.75} />
             </button>
           {/if}
@@ -436,7 +432,7 @@
             {:else if isConnected}
               {$t('app.connected')}
             {:else if isConnecting}
-              {$t('app.connecting')}
+              {state === 'disconnecting' ? $t('app.disconnecting') : $t('app.connecting')}
             {:else}
               {$t('app.disconnected')}
             {/if}
@@ -460,7 +456,7 @@
         <button class="btn-primary-large btn-connect-lg" on:click={connect} disabled={loading || isConnecting}>
           {#if loading || isConnecting}
             <span class="spinner"></span>
-            <span>{$t('app.connecting')}</span>
+            <span>{state === 'disconnecting' ? $t('app.disconnecting') : $t('app.connecting')}</span>
           {:else}
             <Icon name="zap" size={16} strokeWidth={2.25} />
             <span>{$t('tunnel.connect')}</span>
@@ -552,20 +548,36 @@
         {/if}
         {#if detail}
           <div class="info-card detail-info-card">
-            {#each detail.Peers || [] as peer}
+            {#each detail.peers || [] as peer}
               <div class="info-row">
                 <span class="info-label">{$t('tunnel.allowed_ips')}</span>
-                <span class="info-value">{(peer.AllowedIPs || []).join(', ') || '—'}</span>
+                <span class="info-value">{(peer.allowed_ips || []).join(', ') || '—'}</span>
               </div>
               <div class="info-row">
                 <span class="info-label">{$t('tunnel.public_key')}</span>
-                <span class="info-value mono">{peer.PublicKey?.substring(0, 20)}…</span>
+                <span class="info-value mono">{peer.public_key?.substring(0, 20)}…</span>
               </div>
             {/each}
-            {#if detail.Interface?.DNS?.length}
+            {#if dnsInfo.servers.length}
               <div class="info-row">
-                <span class="info-label">DNS</span>
-                <span class="info-value">{detail.Interface.DNS.join(', ')}</span>
+                <span class="info-label">{$t('tunnel.dns_servers')}</span>
+                <span class="info-value">{dnsInfo.servers.join(', ')}</span>
+              </div>
+            {/if}
+            {#if dnsInfo.search.length}
+              <div class="info-row">
+                <span class="info-label">{$t('tunnel.dns_search')}</span>
+                <span class="info-value">{dnsInfo.search.join(', ')}</span>
+              </div>
+            {/if}
+            {#if dnsInfo.match.length}
+              <div class="info-row">
+                <span class="info-label">{$t('tunnel.dns_split')}</span>
+                <span class="info-value">{dnsInfo.match.join(', ')}</span>
+              </div>
+              <div class="info-row">
+                <span class="info-label"></span>
+                <span class="info-value dns-split-note">{$t('tunnel.dns_split_note')}</span>
               </div>
             {/if}
           </div>
@@ -622,8 +634,8 @@
 <AutomationEditor {TunnelService} tunnelName={$selectedTunnel?.name || ''} bind:open={showAutomation} />
 
 {#if showDeleteConfirm}
-  <div class="confirm-backdrop" on:click={cancelDelete}>
-    <div class="confirm-dialog" on:click|stopPropagation>
+  <div class="confirm-backdrop" use:backdrop={cancelDelete}>
+    <div class="confirm-dialog" use:modal={cancelDelete} role="dialog" aria-modal="true" aria-label={$t('confirm.delete_title')} tabindex="-1">
       <div class="dialog-header">
         <div class="dialog-icon-tile danger">
           <Icon name="triangle-alert" size={18} strokeWidth={2} />
@@ -1029,6 +1041,11 @@
     border-radius: 12px;
     overflow: hidden;
   }
+  .dns-split-note {
+    color: var(--text-muted);
+    font-size: 0.85em;
+  }
+
   .detail-info-card {
     border: 0;
     background: transparent;

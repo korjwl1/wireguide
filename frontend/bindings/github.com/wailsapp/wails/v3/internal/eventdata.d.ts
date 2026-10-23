@@ -27,6 +27,7 @@ declare module "@wailsio/runtime" {
             "helper_reset": {};
             "log": ipc$0.LogEntry;
             "reconnect": gui$0.ReconnectEvent;
+            "recovery_warning": ipc$0.RecoveryWarningPayload;
             "settings_changed": ipc$0.SettingsChangedPayload;
             "status": domain$0.ConnectionStatus;
             "tunnels_changed": {};

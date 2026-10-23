@@ -1,0 +1,70 @@
+diff --git a/internal/helper/review_cases_test.go b/internal/helper/review_cases_test.go
+new file mode 100644
+--- /dev/null
++++ b/internal/helper/review_cases_test.go
+@@ -0,0 +1,22 @@
++package helper
++
++import (
++	"github.com/korjwl1/wireguide/internal/domain"
++	"testing"
++)
++
++func TestReviewMixedSplitPhysicalResolverPermit(t *testing.T) {
++	global := &domain.WireGuardConfig{}
++	global.Interface.DNS = []string{"9.9.9.9"}
++	global.Peers = []domain.PeerConfig{{AllowedIPs: []string{"10.0.0.0/8"}}}
++	split := &domain.WireGuardConfig{}
++	split.Interface.DNS = []string{"1.1.1.1", "~corp.example"}
++	split.Peers = []domain.PeerConfig{{AllowedIPs: []string{"172.16.0.0/12"}}}
++	permits := desiredDNSPermits([]reconcileTunnel{{Name: "global", Iface: "utun4", Cfg: global}, {Name: "split", Iface: "utun5", Cfg: split}}, "darwin", true)
++	for _, p := range permits {
++		if p.Server == "1.1.1.1" {
++			return
++		}
++	}
++	t.Fatalf("split resolver blocked by the global policy: %+v", permits)
++}
+diff --git a/internal/diag/review_cases_test.go b/internal/diag/review_cases_test.go
+new file mode 100644
+--- /dev/null
++++ b/internal/diag/review_cases_test.go
+@@ -0,0 +1,15 @@
++package diag
++
++import (
++	"github.com/korjwl1/wireguide/internal/domain"
++	"testing"
++)
++
++func TestReviewSplitDiagnosticPreservesDomainServerOwnership(t *testing.T) {
++	expected := ExpectedDNSForTunnels([][]string{{"10.1.0.53", "~a.example"}, {"10.2.0.53", "~b.example"}})
++	actual := []scutilResolver{{Domain: "a.example", Nameservers: []string{"10.2.0.53"}}, {Domain: "b.example", Nameservers: []string{"10.2.0.53"}}}
++	missing := evaluateSplitDNS(actual, domain.ParseDNSEntries(expected))
++	if len(missing) == 0 {
++		t.Fatal("diagnostic passed a.example using the wrong tunnel's DNS")
++	}
++}
+diff --git a/internal/network/review_cases_darwin_test.go b/internal/network/review_cases_darwin_test.go
+new file mode 100644
+--- /dev/null
++++ b/internal/network/review_cases_darwin_test.go
+@@ -0,0 +1,18 @@
++//go:build darwin
++
++package network
++
++import (
++	"errors"
++	"testing"
++)
++
++func TestReviewSplitDNSRemovalFailureIsNotReportedAsRestored(t *testing.T) {
++	old := scutilExec
++	defer func() { scutilExec = old }()
++	scutilExec = func(string) ([]byte, error) { return nil, errors.New("dynamic store unavailable") }
++	m := &DarwinManager{}
++	if err := m.RestoreDNS("utun5"); err == nil {
++		t.Fatal("split resolver removal failed but RestoreDNS returned success")
++	}
++}

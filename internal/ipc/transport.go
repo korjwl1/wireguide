@@ -8,6 +8,17 @@ import (
 	"strconv"
 )
 
+// LegacyDarwinSocketPath is where macOS helpers before socket activation
+// listened. It is kept for migration probes (an old helper may still be
+// running on it after an upgrade) and as the non-launchd fallback location
+// for dev runs, tests and old plists that pass it explicitly.
+const LegacyDarwinSocketPath = "/var/run/wireguide/wireguide.sock"
+
+// DarwinSocketPath is the launchd-owned socket the LaunchDaemon plist
+// declares under Sockets. It sits directly in /var/run because launchd does
+// not create intermediate directories for SockPathName.
+const DarwinSocketPath = "/var/run/com.wireguide.helper.sock"
+
 // DefaultSocketPath returns the default socket/pipe address for this OS+user.
 func DefaultSocketPath() string {
 	switch runtime.GOOS {
@@ -21,19 +32,22 @@ func DefaultSocketPath() string {
 		uid := os.Getuid()
 		uidStr := strconv.Itoa(uid)
 
+		// The path is fixed by the plist's SockPathName, so it wins over
+		// XDG_RUNTIME_DIR: an activated helper serves only launchd's socket.
+		if runtime.GOOS == "darwin" {
+			// macOS: launchd binds this socket itself (plist Sockets, mode 0600,
+			// owned by the GUI user) and starts the root helper on the first
+			// connect, so no admin prompt is needed to bring the helper up.
+			// It must sit directly in /var/run: launchd does not create
+			// parent directories. See LegacyDarwinSocketPath for the old
+			// location.
+			return DarwinSocketPath
+		}
+
 		// M18: Prefer $XDG_RUNTIME_DIR (typically /run/user/<uid>/) which is
 		// a per-user tmpfs with restricted permissions.
 		if runtimeDir := os.Getenv("XDG_RUNTIME_DIR"); runtimeDir != "" {
 			return filepath.Join(runtimeDir, "wireguide-"+uidStr+".sock")
-		}
-
-		if runtime.GOOS == "darwin" {
-			// macOS: use /var/run/wireguide/ — the helper runs as root (via
-			// LaunchDaemon or osascript) and creates this directory. The GUI
-			// connects as an unprivileged user; the helper chowns the socket
-			// so the GUI can read/write it. This path is stable across app
-			// restarts and doesn't pollute the user's home directory.
-			return "/var/run/wireguide/wireguide.sock"
 		}
 
 		// Linux fallback: create a private subdirectory under /tmp with mode 0700

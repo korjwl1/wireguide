@@ -1,4 +1,7 @@
 <script>
+ import { modal, backdrop } from './lib/modal.js';
+  import { loadSettings, settingsErrors } from './stores/settings.js';
+  import { connectedTunnelNames, tunnelState } from './lib/tunnel-state.js';
   import { onMount, onDestroy } from 'svelte';
   import { Events } from '@wailsio/runtime';
   import TunnelList from './lib/TunnelList.svelte';
@@ -17,6 +20,8 @@
   import { startLogListener, stopLogListener } from './stores/logs.js';
   import { compactList, listSort, listActiveOnTop, listPaneWidth, saveListPrefs, LIST_PANE_MIN, LIST_PANE_MAX, LIST_PANE_DEFAULT } from './stores/ui.js';
   import { errText } from './lib/errors.js';
+  import { createEventScope } from './lib/event-scope.js';
+  import { uniqueImportName, fileBase64, checkImportSize, MAX_CONFIG_BYTES, MAX_ZIP_BYTES, MAX_QR_BYTES } from './lib/imports.js';
   import { t, setLanguage, detectLanguage } from './i18n/index.js';
   import { TunnelService } from '../bindings/github.com/korjwl1/wireguide/internal/app';
   import Icon from './lib/Icon.svelte';
@@ -44,15 +49,10 @@
   // last-checked timestamp. Loaded once at startup; refreshed by the
   // Settings → About "Check now" flow.
   let updateState = null;
-  let filesDroppedUnsub = null;
-  let helperUnsub = null;
-  let helperResetUnsub = null;
-  let wifiSsidUnsub = null;
-  let autoConnectedUnsub = null;
-  let criticalErrorUnsub = null;
-  let updateUnsub = null;
-  let configChangedUnsub = null;
-  let tunnelsChangedUnsub = null;
+  let stopThemeWatcher;
+  const appEvents = createEventScope((...args) => Events.On(...args), error => {
+    if (!appEvents.disposed) showToast(errText(error));
+  });
   let criticalErrors = []; // array of { where, detail, at } — shown as a persistent banner
 
   // App-level ESC handler: close the editor modal. ConfigEditor wraps
@@ -79,7 +79,7 @@
   // externally (the CLI) — every set is idempotent, so re-applying our own
   // writes is harmless.
   async function applySettingsToUI() {
-    const s = await TunnelService.GetSettings();
+    const s = await loadSettings(TunnelService);
     applyTheme(s?.theme || 'system');
     compactList.set(s?.compact_list ?? false);
     listSort.set(s?.list_sort || 'name_asc');
@@ -93,7 +93,17 @@
     setLanguage(lang === 'auto' ? detectLanguage() : lang);
   }
 
-  onMount(async () => {
+  onMount(() => {
+    stopThemeWatcher = initThemeWatcher();
+    startLogListener();
+    subscribeToEvents();
+    registerAppEvents();
+    initialize().catch(error => {
+      if (!appEvents.disposed) showToast(errText(error));
+    });
+  });
+
+  async function initialize() {
     // Load and apply saved theme before loading other data.
     // applyTheme sets the data-theme attribute AND the resolvedTheme store
     // that CodeMirror subscribes to for its own light/dark swap.
@@ -102,15 +112,9 @@
     } catch (e) {
       applyTheme('system');
     }
-    initThemeWatcher();
-
-    // Start piping backend log events into the LogViewer store BEFORE
-    // initialLoad so the first slog records (tunnel list scan, etc.) are
-    // captured. Idempotent.
-    startLogListener();
-
+    if (appEvents.disposed) return;
     await initialLoad(TunnelService);
-    subscribeToEvents();
+    if (appEvents.disposed) return;
     // Refresh status once on launch — the helper's eventLoop only
     // BROADCASTS on diff, so a fresh GUI subscriber connecting to a
     // long-running helper would otherwise see no status events
@@ -122,13 +126,21 @@
       /* helper may be mid-restart; status will arrive via events */
     }
 
+    try {
+      updateState = await TunnelService.GetUpdateState();
+    } catch (_) { /* GetUpdateState is best-effort UI hint */ }
+  }
+
+  // Register synchronously so backend events cannot be lost while startup
+  // RPCs are pending. The scope owns every listener until component teardown.
+  function registerAppEvents() {
     // Update notifications now come from the Go-side scheduler via the
     // 'update-available' Wails event (see internal/update/scheduler.go).
     // The scheduler handles cadence (24h ±10%), jitter, ETag caching,
     // and dev-build skip — none of which the launch-only check we used
     // to do here could provide. See research-update-patterns for the
     // rationale (wireguard-windows, VS Code, Obsidian cadences).
-    updateUnsub = Events.On('update-available', (event) => {
+    appEvents.on('update-available', (event) => {
       const info = event.data || {};
       if (!info?.available) return;
       // Backend already filters out dismissed + already-notified versions
@@ -136,13 +148,10 @@
       // banner the user should see.
       updateInfo = info;
     });
-    try {
-      updateState = await TunnelService.GetUpdateState();
-    } catch (_) { /* GetUpdateState is best-effort UI hint */ }
 
     // Wails v3 native file drop — HTML5 dragdrop doesn't work in WebKit.
     // Event payload: { files: string[], details: {...} }
-    filesDroppedUnsub = Events.On('files-dropped', async (event) => {
+    appEvents.on('files-dropped', async (event) => {
       const payload = event.data || {};
       const paths = payload.files || [];
       for (const path of paths) {
@@ -154,18 +163,18 @@
         } else if (/\.(png|jpe?g|webp)$/.test(lower)) {
           await importQRFromPath(path);
         } else {
-          showToast('Only .conf, .zip, and QR image files are supported');
+          showToast($t('app.supported_imports'));
         }
       }
     });
 
     // Helper health events (crash detection)
-    helperUnsub = Events.On('helper', (event) => {
+    appEvents.on('helper', (event) => {
       const { alive, message } = event.data || {};
       if (!alive) {
-        showToast('⚠ ' + (message || 'Helper process disconnected'));
+        showToast('⚠ ' + (message || $t('app.helper_disconnected')));
       } else {
-        showToast('Helper reconnected');
+        showToast($t('app.helper_reconnected'));
       }
     });
 
@@ -174,7 +183,7 @@
     // close any in-flight modals whose state references something
     // the new helper may not have. ConflictWarning's pendingConnectName
     // for instance can point at a tunnel the helper just lost.
-    helperResetUnsub = Events.On('helper_reset', async () => {
+    appEvents.on('helper_reset', async () => {
       showConflictWarning = false;
       conflictList = [];
       pendingConnectName = '';
@@ -186,14 +195,9 @@
       await refreshStatus(TunnelService);
     });
 
-    // Wi-Fi SSID change events are still broadcast by the helper for
-    // observability, but rule evaluation now lives in the helper
-    // itself (internal/helper/wifi_rules_darwin.go). That keeps
-    // auto-connect / auto-disconnect working when the GUI is fully
-    // quit — the helper has KeepAlive=true and runs the rules
-    // independently. We just show a brief toast here so the user
-    // sees what happened.
-    wifiSsidUnsub = Events.On('wifi_ssid', (event) => {
+    // The helper owns automation; the GUI only reports SSID transitions.
+    // Active or pending tunnel intent keeps the helper alive without a GUI.
+    appEvents.on('wifi_ssid', (event) => {
       const { new_ssid } = event.data || {};
       if (new_ssid) {
         showToast(`Wi-Fi: ${new_ssid}`);
@@ -203,16 +207,34 @@
     // Helper auto-connected a tunnel via Wi-Fi rules.
     // EventStatus broadcast handles tunnel state/status update within 1s.
     // Only need to apply firewall settings here (same as after manual connect).
-    autoConnectedUnsub = Events.On('auto_connected', async () => {
+    appEvents.on('auto_connected', async () => {
       await applyFirewallSettings();
+    });
+
+    appEvents.on('automation_skipped', (event) => {
+      const { tunnel_name, reason } = event.data || {};
+      if (reason === 'lan_overlap') {
+        showToast($t('app.automation_lan_overlap', { name: tunnel_name || 'Tunnel' }), 10000);
+      }
+    });
+
+    // The helper tore a tunnel down on its own (routing-loop watchdog).
+    // It won't come back by itself, so say why it went down.
+    appEvents.on('recovery_warning', event => {
+      const {tunnel_name, detail} = event.data || {};
+      showToast($t('app.recovery_warning', {name: tunnel_name || $t('app.tunnel')}) + ': ' + (detail || ''), 10000);
+    });
+    appEvents.on('forced_disconnect', (event) => {
+      const { tunnel_name, reason } = event.data || {};
+      showToast($t('app.forced_disconnect', {name: tunnel_name || $t('app.tunnel'), reason: reason || $t('app.helper_forced')}), 10000);
     });
 
     // External config.json / tunnel-file changes (the CLI) — reflect them
     // in the running GUI so it never sits on stale state.
-    configChangedUnsub = Events.On('config_changed', () => {
+    appEvents.on('config_changed', () => {
       applySettingsToUI().catch(() => {});
     });
-    tunnelsChangedUnsub = Events.On('tunnels_changed', () => {
+    appEvents.on('tunnels_changed', () => {
       refreshTunnels(TunnelService).catch(() => {});
     });
 
@@ -220,7 +242,7 @@
     // restart budget). Show as a persistent banner — these mean some
     // helper subsystem (status broadcast, latency probe, wifi rules)
     // is permanently dead and the user should restart the helper.
-    criticalErrorUnsub = Events.On('critical_error', (event) => {
+    appEvents.on('critical_error', (event) => {
       const { where, detail } = event.data || {};
       const next = [...criticalErrors, {
         where: where || 'unknown',
@@ -232,20 +254,13 @@
       // would otherwise fill the screen with banners and freeze the UI.
       criticalErrors = next.slice(-5);
     });
-  });
+  }
 
   onDestroy(() => {
+    appEvents.dispose();
+    stopThemeWatcher?.();
     unsubscribe();
     stopLogListener();
-    if (filesDroppedUnsub) filesDroppedUnsub();
-    if (helperUnsub) helperUnsub();
-    if (helperResetUnsub) helperResetUnsub();
-    if (wifiSsidUnsub) wifiSsidUnsub();
-    if (autoConnectedUnsub) autoConnectedUnsub();
-    if (criticalErrorUnsub) criticalErrorUnsub();
-    if (updateUnsub) updateUnsub();
-    if (configChangedUnsub) configChangedUnsub();
-    if (tunnelsChangedUnsub) tunnelsChangedUnsub();
     if (toastTimer) clearTimeout(toastTimer);
   });
 
@@ -253,36 +268,14 @@
     criticalErrors = criticalErrors.filter((_, i) => i !== idx);
   }
 
-  function showToast(msg) {
+  function showToast(msg, ms = 3000) {
     if (toastTimer) clearTimeout(toastTimer);
     toast = msg;
-    toastTimer = setTimeout(() => { toast = ''; toastTimer = null; }, 3000);
+    toastTimer = setTimeout(() => { toast = ''; toastTimer = null; }, ms);
   }
 
-  // sanitizeImportName maps an arbitrary filename stem to something
-  // ValidateTunnelName will accept — letters, digits, '-', '_', spaces only.
-  // Phone screenshots and shared QR images often have names like
-  // "Some QR (1).png" or "WG · backup.png" that the validator would reject;
-  // refusing the import outright is worse UX than auto-cleaning the name.
-  function sanitizeImportName(raw) {
-    if (!raw) return 'tunnel';
-    let s = raw.replace(/[^A-Za-z0-9\-_ ]+/g, '-')
-               .replace(/-{2,}/g, '-')
-               .replace(/^[-\s]+|[-\s]+$/g, '');
-    if (s.length > 64) s = s.slice(0, 64).replace(/[-\s]+$/g, '');
-    return s || 'tunnel';
-  }
-
-  // Generate a unique tunnel name by appending -1, -2, etc. if needed.
-  // The base is sanitised first so callers can pass a raw filename stem.
-  async function uniqueName(baseName) {
-    const cleaned = sanitizeImportName(baseName);
-    if (!(await TunnelService.TunnelExists(cleaned))) return cleaned;
-    for (let i = 1; i < 1000; i++) {
-      const candidate = `${cleaned}-${i}`;
-      if (!(await TunnelService.TunnelExists(candidate))) return candidate;
-    }
-    return cleaned + '-' + Date.now();
+  function uniqueName(baseName) {
+    return uniqueImportName(baseName, name => TunnelService.TunnelExists(name));
   }
 
   // Show zip import result modal.
@@ -300,28 +293,19 @@
       const results = await TunnelService.ImportZip(path);
       showZipResults(results);
     } catch (e) {
-      showToast('Import failed: ' + errText(e));
+      showToast($t('app.import_failed') + ': ' + errText(e));
     }
   }
 
-  // Import a .zip from a browser File object (used by file picker).
-  // Wails serialises []byte as a base64 JSON string, so we must encode manually.
-  // btoa(String.fromCharCode(...bytes)) blows the call stack on large files, so
-  // we process in 8 KB chunks.
+  // Browser file-picker payloads cross the Wails bridge as base64.
   async function importZipFromFile(file) {
     if (!file) return;
     try {
-      const buf = await file.arrayBuffer();
-      const bytes = new Uint8Array(buf);
-      let binary = '';
-      const CHUNK = 8192;
-      for (let i = 0; i < bytes.length; i += CHUNK) {
-        binary += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
-      }
-      const results = await TunnelService.ImportZipData(btoa(binary));
+      const data = await fileBase64(file, MAX_ZIP_BYTES);
+      const results = await TunnelService.ImportZipData(data);
       showZipResults(results);
     } catch (e) {
-      showToast('Import failed: ' + errText(e));
+      showToast($t('app.import_failed') + ': ' + errText(e));
     }
   }
 
@@ -331,16 +315,16 @@
       const content = await TunnelService.ReadFile(path);
       const errors = await TunnelService.ValidateConfig(content);
       if (errors && errors.length > 0) {
-        showToast('Invalid config: ' + errors[0]);
+        showToast($t('app.invalid_config') + ': ' + errors[0]);
         return;
       }
       const baseName = await TunnelService.BaseName(path);
       const name = await uniqueName(baseName);
       await TunnelService.ImportConfig(name, content);
-      showToast(`Imported "${name}"`);
+      showToast($t('app.imported', {name}));
       await refreshTunnels(TunnelService);
     } catch (e) {
-      showToast("Import failed: " + errText(e));
+      showToast($t('app.import_failed') + ': ' + errText(e));
     }
   }
 
@@ -352,33 +336,25 @@
       const baseName = await TunnelService.BaseName(path);
       const name = await uniqueName(baseName || 'tunnel');
       await TunnelService.ImportQRFromPath(path, name);
-      showToast(`Imported "${name}"`);
+      showToast($t('app.imported', {name}));
       await refreshTunnels(TunnelService);
     } catch (e) {
-      showToast('QR import failed: ' + errText(e));
+      showToast($t('app.qr_import_failed') + ': ' + errText(e));
     }
   }
 
-  // Import from a browser File object representing an image with a QR code.
-  // Encodes the bytes as base64 (Wails serialises []byte that way) using the
-  // same chunked approach as importZipFromFile to avoid call-stack blowups.
+  // Import a QR image supplied by the browser file picker.
   async function importQRFromFile(file) {
     if (!file) return;
     try {
-      const buf = await file.arrayBuffer();
-      const bytes = new Uint8Array(buf);
-      let binary = '';
-      const CHUNK = 8192;
-      for (let i = 0; i < bytes.length; i += CHUNK) {
-        binary += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
-      }
+      const data = await fileBase64(file, MAX_QR_BYTES);
       const baseName = file.name.replace(/\.[^.]+$/, '') || 'tunnel';
       const name = await uniqueName(baseName);
-      await TunnelService.ImportQRFromBytes(btoa(binary), name);
-      showToast(`Imported "${name}"`);
+      await TunnelService.ImportQRFromBytes(data, name);
+      showToast($t('app.imported', {name}));
       await refreshTunnels(TunnelService);
     } catch (e) {
-      showToast('QR import failed: ' + errText(e));
+      showToast($t('app.qr_import_failed') + ': ' + errText(e));
     }
   }
 
@@ -386,19 +362,20 @@
   async function importFile(file) {
     if (!file) return;
     const baseName = file.name.replace(/\.conf$/i, '');
-    const content = await file.text();
     try {
+      checkImportSize(file, MAX_CONFIG_BYTES);
+      const content = await file.text();
       const errors = await TunnelService.ValidateConfig(content);
       if (errors && errors.length > 0) {
-        showToast('Invalid config: ' + errors[0]);
+        showToast($t('app.invalid_config') + ': ' + errors[0]);
         return;
       }
       const name = await uniqueName(baseName);
       await TunnelService.ImportConfig(name, content);
-      showToast(`Imported "${name}"`);
+      showToast($t('app.imported', {name}));
       await refreshTunnels(TunnelService);
     } catch (e) {
-      showToast("Import failed: " + errText(e));
+      showToast($t('app.import_failed') + ': ' + errText(e));
     }
   }
 
@@ -494,7 +471,7 @@
       // Surface the failure as a toast so the user knows why the
       // editor didn't open. Silently console.error'ing left them
       // clicking Edit repeatedly with no feedback.
-      showToast(`Edit failed: ${errText(err)}`);
+      showToast($t('app.edit_failed') + ': ' + errText(err));
     }
   }
 
@@ -524,7 +501,8 @@
       } else {
         const renamed = saveName !== originalName;
         if (renamed) {
-          await TunnelService.RenameTunnel(originalName, saveName);
+          const result = await TunnelService.RenameTunnel(originalName, saveName);
+          if (result?.warning) showToast($t('app.profile_rules_warning') + ': ' + result.warning, 10000);
         }
         try {
           await TunnelService.UpdateConfig(saveName, saveContent);
@@ -537,9 +515,10 @@
           // genuinely-broken state.
           if (renamed) {
             try {
-              await TunnelService.RenameTunnel(saveName, originalName);
+              const result = await TunnelService.RenameTunnel(saveName, originalName);
+              if (result?.warning) showToast($t('app.profile_rules_warning') + ': ' + result.warning, 10000);
             } catch (rollbackErr) {
-              showToast(`Rename rollback failed: ${errText(rollbackErr)}`);
+              showToast($t('app.rename_rollback_failed') + ': ' + errText(rollbackErr));
             }
           }
           throw err;
@@ -564,10 +543,10 @@
     try {
       const path = await TunnelService.ExportTunnel(name);
       if (path) {
-        showToast(`Exported to ${path}`);
+        showToast($t('app.exported', {path}));
       }
     } catch (err) {
-      showToast('Export failed: ' + err.toString());
+      showToast($t('app.export_failed') + ': ' + err.toString());
     }
   }
 
@@ -575,7 +554,7 @@
   // Called after any successful connect (manual or auto).
   async function applyFirewallSettings() {
     try {
-      const s = await TunnelService.GetSettings();
+      const s = await loadSettings(TunnelService);
       if (s?.kill_switch) await TunnelService.SetKillSwitch(true);
       if (s?.dns_protection) await TunnelService.SetDNSProtection(true);
     } catch (e) {
@@ -591,7 +570,7 @@
       await refreshStatus(TunnelService);
       await applyFirewallSettings();
     } catch (e) {
-      showToast("Connect failed: " + errText(e));
+      showToast($t('app.connect_failed') + ': ' + errText(e));
     }
   }
 
@@ -632,7 +611,7 @@
     try {
       await TunnelService.RunUpdate(updateInfo);
     } catch (e) {
-      showToast('Update failed: ' + (e?.message || e));
+      showToast($t('update.install_failed') + ': ' + (e?.message || e));
       // Rethrow: modal-context callers (Settings → About, the banner)
       // render the failure inline — a toast alone can sit underneath an
       // open modal where it is never seen.
@@ -677,16 +656,23 @@
 
   {#if criticalErrors.length > 0}
     <div class="critical-banner" role="alert">
-      <div class="critical-banner-title">⚠ Helper subsystem failure</div>
+      <div class="critical-banner-title">⚠ {$t('app.helper_subsystem_failure')}</div>
       {#each criticalErrors as e, i}
         <div class="critical-banner-row">
-          <span class="critical-banner-where">{e.where}</span>
-          <span class="critical-banner-detail">{e.detail}</span>
+          <span class="critical-banner-where">{e.where === 'Helper connection' ? $t('settings.section_connection') : e.where}</span>
+          <span class="critical-banner-detail">{e.where === 'Helper connection' ? $t('app.helper_disconnected') : e.detail}</span>
           <span class="critical-banner-time">{e.at}</span>
-          <button class="critical-banner-close" on:click={() => dismissCriticalError(i)} aria-label="Dismiss">×</button>
+          <button class="critical-banner-close" on:click={() => dismissCriticalError(i)} aria-label={$t('app.dismiss')}>×</button>
         </div>
       {/each}
-      <div class="critical-banner-hint">Restart the app to recover the affected subsystem.</div>
+      <div class="critical-banner-hint">{$t('app.helper_restart_hint')}</div>
+    </div>
+  {/if}
+
+  {#if !showSettings && Object.keys($settingsErrors).length > 0}
+    <div class="critical-banner" role="alert">
+      <span>{$t('settings.save_failed')}</span>
+      <button class="btn btn-secondary" on:click={() => showSettings = true}>{$t('nav.settings')}</button>
     </div>
   {/if}
 
@@ -706,8 +692,8 @@
             <Icon name="shield" size={15} strokeWidth={2} />
           </span>
           <span class="nav-label">{$t('nav.tunnels')}</span>
-          {#if ($connectionStatus?.active_tunnels || []).length > 0}
-            <span class="nav-badge">{($connectionStatus.active_tunnels).length}</span>
+          {#if connectedTunnelNames($connectionStatus).length > 0}
+            <span class="nav-badge">{connectedTunnelNames($connectionStatus).length}</span>
           {/if}
         </button>
         <button class="nav-item" class:active={currentView === 'history'} on:click={() => currentView = 'history'}>
@@ -766,15 +752,22 @@
           </div>
           <div class="pane-resizer" class:resizing
             on:mousedown={onResizeStart} on:dblclick={onResizeReset}
-            role="separator" aria-orientation="vertical" title="Drag to resize · double-click to reset"></div>
+            role="slider" aria-label={$t('settings.list_width')} tabindex="0" aria-orientation="vertical" aria-valuemin={LIST_PANE_MIN} aria-valuemax={LIST_PANE_MAX} aria-valuenow={$listPaneWidth}
+            on:keydown={(e) => {
+              if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+                e.preventDefault();
+                listPaneWidth.set(Math.min(LIST_PANE_MAX, Math.max(LIST_PANE_MIN, $listPaneWidth + (e.key === 'ArrowRight' ? 10 : -10))));
+                saveListPrefs();
+              } else if (e.key === 'Home') { e.preventDefault(); onResizeReset(); }
+            }} title={$t('tunnel.resize_hint')}></div>
           <div class="tunnel-detail-pane">
             {#if $selectedTunnel}
               <TunnelDetail {TunnelService}
-                on:edit={handleEdit}
+                on:warning={(event) => showToast(event.detail, 10000)} on:edit={handleEdit}
                 on:export={handleExport}
                 on:connect={handleConnect}
                 on:refresh={handleRefresh} />
-              {#if $connectionStatus?.state === 'connected' && $connectionStatus?.tunnel_name === $selectedTunnel?.name}
+              {#if tunnelState($connectionStatus, $selectedTunnel?.name) === 'connected'}
                 <div class="stats-section">
                   <StatsDashboard />
                 </div>
@@ -825,8 +818,8 @@
 
   <!-- Modals -->
   {#if showEditor}
-    <div class="modal-backdrop" on:click={() => showEditor = false}>
-      <div class="modal modal-editor" on:click|stopPropagation
+    <div class="modal-backdrop" use:backdrop={() => showEditor = false}>
+      <div class="modal modal-editor" use:modal={() => showEditor = false} tabindex="-1"
         role="dialog" aria-modal="true"
         aria-label={editorIsNew ? $t('tunnel.new_tunnel') : $t('tunnel.edit')}>
         <ConfigEditor
@@ -853,8 +846,8 @@
   {/if}
 
   {#if showZipResult}
-    <div class="modal-backdrop" on:click={() => showZipResult = false}>
-      <div class="modal modal-zip-result" on:click|stopPropagation
+    <div class="modal-backdrop" use:backdrop={() => showZipResult = false}>
+      <div class="modal modal-zip-result" use:modal={() => showZipResult = false} tabindex="-1"
         role="dialog" aria-modal="true" aria-labelledby="zip-result-title">
         <h3 id="zip-result-title">{$t('import.zip_result_title')}</h3>
         <div class="zip-result-list">

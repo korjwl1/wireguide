@@ -32,6 +32,7 @@ public_ip() { curl --connect-timeout 6 --max-time 15 --silent --fail https://api
 cleanup() {
   rc=$?
   trap - EXIT INT TERM
+  [[ -n "${keepalive_pid:-}" ]] && kill "$keepalive_pid" 2>/dev/null || true
   cli set dns-protection off >>"$test_log" 2>&1 || true
   cli set killswitch off >>"$test_log" 2>&1 || true
   sudo -n "$recover" "$backup_resolv" "$helper_pidfile" "$recovery_log" || true
@@ -111,6 +112,31 @@ for _ in {1..100}; do [[ -S "$socket" ]] && break; sleep 0.1; done
 main_pid=$(sudo -n systemctl show -p MainPID --value wireguide-fulltest-helper.service)
 [[ "$main_pid" =~ ^[1-9][0-9]*$ ]]
 printf '%s\n' "$main_pid" >"$helper_pidfile"
+
+# The CLI refuses to act on a helper with no GUI attached (Ping.GUIAttached),
+# so hold ONE non-transient control connection as a GUI stand-in for the
+# duration. It also keeps the helper from self-exiting after its startup grace.
+start_keepalive() {
+  python3 - "$socket" <<'PYKEEPALIVE' &
+import json, socket, struct, sys, time
+s = socket.socket(socket.AF_UNIX)
+s.connect(sys.argv[1])
+body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "Helper.Ping"}).encode()
+s.sendall(struct.pack(">I", len(body)) + body)
+hdr = s.recv(4)
+if len(hdr) == 4:
+    n = struct.unpack(">I", hdr)[0]
+    while n > 0:
+        chunk = s.recv(min(n, 65536))
+        if not chunk:
+            break
+        n -= len(chunk)
+while True:
+    time.sleep(30)
+PYKEEPALIVE
+  keepalive_pid=$!
+}
+start_keepalive
 
 # Every live setting accepted by the helper, plus invalid-value rejection.
 for level in debug info warn error info; do cli set loglevel "$level" >>"$test_log" 2>&1; done

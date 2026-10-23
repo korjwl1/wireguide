@@ -1,0 +1,32 @@
+diff --git a/internal/helper/review_cases_test.go b/internal/helper/review_cases_test.go
+new file mode 100644
+--- /dev/null
++++ b/internal/helper/review_cases_test.go
+@@ -0,0 +1,27 @@
++package helper
++
++import (
++	"testing"
++	"time"
++)
++
++func TestReviewOrphanRecoveryFailureKeepsInstalledHelper(t *testing.T) {
++	r := &orphanRec{exist: []bool{false, false}}
++	ops := r.ops()
++	failed := false
++	ops.recover = func() { failed = true } // production recovery reports failures only in logs
++	uninstalled := handleOrphanedInstall("/Applications/WireGuide.app", ops)
++	if failed && uninstalled {
++		t.Fatalf("failed network recovery could not veto self-uninstall: %v", r.calls)
++	}
++}
++
++func TestReviewTemporaryAppSwapLongerThanTwoSecondsDoesNotUninstall(t *testing.T) {
++	elapsed := time.Duration(0)
++	removed := false
++	ops := orphanOps{exists: func(string) bool { return elapsed >= 3*time.Second }, sleep: func(d time.Duration) { elapsed += d }, recover: func() {}, remove: func(string) error { removed = true; return nil }, bootout: func() error { return nil }}
++	handleOrphanedInstall("/Applications/WireGuide.app", ops)
++	if removed {
++		t.Fatal("a three-second app replacement was treated as permanent uninstall after two seconds")
++	}
++}

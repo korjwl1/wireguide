@@ -66,11 +66,11 @@ func startWindowsWlanWatcher(onChange func()) (stop func(), attached bool) {
 }
 
 var (
-	modWlanapi                      = windows.NewLazySystemDLL("wlanapi.dll")
-	procWlanOpenHandle              = modWlanapi.NewProc("WlanOpenHandle")
-	procWlanRegisterNotification    = modWlanapi.NewProc("WlanRegisterNotification")
+	modWlanapi                   = windows.NewLazySystemDLL("wlanapi.dll")
+	procWlanOpenHandle           = modWlanapi.NewProc("WlanOpenHandle")
+	procWlanRegisterNotification = modWlanapi.NewProc("WlanRegisterNotification")
 
-	wlanHandle uintptr
+	wlanHandle   uintptr
 	wlanOpenOnce sync.Once
 	wlanOpenErr  error
 )

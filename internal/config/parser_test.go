@@ -371,3 +371,29 @@ func TestHasScriptsNoScripts(t *testing.T) {
 		t.Error("expected HasScripts() to be false for config without scripts")
 	}
 }
+
+func TestParseSplitDNSKeptVerbatimAndRoundTrips(t *testing.T) {
+	in := "[Interface]\nPrivateKey = cGFzc3dvcmRwYXNzd29yZHBhc3N3b3JkcGFzc3dvcmQ=\nAddress = 10.0.0.2/24\nDNS = 192.168.1.1, ~home.lan, corp.example\n"
+	cfg, err := Parse(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"192.168.1.1", "~home.lan", "corp.example"}
+	if len(cfg.Interface.DNS) != 3 {
+		t.Fatalf("DNS = %v, want %v", cfg.Interface.DNS, want)
+	}
+	for i := range want {
+		if cfg.Interface.DNS[i] != want[i] {
+			t.Fatalf("DNS = %v, want %v", cfg.Interface.DNS, want)
+		}
+	}
+	again, err := Parse(Serialize(cfg))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range want {
+		if again.Interface.DNS[i] != want[i] {
+			t.Fatalf("round trip DNS = %v, want %v", again.Interface.DNS, want)
+		}
+	}
+}

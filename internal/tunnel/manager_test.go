@@ -9,6 +9,7 @@ import (
 
 	"github.com/korjwl1/wireguide/internal/domain"
 	"github.com/korjwl1/wireguide/internal/network"
+	"golang.zx2c4.com/wireguard/conn"
 )
 
 // ---------------------------------------------------------------------------
@@ -106,7 +107,9 @@ func (m *mockNetworkManager) Cleanup(string) error {
 // because the Manager never talks to the engine directly — it only passes
 // it to the NetworkManager methods (which are also mocked).
 func fakeEngine(name string) *Engine {
+	base := &testInterfaceBind{Bind: conn.NewStdNetBind()}
 	return &Engine{
+		bind:                &guardedBind{Bind: base, binder: base},
 		ifaceName:           name,
 		resolvedEndpointIPs: []string{"1.2.3.4"},
 		resolvedEndpoints:   []string{"1.2.3.4:51820"},
@@ -554,17 +557,17 @@ func TestDisconnect_WaitsForConnectToFinish(t *testing.T) {
 	// Wait for connecting state.
 	time.Sleep(50 * time.Millisecond)
 
-	// Disconnect should wait for Connect to finish, then disconnect.
+	// Disconnect cancels setup and waits for rollback to finish.
 	if err := mgr.Disconnect(); err != nil {
 		t.Fatalf("Disconnect failed: %v", err)
 	}
 
-	// Connect should also have succeeded.
+	// Off during setup cancels the connection.
 	if err := <-connectDone; err != nil {
 		// Connect may have succeeded or gotten ErrStateCorrupt if Disconnect
 		// changed state while it was in-flight. Either is acceptable.
 		var te *TunnelError
-		if errors.As(err, &te) && te.Kind != ErrStateCorrupt {
+		if errors.As(err, &te) && te.Kind != ErrStateCorrupt && te.Kind != ErrCancelled {
 			t.Fatalf("unexpected Connect error: %v", err)
 		}
 	}
@@ -639,17 +642,21 @@ func TestStatus_Connecting(t *testing.T) {
 }
 
 func TestStatus_Disconnecting(t *testing.T) {
-	// Verify that disconnecting state surfaces as "connecting" (the GUI
-	// doesn't distinguish them).
+	// Teardown must be distinguishable from connection setup.
 	dir := t.TempDir()
 	mgr := newTestManagerWithDir(&mockNetworkManager{}, succeedingFactory(), dir)
 
 	// Set state directly to disconnecting.
 	setTunnelEntry(mgr, "vpn1", stateDisconnecting, testConfig("vpn1"), nil)
 
+	for _, view := range []*ConnectionStatus{mgr.Status(), mgr.StatusFor("vpn1"), mgr.AllStatuses()[0]} {
+		if view.State != domain.StateDisconnecting {
+			t.Fatalf("transition view reported %s", view.State)
+		}
+	}
 	status := mgr.Status()
-	if status.State != domain.StateConnecting {
-		t.Fatalf("expected connecting (for disconnecting), got %s", status.State)
+	if status.State != domain.StateDisconnecting {
+		t.Fatalf("expected disconnecting, got %s", status.State)
 	}
 	if status.TunnelName != "vpn1" {
 		t.Fatalf("expected tunnel name vpn1, got %q", status.TunnelName)

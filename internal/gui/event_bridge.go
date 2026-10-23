@@ -1,9 +1,11 @@
 package gui
 
 import (
+	"context"
 	"encoding/json"
 	"log/slog"
 	"sync"
+	"time"
 
 	"github.com/korjwl1/wireguide/internal/domain"
 	"github.com/korjwl1/wireguide/internal/ipc"
@@ -55,44 +57,43 @@ func (b *eventBridge) start() {
 	b.resubscribe()
 }
 
-// Resubscribe re-attaches after a helper restart. Called by the health monitor
-// right after it swaps the client in the holder.
-//
-// Race safety: the old goroutine (from the previous Subscribe call) will
-// terminate on its own when the old connection's read loop returns an error
-// (the dead socket gets closed). The new Subscribe call starts a fresh
-// goroutine on the new client. There is no shared mutable state between the
-// two goroutines — the subscribedTo guard prevents double-subscribing on the
-// same client, and the old goroutine's callback becomes a no-op once its
-// connection is gone.
+// Resubscribe repairs a missing event stream without replacing the control
+// connection or interrupting a long-running VPN operation.
 func (b *eventBridge) Resubscribe() {
-	b.resubscribe()
-	// Let the frontend know that state is now fresh — it should re-fetch the
-	// tunnel list and status since the helper lost any in-memory state.
-	b.app.Event.Emit("helper_reset", struct{}{})
+	b.mu.Lock()
+	previous := b.subscribedTo
+	b.mu.Unlock()
+	if b.resubscribe() {
+		if previous != nil && previous != b.clients.Get() {
+			b.app.Event.Emit("helper_reset", struct{}{})
+		} else {
+			b.app.Event.Emit("tunnels_changed", struct{}{})
+		}
+	}
 }
 
-func (b *eventBridge) resubscribe() {
-	c := b.clients.Get()
-	if c == nil {
-		return
-	}
-
+func (b *eventBridge) resubscribe() bool {
 	b.mu.Lock()
-	if b.subscribedTo == c {
-		b.mu.Unlock()
-		return // already subscribed on this exact client
+	defer b.mu.Unlock()
+	c := b.clients.Get()
+	if c == nil || c.IsClosed() || (b.subscribedTo == c && c.HasSubscription()) {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := c.SubscribeContext(ctx, func(method string, params json.RawMessage) {
+		// Order callbacks against resubscription; ignore replaced clients.
+		b.mu.Lock()
+		defer b.mu.Unlock()
+		if b.subscribedTo == c && b.clients.Get() == c {
+			b.handleEvent(method, params)
+		}
+	}); err != nil {
+		slog.Warn("event subscription failed", "error", err)
+		return false
 	}
 	b.subscribedTo = c
-	b.mu.Unlock()
-
-	if err := c.Subscribe(b.handleEvent); err != nil {
-		slog.Warn("event subscription failed", "error", err)
-		// Reset subscribedTo so a subsequent Resubscribe can retry.
-		b.mu.Lock()
-		b.subscribedTo = nil
-		b.mu.Unlock()
-	}
+	return true
 }
 
 func (b *eventBridge) handleEvent(method string, params json.RawMessage) {
@@ -104,14 +105,8 @@ func (b *eventBridge) handleEvent(method string, params json.RawMessage) {
 		} else {
 			b.app.Event.Emit("status", status)
 			if b.onStatusChange != nil {
-				hsMap := make(map[string]bool)
-				for _, ts := range status.Tunnels {
-					hsMap[ts.TunnelName] = ts.LastHandshake != ""
-				}
-				if status.TunnelName != "" {
-					hsMap[status.TunnelName] = status.LastHandshake != ""
-				}
-				b.onStatusChange(status.ActiveTunnels, hsMap)
+				names, handshakes := connectedStatusIndicators(status)
+				b.onStatusChange(names, handshakes)
 			}
 			if b.onReconcileHistory != nil {
 				rx := make(map[string]int64, len(status.Tunnels)+1)
@@ -150,8 +145,8 @@ func (b *eventBridge) handleEvent(method string, params json.RawMessage) {
 			b.app.Event.Emit("log", entry)
 		}
 	case ipc.EventWifiSSID:
-		// SSID change from the helper's wifi monitor. Frontend evaluates
-		// Settings.WifiRules and decides whether to (dis)connect a tunnel.
+		// The helper owns automation decisions; the frontend displays the
+		// observed SSID and permission state.
 		var payload ipc.WifiSSIDPayload
 		if err := json.Unmarshal(params, &payload); err != nil {
 			slog.Debug("event bridge: unmarshal wifi_ssid failed", "error", err)
@@ -168,14 +163,29 @@ func (b *eventBridge) handleEvent(method string, params json.RawMessage) {
 		} else {
 			b.app.Event.Emit("auto_connected", payload)
 		}
+	case ipc.EventAutomationSkipped:
+		var payload ipc.AutomationSkippedPayload
+		if err := json.Unmarshal(params, &payload); err != nil {
+			slog.Debug("event bridge: unmarshal automation_skipped failed", "error", err)
+		} else {
+			b.app.Event.Emit("automation_skipped", payload)
+		}
+	case ipc.EventForcedDisconnect:
+		// The helper tore a tunnel down on its own (loop watchdog, issue
+		// #49). EventStatus already shows it as down; the frontend tells
+		// the user why, since it won't reconnect by itself.
+		var payload ipc.ForcedDisconnectPayload
+		if err := json.Unmarshal(params, &payload); err != nil {
+			slog.Debug("event bridge: unmarshal forced_disconnect failed", "error", err)
+		} else {
+			b.app.Event.Emit("forced_disconnect", payload)
+		}
 	case ipc.EventQuit:
 		// `wireguide ctl stop` — the user asked for the whole app to go
 		// away. Run the same teardown the tray's Quit item does.
 		//
-		// In a goroutine: we're on the event-stream read loop, and
-		// quitApp's doShutdown makes blocking RPCs back to the helper.
-		// Quitting inline would deadlock — the helper can't answer while
-		// this goroutine is the one that has to read its reply.
+		// Dispatch teardown so its blocking RPCs do not hold up the
+		// event reader. Control responses use a separate connection.
 		slog.Info("event bridge: quit requested by CLI")
 		if b.onQuitRequested != nil {
 			go b.onQuitRequested()
@@ -189,6 +199,13 @@ func (b *eventBridge) handleEvent(method string, params json.RawMessage) {
 		} else {
 			b.app.Event.Emit("settings_changed", payload)
 		}
+	case ipc.EventRecoveryWarning:
+		var payload ipc.RecoveryWarningPayload
+		if err := json.Unmarshal(params, &payload); err != nil {
+			slog.Warn("invalid recovery warning", "error", err)
+		} else {
+			b.app.Event.Emit("recovery_warning", payload)
+		}
 	case ipc.EventCriticalError:
 		// A helper background goroutine has died permanently. Surface to
 		// the frontend so the user knows tunnel state may stop updating
@@ -200,5 +217,18 @@ func (b *eventBridge) handleEvent(method string, params json.RawMessage) {
 			slog.Error("helper background goroutine died permanently", "where", payload.Where, "detail", payload.Detail)
 			b.app.Event.Emit("critical_error", payload)
 		}
+	}
+}
+
+// A missing helper cannot attest to a live connection. Clear indicators without
+// inventing a disconnect/history record; restored status will repopulate them.
+func (b *eventBridge) clearConnectionIndicators() {
+	if b == nil {
+		return
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.onStatusChange != nil {
+		b.onStatusChange(nil, nil)
 	}
 }

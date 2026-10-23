@@ -13,14 +13,22 @@ permissions:
 
 jobs:
   linux:
-    name: Linux (test + package)
-    runs-on: ubuntu-latest
+    name: Linux ${{ matrix.arch }} (test + package)
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.25.12'
+          go-version: '1.26.9'
 
       - uses: actions/setup-node@v4
         with:
@@ -31,7 +39,7 @@ jobs:
       - name: Install Linux build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev xvfb nftables
 
       - name: Install pinned build tools
         run: |
@@ -45,15 +53,32 @@ jobs:
         working-directory: frontend
         run: |
           npm ci
+          npm test
           npm run build
+
+      - name: Go formatting
+        run: |
+          unformatted=$(git ls-files -z '*.go' | xargs -0 gofmt -l)
+          if [ -n "$unformatted" ]; then
+            printf '%s\n' "$unformatted"
+            exit 1
+          fi
 
       - name: Test and vet
         run: |
           go test -race ./...
           go vet ./...
 
+      - name: Isolated nftables recovery
+        run: |
+          go test -c -o "$RUNNER_TEMP/wireguide-firewall.test" ./internal/firewall
+          sudo unshare --net env WIREGUIDE_TEST_NFT=1 "$RUNNER_TEMP/wireguide-firewall.test" -test.run 'InKernel$' -test.v
+
       - name: Build native Linux binary
-        run: task linux:build ARCH=amd64
+        run: task linux:build ARCH=${{ matrix.arch }}
+
+      - name: Native GTK connection icon
+        run: WIREGUIDE_TEST_APP_ICON=1 go test -race ./internal/gui -run '^TestNativeApplicationConnectionIcon$' -count=1 -v
 
       - name: Check runtime linking
         run: |
@@ -65,7 +90,7 @@ jobs:
 
       - name: Build and inspect DEB
         env:
-          GOARCH: amd64
+          GOARCH: ${{ matrix.arch }}
           GIT_COMMITTER_NAME: WireGuide CI
           GIT_COMMITTER_EMAIL: noreply@example.com
         run: |
@@ -77,7 +102,7 @@ jobs:
       # nfpm.yaml fails the PR instead of the tag build.
       - name: Build and inspect RPM
         env:
-          GOARCH: amd64
+          GOARCH: ${{ matrix.arch }}
           GIT_COMMITTER_NAME: WireGuide CI
           GIT_COMMITTER_EMAIL: noreply@example.com
         run: |
@@ -85,11 +110,17 @@ jobs:
           wails3 tool package -name wireguide -format rpm -config ./build/linux/nfpm/nfpm.yaml -out ./bin
           rpm -qip bin/wireguide.rpm
           rpm -qp --requires bin/wireguide.rpm
+          rpm -qp --recommends bin/wireguide.rpm
           rpm -qpl bin/wireguide.rpm
+
+      - name: Install RPM on Fedora
+        run: |
+          docker run --rm -v "$PWD/bin:/packages:ro" registry.fedoraproject.org/fedora:44 \
+            sh -ec 'dnf -y install /packages/wireguide.rpm; rpm -q wireguide; wireguide ctl --help'
 
       - uses: actions/upload-artifact@v4
         with:
-          name: linux-amd64-ci
+          name: linux-${{ matrix.arch }}-ci
           path: |
             bin/wireguide
             bin/wireguide.deb
@@ -105,7 +136,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.25.12'
+          go-version: '1.26.9'
 
       - uses: actions/setup-node@v4
         with:
@@ -117,6 +148,7 @@ jobs:
         working-directory: frontend
         run: |
           npm ci
+          npm test
           npm run build
 
       - name: Test and vet
@@ -132,7 +164,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.25.12'
+          go-version: '1.26.9'
 
       - uses: actions/setup-node@v4
         with:
@@ -145,6 +177,9 @@ jobs:
         shell: pwsh
         run: |
           npm ci
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm test
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           npm run build
 
       # No -race on Windows: the race detector needs cgo + a C toolchain,
@@ -153,5 +188,9 @@ jobs:
       - name: Test and vet
         shell: pwsh
         run: |
+          # PowerShell otherwise reports only the last native command's exit
+          # code: a passing vet must never hide a failing test run.
           go test ./...
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           go vet ./...
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

@@ -68,4 +68,3 @@ func verifyPeer(conn net.Conn, expectedUID int, expectedSID string) error {
 	}
 	return nil
 }
-

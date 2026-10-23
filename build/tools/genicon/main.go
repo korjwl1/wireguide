@@ -140,9 +140,9 @@ func writeICO(path string, sizes []int, payloads [][]byte) error {
 	}
 	var buf bytes.Buffer
 	// ICONDIR
-	binary.Write(&buf, binary.LittleEndian, uint16(0))           // reserved
-	binary.Write(&buf, binary.LittleEndian, uint16(1))           // type = icon
-	binary.Write(&buf, binary.LittleEndian, uint16(len(sizes)))  // count
+	binary.Write(&buf, binary.LittleEndian, uint16(0))          // reserved
+	binary.Write(&buf, binary.LittleEndian, uint16(1))          // type = icon
+	binary.Write(&buf, binary.LittleEndian, uint16(len(sizes))) // count
 
 	headerSize := 6
 	entrySize := 16
@@ -155,8 +155,8 @@ func writeICO(path string, sizes []int, payloads [][]byte) error {
 		}
 		buf.WriteByte(w)
 		buf.WriteByte(h)
-		buf.WriteByte(0) // colors in palette (0 = no palette)
-		buf.WriteByte(0) // reserved
+		buf.WriteByte(0)                                    // colors in palette (0 = no palette)
+		buf.WriteByte(0)                                    // reserved
 		binary.Write(&buf, binary.LittleEndian, uint16(1))  // color planes
 		binary.Write(&buf, binary.LittleEndian, uint16(32)) // bits per pixel
 		binary.Write(&buf, binary.LittleEndian, uint32(len(payloads[i])))

@@ -10,7 +10,7 @@ import { Create as $Create } from "@wailsio/runtime";
  * A Logger records structured information about each call to its
  * Log, Debug, Info, Warn, and Error methods.
  * For each call, it creates a [Record] and passes it to a [Handler].
- * 
+ *
  * To create a new Logger, call [New] or a Logger method
  * that begins "With".
  */

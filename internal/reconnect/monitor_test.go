@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/korjwl1/wireguide/internal/domain"
 	"github.com/korjwl1/wireguide/internal/tunnel"
 )
 
@@ -191,6 +192,71 @@ func TestSleepWake_DoesNotReconnect_WhenDisconnected(t *testing.T) {
 
 	if reconnectCalls.Load() != 0 {
 		t.Fatalf("expected no reconnect when disconnected, got %d calls", reconnectCalls.Load())
+	}
+}
+
+// Issue #44: a helper that crash-restarted and failed its desired-state
+// restore reports nothing active, but the persisted desired state says
+// tunnels are wanted. Wake (and network change) must still fire — with a
+// nil fallback the old guard silently dropped the event and nothing ever
+// retried, leaving a manual reconnect as the only way out.
+func TestSleepWake_TriggersReconnect_WhenOnlyDesiredStateActive(t *testing.T) {
+	var reconnectCalls atomic.Int32
+	reconnectFn := func(_ context.Context, name string) error {
+		reconnectCalls.Add(1)
+		return nil
+	}
+
+	mon, mgr, sd := newTestMonitor(testConfig(), reconnectFn)
+	// Nothing connected — the manager alone would fail the old guard.
+	mgr.setConnected(false, "")
+	// Like the real Manager, Disconnect fails when nothing is up; the
+	// monitor must not call it (or back off on it) in this state.
+	var disconnectCalls, suspendCalls atomic.Int32
+	mgr.disconnectFn = func() error {
+		disconnectCalls.Add(1)
+		return errors.New("no tunnel is connected")
+	}
+	mon.SetFirewallCallbacks(func() error { suspendCalls.Add(1); return nil }, func() error { return nil })
+	mon.SetDesiredActiveFn(func() bool { return true })
+
+	mon.Start()
+	defer mon.Stop()
+
+	sd.sendWake()
+
+	waitFor(t, 2*time.Second, "reconnectFn called after wake via desired state", func() bool {
+		return reconnectCalls.Load() > 0
+	})
+	if n := disconnectCalls.Load(); n != 0 {
+		t.Fatalf("Disconnect called %d times with nothing up", n)
+	}
+	if n := suspendCalls.Load(); n != 0 {
+		t.Fatalf("firewall suspended %d times with nothing up; resume can't restore a no-tunnel kill switch", n)
+	}
+}
+
+// The desired-state fallback must not manufacture reconnects when it reports
+// nothing wanted — disconnected manager + false fallback stays silent.
+func TestSleepWake_DoesNotReconnect_WhenDesiredStateEmpty(t *testing.T) {
+	var reconnectCalls atomic.Int32
+	reconnectFn := func(_ context.Context, name string) error {
+		reconnectCalls.Add(1)
+		return nil
+	}
+
+	mon, mgr, sd := newTestMonitor(testConfig(), reconnectFn)
+	mgr.setConnected(false, "")
+	mon.SetDesiredActiveFn(func() bool { return false })
+
+	mon.Start()
+	defer mon.Stop()
+
+	sd.sendWake()
+	time.Sleep(100 * time.Millisecond)
+
+	if reconnectCalls.Load() != 0 {
+		t.Fatalf("expected no reconnect with empty desired state, got %d calls", reconnectCalls.Load())
 	}
 }
 
@@ -1003,4 +1069,213 @@ func TestPingSettingsChangeDuringDisconnectRestoresFirewall(t *testing.T) {
 	if mon.GetState().Reconnecting {
 		t.Fatal("invalid retry retained")
 	}
+}
+
+// With several tunnels up, the all-tunnels wake path must take all of them
+// down before reconnecting; Disconnect() alone dropped only the first.
+func TestSleepWake_DisconnectsEveryTunnel(t *testing.T) {
+	var reconnectCalls atomic.Int32
+	reconnectFn := func(_ context.Context, name string) error {
+		reconnectCalls.Add(1)
+		return nil
+	}
+	mon, mgr, sd := newTestMonitor(testConfig(), reconnectFn)
+	mgr.setConnected(true, "alpha")
+	mgr.allStatuses = []*tunnel.ConnectionStatus{
+		{TunnelName: "alpha", State: domain.StateConnected},
+		{TunnelName: "bravo", State: domain.StateConnected},
+	}
+	var disconnects atomic.Int32
+	mgr.disconnectFn = func() error { disconnects.Add(1); return nil }
+
+	mon.Start()
+	defer mon.Stop()
+	sd.sendWake()
+
+	waitFor(t, 2*time.Second, "reconnect after wake", func() bool { return reconnectCalls.Load() > 0 })
+	if n := disconnects.Load(); n != 2 {
+		t.Fatalf("disconnected %d tunnels before reconnect, want 2", n)
+	}
+}
+
+// A retry cancelled while its firewall suspend was blocked (the helper's
+// connect lock was busy) must not go on to tear the tunnel down.
+func TestRetryCancelledDuringSuspendDoesNotDisconnect(t *testing.T) {
+	reconnectFn := func(_ context.Context, _ string) error { return nil }
+	mon, mgr, _ := newTestMonitor(testConfig(), reconnectFn)
+	mgr.setConnected(true, "alpha")
+	var disconnects, resumes atomic.Int32
+	mgr.disconnectFn = func() error { disconnects.Add(1); return nil }
+	inSuspend := make(chan struct{})
+	release := make(chan struct{})
+	mon.SetFirewallCallbacks(func() error {
+		close(inSuspend)
+		<-release // blocked on the helper's connect lock
+		return nil
+	}, func() error { resumes.Add(1); return nil })
+
+	mon.Start()
+	defer mon.Stop()
+	mon.triggerReconnectTunnel("alpha")
+
+	select {
+	case <-inSuspend:
+	case <-time.After(3 * time.Second):
+		t.Fatal("retry never reached the firewall suspend")
+	}
+	mon.CancelRetryFor("alpha") // the user's Disconnect
+	close(release)
+
+	waitFor(t, 2*time.Second, "firewall resumed after cancel", func() bool { return resumes.Load() == 1 })
+	if n := disconnects.Load(); n != 0 {
+		t.Fatalf("cancelled retry tore the tunnel down %d times", n)
+	}
+}
+
+func TestWakeRetryDoesNotBounceRestoredSiblings(t *testing.T) {
+	var attempts, disconnects atomic.Int32
+	mon, mgr, _ := newTestMonitor(testConfig(), func(context.Context, string) error {
+		if attempts.Add(1) == 1 {
+			return errors.New("one sibling unavailable")
+		}
+		return nil
+	})
+	mgr.setConnected(true, "alpha")
+	mgr.allStatuses = []*tunnel.ConnectionStatus{{TunnelName: "alpha", State: domain.StateConnected}, {TunnelName: "bravo", State: domain.StateConnected}}
+	mgr.disconnectFn = func() error { disconnects.Add(1); return nil }
+	mon.Start()
+	defer mon.Stop()
+	mon.triggerReconnect()
+	waitFor(t, 2*time.Second, "second restore attempt", func() bool { return attempts.Load() >= 2 })
+	if n := disconnects.Load(); n != 2 {
+		t.Fatalf("bounced recovered siblings: %d disconnects", n)
+	}
+}
+
+func TestNamedRetryAfterFailedConnectAllowsAlreadyDown(t *testing.T) {
+	var attempts atomic.Int32
+	mon, mgr, _ := newTestMonitor(testConfig(), func(context.Context, string) error { attempts.Add(1); return nil })
+	mgr.setConnected(true, "alpha")
+	mgr.disconnectFn = func() error { return &tunnel.TunnelError{Kind: tunnel.ErrNotConnected} }
+	mon.Start()
+	defer mon.Stop()
+	mon.ReconnectTunnelIfIdle("alpha", nil)
+	waitFor(t, time.Second, "restore already down tunnel", func() bool { return attempts.Load() > 0 })
+}
+
+func TestNetworkReadinessWaitPrecedesFirewallAndTeardown(t *testing.T) {
+	var connects, suspends, disconnects atomic.Int32
+	mon, mgr, _ := newTestMonitor(testConfig(), func(context.Context, string) error { connects.Add(1); return nil })
+	mon.networkDetector = nil // These cases drive the trigger explicitly.
+	mgr.setConnected(true, "alpha")
+	mgr.disconnectFn = func() error { disconnects.Add(1); return nil }
+	waiting, ready := make(chan struct{}), make(chan struct{})
+	mon.SetReconnectPreflight(func(ctx context.Context, name string) error {
+		if name != "" {
+			t.Errorf("unexpected per-tunnel wait %q", name)
+		}
+		close(waiting)
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ready:
+			return nil
+		}
+	})
+	mon.SetFirewallCallbacks(func() error { suspends.Add(1); return nil }, func() error { return nil })
+	mon.Start()
+	defer mon.Stop()
+	mon.triggerReconnect()
+	select {
+	case <-waiting:
+	case <-time.After(time.Second):
+		t.Fatal("readiness check was not called")
+	}
+	if suspends.Load() != 0 || disconnects.Load() != 0 || connects.Load() != 0 {
+		t.Fatal("network wait dropped protection or tore down transports")
+	}
+	close(ready)
+	waitFor(t, time.Second, "reconnect after route recovery", func() bool { return connects.Load() == 1 })
+	if suspends.Load() != 1 || disconnects.Load() != 1 {
+		t.Fatal("normal recovery did not follow readiness")
+	}
+}
+
+func TestCancelDuringNetworkWaitDoesNotTouchFirewallOrTunnel(t *testing.T) {
+	var connects, suspends, disconnects atomic.Int32
+	mon, mgr, _ := newTestMonitor(testConfig(), func(context.Context, string) error { connects.Add(1); return nil })
+	mon.networkDetector = nil // These cases drive the trigger explicitly.
+	mgr.setConnected(true, "alpha")
+	mgr.disconnectFn = func() error { disconnects.Add(1); return nil }
+	waiting, finished := make(chan struct{}), make(chan struct{})
+	mon.SetReconnectPreflight(func(ctx context.Context, _ string) error {
+		close(waiting)
+		<-ctx.Done()
+		close(finished)
+		return ctx.Err()
+	})
+	mon.SetFirewallCallbacks(func() error { suspends.Add(1); return nil }, nil)
+	mon.Start()
+	defer mon.Stop()
+	mon.triggerReconnect()
+	select {
+	case <-waiting:
+	case <-time.After(time.Second):
+		t.Fatal("no readiness wait")
+	}
+	mon.CancelRetry()
+	select {
+	case <-finished:
+	case <-time.After(time.Second):
+		t.Fatal("manual Off did not interrupt readiness")
+	}
+	if suspends.Load() != 0 || disconnects.Load() != 0 || connects.Load() != 0 {
+		t.Fatal("cancelled network wait touched transport/protection")
+	}
+}
+
+// Stop includes retry workers, even when an OS callback needs a brief moment
+// to finish after cancellation. The helper must not tear down beneath it.
+func TestStopWaitsForRetryWorkerAndCanRestart(t *testing.T) {
+	started, release, exited := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	mon, mgr, _ := newTestMonitor(testConfig(), func(context.Context, string) error {
+		close(started)
+		<-release
+		close(exited)
+		return nil
+	})
+	mgr.setConnected(true, "alpha")
+	mon.Start()
+	mon.triggerReconnectTunnel("alpha")
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("retry never started")
+	}
+	stopped := make(chan struct{})
+	go func() { mon.Stop(); close(stopped) }()
+	select {
+	case <-stopped:
+		t.Fatal("Stop returned before retry worker")
+	case <-time.After(30 * time.Millisecond):
+	}
+	close(release)
+	select {
+	case <-stopped:
+	case <-time.After(time.Second):
+		t.Fatal("Stop failed to join retry")
+	}
+	select {
+	case <-exited:
+	default:
+		t.Fatal("worker still alive")
+	}
+	mon.Start()
+	mon.mu.Lock()
+	running, slots := mon.running, len(mon.retries)
+	mon.mu.Unlock()
+	if !running || slots != 0 {
+		t.Fatalf("restart: running=%v stale retries=%d", running, slots)
+	}
+	mon.Stop()
 }

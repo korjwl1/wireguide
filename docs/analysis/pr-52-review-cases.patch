@@ -1,0 +1,41 @@
+diff --git a/internal/helper/review_cases_test.go b/internal/helper/review_cases_test.go
+new file mode 100644
+--- /dev/null
++++ b/internal/helper/review_cases_test.go
+@@ -0,0 +1,36 @@
++package helper
++
++import (
++	"github.com/korjwl1/wireguide/internal/wifi"
++	"testing"
++)
++
++func TestReviewManualLatchClearsWhenGatewayChangesUnderSameSSID(t *testing.T) {
++	p := wifiProbe()
++	stubNetwork(t, p)
++	h, clk := newAutomationHelper(t, "SharedSSID")
++	h.guiAttachedFn = func() bool { return true }
++	h.recordManualOverride("vpn", true)
++	p.Gateway = "192.168.99.1"
++	p.GatewayMAC = "00:11:22:33:44:55"
++	p.Subnets = []string{"192.168.99.0/24"}
++	h.currentNetworkState()
++	clk.Advance(wifi.NegationSettleWindow)
++	h.pruneManualOverrides(h.currentNetworkState())
++	if _, held := h.manualLatchFor("vpn"); held {
++		t.Fatal("manual override survived a different gateway and subnet under the same SSID")
++	}
++}
++func TestReviewManualConnectedTunnelStillParticipatesInWakeRecovery(t *testing.T) {
++	stubNetwork(t, wifiProbe())
++	h, _ := newAutomationHelper(t, "Home")
++	writeAutomation(t, h, map[string][]wifi.Rule{"vpn": {{When: wifi.Condition{Type: wifi.CondSSID, SSID: "Home"}, Do: wifi.ActionConnect}}})
++	h.recordManualOverride("vpn", false)
++	recovered := false
++	if err := h.legacyTeardownWith([]string{"vpn"}, func(string) error { recovered = true; return nil }); err != nil {
++		t.Fatal(err)
++	}
++	if !recovered {
++		t.Fatal("wake recovery skipped the manually connected tunnel solely because its intent was latched")
++	}
++}

@@ -7,6 +7,50 @@ import (
 	"github.com/korjwl1/wireguide/internal/network"
 )
 
+// persistDNSCheckpoint uses one pre-VPN baseline for every global-DNS journal.
+// Later tunnels see earlier tunnels' overrides; only newly discovered services
+// may extend the baseline. Publish the journal before changing the cached model.
+func (m *Manager) persistDNSCheckpoint(state ActiveTunnelState, snapshot network.DNSSnapshot) error {
+	m.dnsCheckpointMu.Lock()
+	defer m.dnsCheckpointMu.Unlock()
+	m.mu.Lock()
+	base := network.DNSSnapshot{Servers: map[string][]string{}, Search: map[string][]string{}}
+	if m.globalPreModDNS != nil {
+		base.Servers = copyServiceMap(m.globalPreModDNS.Servers)
+		base.Search = copyServiceMap(m.globalPreModDNS.Search)
+	}
+	if base.Servers == nil {
+		base.Servers = map[string][]string{}
+	}
+	if base.Search == nil {
+		base.Search = map[string][]string{}
+	}
+	services := map[string]struct{}{}
+	for service := range snapshot.Servers {
+		services[service] = struct{}{}
+	}
+	for service := range snapshot.Search {
+		services[service] = struct{}{}
+	}
+	for service := range services {
+		_, knownDNS := base.Servers[service]
+		_, knownSearch := base.Search[service]
+		if !knownDNS && !knownSearch {
+			base.Servers[service] = append([]string(nil), snapshot.Servers[service]...)
+			base.Search[service] = append([]string(nil), snapshot.Search[service]...)
+		}
+	}
+	m.mu.Unlock()
+	state.PreModDNS, state.PreModSearch = base.Servers, base.Search
+	if err := SaveActiveState(m.dataDir, &state); err != nil {
+		return err
+	}
+	m.mu.Lock()
+	m.globalPreModDNS = &base
+	m.mu.Unlock()
+	return nil
+}
+
 // AllDNSServers returns the union of DNS servers from all connected tunnels'
 // configs. Used to re-apply the combined DNS when a tunnel connects or
 // disconnects, preventing one tunnel from overwriting another's DNS settings.
@@ -27,6 +71,8 @@ func (m *Manager) AllDNSServers() []string {
 // netMgr_B.Cleanup the user's system would get restored to A's DNS
 // instead of the original DHCP defaults.
 func (m *Manager) CapturePreModDNS(snapshot network.DNSSnapshot) {
+	m.dnsCheckpointMu.Lock()
+	defer m.dnsCheckpointMu.Unlock()
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.globalPreModDNS != nil || snapshot.Empty() {
@@ -55,6 +101,8 @@ func (m *Manager) PreModDNSSnapshot() (network.DNSSnapshot, bool) {
 // ClearPreModDNS drops the captured snapshot once the last tunnel has
 // disconnected so a fresh capture happens on the next session.
 func (m *Manager) ClearPreModDNS() {
+	m.dnsCheckpointMu.Lock()
+	defer m.dnsCheckpointMu.Unlock()
 	m.mu.Lock()
 	m.globalPreModDNS = nil
 	m.mu.Unlock()
@@ -67,6 +115,11 @@ func (m *Manager) ClearPreModDNS() {
 // (issue #34 gap 4) — without this a helper upgrade while connected left
 // tunnel DNS behind until crash recovery ran.
 func (m *Manager) RestoreDNSBestEffort() {
+	// Split-DNS keys outlive the process (dynamic store), so sweep them
+	// whether or not a global snapshot was captured.
+	if err := cleanupStaleSplitDNS(); err != nil {
+		slog.Warn("RestoreDNSBestEffort: split DNS sweep failed", "error", err)
+	}
 	pre, captured := m.PreModDNSSnapshot()
 	if !captured {
 		return
@@ -85,6 +138,7 @@ func (m *Manager) RestoreDNSBestEffort() {
 	}
 	if err := restorer.RestoreDNSFromSnapshot(pre); err != nil {
 		slog.Warn("RestoreDNSBestEffort failed", "error", err)
+		return
 	}
 	m.ClearPreModDNS()
 }
@@ -102,14 +156,13 @@ func copyServiceMap(in map[string][]string) map[string][]string {
 
 // allDNSServersLocked is AllDNSServers without the lock — for callers
 // that already hold m.mu (e.g. inside the Phase-3 commit of Connect).
-// Today no caller needs it, but exposing the locked variant means a
-// future callsite added inside the manager's critical section won't
-// silently deadlock by re-acquiring m.mu.
+// Caller must hold m.mu.
 func (m *Manager) allDNSServersLocked() []string {
 	seen := make(map[string]struct{})
 	var all []string
 	for _, e := range m.tunnels {
-		if e.state == domain.StateConnected && e.cfg != nil {
+		// Split-DNS tunnels own a supplemental resolver, not system DNS.
+		if e.state == domain.StateConnected && e.cfg != nil && !e.cfg.Interface.IsSplitDNS() {
 			for _, dns := range e.cfg.Interface.DNS {
 				if _, ok := seen[dns]; !ok {
 					seen[dns] = struct{}{}
@@ -119,4 +172,20 @@ func (m *Manager) allDNSServersLocked() []string {
 		}
 	}
 	return all
+}
+
+func (m *Manager) trackDNSUnion(entries []string) {
+	m.mu.Lock()
+	var trackers []network.DNSUnionTracker
+	for _, e := range m.tunnels {
+		if e.cfg != nil && !e.cfg.Interface.IsSplitDNS() {
+			if tracker, ok := e.netMgr.(network.DNSUnionTracker); ok {
+				trackers = append(trackers, tracker)
+			}
+		}
+	}
+	m.mu.Unlock()
+	for _, tracker := range trackers {
+		tracker.TrackDNSUnion(entries)
+	}
 }

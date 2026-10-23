@@ -30,10 +30,10 @@ type linuxSleepDetector struct {
 	// conn is shared with wifi/detect_linux.go via dbus.SystemBus(). We
 	// keep a reference so Stop() can RemoveMatchSignal / Signal-remove
 	// our subscription, but we never Close() it.
-	conn      *dbus.Conn
-	signalCh  chan *dbus.Signal // the channel we registered for our signal pump
-	wakeCh    chan struct{}
-	stopCh    chan struct{}
+	conn     *dbus.Conn
+	signalCh chan *dbus.Signal // the channel we registered for our signal pump
+	wakeCh   chan struct{}
+	stopCh   chan struct{}
 }
 
 func NewSleepDetector() SleepDetector {
@@ -159,7 +159,7 @@ func (d *linuxSleepDetector) dbusLoop(ch <-chan *dbus.Signal) {
 // Stop() guards those reads with `if conn != nil && ch != nil` so the
 // nil state is safe; only d.stopCh drives shutdown here.
 func (d *linuxSleepDetector) poll() {
-	lastCheck := time.Now()
+	lastCheck := time.Now().Round(0)
 	const pollInterval = 10 * time.Second
 	const sleepThreshold = 30 * time.Second
 
@@ -168,7 +168,7 @@ func (d *linuxSleepDetector) poll() {
 		case <-d.stopCh:
 			return
 		case <-time.After(pollInterval):
-			now := time.Now()
+			now := time.Now().Round(0) // suspend detection requires wall time
 			elapsed := now.Sub(lastCheck)
 			lastCheck = now
 			if elapsed > pollInterval+sleepThreshold {

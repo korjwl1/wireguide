@@ -10,7 +10,7 @@ import (
 )
 
 // connectPhases executes the steps that bring a tunnel up. Called from
-// Manager.Connect under the manager's mutex. Returns the created engine on
+// Manager.ConnectWithContext outside the manager's mutex. Returns the engine on
 // success, or an error after rolling back any partial state on failure.
 //
 // Steps:
@@ -19,13 +19,19 @@ import (
 //  3. Assign address
 //  4. Bring interface up
 //  5. Install routes (incl. endpoint bypass for every peer)
-//  6. Apply DNS (best-effort)
+//  6. Apply explicitly configured DNS (failure rolls back)
 //  7. Persist crash-recovery state (only after everything else succeeds)
 //
 // Note: Pre/PostUp/Down script execution was removed as a security hardening
 // measure. The config parser still accepts these fields so existing configs
 // import without error, but the scripts are silently ignored.
 func (m *Manager) connectPhases(ctx context.Context, cfg *domain.WireGuardConfig, netMgr network.NetworkManager) (*Engine, error) {
+	if validator, ok := netMgr.(interface{ ValidateDNSConfig([]string) error }); ok {
+		if err := validator.ValidateDNSConfig(cfg.Interface.DNS); err != nil {
+			return nil, newTunnelError(ErrNetwork, "validating DNS support", err)
+		}
+	}
+
 	// Compute fullTunnel early — needed by the rollback closure and later
 	// by AddRoutes. It only depends on cfg which is a parameter.
 	fullTunnel := cfg.IsFullTunnel()
@@ -44,31 +50,20 @@ func (m *Manager) connectPhases(ctx context.Context, cfg *domain.WireGuardConfig
 		return nil, newTunnelError(ErrEngineCreation, "creating engine", err)
 	}
 	ifaceName := engine.InterfaceName()
-
-	// rollback helper closes the engine and restores network state if any
-	// later phase fails. Best-effort — we log rather than propagate cleanup
-	// errors because we already have a primary failure to report.
-	rollback := func(primary error) error {
-		// Undo routes that may have been installed before the failure.
-		if err := netMgr.RemoveRoutes(ifaceName, allAllowedIPs, fullTunnel); err != nil {
-			slog.Warn("rollback: RemoveRoutes failed", "error", err)
-		}
-		// Strip any endpoint loop protection filters we installed before
-		// the failure point — leaving them in force after a failed
-		// connect would block re-connects to the same endpoint until
-		// the helper restarted (the WFP BLOCK targets remote IP+port +
-		// tunnel LUID; on a re-connect the LUID matches again).
-		if m.endpointProtector != nil {
-			if err := m.endpointProtector.DisableEndpointProtection(ifaceName); err != nil {
-				slog.Warn("rollback: DisableEndpointProtection failed", "iface", ifaceName, "error", err)
-			}
-		}
-		if err := netMgr.Cleanup(ifaceName); err != nil {
-			slog.Warn("rollback: network Cleanup failed", "iface", ifaceName, "error", err)
-		}
+	if err := m.prepareInterfaceDNS(ifaceName); err != nil {
+		// Nothing has been configured yet. Preserve the former owner's
+		// journal and retry entry; rollback of the new owner could erase it.
 		engine.Close()
-		return primary
+		return nil, newTunnelError(ErrNetwork, "removing previous interface DNS", err)
 	}
+
+	// Record interface ownership before the first OS mutation, including
+	// failures that happen before the precise pre-DNS checkpoint.
+	if err := SaveActiveState(m.dataDir, &ActiveTunnelState{TunnelName: cfg.Name, InterfaceName: ifaceName, FullTunnel: fullTunnel, Table: cfg.Interface.Table, FwMark: cfg.Interface.FwMark}); err != nil {
+		engine.Close()
+		return nil, newTunnelError(ErrNetwork, "persisting interface recovery state", err)
+	}
+	rollback := func(primary error) error { return m.rollbackConnect(cfg, engine, netMgr, primary) }
 
 	// checkCtx is the per-phase cancellation gate. The individual exec
 	// helpers inside netMgr have their own bounded timeouts (cmdTimeout),
@@ -146,25 +141,16 @@ func (m *Manager) connectPhases(ctx context.Context, cfg *domain.WireGuardConfig
 		return nil, err
 	}
 
-	// 5.8 Pin the WG UDP socket to the physical underlay's ifIndex
-	// (IP_UNICAST_IF on Windows). This is the source-side loop firewall:
-	// once pinned, the kernel skips its routing lookup for sends on
-	// these sockets and goes straight out the chosen interface — so even
-	// if wintun is the longest-prefix match for the peer endpoint in
-	// the route table (loop scenario), the encrypted UDP never crosses
-	// into wintun. Mirrors what wireguard-windows does in
-	// tunnel/defaultroutemonitor.go.
-	//
-	// We do this here, AFTER engine.Start opened the sockets, AFTER
-	// EnableEndpointProtection installed the per-flow/per-packet WFP
-	// blocks, but BEFORE AddRoutes installs the /1 split. Order matters
-	// because the bind picks "best non-tunnel default" — if /1 split is
-	// already in, the lookup still correctly returns the physical NIC
-	// (because /1 is via the tunnel adapter LUID, which we exclude),
-	// but if the physical default was missing AND /1 isn't in yet,
-	// pinning would blackhole. Doing it post-Start, pre-AddRoutes is
-	// the safest window.
-	engine.SocketPinV4, engine.SocketPinV6 = pinSocketToPhysical(engine.bind, ifaceName)
+	// 5.8 Re-evaluate Windows socket binding before installing routes.
+	// The guarded bind applies the initial interface during Open, before
+	// the first handshake. IP_UNICAST_IF constrains outer-packet routing
+	// to that underlay; no underlay means dropped sends. A failed bind
+	// fails Connect, rather than leaving an unprotected socket running.
+	var pinErr error
+	engine.SocketPinV4, engine.SocketPinV6, pinErr = pinSocketToPhysical(engine.bind, ifaceName)
+	if pinErr != nil {
+		return nil, rollback(newTunnelError(ErrNetwork, "protecting WireGuard UDP sockets", pinErr))
+	}
 
 	// 6. Routes + endpoint bypass.
 	//
@@ -179,8 +165,32 @@ func (m *Manager) connectPhases(ctx context.Context, cfg *domain.WireGuardConfig
 	// the chicken-and-egg that wg-quick sidesteps by resolving endpoints
 	// via the `wg` tool BEFORE touching the route table.
 	endpointIPs := engine.ResolvedEndpointIPs()
+	var allowEndpointTraffic func(bool)
+	networkOwnsTrafficGate := false
+	if guard, ok := engine.bind.(interface{ SetEndpointTrafficAllowed(bool) }); ok {
+		allowEndpointTraffic = guard.SetEndpointTrafficAllowed
+		if setter, ok := netMgr.(network.EndpointTrafficGuardSetter); ok {
+			setter.SetEndpointTrafficGuard(allowEndpointTraffic)
+			networkOwnsTrafficGate = true
+		}
+		allowEndpointTraffic(false)
+	}
 	if err := netMgr.AddRoutes(ifaceName, allAllowedIPs, fullTunnel, endpointIPs, cfg.Interface.Table, cfg.Interface.FwMark); err != nil {
 		return nil, rollback(newTunnelError(ErrNetwork, "adding routes", err))
+	}
+	if checker, ok := netMgr.(network.EndpointLoopChecker); ok {
+		reason, err := checker.EndpointRoutingLoop(endpointIPs)
+		if err != nil {
+			return nil, rollback(newTunnelError(ErrNetwork, "verifying endpoint routes", err))
+		}
+		if reason != "" {
+			return nil, rollback(newTunnelError(ErrNetwork, reason, nil))
+		}
+	}
+	// A network-owned gate is reopened by its checker while holding the
+	// route lock. Reopening it here could override a subsequent repair.
+	if allowEndpointTraffic != nil && !networkOwnsTrafficGate {
+		allowEndpointTraffic(true)
 	}
 	if err := checkCtx(); err != nil {
 		return nil, err
@@ -196,8 +206,13 @@ func (m *Manager) connectPhases(ctx context.Context, cfg *domain.WireGuardConfig
 	//
 	// When multiple tunnels are active, we apply the UNION of all tunnels'
 	// DNS servers so a second tunnel doesn't overwrite the first's DNS.
+	//
+	// Split-DNS tunnels (any "~domain" token) never take part in the union:
+	// they install their own supplemental resolver and leave system DNS alone.
+	splitDNS := cfg.Interface.IsSplitDNS()
+	dnsMode := dnsModeFor(cfg)
 	dnsServers := cfg.Interface.DNS
-	if len(dnsServers) > 0 {
+	if len(dnsServers) > 0 && !splitDNS {
 		// Collect DNS from already-connected tunnels and merge.
 		existingDNS := m.AllDNSServers()
 		if len(existingDNS) > 0 {
@@ -219,25 +234,25 @@ func (m *Manager) connectPhases(ctx context.Context, cfg *domain.WireGuardConfig
 			dnsServers = merged
 		}
 	}
-	// Pre-DNS crash recovery checkpoint. The DNS modification phase
-	// is the first step that leaves persistent state on disk (the
-	// per-service DNS overrides written by `networksetup` survive a
-	// helper crash). If the helper dies between SetDNS and the
-	// FINAL state write below, the user is stuck on the tunnel's
-	// DNS — this checkpoint guarantees crash recovery sees a state
-	// file and falls back to ResetDNSToSystemDefault (which clears
-	// the per-service overrides to DHCP defaults). Empty PreModDNS
-	// triggers the fallback path in RecoverFromCrash.
-	if err := SaveActiveState(m.dataDir, &ActiveTunnelState{
+	state := ActiveTunnelState{
 		TunnelName:     cfg.Name,
 		InterfaceName:  ifaceName,
 		DNSServers:     cfg.Interface.DNS,
+		DNSMode:        dnsMode,
 		FullTunnel:     fullTunnel,
 		Table:          cfg.Interface.Table,
 		FwMark:         cfg.Interface.FwMark,
 		EndpointRoutes: endpointRoutes,
-	}); err != nil {
-		slog.Warn("failed to persist pre-DNS crash recovery state", "error", err)
+	}
+	// The adapter checkpoints its captured original DNS before its first
+	// write, including services discovered later during route repair.
+	if setter, ok := netMgr.(network.DNSCheckpointSetter); ok && dnsMode == DNSModeGlobal {
+		setter.SetDNSCheckpoint(func(snapshot network.DNSSnapshot) error {
+			return m.persistDNSCheckpoint(state, snapshot)
+		})
+	}
+	if err := SaveActiveState(m.dataDir, &state); err != nil {
+		return nil, rollback(newTunnelError(ErrNetwork, "persisting pre-DNS recovery state", err))
 	}
 
 	if err := netMgr.SetDNS(ifaceName, dnsServers); err != nil {
@@ -245,6 +260,10 @@ func (m *Manager) connectPhases(ctx context.Context, cfg *domain.WireGuardConfig
 			return nil, rollback(newTunnelError(ErrNetwork, "setting DNS", err))
 		}
 		slog.Warn("failed to set DNS", "error", err)
+	}
+
+	if !splitDNS && len(dnsServers) > 0 {
+		m.trackDNSUnion(dnsServers)
 	}
 
 	// 8. Final state file with the precise per-service DNS snapshot
@@ -258,15 +277,19 @@ func (m *Manager) connectPhases(ctx context.Context, cfg *domain.WireGuardConfig
 	// deliberately ignore them via CapturePreModDNS's first-write-
 	// wins guard.
 	var preMod network.DNSSnapshot
-	if provider, ok := netMgr.(network.DNSSnapshotProvider); ok {
+	if provider, ok := netMgr.(network.DNSSnapshotProvider); ok && dnsMode == DNSModeGlobal {
 		preMod = provider.SavedDNSSnapshot()
 		m.CapturePreModDNS(preMod)
+		if original, captured := m.PreModDNSSnapshot(); captured {
+			preMod = original
+		}
 	}
 
 	if err := SaveActiveState(m.dataDir, &ActiveTunnelState{
 		TunnelName:     cfg.Name,
 		InterfaceName:  ifaceName,
 		DNSServers:     cfg.Interface.DNS,
+		DNSMode:        dnsMode,
 		FullTunnel:     fullTunnel,
 		Table:          cfg.Interface.Table,
 		FwMark:         cfg.Interface.FwMark,
@@ -285,7 +308,7 @@ func (m *Manager) connectPhases(ctx context.Context, cfg *domain.WireGuardConfig
 }
 
 // disconnectPhases runs the teardown sequence for an active tunnel. Called
-// from Manager.Disconnect under the manager's mutex. All steps are best-effort
+// from Manager.Disconnect outside the manager's mutex. All steps are best-effort
 // — we log errors rather than returning them because partial teardown is
 // better than none.
 func (m *Manager) disconnectPhases(cfg *domain.WireGuardConfig, engine *Engine, netMgr network.NetworkManager) {
@@ -346,44 +369,48 @@ func (m *Manager) disconnectPhases(cfg *domain.WireGuardConfig, engine *Engine, 
 	engine.Close()
 	logStep("engine.Close", tsEngine)
 
+	// Split-DNS keys live in the dynamic store, outside Cleanup's
+	// RestoreDNS path when other global-DNS tunnels remain (Cleanup is
+	// skipped entirely then), so remove them for THIS tunnel unconditionally.
+	var splitCleanupErr error
+	if cfg.Interface.IsSplitDNS() {
+		splitCleanupErr = m.removeSplitDNS(cfg.Name, netMgr, ifaceName)
+	}
+
 	// Check if other tunnels remain connected BEFORE cleanup.
 	remainingDNS := m.AllDNSServers()
 	hasOtherTunnels := len(remainingDNS) > 0
 
-	// Network cleanup — each tunnel has its own netMgr, so Cleanup only
-	// affects this tunnel's state (route monitor, bypass routes, DNS snapshot).
+	// A failed restore retains both its baseline and recovery journal.
+	var cleanupErr error
 	if netMgr != nil {
-		if !hasOtherTunnels {
-			// Last tunnel — restore the ORIGINAL system DNS (captured
-			// when the first tunnel connected) rather than this
-			// netMgr's own savedDNS, which for a non-first tunnel
-			// would still hold the previous tunnel's DNS overrides.
-			// Cleanup's internal RestoreDNS becomes a no-op because
-			// RestoreDNSFromSnapshot clears dnsActive.
-			if pre, captured := m.PreModDNSSnapshot(); captured {
-				if r, ok := netMgr.(network.DNSStateRestorer); ok {
-					if err := r.RestoreDNSFromSnapshot(pre); err != nil {
-						slog.Warn("RestoreDNSFromSnapshot failed; falling back to per-netMgr restore", "error", err)
-					}
-				}
+		if hasOtherTunnels {
+			if remover, ok := netMgr.(network.InterfaceDNSRemover); ok {
+				cleanupErr = remover.RemoveInterfaceDNS(ifaceName)
 			}
-			tsCleanup := time.Now()
-			if err := netMgr.Cleanup(ifaceName); err != nil {
-				slog.Warn("disconnect: network Cleanup failed", "iface", ifaceName, "error", err)
+		} else {
+			cleanupErr = m.cleanupNetwork(netMgr, ifaceName)
+			if cleanupErr == nil {
+				m.clearRecoveredBaseline()
 			}
-			logStep("netMgr.Cleanup", tsCleanup)
-			m.ClearPreModDNS()
+		}
+		if cleanupErr != nil {
+			m.queueNetworkCleanup(cfg.Name, ifaceName, netMgr, cleanupErr)
+			slog.Warn("disconnect: network recovery pending", "iface", ifaceName, "error", cleanupErr)
 		}
 	}
 
 	// If other tunnels remain, re-apply their DNS union via one of the
 	// remaining tunnels' netMgr instances.
-	if hasOtherTunnels {
+	// A split tunnel never contributed to that union, so its disconnect
+	// changes nothing for the others.
+	if hasOtherTunnels && !cfg.Interface.IsSplitDNS() {
+		m.trackDNSUnion(remainingDNS)
 		m.mu.Lock()
 		var remainingNetMgr network.NetworkManager
 		var remainingIface string
 		for _, e := range m.tunnels {
-			if e.state == domain.StateConnected && e.engine != nil && e.cfg != nil && e.cfg.Name != cfg.Name && e.netMgr != nil {
+			if e.state == domain.StateConnected && e.engine != nil && e.cfg != nil && e.cfg.Name != cfg.Name && e.netMgr != nil && !e.cfg.Interface.IsSplitDNS() {
 				remainingNetMgr = e.netMgr
 				remainingIface = e.engine.InterfaceName()
 				break
@@ -398,10 +425,45 @@ func (m *Manager) disconnectPhases(cfg *domain.WireGuardConfig, engine *Engine, 
 	}
 
 	// Clear crash-recovery state for this specific tunnel
-	if err := ClearActiveState(m.dataDir, cfg.Name); err != nil {
-		slog.Warn("disconnect: ClearActiveState failed", "tunnel", cfg.Name, "error", err)
+	if splitCleanupErr == nil && cleanupErr == nil {
+		if err := ClearActiveState(m.dataDir, cfg.Name); err != nil {
+			slog.Warn("disconnect: ClearActiveState failed", "tunnel", cfg.Name, "error", err)
+		}
 	}
 
 	slog.Info("tunnel disconnected", "name", cfg.Name,
 		"total_ms", time.Since(t0).Milliseconds())
+}
+
+// dnsModeFor classifies a config's DNS handling for the crash-recovery
+// journal: "split" (supplemental resolver only), "global" (system DNS
+// override) or "" (the tunnel never touches DNS).
+func dnsModeFor(cfg *domain.WireGuardConfig) string {
+	switch {
+	case cfg.Interface.IsSplitDNS():
+		return DNSModeSplit
+	case len(cfg.Interface.DNS) > 0:
+		return DNSModeGlobal
+	}
+	return ""
+}
+
+// removeSplitDNS removes a tunnel's split-DNS state if the platform manager
+// keeps any. Idempotent and best-effort.
+func (m *Manager) removeSplitDNS(name string, netMgr network.NetworkManager, ifaceName string) error {
+	r, ok := netMgr.(network.SplitDNSRemover)
+	if !ok {
+		return nil
+	}
+	if err := r.RemoveSplitDNS(ifaceName); err != nil {
+		slog.Warn("RemoveSplitDNS failed", "iface", ifaceName, "error", err)
+		m.mu.Lock()
+		if m.pendingDNSCleanup == nil {
+			m.pendingDNSCleanup = make(map[string]pendingDNSCleanup)
+		}
+		m.pendingDNSCleanup[ifaceName] = pendingDNSCleanup{name: name, remover: r}
+		m.mu.Unlock()
+		return err
+	}
+	return nil
 }

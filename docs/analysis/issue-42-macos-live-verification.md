@@ -85,6 +85,14 @@ after this final launch passed. The app was left running with no VPN connected.
 
 ## Limits
 
+2026-10-13 follow-up: the health policy, multi-target success/failure and
+native bound IPv4/IPv6 ICMP tests pass on Linux arm64 in an isolated container
+network namespace. A nonexistent interface fails instead of falling back to
+the default route. The macOS native ICMP rerun could not open raw sockets
+without administrator privileges; this is a permission limitation, not a
+passing native macOS check for the current build. The earlier macOS live
+results above remain historical evidence.
+
 These tests exercise split routes against controlled local peers. They do not
 establish behavior over a remote WAN, every full-tunnel configuration, Wi-Fi
 SSID roaming, reboot, or a long sleep. The machine's primary link was Ethernet;

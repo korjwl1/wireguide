@@ -1,6 +1,38 @@
 // Package network provides OS-specific IP, routing, and DNS configuration.
 package network
 
+import "errors"
+
+// DNSCheckpointSetter lets the tunnel owner persist exact original DNS before
+// an adapter changes system preferences. A checkpoint error must prevent writes.
+type DNSCheckpointSetter interface {
+	SetDNSCheckpoint(func(DNSSnapshot) error)
+}
+
+// ErrSplitDNSUnsupported rejects an explicit domain-routing request when
+// the platform cannot honor it. Connect must not silently use system DNS.
+var ErrSplitDNSUnsupported = errors.New("split DNS is not supported on this platform")
+
+type SplitDNSRemover interface {
+	RemoveSplitDNS(ifaceName string) error
+}
+
+// EndpointLoopChecker verifies that a peer's outer packets do not route
+// back through their own tunnel. A nonempty reason is positive evidence of
+// a loop; an error means the route could not be checked.
+type EndpointLoopChecker interface {
+	EndpointRoutingLoop(endpoints []string) (reason string, err error)
+}
+
+// EndpointTrafficGuardSetter coordinates route replacements with the
+// engine's outer UDP sender. false drops sends until forwarding is safe.
+// Its route checker owns reopening the gate under the same lock as route
+// replacement; callers must not override that decision after verification.
+type EndpointTrafficGuardSetter interface {
+	EndpointLoopChecker
+	SetEndpointTrafficGuard(allow func(bool))
+}
+
 // NetworkManager handles OS-level network configuration for WireGuard tunnels.
 type NetworkManager interface {
 	// AssignAddress assigns an IP address to the named interface.
@@ -113,3 +145,10 @@ type PersistentStateDirSetter interface {
 type PreCloseCleaner interface {
 	PreCloseAdapterCleanup(ifaceName string)
 }
+
+// InterfaceDNSRemover removes only the departing interface's contribution;
+// it must preserve global DNS while another tunnel remains.
+type InterfaceDNSRemover interface{ RemoveInterfaceDNS(string) error }
+
+// DNSUnionTracker updates a global DNS monitor without another OS write.
+type DNSUnionTracker interface{ TrackDNSUnion([]string) }

@@ -4,7 +4,7 @@ package wifi
 
 import "errors"
 
-func currentSSIDCoreWLAN() string      { return "" }
+func currentSSIDCoreWLAN() string       { return "" }
 func wifiInterfaceNameCoreWLAN() string { return "" }
 func RequestLocationAuthorization()     {}
 

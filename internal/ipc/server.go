@@ -18,13 +18,14 @@ type Handler func(params json.RawMessage) (interface{}, error)
 // exhaust the helper's goroutine + memory budget — which would in
 // practice take down the kill switch with the helper.
 //
-// We intentionally do NOT add per-method rate limiting. The threat model
-// is "same-UID local process" — that attacker already has access to far
-// more dangerous things (the user's WG configs on disk, the ability to
-// kill the helper directly, etc.). A per-method limiter would only
-// complicate the dispatch path without raising the security ceiling.
-// The 32-connection cap is the practical denial-of-service defense.
+// IPC trusts the configured local user for VPN operations; it does not attest
+// the caller's binary or isolate a compromised GUI from those same operations.
+// Peer credentials, frame bounds and connection/deadline limits restrict that
+// surface. They do not protect against malware running as the authorized user.
 const maxConcurrentConns = 32
+
+// A client that stops reading must not hold a connection slot indefinitely.
+const writeTimeout = 5 * time.Second
 
 // Server is an IPC server that dispatches RPC requests to handlers
 // and broadcasts events to subscribed clients.
@@ -39,6 +40,7 @@ type Server struct {
 	mu           sync.Mutex
 	eventSubs    map[*subscriber]struct{} // active event subscribers
 	shutdownCh   chan struct{}
+	shutdownOnce sync.Once
 	onConnect    func() // called when a control conn attaches (any)
 	onDisconnect func() // called when the last control conn closes
 	controlConns map[net.Conn]struct{}
@@ -58,7 +60,10 @@ type subscriber struct {
 	ch   chan []byte
 }
 
-// NewServer creates a server. ownerUID is the expected UID of connecting
+// NewServer creates a server on an already-bound listener — one from Listen,
+// or one adopted from launchd (socket activation). Every accepted connection
+// is peer-credential checked against ownerUID regardless of where the
+// listener came from. ownerUID is the expected UID of connecting
 // peers on Unix (pass -1 to skip peer credential checks, e.g. in tests).
 func NewServer(listener net.Listener, ownerUID ...int) *Server {
 	uid := -1
@@ -176,21 +181,19 @@ func (s *Server) safeHandleConn(conn net.Conn) {
 // helper exit hostage — at that point we log and return anyway, letting
 // the process exit and launchd respawn handle the wedged state.
 func (s *Server) Shutdown() {
-	select {
-	case <-s.shutdownCh:
-	default:
+	s.shutdownOnce.Do(func() {
 		close(s.shutdownCh)
-	}
-	s.listener.Close()
+		s.listener.Close()
 
-	s.mu.Lock()
-	for sub := range s.eventSubs {
-		sub.conn.Close()
-	}
-	for c := range s.controlConns {
-		c.Close()
-	}
-	s.mu.Unlock()
+		s.mu.Lock()
+		for sub := range s.eventSubs {
+			sub.conn.Close()
+		}
+		for c := range s.controlConns {
+			c.Close()
+		}
+		s.mu.Unlock()
+	})
 
 	// Wait for in-flight handlers with a hard ceiling so a wedged handler
 	// can't deadlock helper shutdown indefinitely.
@@ -248,6 +251,11 @@ func (s *Server) Broadcast(method string, params interface{}) {
 	if err != nil {
 		return
 	}
+	if len(data) > maxFrameSize {
+		slog.Warn("dropping oversized IPC event", "method", method, "bytes", len(data))
+		return
+	}
+	framed := frameBytes(data)
 
 	s.mu.Lock()
 	subs := make([]*subscriber, 0, len(s.eventSubs))
@@ -258,7 +266,7 @@ func (s *Server) Broadcast(method string, params interface{}) {
 
 	for _, sub := range subs {
 		select {
-		case sub.ch <- data:
+		case sub.ch <- framed:
 		default:
 			// Drop event if subscriber is slow (prevents helper from blocking)
 		}
@@ -361,6 +369,7 @@ func (s *Server) handleConn(conn net.Conn) {
 		// Dispatch RPC
 		resp := s.dispatch(&req)
 		if resp != nil {
+			_ = conn.SetWriteDeadline(time.Now().Add(writeTimeout))
 			if err := WriteFrame(conn, resp); err != nil {
 				slog.Debug("ipc: WriteFrame error, closing conn",
 					"conn", remoteDesc,
@@ -397,6 +406,18 @@ func (s *Server) dispatch(req *Request) *Response {
 
 // handleSubscribe takes over a connection as an event stream.
 func (s *Server) handleSubscribe(conn net.Conn, reqID uint64) {
+	// Event streams have no inbound frames after Subscribe. Read once to
+	// detect EOF even when idle; the control connection's read deadline no
+	// longer applies. Closing conn on every exit also releases this reader.
+	_ = conn.SetReadDeadline(time.Time{})
+	defer conn.Close()
+	peerDone := make(chan struct{})
+	go func() {
+		defer close(peerDone)
+		var unexpected [1]byte
+		_, _ = conn.Read(unexpected[:])
+	}()
+
 	sub := &subscriber{
 		conn: conn,
 		ch:   make(chan []byte, 32),
@@ -418,6 +439,7 @@ func (s *Server) handleSubscribe(conn net.Conn, reqID uint64) {
 
 	// Acknowledge subscription
 	ack, _ := NewResponse(reqID, Empty{})
+	_ = conn.SetWriteDeadline(time.Now().Add(writeTimeout))
 	if err := WriteFrame(conn, ack); err != nil {
 		return
 	}
@@ -427,11 +449,14 @@ func (s *Server) handleSubscribe(conn net.Conn, reqID uint64) {
 		select {
 		case <-s.shutdownCh:
 			return
+		case <-peerDone:
+			return
 		case data, ok := <-sub.ch:
 			if !ok {
 				return
 			}
-			if _, err := conn.Write(frameBytes(data)); err != nil {
+			_ = conn.SetWriteDeadline(time.Now().Add(writeTimeout))
+			if n, err := conn.Write(data); err != nil || n != len(data) {
 				return
 			}
 		}
