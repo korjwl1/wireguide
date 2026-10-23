@@ -55,7 +55,11 @@ overrides:
       - polkit
       - iproute
       - nftables
-  
+    recommends:
+      - NetworkManager
+      - google-noto-sans-fonts
+      - google-noto-sans-cjk-fonts
+
   # Arch Linux package names.
   archlinux:
     depends:

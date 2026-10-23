@@ -8,12 +8,10 @@ import (
 	"runtime"
 )
 
-// Linux releases ship as a .deb that installs /usr/local/bin/wireguide
-// through dpkg. Replacing a package-owned file behind dpkg's back would
-// desync the package database, and driving `pkexec dpkg -i` from the GUI
-// depends on a polkit agent being present and leaves the restart to
-// guesswork — the distro package manager (or the Releases page) is the
-// honest update path. Other OSes have no release assets at all.
+// Linux DEB/RPM installs are updated through the package manager or Releases
+// page. Replacing package-owned files would desync the package database;
+// this remains unsupported even when a matching release asset is available.
+// Other OSes have no release assets.
 func platformSelfUpdateSupport() error {
 	return fmt.Errorf("%w: %s installs are updated through the package manager", ErrSelfUpdateUnsupported, runtime.GOOS)
 }

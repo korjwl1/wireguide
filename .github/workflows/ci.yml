@@ -13,8 +13,16 @@ permissions:
 
 jobs:
   linux:
-    name: Linux (test + package)
-    runs-on: ubuntu-latest
+    name: Linux ${{ matrix.arch }} (test + package)
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
 
@@ -50,7 +58,7 @@ jobs:
 
       - name: Go formatting
         run: |
-          unformatted=$(gofmt -l $(git ls-files '*.go'))
+          unformatted=$(git ls-files -z '*.go' | xargs -0 gofmt -l)
           if [ -n "$unformatted" ]; then
             printf '%s\n' "$unformatted"
             exit 1
@@ -67,7 +75,7 @@ jobs:
           sudo unshare --net env WIREGUIDE_TEST_NFT=1 "$RUNNER_TEMP/wireguide-firewall.test" -test.run 'InKernel$' -test.v
 
       - name: Build native Linux binary
-        run: task linux:build ARCH=amd64
+        run: task linux:build ARCH=${{ matrix.arch }}
 
       - name: Native GTK connection icon
         run: WIREGUIDE_TEST_APP_ICON=1 go test -race ./internal/gui -run '^TestNativeApplicationConnectionIcon$' -count=1 -v
@@ -82,7 +90,7 @@ jobs:
 
       - name: Build and inspect DEB
         env:
-          GOARCH: amd64
+          GOARCH: ${{ matrix.arch }}
           GIT_COMMITTER_NAME: WireGuide CI
           GIT_COMMITTER_EMAIL: noreply@example.com
         run: |
@@ -90,14 +98,47 @@ jobs:
           dpkg-deb --info bin/wireguide.deb
           dpkg-deb --contents bin/wireguide.deb
 
+      # Mirrors release.yml's RPM step so a broken overrides.rpm block in
+      # nfpm.yaml fails the PR instead of the tag build.
+      - name: Build and inspect RPM
+        env:
+          GOARCH: ${{ matrix.arch }}
+          GIT_COMMITTER_NAME: WireGuide CI
+          GIT_COMMITTER_EMAIL: noreply@example.com
+        run: |
+          sudo apt-get install -y rpm
+          wails3 tool package -name wireguide -format rpm -config ./build/linux/nfpm/nfpm.yaml -out ./bin
+          rpm -qip bin/wireguide.rpm
+          rpm -qp --requires bin/wireguide.rpm
+          rpm -qp --recommends bin/wireguide.rpm
+          rpm -qpl bin/wireguide.rpm
+
+      - name: Install RPM on Fedora
+        run: |
+          docker run --rm -v "$PWD/bin:/packages:ro" registry.fedoraproject.org/fedora:44 \
+            sh -ec 'dnf -y install /packages/wireguide.rpm; rpm -q wireguide; wireguide ctl --help'
+
       - uses: actions/upload-artifact@v4
         with:
-          name: linux-amd64-ci
+          name: linux-${{ matrix.arch }}-ci
           path: |
             bin/wireguide
             bin/wireguide.deb
+            bin/wireguide.rpm
           if-no-files-found: error
           retention-days: 7
+
+  # Keep the required check name stable while requiring both Linux architectures.
+  linux-status:
+    name: Linux (test + package)
+    needs: linux
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require all Linux architectures to pass
+        env:
+          LINUX_RESULT: ${{ needs.linux.result }}
+        run: test "$LINUX_RESULT" = success
 
   macos:
     name: macOS (test)

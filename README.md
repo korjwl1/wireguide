@@ -134,14 +134,26 @@ privileged helper on demand with administrator authorization.
 > Windows SmartScreen may warn that the publisher is unknown — the binary is
 > currently unsigned. Click "More info" → "Run anyway".
 
-### Linux (DEB)
+### Linux (DEB / RPM)
 
-Download the `WireGuide-linux-amd64.deb` (or `-arm64.deb`) package from
-[Releases](https://github.com/korjwl1/wireguide/releases) and install it:
+Download the package for your distribution from
+[Releases](https://github.com/korjwl1/wireguide/releases) and install it.
+
+Debian / Ubuntu — `WireGuide-linux-amd64.deb` (or `-arm64.deb`):
 
 ```bash
 sudo apt install ./WireGuide-linux-amd64.deb
 ```
+
+Fedora / compatible RPM distributions — `WireGuide-linux-amd64.rpm` (or `-arm64.rpm`):
+
+```bash
+sudo dnf install ./WireGuide-linux-amd64.rpm
+```
+
+RPM installations require GTK 3, WebKitGTK 4.1 and Ayatana AppIndicator.
+On RHEL-family systems, availability depends on the release and enabled repositories.
+Use the package manager to update; the app opens the Releases page for Linux updates.
 
 The package registers the app menu entry and tray integration; the privileged
 helper is started on demand through PolicyKit (no always-on service).
