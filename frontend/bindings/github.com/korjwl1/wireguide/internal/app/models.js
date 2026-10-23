@@ -404,6 +404,13 @@ export class SettingsPatch {
         if (/** @type {any} */(false)) {
             /**
              * @member
+             * @type {string | null | undefined}
+             */
+            this["tunnel_backend"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
              * @type {boolean | null | undefined}
              */
             this["auto_update_check"] = undefined;

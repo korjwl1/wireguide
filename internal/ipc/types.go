@@ -65,6 +65,11 @@ type SetPinInterfaceRequest struct {
 	Enabled bool `json:"enabled"`
 }
 
+// SetTunnelBackendRequest is the parameter for Network.SetTunnelBackend.
+type SetTunnelBackendRequest struct {
+	Backend string `json:"backend"`
+}
+
 // SetHealthCheckRequest is the parameter for Monitor.SetHealthCheck.
 type SetHealthCheckRequest struct {
 	Enabled bool `json:"enabled"`
@@ -172,6 +177,7 @@ type SettingsChangedPayload struct {
 	HealthCheck   *bool   `json:"health_check,omitempty"`
 	PinInterface  *bool   `json:"pin_interface,omitempty"`
 	LogLevel      *string `json:"log_level,omitempty"`
+	TunnelBackend *string `json:"tunnel_backend,omitempty"`
 }
 
 // AutomationPreviewResponse is the read-only result of Automation.Preview:

@@ -30,6 +30,7 @@ func (h *Helper) doConnectHeld(cfg *domain.WireGuardConfig) error {
 // A nil owner denotes manual intent; recovery retains the recorded owner.
 // Ownership is committed with the first successful desired-state snapshot.
 func (h *Helper) doConnectWithOwnerHeld(cfg *domain.WireGuardConfig, owner *string) error {
+	h.applyTunnelBackendSetting()
 	if err := h.manager.PreflightConnect(cfg); err != nil {
 		return err
 	}

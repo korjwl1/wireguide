@@ -147,6 +147,7 @@ const (
 	MethodSetDNSProtection = "Firewall.SetDNSProtection"
 	MethodSetHealthCheck   = "Monitor.SetHealthCheck"
 	MethodSetPinInterface  = "Network.SetPinInterface"
+	MethodSetTunnelBackend = "Network.SetTunnelBackend"
 	MethodReportSSID       = "Wifi.ReportSSID"
 	// MethodAutomationPreview is a read-only dry-run: it evaluates the
 	// current Automation rules against the current network context and

@@ -632,6 +632,15 @@ export function SetPinInterface(enabled) {
 }
 
 /**
+ * SetTunnelBackend selects the data plane for tunnels connected afterwards.
+ * @param {string} backend
+ * @returns {$CancellablePromise<void>}
+ */
+export function SetTunnelBackend(backend) {
+    return $Call.ByID(1967609811, backend);
+}
+
+/**
  * SetTunnelLatencyProbeTarget persists the optional per-tunnel ICMP target
  * used only for latency display. The value is deliberately stored outside the
  * WireGuard .conf so exports remain compatible with other clients.

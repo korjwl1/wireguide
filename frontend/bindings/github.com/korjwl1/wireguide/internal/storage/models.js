@@ -226,6 +226,16 @@ export class Settings {
              */
             this["log_level"] = "";
         }
+        if (!("tunnel_backend" in $$source)) {
+            /**
+             * TunnelBackend selects the WireGuard data plane: "userspace" (wireguard-go
+             * + Wintun, default) or "kernel" (WireGuardNT, Windows only). It applies to
+             * tunnels connected after the setting changes.
+             * @member
+             * @type {string}
+             */
+            this["tunnel_backend"] = "";
+        }
         if (!("compact_list" in $$source)) {
             /**
              * dense tunnel list: hide endpoint line, shorter rows

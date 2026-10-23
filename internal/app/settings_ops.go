@@ -194,6 +194,11 @@ func (s *TunnelService) SetPinInterface(enabled bool) error {
 	return s.call(ipc.MethodSetPinInterface, ipc.SetPinInterfaceRequest{Enabled: enabled}, nil)
 }
 
+// SetTunnelBackend selects the data plane for tunnels connected afterwards.
+func (s *TunnelService) SetTunnelBackend(backend string) error {
+	return s.call(ipc.MethodSetTunnelBackend, ipc.SetTunnelBackendRequest{Backend: backend}, nil)
+}
+
 // SetHealthCheck enables or disables the tunnel health check monitor.
 func (s *TunnelService) SetHealthCheck(enabled bool) error {
 	return s.call(ipc.MethodSetHealthCheck, ipc.SetHealthCheckRequest{Enabled: enabled}, nil)

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/korjwl1/wireguide/internal/ipc"
+	"github.com/korjwl1/wireguide/internal/tunnel"
 	"github.com/korjwl1/wireguide/internal/version"
 	"github.com/korjwl1/wireguide/internal/wifi"
 )
@@ -33,6 +34,7 @@ func (h *Helper) registerHandlers() {
 	h.server.Handle(ipc.MethodSetDNSProtection, h.handleSetDNSProtection)
 	h.server.Handle(ipc.MethodSetHealthCheck, h.handleSetHealthCheck)
 	h.server.Handle(ipc.MethodSetPinInterface, h.handleSetPinInterface)
+	h.server.Handle(ipc.MethodSetTunnelBackend, h.handleSetTunnelBackend)
 	h.server.Handle(ipc.MethodReportSSID, h.handleReportSSID)
 	h.server.Handle(ipc.MethodAutomationPreview, h.handleAutomationPreview)
 }
@@ -207,6 +209,27 @@ func (h *Helper) handleSetPinInterface(params json.RawMessage) (interface{}, err
 		return nil, err
 	}
 	h.server.Broadcast(ipc.EventSettingsChanged, ipc.SettingsChangedPayload{PinInterface: &req.Enabled})
+	return ipc.Empty{}, nil
+}
+
+func (h *Helper) handleSetTunnelBackend(params json.RawMessage) (interface{}, error) {
+	var req ipc.SetTunnelBackendRequest
+	if err := json.Unmarshal(params, &req); err != nil {
+		return nil, err
+	}
+	kind := tunnel.ParseBackendKind(req.Backend)
+	if !kind.Supported() {
+		return nil, fmt.Errorf("tunnel backend %q is not supported on this platform", req.Backend)
+	}
+	// Serialize with Connect/Disconnect: a connect already in flight must
+	// finish before the selection changes, and a connect that starts later
+	// reads the new value from disk. Broadcast the normalized value so the
+	// GUI cannot show a spelling the helper did not accept.
+	h.connectMu.Lock()
+	h.manager.SetBackend(kind)
+	h.connectMu.Unlock()
+	normalized := kind.String()
+	h.server.Broadcast(ipc.EventSettingsChanged, ipc.SettingsChangedPayload{TunnelBackend: &normalized})
 	return ipc.Empty{}, nil
 }
 

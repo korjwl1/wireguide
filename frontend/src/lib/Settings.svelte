@@ -142,6 +142,7 @@
     health_check: false,
     pin_interface: false,
     log_level: 'info',
+    tunnel_backend: 'userspace',
     tray_icon_style: 'color',
     auto_update_check: true,
     compact_list: false,
@@ -150,6 +151,12 @@
   let loadError = "";
   let pendingPatch = {};
   let busyFields = {};
+  // Engine picked while at least one tunnel is connected. Nothing is
+  // persisted until the confirmation dialog is accepted.
+  let pendingBackend = null;
+  // A disconnect invalidates the confirmation's premise; do not leave a
+  // stale pending choice that the user could apply to a later connection.
+  $: if ($connectionStatus?.state !== 'connected') pendingBackend = null;
   let appVersion = '';
   let automationBackup = null;
 
@@ -170,6 +177,7 @@
         settings.health_check = s.health_check ?? false;
         settings.pin_interface = s.pin_interface ?? false;
         settings.log_level = s.log_level || 'info';
+        settings.tunnel_backend = s.tunnel_backend || 'userspace';
         settings.tray_icon_style = s.tray_icon_style || 'color';
         settings.compact_list = s.compact_list ?? false;
         // Legacy settings.json predates this field — *bool null on
@@ -252,6 +260,26 @@
   }
 
   function onLogLevelChange(e) { applyField('log_level', e.target.value); }
+  function onTunnelBackendChange(e) {
+    const next = e.target.value;
+    if ($connectionStatus?.state === 'connected' && next !== settings.tunnel_backend) {
+      pendingBackend = next;
+      // Keep the select on the persisted value until the user confirms.
+      e.target.value = settings.tunnel_backend;
+      return;
+    }
+    applyField('tunnel_backend', next);
+  }
+
+  function confirmBackendChange() {
+    const next = pendingBackend;
+    pendingBackend = null;
+    if (next) applyField('tunnel_backend', next);
+  }
+
+  function cancelBackendChange() {
+    pendingBackend = null;
+  }
   function onKillSwitchChange(e) { applyField('kill_switch', e.target.checked); }
   function onDnsProtectionChange(e) { applyField('dns_protection', e.target.checked); }
   function onPinInterfaceChange(e) { applyField('pin_interface', e.target.checked); }
@@ -267,6 +295,10 @@
     if (p.health_check != null) settings.health_check = p.health_check;
     if (p.pin_interface != null) settings.pin_interface = p.pin_interface;
     if (p.log_level != null) settings.log_level = p.log_level;
+    if (p.tunnel_backend != null) {
+      settings.tunnel_backend = p.tunnel_backend;
+      if (pendingBackend === p.tunnel_backend) pendingBackend = null;
+    }
     settings = settings; // trigger reactivity
   }
 
@@ -478,6 +510,18 @@
                   <span class="toggle-track"></span>
                 </label>
               </div>
+              {#if /Windows/i.test(navigator.userAgent)}
+                <div class="setting-row">
+                  <div class="setting-info">
+                    <label class="setting-label" for="tunnel-backend">{$t('settings.tunnel_backend')}</label>
+                    <p class="setting-desc">{$t('settings.tunnel_backend_hint')}</p>
+                  </div>
+                  <select id="tunnel-backend" disabled={busyFields.tunnel_backend} value={settings.tunnel_backend} on:change={onTunnelBackendChange}>
+                    <option value="userspace">{$t('settings.tunnel_backend_userspace')}</option>
+                    <option value="kernel">{$t('settings.tunnel_backend_kernel')}</option>
+                  </select>
+                </div>
+              {/if}
             </div>
           </div>
 
@@ -576,6 +620,28 @@
       <button type="button" class="btn-close" on:click={close}>{$t('settings.close')}</button>
     </div>
   </div>
+
+  {#if pendingBackend}
+    <div class="confirm-backdrop" use:backdrop={cancelBackendChange}>
+      <div class="confirm-dialog" use:modal={cancelBackendChange} role="dialog" aria-modal="true" aria-labelledby="backend-confirm-title" tabindex="-1">
+        <div class="dialog-header">
+          <div class="dialog-icon-tile">
+            <Icon name="triangle-alert" size={18} strokeWidth={2} />
+          </div>
+          <div class="dialog-header-text">
+            <h3 id="backend-confirm-title">{$t('settings.tunnel_backend_confirm_title')}</h3>
+          </div>
+        </div>
+        <p class="dialog-message">{$t('settings.tunnel_backend_confirm_message', { engine: $t(pendingBackend === 'kernel' ? 'settings.tunnel_backend_kernel' : 'settings.tunnel_backend_userspace') })}</p>
+        <div class="confirm-footer">
+          <button class="dialog-btn dialog-btn-ghost" on:click={cancelBackendChange}>{$t('confirm.no')}</button>
+          <button class="dialog-btn dialog-btn-primary" on:click={confirmBackendChange}>
+            {$t('settings.tunnel_backend_switch')}
+          </button>
+        </div>
+      </div>
+    </div>
+  {/if}
 </div>
 
 <style>
@@ -1115,4 +1181,88 @@
       transition: filter 120ms cubic-bezier(0.2, 0, 0.1, 1);
     }
   }
+
+  /* Engine switch confirmation — sits above the Settings modal (z-index 200). */
+  .confirm-backdrop {
+    position: fixed;
+    inset: 0;
+    background: var(--overlay-bg, rgba(0,0,0,0.45));
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 400;
+  }
+  .confirm-dialog {
+    background: var(--bg-primary);
+    border: 0.5px solid var(--border);
+    border-radius: 14px;
+    padding: 22px 26px 18px;
+    width: 480px;
+    max-width: calc(100vw - 40px);
+    box-sizing: border-box;
+    box-shadow: var(--shadow-lg);
+  }
+  .dialog-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 10px;
+  }
+  .dialog-icon-tile {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 36px;
+    height: 36px;
+    border-radius: 10px;
+    background: color-mix(in srgb, var(--accent) 16%, transparent);
+    color: var(--accent);
+    flex-shrink: 0;
+  }
+  .dialog-header-text { flex: 1; min-width: 0; }
+  .confirm-dialog h3 {
+    margin: 0;
+    color: var(--text-primary);
+    font: 700 15px/20px var(--font-sans);
+    letter-spacing: -0.01em;
+  }
+  .dialog-message {
+    margin: 0 0 18px;
+    font: 13px/19px var(--font-sans);
+    color: var(--text-secondary);
+  }
+  .confirm-footer {
+    display: flex;
+    gap: 8px;
+    justify-content: flex-end;
+    margin-top: 14px;
+  }
+  .dialog-btn {
+    height: 32px;
+    min-width: 76px;
+    padding: 0 16px;
+    border: 0;
+    border-radius: 9px;
+    font: 600 13px/18px var(--font-sans);
+    letter-spacing: -0.005em;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .dialog-btn-ghost {
+    background: var(--bg-card);
+    border: 0.5px solid var(--border);
+    color: var(--text-primary);
+  }
+  .dialog-btn-ghost:hover { background: var(--bg-hover); }
+  .dialog-btn-primary {
+    background: var(--accent);
+    color: #fff;
+    box-shadow:
+      0 1px 3px color-mix(in srgb, var(--accent) 26%, transparent),
+      0 1px 2px rgba(0,0,0,0.08);
+  }
+  .dialog-btn-primary:hover { background: color-mix(in srgb, #fff 8%, var(--accent)); }
+  .dialog-btn-primary:active { background: color-mix(in srgb, #000 8%, var(--accent)); }
 </style>
