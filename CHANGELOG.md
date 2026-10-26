@@ -2,7 +2,7 @@
 
 All notable changes to WireGuide will be documented in this file.
 
-## [0.7.0] - 2026-10-26
+## [0.6.1] - 2026-10-26
 
 ### Added
 - **Optional Windows kernel engine (#59)** - select the official WireGuardNT backend in Settings. The existing userspace engine remains the default. Switching engines while connected requires confirmation and a reconnect.
