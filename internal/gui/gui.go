@@ -252,9 +252,7 @@ func Run(assetsHandler http.Handler, dataDir string) error {
 		if len(trayOffIconWindows) > 0 {
 			tray.SetIcon(trayOffIconWindows)
 		}
-		if runtime.GOOS == "windows" {
-			tray.OnClick(showDock)
-		}
+		tray.OnClick(showDock)
 		tray.SetTooltip("WireGuide")
 	}
 
