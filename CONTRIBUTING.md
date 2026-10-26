@@ -6,8 +6,8 @@ Thanks for your interest in contributing!
 
 ### Prerequisites
 
-- Go 1.26.9+
-- Node.js 20+
+- Go 1.26.10+
+- Node.js 24.22.1+ (`nvm use` selects the version pinned in `.nvmrc`)
 - [Task](https://taskfile.dev/) (`go install github.com/go-task/task/v3/cmd/task@v3.45.4`)
 - [Wails v3](https://v3alpha.wails.io/) (`go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-alpha.74`)
 - macOS 12+ (Apple Silicon), Windows 11, or Linux — all three are supported build/dev hosts
