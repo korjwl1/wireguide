@@ -79,6 +79,11 @@ jobs:
         run: task linux:build ARCH=${{ matrix.arch }}
 
       - name: Native GTK4 connection icon and webview
+        # Hosted runners deny bubblewrap's user-namespace setup. This fixture
+        # serves only an in-memory page and opens no profiles or VPN/helper.
+        # Keep this override in CI; production retains WebKit's sandbox.
+        env:
+          WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS: '1'
         run: WIREGUIDE_TEST_APP_ICON=1 go test -race ./internal/gui -run '^TestNative(ApplicationConnectionIcon|GTK4WebviewRoundTrip)$' -count=1 -v
 
       - name: Check runtime linking
