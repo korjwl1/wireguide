@@ -175,6 +175,14 @@ jobs:
           go test -race ./...
           go vet ./...
 
+      - name: Build macOS application bundle
+        run: |
+          go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-beta.34
+          go install github.com/go-task/task/v3/cmd/task@v3.54.0
+          export PATH="$HOME/go/bin:$PATH"
+          task darwin:package ARCH=arm64
+          codesign --verify --deep --strict bin/wireguide.app
+
   windows:
     name: Windows (test)
     runs-on: windows-latest
