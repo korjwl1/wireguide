@@ -20,8 +20,14 @@ import (
 	"github.com/korjwl1/wireguide/internal/config"
 )
 
-// Engine wraps wireguard-go device and TUN.
+// Engine wraps a WireGuard data plane. The userspace fields below are set
+// for wireguard-go + TUN; kernel is set instead when the Windows
+// WireGuardNT backend is selected. Exactly one of the two is active.
 type Engine struct {
+	// kernel is non-nil when the engine is backed by the Windows kernel
+	// driver. The wireguard-go fields below stay nil in that case.
+	kernel kernelBackend
+
 	tunDevice    tun.Device
 	wgDevice     *device.Device
 	uapiListener net.Listener
@@ -57,11 +63,22 @@ type Engine struct {
 	resolvedEndpoints []string
 }
 
-// NewEngine creates a WireGuard tunnel with a TUN device and starts the WG protocol.
-//
-// The MTU passed in here is the initial value the TUN device is created with.
-// It can be overridden later by the platform network manager's SetMTU.
+// NewEngine creates a userspace WireGuard tunnel with a TUN device and
+// starts the WG protocol. Callers that support backend selection use
+// NewEngineWithBackend instead.
 func NewEngine(cfg *config.WireGuardConfig) (*Engine, error) {
+	return NewEngineWithBackend(cfg, BackendUserspace)
+}
+
+// NewEngineWithBackend creates a tunnel on the requested data plane.
+//
+// The MTU passed in here is the initial value the userspace TUN device is
+// created with. It can be overridden later by the platform network manager's
+// SetMTU. The kernel backend relies on that same platform SetMTU path.
+func NewEngineWithBackend(cfg *config.WireGuardConfig, kind BackendKind) (*Engine, error) {
+	if !kind.Supported() {
+		return nil, fmt.Errorf("WireGuard backend %q is not supported on this platform", kind)
+	}
 	// Validate keys up front — otherwise we'd write `private_key=\n` to the
 	// UAPI config and wireguard-go would reject or misbehave with an empty
 	// key, producing a confusing downstream failure.
@@ -115,6 +132,12 @@ func NewEngine(cfg *config.WireGuardConfig) (*Engine, error) {
 		resolvedCfg.Peers[i].Endpoint = resolved
 		resolvedEndpointIPs = append(resolvedEndpointIPs, ips[0])
 		resolvedEndpoints = append(resolvedEndpoints, net.JoinHostPort(ips[0], port))
+	}
+
+	// The kernel backend owns its adapter lifecycle; the platform network
+	// manager still applies MTU/address/routes to the adapter it creates.
+	if kind == BackendKernel {
+		return newKernelEngine(cfg, &resolvedCfg, resolvedEndpointIPs, resolvedEndpoints)
 	}
 
 	mtu := cfg.Interface.MTU
@@ -283,6 +306,9 @@ func (e *Engine) Start() error {
 	if e == nil {
 		return fmt.Errorf("engine.Start: nil engine")
 	}
+	if e.kernel != nil {
+		return e.kernel.Start()
+	}
 	if e.wgDevice == nil {
 		return nil
 	}
@@ -317,6 +343,12 @@ func (e *Engine) ResolvedEndpoints() []string {
 // turn closes the TUN). Safe for concurrent and repeated calls.
 func (e *Engine) Close() {
 	e.closeOnce.Do(func() {
+		if e.kernel != nil {
+			if err := e.kernel.Close(); err != nil {
+				slog.Warn("closing kernel WireGuard adapter", "interface", e.ifaceName, "error", err)
+			}
+			return
+		}
 		if e.uapiListener != nil {
 			e.uapiListener.Close()
 		}
@@ -336,6 +368,9 @@ func (e *Engine) Close() {
 // need peer stats and don't want to depend on the pipe should use this
 // instead of going through wgctrl.
 func (e *Engine) IpcGet() (string, error) {
+	if e.kernel != nil {
+		return "", fmt.Errorf("UAPI is not available on the kernel backend")
+	}
 	if e.wgDevice == nil {
 		return "", fmt.Errorf("engine wgDevice is nil")
 	}
@@ -345,6 +380,9 @@ func (e *Engine) IpcGet() (string, error) {
 // CurrentEndpointIPs reads live peer endpoints in-process, including peer
 // roaming. It never resolves a hostname through the tunnel's DNS.
 func (e *Engine) CurrentEndpointIPs() ([]string, error) {
+	if e.kernel != nil {
+		return e.kernel.CurrentEndpointIPs()
+	}
 	state, err := e.IpcGet()
 	if err != nil {
 		return nil, err

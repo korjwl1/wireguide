@@ -76,6 +76,11 @@ type Manager struct {
 	// it can be propagated to each newly-created per-tunnel NetworkManager.
 	pinInterface bool
 
+	// backend selects the WireGuard data plane for new connections. It is
+	// read once per Connect, so an in-flight connection keeps the backend it
+	// started with even if the setting changes. Guarded by m.mu.
+	backend BackendKind
+
 	// netMgrFactory creates a fresh NetworkManager for each tunnel.
 	// Defaults to network.NewPlatformManager. Overridable in tests.
 	netMgrFactory func() network.NetworkManager
@@ -162,8 +167,30 @@ func NewManager(dataDir string) *Manager {
 		dataDir:       dataDir,
 		tunnels:       make(map[string]*tunnelEntry),
 		netMgrFactory: func() network.NetworkManager { return network.NewPlatformManager() },
-		engineFactory: NewEngine,
 	}
+}
+
+// SetBackend selects the data plane used by subsequent Connect calls.
+// Connected tunnels keep their current engine until they are disconnected;
+// changing this never tears down live traffic.
+func (m *Manager) SetBackend(kind BackendKind) {
+	if !kind.Supported() {
+		kind = BackendUserspace
+	}
+	m.mu.Lock()
+	m.backend = kind
+	m.mu.Unlock()
+}
+
+// backendKind returns the selected data plane, defaulting to userspace for
+// zero-value Managers and tests.
+func (m *Manager) backendKind() BackendKind {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.backend == "" {
+		return BackendUserspace
+	}
+	return m.backend
 }
 
 // SetEndpointProtector wires the optional always-on loop protection

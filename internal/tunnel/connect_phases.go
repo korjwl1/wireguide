@@ -43,7 +43,10 @@ func (m *Manager) connectPhases(ctx context.Context, cfg *domain.WireGuardConfig
 	// 2. Engine
 	factory := m.engineFactory
 	if factory == nil {
-		factory = NewEngine
+		backend := m.backendKind()
+		factory = func(cfg *domain.WireGuardConfig) (*Engine, error) {
+			return NewEngineWithBackend(cfg, backend)
+		}
 	}
 	engine, err := factory(cfg)
 	if err != nil {
@@ -146,10 +149,14 @@ func (m *Manager) connectPhases(ctx context.Context, cfg *domain.WireGuardConfig
 	// the first handshake. IP_UNICAST_IF constrains outer-packet routing
 	// to that underlay; no underlay means dropped sends. A failed bind
 	// fails Connect, rather than leaving an unprotected socket running.
+	// The kernel backend owns its UDP socket inside the driver, so there is
+	// no userspace bind to pin. Its bind field is nil; skip the pin phase.
 	var pinErr error
-	engine.SocketPinV4, engine.SocketPinV6, pinErr = pinSocketToPhysical(engine.bind, ifaceName)
-	if pinErr != nil {
-		return nil, rollback(newTunnelError(ErrNetwork, "protecting WireGuard UDP sockets", pinErr))
+	if engine.bind != nil {
+		engine.SocketPinV4, engine.SocketPinV6, pinErr = pinSocketToPhysical(engine.bind, ifaceName)
+		if pinErr != nil {
+			return nil, rollback(newTunnelError(ErrNetwork, "protecting WireGuard UDP sockets", pinErr))
+		}
 	}
 
 	// 6. Routes + endpoint bypass.
@@ -356,7 +363,10 @@ func (m *Manager) disconnectPhases(cfg *domain.WireGuardConfig, engine *Engine, 
 	// internet permanently broken until I reconnect". Defang the
 	// lingering adapter by clearing its DNS and bumping its metric
 	// BEFORE we hand the close to wireguard-go.
-	if netMgr != nil {
+	// Wintun adapters linger for seconds after close; deprioritize them
+	// before teardown. A WireGuardNT adapter is removed synchronously by
+	// CloseAdapter, so the workaround is unnecessary there.
+	if netMgr != nil && engine.kernel == nil {
 		if pc, ok := netMgr.(network.PreCloseCleaner); ok {
 			tsPre := time.Now()
 			pc.PreCloseAdapterCleanup(ifaceName)

@@ -19,6 +19,13 @@ vars:
   WINTUN_VERSION: "0.14.1"
   WINTUN_SHA256: "07c256185d6ee3652e09fa55c0b673e2624b565e02c4b9091c79ca7d2f24ef51"
 
+  # wireguard.dll — WireGuardNT kernel driver library, loaded from the EXE
+  # directory only when the kernel backend is selected. The official prebuilt
+  # binary's license permits redistribution alongside an app that uses only
+  # the public API. SHA256 of the upstream wireguard-nt ZIP.
+  WIREGUARDNT_VERSION: "1.1"
+  WIREGUARDNT_SHA256: "dceb30a9bc4be48cce0f74160fc88a585a2c2627366e8f846fc6658f9038dace"
+
 tasks:
   build:
     summary: Builds the application for Windows
@@ -49,6 +56,9 @@ tasks:
       - task: vendor:wintun
         vars:
           ARCH: '{{.ARCH | default ARCH}}'
+      - task: vendor:wireguardnt
+        vars:
+          ARCH: '{{.ARCH | default ARCH}}'
     cmds:
       - task: generate:syso
       - go build {{.BUILD_FLAGS}} -o "{{.BIN_DIR}}/{{.APP_NAME}}.exe"
@@ -72,6 +82,9 @@ tasks:
       - task: common:build:frontend
       - task: common:generate:icons
       - task: vendor:wintun
+        vars:
+          ARCH: '{{.ARCH | default "amd64"}}'
+      - task: vendor:wireguardnt
         vars:
           ARCH: '{{.ARCH | default "amd64"}}'
     preconditions:
@@ -144,6 +157,27 @@ tasks:
       - cmd: powershell -NoProfile -ExecutionPolicy Bypass -File "{{.ROOT_DIR}}/build/windows/scripts/vendor-wintun.ps1" -Version "{{.WINTUN_VERSION}}" -Sha256 "{{.WINTUN_SHA256}}" -Arch "{{.ARCH}}" -OutDir "{{.ROOT_DIR}}/{{.BIN_DIR}}"
         platforms: [windows]
       - cmd: bash "{{.ROOT_DIR}}/build/windows/scripts/vendor-wintun.sh" "{{.WINTUN_VERSION}}" "{{.WINTUN_SHA256}}" "{{.ARCH}}" "{{.ROOT_DIR}}/{{.BIN_DIR}}"
+        platforms: [linux, darwin]
+
+  vendor:wireguardnt:
+    summary: Fetches the official WireGuardNT wireguard.dll into bin/
+    desc: |
+      The kernel backend loads wireguard.dll from the EXE directory. The DLL
+      ships the signed WireGuardNT driver and loads it on demand when the
+      first adapter is created. Published at
+      https://download.wireguard.com/wireguard-nt/ and pinned here by SHA256.
+    internal: true
+    vars:
+      ARCH: '{{.ARCH | default ARCH}}'
+    # The stamp carries the arch and pin. Checking only the DLL would keep a
+    # stale binary after a version or architecture change.
+    status:
+      - test -f "{{.ROOT_DIR}}/{{.BIN_DIR}}/wireguard.dll"
+      - test -f "{{.ROOT_DIR}}/{{.BIN_DIR}}/wireguardnt-{{.ARCH}}-{{.WIREGUARDNT_VERSION}}-{{.WIREGUARDNT_SHA256}}"
+    cmds:
+      - cmd: powershell -NoProfile -ExecutionPolicy Bypass -File "{{.ROOT_DIR}}/build/windows/scripts/vendor-wireguardnt.ps1" -Version "{{.WIREGUARDNT_VERSION}}" -Sha256 "{{.WIREGUARDNT_SHA256}}" -Arch "{{.ARCH}}" -OutDir "{{.ROOT_DIR}}/{{.BIN_DIR}}"
+        platforms: [windows]
+      - cmd: bash "{{.ROOT_DIR}}/build/windows/scripts/vendor-wireguardnt.sh" "{{.WIREGUARDNT_VERSION}}" "{{.WIREGUARDNT_SHA256}}" "{{.ARCH}}" "{{.ROOT_DIR}}/{{.BIN_DIR}}"
         platforms: [linux, darwin]
 
   create:nsis:installer:

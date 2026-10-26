@@ -110,6 +110,12 @@ Section
     # TUN creation. Bundled here by `task vendor:wintun` during build.
     File "..\..\..\bin\wintun.dll"
 
+    # The kernel backend loads wireguard.dll from the EXE directory. Bundled
+    # here by `task vendor:wireguardnt` during build, together with the
+    # license notice the official prebuilt binaries are distributed under.
+    File "..\..\..\bin\wireguard.dll"
+    File "..\..\..\bin\wireguard-nt-LICENSE.txt"
+
     CreateShortcut "$SMPROGRAMS\${INFO_PRODUCTNAME}.lnk" "$INSTDIR\${PRODUCT_EXECUTABLE}"
     CreateShortCut "$DESKTOP\${INFO_PRODUCTNAME}.lnk" "$INSTDIR\${PRODUCT_EXECUTABLE}"
 

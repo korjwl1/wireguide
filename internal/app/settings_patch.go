@@ -7,6 +7,7 @@ import (
 
 	"github.com/korjwl1/wireguide/internal/autostart"
 	"github.com/korjwl1/wireguide/internal/storage"
+	"github.com/korjwl1/wireguide/internal/tunnel"
 )
 
 // SettingsPatch owns only explicitly changed preferences. Automation has its
@@ -21,6 +22,7 @@ type SettingsPatch struct {
 	HealthCheck     *bool   `json:"health_check,omitempty"`
 	PinInterface    *bool   `json:"pin_interface,omitempty"`
 	LogLevel        *string `json:"log_level,omitempty"`
+	TunnelBackend   *string `json:"tunnel_backend,omitempty"`
 	AutoUpdateCheck *bool   `json:"auto_update_check,omitempty"`
 	CompactList     *bool   `json:"compact_list,omitempty"`
 	ListSort        *string `json:"list_sort,omitempty"`
@@ -38,6 +40,7 @@ func (p SettingsPatch) apply(s *storage.Settings) {
 	assignSetting(&s.HealthCheck, p.HealthCheck)
 	assignSetting(&s.PinInterface, p.PinInterface)
 	assignSetting(&s.LogLevel, p.LogLevel)
+	assignSetting(&s.TunnelBackend, p.TunnelBackend)
 	assignSetting(&s.CompactList, p.CompactList)
 	assignSetting(&s.ListSort, p.ListSort)
 	assignSetting(&s.ListActiveOnTop, p.ListActiveOnTop)
@@ -58,6 +61,17 @@ func assignSetting[T any](target *T, value *T) {
 // requested side effects. Apply failures are explicit; stored intent remains
 // available for retry/recovery, matching the helper's wanted/applied model.
 func (s *TunnelService) UpdateSettings(p SettingsPatch) error {
+	// Reject an unsupported data plane before persisting it. Storing "kernel"
+	// on a platform that cannot use it would leave the UI showing a backend
+	// the helper silently replaces with userspace on the next connect.
+	if p.TunnelBackend != nil {
+		kind := tunnel.ParseBackendKind(*p.TunnelBackend)
+		if !kind.Supported() {
+			return fmt.Errorf("tunnel backend %q is not supported on this platform", *p.TunnelBackend)
+		}
+		normalized := kind.String()
+		p.TunnelBackend = &normalized
+	}
 	var previous, current storage.Settings
 	if err := s.settingsStore.Update(func(settings *storage.Settings) error {
 		previous = *settings
@@ -104,6 +118,9 @@ func (s *TunnelService) UpdateSettings(p SettingsPatch) error {
 	}
 	if p.LogLevel != nil {
 		apply("log level", func() error { return s.SetLogLevel(current.LogLevel) })
+	}
+	if p.TunnelBackend != nil {
+		apply("tunnel backend", func() error { return s.SetTunnelBackend(current.TunnelBackend) })
 	}
 	if p.AutoUpdateCheck != nil && !previous.AutoUpdateCheckEnabled() && current.AutoUpdateCheckEnabled() && s.updateScheduler != nil {
 		s.updateScheduler.Kick(true)

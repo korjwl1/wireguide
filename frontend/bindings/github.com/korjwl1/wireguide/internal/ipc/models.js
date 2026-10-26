@@ -148,6 +148,13 @@ export class SettingsChangedPayload {
              */
             this["log_level"] = undefined;
         }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {string | null | undefined}
+             */
+            this["tunnel_backend"] = undefined;
+        }
 
         Object.assign(this, $$source);
     }
