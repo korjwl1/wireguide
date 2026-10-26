@@ -2,6 +2,31 @@
 
 All notable changes to WireGuide will be documented in this file.
 
+## [0.6.1] - 2026-10-26
+
+### Added
+- **Optional Windows kernel engine (#59)** - select the official WireGuardNT backend in Settings. The existing userspace engine remains the default. Switching engines while connected requires confirmation and a reconnect.
+- **Linux RPM packages (#47)** - native amd64 and arm64 packages, distribution-appropriate dependencies, and package-format selection in the update checker.
+- **Simplified Chinese (#58)** - translated application settings and Windows native interface text.
+
+### Changed
+- **Desktop dependencies (#61)** - update Wails and its JavaScript runtime to beta.34, Go to 1.26.10, Node.js to the current 24 LTS patch, and frontend/build dependencies. The Go update fixes a reachable certificate-verification vulnerability; wireguard-go includes the latest handshake and IPv6 length fixes.
+- **Linux desktop** - move to GTK4 and WebKitGTK 6.0, adapt connection icons, and restore the main window when the StatusNotifier tray icon is activated.
+
+### Fixed
+- **WireGuardNT configuration** - preserve IPv4-mapped IPv6 AllowedIPs and scoped IPv6 endpoint addresses; keep adapter-handle access synchronized and retry configuration snapshots safely.
+- **Windows packaging** - bundle the official WireGuardNT runtime and license, and refresh the vendored runtime when its architecture or pinned version changes.
+
+### Upgrade notes
+- **Linux now requires GTK4 and WebKitGTK 6.0**, available on Ubuntu 24.04+ and Debian 13+. Older GTK3-only installations must upgrade their distribution before installing this release. The tray uses the session D-Bus StatusNotifierItem interface.
+- Existing Windows installations continue to use wireguard-go unless the kernel engine is selected. macOS 12 remains supported; the Go toolchain stays on the 1.26 patch line to retain that baseline.
+- macOS applications remain ad-hoc signed. Windows Authenticode signing depends on SignPath availability. Every release publishes SHA256SUMS and an Ed25519 signature for verified in-app updates.
+
+### Verification
+- CI covered Windows and macOS tests, production Windows installer and macOS bundle builds, and Linux amd64/arm64 race tests, isolated nftables recovery, native GTK4/Xvfb icon and webview event checks, D-Bus tray activation, DEB/RPM inspection, and Fedora RPM installation.
+- Native Windows 11 checks covered both VPN engines with HTTPS, DNS protection and kill-switch blocking/recovery, plus the actual application window, settings persistence through restart, UI-driven connection, and close-to-tray/window restoration without interrupting the VPN. Original user settings and tunnel configurations were restored unchanged.
+- Windows ARM64 was cross-built; physical ARM64 Windows, Linux Wayland desktop behavior and a new end-to-end installed-upgrade cycle were not exercised in this release's runtime checks.
+
 ## [0.6.0] - 2026-10-21
 
 ### Added
