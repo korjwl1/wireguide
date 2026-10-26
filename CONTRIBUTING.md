@@ -6,11 +6,16 @@ Thanks for your interest in contributing!
 
 ### Prerequisites
 
-- Go 1.26.9+
-- Node.js 20+
-- [Task](https://taskfile.dev/) (`go install github.com/go-task/task/v3/cmd/task@v3.45.4`)
-- [Wails v3](https://v3alpha.wails.io/) (`go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-alpha.74`)
+- Go 1.26.10+
+- Node.js 24.22.1+ (`nvm use` selects the version pinned in `.nvmrc`)
+- [Task](https://taskfile.dev/) (`go install github.com/go-task/task/v3/cmd/task@v3.54.0`)
+- [Wails v3](https://v3.wails.io/) (`go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-beta.34`)
 - macOS 12+ (Apple Silicon), Windows 11, or Linux — all three are supported build/dev hosts
+
+Linux desktop builds use GTK4 and WebKitGTK 6.0. On Ubuntu 24.04+ install
+`libgtk-4-dev libwebkitgtk-6.0-dev`; the tray uses the session D-Bus
+StatusNotifierItem interface. Go stays on the supported 1.26 patch line to
+preserve macOS 12 support (Go 1.27 requires macOS 13).
 
 ### Build & Run
 

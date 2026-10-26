@@ -24,11 +24,11 @@ contents:
   - src: "./build/linux/wireguide.desktop"
     dst: "/usr/share/applications/wireguide.desktop"
 
-# Wails v3 alpha.74 uses GTK3 and the WebKitGTK 4.1 API on Linux.
+# Wails v3 beta uses GTK4/WebKitGTK 6.0. Its tray uses StatusNotifierItem
+# over the session D-Bus connection and does not load GTK3 AppIndicator.
 depends:
-  - libgtk-3-0
-  - libwebkit2gtk-4.1-0
-  - libayatana-appindicator3-1
+  - libgtk-4-1
+  - libwebkitgtk-6.0-4
   - iproute2
   - nftables
   - pkexec | policykit-1
@@ -49,9 +49,8 @@ overrides:
   # RPM package names used by current Fedora/RHEL-family distributions.
   rpm:
     depends:
-      - gtk3
-      - webkit2gtk4.1
-      - libayatana-appindicator-gtk3
+      - gtk4
+      - webkitgtk6.0
       - polkit
       - iproute
       - nftables
@@ -63,9 +62,8 @@ overrides:
   # Arch Linux package names.
   archlinux:
     depends:
-      - gtk3
-      - webkit2gtk-4.1
-      - libayatana-appindicator
+      - gtk4
+      - webkitgtk-6.0
       - polkit
       - iproute2
       - nftables

@@ -1,7 +1,8 @@
 # Linux verification plan
 
 Target baseline: Debian 13 / Raspberry Pi OS, ARM64, Wayland (`labwc`) and
-WayVNC. CI baseline: Ubuntu latest, AMD64.
+WayVNC. The Wails beta build requires GTK4 and WebKitGTK 6.0 (for example,
+Ubuntu 24.04+ or Debian 13). CI covers both AMD64 and ARM64.
 
 ## Automated gate
 
@@ -77,7 +78,7 @@ kill-switch defect can sever the SSH/VNC session used to test it.
 | Wi-Fi identity | NetworkManager + `/proc` ARP | CoreWLAN | WLAN/IP Helper APIs |
 | Sleep/network events | logind + netlink | IOKit/SystemConfiguration | Windows notifications |
 | Autostart | XDG desktop entry | LaunchAgent | registry Run key |
-| Desktop shell | GTK/WebKitGTK + AppIndicator | AppKit/WebKit | WebView2/tray |
+| Desktop shell | GTK4/WebKitGTK 6.0 + D-Bus StatusNotifierItem | AppKit/WebKit | WebView2/tray |
 
 For every platform-sensitive test, compare the observable contract rather
 than the implementation: identical tunnel status, route/DNS cleanup, reconnect

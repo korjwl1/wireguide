@@ -1,16 +1,15 @@
 #include <gtk/gtk.h>
 
-static int wgSetWindowConnectionIcon(void *window, const void *bytes, size_t count) {
-    if (window == NULL || bytes == NULL || count == 0) return 0;
-    GdkPixbufLoader *loader = gdk_pixbuf_loader_new();
-    gboolean ok = gdk_pixbuf_loader_write(loader, bytes, count, NULL);
-    gboolean closed = gdk_pixbuf_loader_close(loader, NULL);
-    ok = ok && closed;
-    if (ok) {
-        GdkPixbuf *image = gdk_pixbuf_loader_get_pixbuf(loader);
-        if (image != NULL) gtk_window_set_icon(GTK_WINDOW(window), image);
-        else ok = FALSE;
+static int wgSetWindowConnectionIcon(void *window, const char *directory, const char *name) {
+    if (window == NULL || directory == NULL || name == NULL) return 0;
+    GtkIconTheme *theme = gtk_icon_theme_get_for_display(gtk_widget_get_display(GTK_WIDGET(window)));
+    if (theme == NULL) return 0;
+    const char *previous = g_object_get_data(G_OBJECT(theme), "wireguide-icon-directory");
+    if (g_strcmp0(previous, directory) != 0) {
+        gtk_icon_theme_add_search_path(theme, directory);
+        g_object_set_data_full(G_OBJECT(theme), "wireguide-icon-directory", g_strdup(directory), g_free);
     }
-    g_object_unref(loader);
-    return ok;
+    if (!gtk_icon_theme_has_icon(theme, name)) return 0;
+    gtk_window_set_icon_name(GTK_WINDOW(window), name);
+    return 1;
 }
