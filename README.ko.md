@@ -66,7 +66,7 @@ brew install --cask wireguide
 [Releases](https://github.com/korjwl1/wireguide/releases)에서 배포판에 맞는 패키지를
 다운로드 후 설치합니다.
 
-Debian / Ubuntu — `WireGuide-linux-amd64.deb` (또는 `-arm64.deb`):
+Debian 13+ / Ubuntu 24.04+ — `WireGuide-linux-amd64.deb` (또는 `-arm64.deb`):
 
 ```bash
 sudo apt install ./WireGuide-linux-amd64.deb
@@ -78,7 +78,7 @@ Fedora / 호환 RPM 배포판 — `WireGuide-linux-amd64.rpm` (또는 `-arm64.rp
 sudo dnf install ./WireGuide-linux-amd64.rpm
 ```
 
-RPM 설치에는 GTK 3, WebKitGTK 4.1, Ayatana AppIndicator가 필요합니다.
+RPM 설치에는 GTK 4와 WebKitGTK 6.0이 필요합니다.
 RHEL 계열에서는 버전과 활성화한 저장소에 따라 의존성 제공 여부가 다릅니다.
 업데이트는 패키지 관리자로 진행하며, 앱에서는 Linux 업데이트 시 Releases 페이지를 엽니다.
 
@@ -89,8 +89,8 @@ PolicyKit을 통해 필요할 때만 기동됩니다.
 
 ```bash
 brew install go node
-go install github.com/go-task/task/v3/cmd/task@v3.45.4
-go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-alpha.74
+go install github.com/go-task/task/v3/cmd/task@v3.54.0
+go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-beta.34
 
 task build
 ./bin/wireguide

@@ -105,7 +105,7 @@ export function ClearConnectionHistory() {
  * CloseHistorySessions closes any open history sessions with the given reason.
  * Called from gui.Run during shutdown so the UI doesn't show phantom "Active"
  * rows after a quit.
- *
+ * 
  * Single GetStatus probe — the previous one-IPC-per-session pattern made
  * shutdown latency scale linearly with active tunnel count. The status
  * response carries every active tunnel's rx/tx, so one round-trip is enough.
@@ -122,7 +122,7 @@ export function CloseHistorySessions(reason) {
 /**
  * Connect loads a tunnel config from local storage and asks the helper to
  * bring it up. The helper re-validates server-side.
- *
+ * 
  * Session lifecycle is owned entirely by ReconcileHistoryFromStatus —
  * opening here would race the helper's StateConnecting status broadcast,
  * which already includes the tunnel name in ActiveTunnels. The race
@@ -151,7 +151,7 @@ export function DeleteTunnel(name) {
  * Disconnect tears down whatever tunnel the helper currently has active.
  * If the call fails with a "client closed" error (the health monitor may have
  * swapped the client during a recovery), retry once with the fresh client.
- *
+ * 
  * We mark lastKnownStats with reason "user" so the upcoming Reconcile (after
  * the next status event with the tunnel gone) labels the closed session as
  * a user disconnect. Existing fresh rx/tx counters from Reconcile's per-tick
@@ -469,19 +469,19 @@ export function ReadFile(path) {
  * ReconcileHistoryFromStatus is the SINGLE source of truth for opening and
  * closing history sessions. The event bridge calls it on every status event;
  * it diffs the active set against activeSessions and:
- *
+ * 
  *   - opens a session for any active tunnel not currently tracked (covers
  *     both user-initiated Connect and helper-driven auto-reconnect / wifi
  *     rules engine / sleep-wake)
  *   - closes a session for any tracked tunnel that has disappeared (using
  *     cached rx/tx + cached reason from lastKnownStats; falls back to
  *     disappearReason — defaults to "reconnect")
- *
+ * 
  * Stats cache is always refreshed for currently-active tunnels so disconnect
  * closes have ≤ 1 status-event-tick stale counters. Reason hints set by
  * user-initiated Disconnect / DisconnectTunnel are preserved across cache
  * refreshes — only LoadAndDelete on close clears them.
- *
+ * 
  * Fast-path: if the sorted active set hasn't changed since the prior call
  * (the steady-state case at 1 Hz), we skip the activeSessions Range and the
  * open-session loop. The stats cache still gets updated so the eventual
@@ -499,12 +499,12 @@ export function ReconcileHistoryFromStatus(activeNames, rxByTunnel, txByTunnel, 
 /**
  * RenameTunnel changes a tunnel's name. Rejects rename of the connected
  * tunnel since the interface name is derived from it.
- *
+ * 
  * Routes through the helper's Tunnel.Rename so the active-tunnel check and
  * the file rename both happen under the helper's connectMu — closing the
  * race where a Connect arriving between the GUI's check and the rename
  * could leave the new name in activeCfgs while the file path moved.
- *
+ * 
  * Falls back to a direct local rename if the helper rejects the method
  * (older helper that hasn't been upgraded yet).
  * @param {string} oldName
@@ -531,14 +531,21 @@ export function RunDNSLeakTest() {
 
 /**
  * RunUpdate performs the update end-to-end:
- *
+ * 
  *   - Homebrew installs → `brew update && brew upgrade --cask wireguide`,
  *     then verifying the installed version and restarting the app.
- *   - Non-brew installs → open the GitHub Releases page in the browser.
- *     Auto-replacing an un-notarised `.app` bundle needs sudo and races
- *     with Gatekeeper quarantining of the new binary; redirecting the
- *     user to the download page is the honest path for an indie macOS
- *     app without an Apple Developer account.
+ *   - Direct-download installs (Windows NSIS install, macOS .app in a
+ *     user-writable folder) → update.Apply: re-fetch the release in the
+ *     backend, download, verify SHA256SUMS + its Ed25519 signature, then
+ *     run the silent installer (Windows) or swap the bundle (macOS) and
+ *     relaunch. Verification failures are returned as errors — never
+ *     "fixed" by falling back to anything else.
+ *   - Installs that can't replace themselves (Linux packages, portable or
+ *     dev binaries, translocated / read-only bundles) → open the GitHub
+ *     Releases page in the browser.
+ * 
+ * Only info.Version is taken from the caller: info arrives as JSON from
+ * the frontend, so the download URLs and hashes are re-derived by Apply.
  * @param {update$0.UpdateInfo | null} info
  * @returns {$CancellablePromise<void>}
  */
@@ -656,7 +663,7 @@ export function SetTunnelLatencyProbeTarget(name, target) {
  * SetTunnelNotes persists a freeform note for a tunnel. Empty notes still
  * write an empty .meta.json — that matches the contract the frontend
  * expects (write always succeeds, no special-case for "clear").
- *
+ * 
  * Existence check first to avoid orphaning a .meta.json sidecar after the
  * .conf was deleted: TunnelDetail's onDestroy can fire-and-forget a
  * pending-edit flush after the user deletes a tunnel, and writing the

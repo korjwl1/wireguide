@@ -9,9 +9,6 @@ import { Create as $Create } from "@wailsio/runtime";
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
 import * as automation$0 from "../automation/models.js";
-// eslint-disable-next-line @typescript-eslint/ban-ts-comment
-// @ts-ignore: Unused imports
-import * as time$0 from "../../../../../time/models.js";
 
 export class AutomationBackupStatus {
     /**
@@ -93,14 +90,14 @@ export class Session {
         if (!("start_time" in $$source)) {
             /**
              * @member
-             * @type {time$0.Time}
+             * @type {string}
              */
-            this["start_time"] = null;
+            this["start_time"] = "0001-01-01T00:00:00.000Z";
         }
         if (/** @type {any} */(false)) {
             /**
              * @member
-             * @type {time$0.Time | null | undefined}
+             * @type {string | null | undefined}
              */
             this["end_time"] = undefined;
         }
@@ -158,7 +155,7 @@ export class Settings {
     constructor($$source = {}) {
         if (!("language" in $$source)) {
             /**
-             * "auto", "en", "ko", "ja"
+             * "auto", "en", "ko", "ja", "zh"
              * @member
              * @type {string}
              */
@@ -315,10 +312,10 @@ export class Settings {
      * @returns {Settings}
      */
     static createFrom($$source = {}) {
-        const $$createField14_0 = $$createType0;
+        const $$createField15_0 = $$createType0;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("wifi_rules" in $$parsedSource) {
-            $$parsedSource["wifi_rules"] = $$createField14_0($$parsedSource["wifi_rules"]);
+            $$parsedSource["wifi_rules"] = $$createField15_0($$parsedSource["wifi_rules"]);
         }
         return new Settings(/** @type {Partial<Settings>} */($$parsedSource));
     }

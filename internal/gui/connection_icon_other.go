@@ -1,4 +1,4 @@
-//go:build !windows && !darwin && (!linux || !cgo || gtk4)
+//go:build !windows && !darwin && (!linux || !cgo || gtk3)
 
 package gui
 

@@ -140,7 +140,7 @@ privileged helper on demand with administrator authorization.
 Download the package for your distribution from
 [Releases](https://github.com/korjwl1/wireguide/releases) and install it.
 
-Debian / Ubuntu — `WireGuide-linux-amd64.deb` (or `-arm64.deb`):
+Debian 13+ / Ubuntu 24.04+ — `WireGuide-linux-amd64.deb` (or `-arm64.deb`):
 
 ```bash
 sudo apt install ./WireGuide-linux-amd64.deb
@@ -152,7 +152,7 @@ Fedora / compatible RPM distributions — `WireGuide-linux-amd64.rpm` (or `-arm6
 sudo dnf install ./WireGuide-linux-amd64.rpm
 ```
 
-RPM installations require GTK 3, WebKitGTK 4.1 and Ayatana AppIndicator.
+RPM installations require GTK 4 and WebKitGTK 6.0.
 On RHEL-family systems, availability depends on the release and enabled repositories.
 Use the package manager to update; the app opens the Releases page for Linux updates.
 
@@ -177,8 +177,8 @@ and choose Retry; reinstalling does not override that choice.
 
 ```bash
 brew install go node
-go install github.com/go-task/task/v3/cmd/task@v3.45.4
-go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-alpha.74
+go install github.com/go-task/task/v3/cmd/task@v3.54.0
+go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-beta.34
 
 task build
 ./bin/wireguide

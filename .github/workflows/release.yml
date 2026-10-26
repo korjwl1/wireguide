@@ -29,7 +29,7 @@ jobs:
     # to bump one of these would ship an update nobody can install.
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7.0.1
       - name: Compare version files with the tag
         run: |
           tag="${GITHUB_REF_NAME#v}"
@@ -55,20 +55,20 @@ jobs:
     # build from source.
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7.0.1
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7.0.0
         with:
-          go-version: '1.26.10'
+          go-version-file: 'go.mod'
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7.1.0
         with:
           node-version-file: '.nvmrc'
 
       - name: Install wails3 + task
         run: |
-          go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-alpha.74
-          go install github.com/go-task/task/v3/cmd/task@v3.45.4
+          go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-beta.34
+          go install github.com/go-task/task/v3/cmd/task@v3.54.0
           echo "$HOME/go/bin" >> "$GITHUB_PATH"
 
       - name: Build .app bundle (ad-hoc signed)
@@ -84,7 +84,7 @@ jobs:
           cd bin
           ditto -c -k --sequesterRsrc --keepParent wireguide.app "WireGuide-darwin-arm64.zip"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7.0.2
         with:
           name: macos-arm64
           path: bin/WireGuide-darwin-arm64.zip
@@ -109,21 +109,21 @@ jobs:
       contents: read
       actions: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7.0.1
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7.0.0
         with:
-          go-version: '1.26.10'
+          go-version-file: 'go.mod'
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7.1.0
         with:
           node-version-file: '.nvmrc'
 
       - name: Install wails3 + task
         shell: pwsh
         run: |
-          go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-alpha.74
-          go install github.com/go-task/task/v3/cmd/task@v3.45.4
+          go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-beta.34
+          go install github.com/go-task/task/v3/cmd/task@v3.54.0
           # Append, don't overwrite — PATH already has system entries.
           "$env:USERPROFILE\go\bin" | Out-File -FilePath $env:GITHUB_PATH -Append
 
@@ -190,7 +190,7 @@ jobs:
       - name: Upload unsigned installer for SignPath
         if: steps.signpath-cfg.outputs.enabled == 'true'
         id: upload-unsigned
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7.0.2
         with:
           # transient name — the final published artifact stays
           # 'windows-${{ matrix.arch }}' and contains the signed exe;
@@ -208,7 +208,7 @@ jobs:
         # privileged step in the workflow, so a compromised tag retag
         # would be a direct supply-chain path to a signed-binary forgery.
         # Update by bumping the SHA + the trailing `# v2.x.y` comment.
-        uses: signpath/github-action-submit-signing-request@b9d91eadd323de506c0c81cf0c7fe7438f3360fd  # v2
+        uses: signpath/github-action-submit-signing-request@c92b958760219087e01f8d67a1669ed57afe2627  # v2
         with:
           api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
           organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
@@ -237,7 +237,7 @@ jobs:
           grep -q '^Valid' /tmp/sigstatus
       # --- end signing -------------------------------------------------
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7.0.2
         with:
           name: windows-${{ matrix.arch }}
           path: bin/WireGuide-windows-${{ matrix.arch }}.exe
@@ -259,25 +259,25 @@ jobs:
             runner: ubuntu-24.04-arm
     runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7.0.1
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7.0.0
         with:
-          go-version: '1.26.10'
+          go-version-file: 'go.mod'
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7.1.0
         with:
           node-version-file: '.nvmrc'
 
       - name: Install Linux build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev
+          sudo apt-get install -y libgtk-4-dev libwebkitgtk-6.0-dev
 
       - name: Install wails3 + task
         run: |
-          go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-alpha.74
-          go install github.com/go-task/task/v3/cmd/task@v3.45.4
+          go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-beta.34
+          go install github.com/go-task/task/v3/cmd/task@v3.54.0
           echo "$HOME/go/bin" >> "$GITHUB_PATH"
 
       - name: Build native Linux binary
@@ -320,7 +320,7 @@ jobs:
           rpm -qpl bin/wireguide.rpm
           mv bin/wireguide.rpm "bin/WireGuide-linux-${{ matrix.arch }}.rpm"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7.0.2
         with:
           name: linux-${{ matrix.arch }}
           path: |
@@ -334,7 +334,7 @@ jobs:
     needs: [build-macos, build-windows, build-linux]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7.0.1
         with:
           # git-cliff needs the full history + all tags to compute the
           # commit range since the previous release. Shallow clone (the
@@ -342,7 +342,7 @@ jobs:
           # out empty.
           fetch-depth: 0
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8.0.2
         with:
           path: artifacts
           merge-multiple: true  # flattens platform sub-dirs into one folder
@@ -362,9 +362,9 @@ jobs:
           sha256sum -- * > SHA256SUMS
           cat SHA256SUMS
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7.0.0
         with:
-          go-version: '1.26.10'
+          go-version-file: 'go.mod'
 
       - name: Sign SHA256SUMS (Ed25519)
         # HARD failure when the key is missing or mismatched — every
@@ -393,7 +393,7 @@ jobs:
         # auto-generated body was nearly empty (v0.3.0 shipped showing
         # one bullet despite ~30 commits). git-cliff reads the actual
         # git log, grouped by subject-line prefix per cliff.toml.
-        uses: orhun/git-cliff-action@v4
+        uses: orhun/git-cliff-action@v4.9.1
         with:
           config: cliff.toml
           args: --latest --strip header
@@ -423,7 +423,7 @@ jobs:
           PY
 
       - name: Publish release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3.0.3
         with:
           files: artifacts/*
           draft: false
@@ -454,7 +454,7 @@ jobs:
 
       - name: Checkout homebrew-tap
         if: steps.check_token.outputs.skip == 'false'
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7.0.1
         with:
           repository: korjwl1/homebrew-tap
           token: ${{ secrets.TAP_PUSH_TOKEN }}
@@ -462,7 +462,7 @@ jobs:
 
       - name: Download arm64 artifact
         if: steps.check_token.outputs.skip == 'false'
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8.0.2
         with:
           name: macos-arm64
           path: dl
