@@ -28,9 +28,10 @@ import (
 // Minor 3 adds wanted_tunnels so pending restore/backoff remains visible to
 // CLI status/disconnect/stop even when no GUI or transport is currently up.
 // Minor 4 adds serialized profile deletion in the helper.
+// Minor 5 adds WireGuard backend selection and its settings-change event field.
 const (
 	ProtocolMajor = 1
-	ProtocolMinor = 4
+	ProtocolMinor = 5
 )
 
 // ProtocolVersion is the canonical "major.minor" string used in

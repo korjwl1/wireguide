@@ -3,8 +3,10 @@
 package wireguardnt
 
 import (
+	"net"
 	"net/netip"
 	"runtime"
+	"strconv"
 	"testing"
 	"time"
 	"unsafe"
@@ -121,11 +123,72 @@ func TestConfigurationEncoding(t *testing.T) {
 	}
 }
 
+func TestConfigurationPreservesMappedIPv6AllowedIPs(t *testing.T) {
+	prefix := netip.MustParsePrefix("::ffff:192.0.2.0/120")
+	raw, backing, err := encodeConfiguration(&Configuration{Peers: []Peer{{AllowedIPs: []netip.Prefix{prefix}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.KeepAlive(backing)
+	snapshot, err := decodeConfiguration(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.Peers) != 1 || len(snapshot.Peers[0].AllowedIPs) != 1 {
+		t.Fatalf("mapped IPv6 AllowedIPs were lost: %+v", snapshot)
+	}
+	if got := snapshot.Peers[0].AllowedIPs[0]; got != prefix {
+		t.Fatalf("AllowedIP = %s, want %s", got, prefix)
+	}
+}
+
 func TestSockaddrIPv6(t *testing.T) {
 	want := netip.MustParseAddrPort("[2001:db8::1]:51820")
-	got := decodeSockaddr(encodeSockaddr(want))
+	encoded, err := encodeSockaddr(want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := decodeSockaddr(encoded)
 	if got != want {
 		t.Fatalf("endpoint round trip = %v, want %v", got, want)
+	}
+}
+
+func TestSockaddrIPv6Zone(t *testing.T) {
+	want := netip.MustParseAddrPort("[fe80::1%7]:51820")
+	encoded, err := encodeSockaddr(want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := decodeSockaddr(encoded); got != want {
+		t.Fatalf("scoped endpoint = %s, want %s", got, want)
+	}
+}
+
+func TestSockaddrIPv6NamedZone(t *testing.T) {
+	interfaces, err := net.Interfaces()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(interfaces) == 0 {
+		t.Skip("no network interfaces")
+	}
+	iface := interfaces[0]
+	endpoint := netip.AddrPortFrom(netip.MustParseAddr("fe80::1").WithZone(iface.Name), 51820)
+	encoded, err := encodeSockaddr(endpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := netip.AddrPortFrom(endpoint.Addr().WithZone(strconv.Itoa(iface.Index)), endpoint.Port())
+	if got := decodeSockaddr(encoded); got != want {
+		t.Fatalf("scoped endpoint = %s, want %s", got, want)
+	}
+}
+
+func TestConfigurationRejectsUnknownIPv6Zone(t *testing.T) {
+	endpoint := netip.MustParseAddrPort("[fe80::1%wireguide-missing-zone-42]:51820")
+	if _, _, err := encodeConfiguration(&Configuration{Peers: []Peer{{Endpoint: endpoint}}}); err == nil {
+		t.Fatal("unknown IPv6 zone was silently discarded")
 	}
 }
 

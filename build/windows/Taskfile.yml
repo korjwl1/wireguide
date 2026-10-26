@@ -173,6 +173,7 @@ tasks:
     # stale binary after a version or architecture change.
     status:
       - test -f "{{.ROOT_DIR}}/{{.BIN_DIR}}/wireguard.dll"
+      - test -f "{{.ROOT_DIR}}/{{.BIN_DIR}}/wireguard-nt-LICENSE.txt"
       - test -f "{{.ROOT_DIR}}/{{.BIN_DIR}}/wireguardnt-{{.ARCH}}-{{.WIREGUARDNT_VERSION}}-{{.WIREGUARDNT_SHA256}}"
     cmds:
       - cmd: powershell -NoProfile -ExecutionPolicy Bypass -File "{{.ROOT_DIR}}/build/windows/scripts/vendor-wireguardnt.ps1" -Version "{{.WIREGUARDNT_VERSION}}" -Sha256 "{{.WIREGUARDNT_SHA256}}" -Arch "{{.ARCH}}" -OutDir "{{.ROOT_DIR}}/{{.BIN_DIR}}"

@@ -7,13 +7,16 @@
 package wireguardnt
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"math/bits"
+	"net"
 	"net/netip"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"sync"
 	"syscall"
 	"time"
@@ -475,7 +478,11 @@ func encodeConfiguration(cfg *Configuration) ([]byte, []uint64, error) {
 		}
 		if peerCfg.Endpoint.IsValid() {
 			peer.Flags |= peerHasEndpoint
-			peer.Endpoint = encodeSockaddr(peerCfg.Endpoint)
+			endpoint, err := encodeSockaddr(peerCfg.Endpoint)
+			if err != nil {
+				return nil, nil, fmt.Errorf("peer endpoint %q: %w", peerCfg.Endpoint, err)
+			}
+			peer.Endpoint = endpoint
 		}
 		peer.AllowedIPsCount = uint32(len(peerCfg.AllowedIPs))
 		offset += peerSize
@@ -491,7 +498,9 @@ func encodeConfiguration(cfg *Configuration) ([]byte, []uint64, error) {
 
 func writeAllowedIP(dst []byte, prefix netip.Prefix) error {
 	prefix = prefix.Masked()
-	addr := prefix.Addr().Unmap()
+	// A mapped IPv6 prefix still has an IPv6 prefix length. Unmapping the
+	// address alone would send (for example) an invalid IPv4 /120 to the driver.
+	addr := prefix.Addr()
 	aip := (*wireguardAllowedIP)(unsafe.Pointer(&dst[0]))
 	aip.Cidr = uint8(prefix.Bits())
 	switch {
@@ -509,7 +518,7 @@ func writeAllowedIP(dst []byte, prefix netip.Prefix) error {
 	return nil
 }
 
-func encodeSockaddr(endpoint netip.AddrPort) sockaddrInet {
+func encodeSockaddr(endpoint netip.AddrPort) (sockaddrInet, error) {
 	var result sockaddrInet
 	result.Port = bits.ReverseBytes16(endpoint.Port())
 	addr := endpoint.Addr().Unmap()
@@ -522,8 +531,19 @@ func encodeSockaddr(endpoint netip.AddrPort) sockaddrInet {
 		result.Family = afInet6
 		v6 := addr.As16()
 		copy(result.Data[4:20], v6[:])
+		if zone := addr.Zone(); zone != "" {
+			scope, err := strconv.ParseUint(zone, 10, 32)
+			if err != nil {
+				iface, lookupErr := net.InterfaceByName(zone)
+				if lookupErr != nil {
+					return sockaddrInet{}, fmt.Errorf("resolving IPv6 zone %q: %w", zone, lookupErr)
+				}
+				scope = uint64(iface.Index)
+			}
+			binary.LittleEndian.PutUint32(result.Data[20:24], uint32(scope))
+		}
 	}
-	return result
+	return result, nil
 }
 
 func decodeSockaddr(s sockaddrInet) netip.AddrPort {
@@ -536,7 +556,11 @@ func decodeSockaddr(s sockaddrInet) netip.AddrPort {
 	case afInet6:
 		var v6 [16]byte
 		copy(v6[:], s.Data[4:20])
-		return netip.AddrPortFrom(netip.AddrFrom16(v6), port)
+		addr := netip.AddrFrom16(v6)
+		if scope := binary.LittleEndian.Uint32(s.Data[20:24]); scope != 0 {
+			addr = addr.WithZone(strconv.FormatUint(uint64(scope), 10))
+		}
+		return netip.AddrPortFrom(addr, port)
 	default:
 		return netip.AddrPort{}
 	}
