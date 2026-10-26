@@ -16,6 +16,15 @@
   export let updateInfo = null;
   export let onInstall = null;
 
+  // The kernel backend exists on Windows (WireGuardNT) and Linux (the
+  // in-kernel module). Label it per platform so the option never names a
+  // driver the user's OS does not ship.
+  const isLinuxPlatform = /Linux/i.test(navigator.userAgent);
+  const backendLabelKey = (kind) =>
+    isLinuxPlatform
+      ? (kind === 'kernel' ? 'settings.tunnel_backend_kernel_linux' : 'settings.tunnel_backend_userspace_linux')
+      : (kind === 'kernel' ? 'settings.tunnel_backend_kernel_windows' : 'settings.tunnel_backend_userspace_windows');
+
   let aboutUpdating = false;
   let aboutShowVpnWarn = false;
   // updateState mirrors UpdateState DTO from GetUpdateState. Used by the
@@ -510,15 +519,15 @@
                   <span class="toggle-track"></span>
                 </label>
               </div>
-              {#if /Windows/i.test(navigator.userAgent)}
+              {#if /(Windows|Linux)/i.test(navigator.userAgent)}
                 <div class="setting-row">
                   <div class="setting-info">
                     <label class="setting-label" for="tunnel-backend">{$t('settings.tunnel_backend')}</label>
-                    <p class="setting-desc">{$t('settings.tunnel_backend_hint')}</p>
+                    <p class="setting-desc">{$t(isLinuxPlatform ? 'settings.tunnel_backend_hint_linux' : 'settings.tunnel_backend_hint_windows')}</p>
                   </div>
                   <select id="tunnel-backend" disabled={busyFields.tunnel_backend} value={settings.tunnel_backend} on:change={onTunnelBackendChange}>
-                    <option value="userspace">{$t('settings.tunnel_backend_userspace')}</option>
-                    <option value="kernel">{$t('settings.tunnel_backend_kernel')}</option>
+                    <option value="userspace">{$t(backendLabelKey('userspace'))}</option>
+                    <option value="kernel">{$t(backendLabelKey('kernel'))}</option>
                   </select>
                 </div>
               {/if}
@@ -632,7 +641,7 @@
             <h3 id="backend-confirm-title">{$t('settings.tunnel_backend_confirm_title')}</h3>
           </div>
         </div>
-        <p class="dialog-message">{$t('settings.tunnel_backend_confirm_message', { engine: $t(pendingBackend === 'kernel' ? 'settings.tunnel_backend_kernel' : 'settings.tunnel_backend_userspace') })}</p>
+        <p class="dialog-message">{$t('settings.tunnel_backend_confirm_message', { engine: $t(backendLabelKey(pendingBackend)) })}</p>
         <div class="confirm-footer">
           <button class="dialog-btn dialog-btn-ghost" on:click={cancelBackendChange}>{$t('confirm.no')}</button>
           <button class="dialog-btn dialog-btn-primary" on:click={confirmBackendChange}>
