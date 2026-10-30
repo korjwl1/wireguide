@@ -267,7 +267,7 @@ helper over the local socket — so unlike `wg-quick` it needs no per-command
 wireguide ctl start                     # launch WireGuide (app + helper) and wait
 wireguide ctl stop                      # quit WireGuide (app + helper)
 
-wireguide ctl status [--json]           # connection status
+wireguide ctl status [--json]           # connection status (dns=global|split(...)|search|none = intended DNS mode)
 wireguide ctl list [--json]             # list tunnels (● = connected)
 wireguide ctl connect <name>            # connect a tunnel
 wireguide ctl disconnect [name]         # disconnect one (or all)

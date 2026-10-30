@@ -95,7 +95,13 @@
     "sort_added_old": "古い順",
     "rename": "名前を変更",
     "clear_search": "検索をクリア",
-    "resize_hint": "ドラッグで幅を変更 · ダブルクリックで既定の幅に戻す"
+    "resize_hint": "ドラッグで幅を変更 · ダブルクリックで既定の幅に戻す",
+    "dns_chip_global": "DNS: グローバル · システム DNS を置換",
+    "dns_chip_split": "DNS: ドメイン別 · {domains}",
+    "dns_chip_search": "DNS: 検索ドメインのみ",
+    "dns_chip_global_hint": "接続中はトンネルの DNS サーバーがシステム DNS を置き換えるため、すべての名前解決がトンネルの DNS に送られます。",
+    "dns_chip_split_hint": "これらのドメインだけがトンネルの DNS サーバーに送られます。それ以外は引き続きシステム DNS が応答します。",
+    "dns_chip_search_hint": "この設定は検索ドメインのみを指定し、DNS サーバーは指定しません。システムの DNS サーバーは維持されますが、接続中はシステムの検索ドメインが変更されます。"
   },
   "import": {
     "zip_result_title": "インポート結果",

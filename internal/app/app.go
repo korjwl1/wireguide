@@ -165,6 +165,11 @@ type TunnelInfo struct {
 	// feed the tunnel-list "date added" / "last used" sort (issue #17).
 	CreatedAtUnix int64 `json:"created_at_unix,omitempty"`
 	LastUsedUnix  int64 `json:"last_used_unix,omitempty"`
+	// DNSMode is the intended DNS behaviour from the config: "global"
+	// (replaces system DNS), "split" (only DNSDomains), "search" (search
+	// domains only) or "none". Intent, not read back from the OS.
+	DNSMode    string   `json:"dns_mode,omitempty"`
+	DNSDomains []string `json:"dns_domains,omitempty"`
 }
 
 // ConnectionStatus is re-exported from the domain package so Wails bindings

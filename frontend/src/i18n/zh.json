@@ -95,7 +95,13 @@
     "sort_added_old": "最早添加优先",
     "rename": "重命名",
     "clear_search": "清除搜索",
-    "resize_hint": "拖动以调整大小 · 双击以恢复默认宽度"
+    "resize_hint": "拖动以调整大小 · 双击以恢复默认宽度",
+    "dns_chip_global": "DNS：全局 · 替换系统 DNS",
+    "dns_chip_split": "DNS：拆分 · {domains}",
+    "dns_chip_search": "DNS：仅搜索域",
+    "dns_chip_global_hint": "连接期间，隧道的 DNS 服务器会替换系统 DNS，所有名称查询都会发往它们。",
+    "dns_chip_split_hint": "只有这些域会发往隧道的 DNS 服务器，其他名称仍由系统 DNS 应答。",
+    "dns_chip_search_hint": "此配置只设置了搜索域，没有 DNS 服务器。系统 DNS 服务器保持不变，但连接期间系统搜索域会被修改。"
   },
   "import": {
     "zip_result_title": "导入结果",

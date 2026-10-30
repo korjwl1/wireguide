@@ -95,7 +95,13 @@
     "sort_added_old": "추가한 순서",
     "rename": "이름 변경",
     "clear_search": "검색어 지우기",
-    "resize_hint": "드래그하여 너비 조절 · 두 번 클릭하여 기본 너비로 복원"
+    "resize_hint": "드래그하여 너비 조절 · 두 번 클릭하여 기본 너비로 복원",
+    "dns_chip_global": "DNS: 전체 · 시스템 DNS 대체",
+    "dns_chip_split": "DNS: 도메인별 · {domains}",
+    "dns_chip_search": "DNS: 검색 도메인만",
+    "dns_chip_global_hint": "연결된 동안 터널의 DNS 서버가 시스템 DNS를 대체하므로 모든 이름 조회가 터널 DNS로 전달됩니다.",
+    "dns_chip_split_hint": "이 도메인만 터널의 DNS 서버로 전달됩니다. 나머지는 계속 시스템 DNS가 응답합니다.",
+    "dns_chip_search_hint": "이 설정은 검색 도메인만 지정하고 DNS 서버는 지정하지 않습니다. 시스템 DNS 서버는 유지되지만 연결 중에는 시스템 검색 도메인이 변경됩니다."
   },
   "import": {
     "zip_result_title": "가져오기 결과",

@@ -5,6 +5,7 @@
   import { tunnels, selectedTunnel, connectionStatus } from '../stores/tunnels.js';
   import { compactList, listSort, listActiveOnTop, saveListPrefs } from '../stores/ui.js';
   import { t } from '../i18n/index.js';
+  import { dnsChip } from './dns-mode.js';
 
   const dispatch = createEventDispatcher();
   let search = '';
@@ -131,6 +132,10 @@
             <span class="tunnel-name">{tun.name}</span>
             {#if tun.endpoint}
               <span class="tunnel-meta">{tun.endpoint}</span>
+            {/if}
+            {#if dnsChip($t, tun.dns_mode, tun.dns_domains || [])}
+              {@const chip = dnsChip($t, tun.dns_mode, tun.dns_domains || [])}
+              <span class="tunnel-dns" title={chip.hint}>{chip.text}</span>
             {/if}
           </div>
         </button>
@@ -413,7 +418,15 @@
     padding: 4px 10px;
     margin-bottom: 1px;
   }
-  .list-items.compact .tunnel-meta {
+  .tunnel-dns {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font: 400 11px/14px var(--font-sans);
+    color: var(--text-muted);
+  }
+  .list-items.compact .tunnel-meta,
+  .list-items.compact .tunnel-dns {
     display: none;
   }
   .list-items.compact .tunnel-item.connected::before {

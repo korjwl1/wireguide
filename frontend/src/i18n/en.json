@@ -95,7 +95,13 @@
     "sort_added_old": "Oldest first",
     "rename": "Rename",
     "clear_search": "Clear search",
-    "resize_hint": "Drag to resize · double-click to restore the default width"
+    "resize_hint": "Drag to resize · double-click to restore the default width",
+    "dns_chip_global": "DNS: Global · replaces system DNS",
+    "dns_chip_split": "DNS: Split · {domains}",
+    "dns_chip_search": "DNS: Search domains only",
+    "dns_chip_global_hint": "The tunnel's DNS servers replace your system DNS while connected, so every name lookup goes to them.",
+    "dns_chip_split_hint": "Only these domains are sent to the tunnel's DNS servers. Your system DNS keeps answering everything else.",
+    "dns_chip_search_hint": "This config sets search domains but no DNS servers. Your system DNS servers are kept, but the system search domains are changed while connected."
   },
   "import": {
     "zip_result_title": "Import Results",
