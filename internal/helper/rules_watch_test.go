@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/korjwl1/wireguide/internal/automation"
+	"github.com/korjwl1/wireguide/internal/ipc"
 	"github.com/korjwl1/wireguide/internal/storage"
 )
 
@@ -196,5 +197,27 @@ func writeSettings(t *testing.T, h *Helper, s *storage.Settings) {
 	}
 	if err := os.WriteFile(filepath.Join(h.userAppSupport, "config.json"), b, 0o600); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestPreviewReportsWatchdogBlock(t *testing.T) {
+	stubNetwork(t, wifiProbe())
+	h, _ := newAutomationHelper(t, "CafeWiFi")
+	h.done = make(chan struct{})
+	h.reevalTrigger = func(string) {}
+	writeAutomation(t, h, map[string][]automation.Rule{
+		"vpn1": {{When: automation.Condition{Type: automation.CondSSID, SSID: "CafeWiFi"}, Do: automation.ActionConnect}},
+	})
+	h.mu.Lock()
+	h.watchdogBlocked = map[string]struct{}{"vpn1": {}}
+	h.mu.Unlock()
+
+	v, err := h.handleAutomationPreview(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp := v.(ipc.AutomationPreviewResponse)
+	if len(resp.Tunnels) != 1 || resp.Tunnels[0].Decision != "connect" || !resp.Tunnels[0].Blocked {
+		t.Fatalf("want connect+blocked, got %+v", resp.Tunnels)
 	}
 }

@@ -210,6 +210,9 @@ type AutomationTunnelDecision struct {
 	Active   bool   `json:"active"`
 	Held     bool   `json:"held,omitempty"`
 	Latched  bool   `json:"latched,omitempty"`
+	// Blocked is true when the loop watchdog has blocked this tunnel from
+	// automatic (re)connects; a "connect" decision is then not acted on.
+	Blocked bool `json:"blocked,omitempty"`
 }
 
 // RecoveryWarningPayload reports retained OS cleanup without disabling new connections.

@@ -9,6 +9,8 @@
   import { createEventDispatcher, tick, onDestroy } from 'svelte';
   import AutomationEditor from './AutomationEditor.svelte';
   import PingHealthSettings from './PingHealthSettings.svelte';
+  import { automationPreview } from '../stores/automation.js';
+  import { verdictFor, verdictText, verdictTone } from './automationLine.js';
 
   export let TunnelService;
   const dispatch = createEventDispatcher();
@@ -199,6 +201,11 @@
       latencyTargetError = '';
     }
   }
+
+  // Why automation is / isn't acting on this tunnel (same one-liner as the
+  // Automation editor strip and the list row).
+  $: autoVerdict = verdictFor($automationPreview, $selectedTunnel?.name);
+  $: autoLine = autoVerdict ? verdictText($t, autoVerdict) : '';
 
   onDestroy(() => {
     if (notesSaveTimer) clearTimeout(notesSaveTimer);
@@ -442,6 +449,11 @@
             <span class="hero-endpoint">{$selectedTunnel.endpoint}</span>
           {/if}
         </div>
+        {#if autoLine}
+          <div class="hero-auto-line">
+            <span class="auto-chip auto-chip-{verdictTone(autoVerdict)}" title={autoLine}>{autoLine}</span>
+          </div>
+        {/if}
       </div>
     </div>
 
@@ -822,6 +834,24 @@
     box-shadow: 0 0 0 3px var(--blue-tint);
   }
 
+  .hero-auto-line {
+    margin-top: 6px;
+    min-width: 0;
+  }
+  .auto-chip {
+    display: inline-block;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    padding: 2px 8px;
+    border-radius: 999px;
+    background: var(--bg-card);
+    border: 0.5px solid var(--border);
+    font: 500 11px/16px var(--font-sans);
+    color: var(--text-secondary);
+  }
+  .auto-chip-warn { color: var(--orange, #FF9500); }
   .hero-status-line {
     display: flex;
     align-items: center;

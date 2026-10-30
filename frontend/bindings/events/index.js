@@ -66,3 +66,8 @@ export const UpdateAvailable = "update-available";
  */
 export const UpdateProgress = "update_progress";
 
+/**
+ * Name of the custom event "window_visibility".
+ */
+export const WindowVisibility = "window_visibility";
+

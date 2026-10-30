@@ -88,3 +88,37 @@ export class ReconnectEvent {
         return new ReconnectEvent(/** @type {Partial<ReconnectEvent>} */($$parsedSource));
     }
 }
+
+/**
+ * WindowVisibilityEvent tells the frontend that the main window was hidden
+ * to the tray or shown again, so it can pause work nobody can see.
+ * document.visibilityState is not guaranteed to change when the window is
+ * hidden to the tray, so the frontend must not rely on it alone.
+ */
+export class WindowVisibilityEvent {
+    /**
+     * Creates a new WindowVisibilityEvent instance.
+     * @param {Partial<WindowVisibilityEvent>} [$$source = {}] - The source object to create the WindowVisibilityEvent.
+     */
+    constructor($$source = {}) {
+        if (!("visible" in $$source)) {
+            /**
+             * @member
+             * @type {boolean}
+             */
+            this["visible"] = false;
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new WindowVisibilityEvent instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {WindowVisibilityEvent}
+     */
+    static createFrom($$source = {}) {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new WindowVisibilityEvent(/** @type {Partial<WindowVisibilityEvent>} */($$parsedSource));
+    }
+}

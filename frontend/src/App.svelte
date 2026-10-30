@@ -18,6 +18,7 @@
   import { tunnels, selectedTunnel, refreshTunnels, refreshStatus, subscribeToEvents, unsubscribe, initialLoad, connectionStatus } from './stores/tunnels.js';
   import { applyTheme, initThemeWatcher } from './stores/theme.js';
   import { startLogListener, stopLogListener } from './stores/logs.js';
+  import { startAutomationPolling, stopAutomationPolling, refreshAutomationPreview, setAutomationWindowVisible } from './stores/automation.js';
   import { compactList, listSort, listActiveOnTop, listPaneWidth, saveListPrefs, LIST_PANE_MIN, LIST_PANE_MAX, LIST_PANE_DEFAULT } from './stores/ui.js';
   import { errText } from './lib/errors.js';
   import { createEventScope } from './lib/event-scope.js';
@@ -98,6 +99,7 @@
     startLogListener();
     subscribeToEvents();
     registerAppEvents();
+    startAutomationPolling(TunnelService);
     initialize().catch(error => {
       if (!appEvents.disposed) showToast(errText(error));
     });
@@ -193,21 +195,28 @@
       criticalErrors = [];
       await initialLoad(TunnelService);
       await refreshStatus(TunnelService);
+      refreshAutomationPreview();
     });
 
     // The helper owns automation; the GUI only reports SSID transitions.
     // Active or pending tunnel intent keeps the helper alive without a GUI.
-    appEvents.on('wifi_ssid', (event) => {
-      const { new_ssid } = event.data || {};
-      if (new_ssid) {
-        showToast(`Wi-Fi: ${new_ssid}`);
-      }
+    // The Automation status strip and the tunnel chips show the network
+    // and the verdict; refresh them now rather than at the next poll.
+    appEvents.on('wifi_ssid', () => {
+      refreshAutomationPreview();
+    });
+
+    // Close-to-tray hides the window without necessarily changing
+    // document.visibilityState; pause the automation poll while hidden.
+    appEvents.on('window_visibility', (event) => {
+      setAutomationWindowVisible(event.data?.visible !== false);
     });
 
     // Helper auto-connected a tunnel via Wi-Fi rules.
     // EventStatus broadcast handles tunnel state/status update within 1s.
     // Only need to apply firewall settings here (same as after manual connect).
     appEvents.on('auto_connected', async () => {
+      refreshAutomationPreview();
       await applyFirewallSettings();
     });
 
@@ -261,6 +270,7 @@
     stopThemeWatcher?.();
     unsubscribe();
     stopLogListener();
+    stopAutomationPolling();
     if (toastTimer) clearTimeout(toastTimer);
   });
 
