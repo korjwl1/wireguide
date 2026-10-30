@@ -204,10 +204,15 @@
       }
     });
 
-    // Helper auto-connected a tunnel via Wi-Fi rules.
+    // Helper auto-connected a tunnel via automation rules.
     // EventStatus broadcast handles tunnel state/status update within 1s.
-    // Only need to apply firewall settings here (same as after manual connect).
-    appEvents.on('auto_connected', async () => {
+    // Apply firewall settings here (same as after manual connect) and say
+    // which tunnel it was; the native notification covers a hidden window.
+    appEvents.on('auto_connected', async (event) => {
+      const { tunnel_name } = event.data || {};
+      if (tunnel_name) {
+        showToast($t('app.automation_connected', { name: tunnel_name }));
+      }
       await applyFirewallSettings();
     });
 

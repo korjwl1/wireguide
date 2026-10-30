@@ -1,5 +1,6 @@
 {
   "app": {
+    "automation_connected": "Automation connected {name}",
     "automation_lan_overlap": "{name}: automatic connection paused because its routes overlap the local network.",
     "disconnected": "Disconnected",
     "connecting": "Connecting…",
@@ -158,6 +159,9 @@
     "up_to_date": "You're on the latest version.",
     "section_appearance": "Appearance",
     "section_startup": "Startup",
+    "section_notifications": "Notifications",
+    "notify_auto_changes": "Notify on automatic tunnel changes",
+    "notify_auto_changes_hint": "Show a system notification when a tunnel connects or disconnects without you using this app, for example through automation.",
     "section_updates": "Updates",
     "auto_update_check": "Check for updates automatically",
     "auto_update_check_hint": "Check for a new version once a day.",

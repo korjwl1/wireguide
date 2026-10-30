@@ -1,5 +1,6 @@
 {
   "app": {
+    "automation_connected": "自動化が {name} を接続しました",
     "automation_lan_overlap": "{name}: 経路がローカルネットワークと重複するため、自動接続を保留しました。",
     "disconnected": "未接続",
     "connecting": "接続中…",
@@ -157,6 +158,9 @@
     "about_footer_copyright": "© 2026 WireGuide",
     "section_appearance": "外観",
     "section_startup": "起動",
+    "section_notifications": "通知",
+    "notify_auto_changes": "トンネルの自動変更を通知",
+    "notify_auto_changes_hint": "自動化などにより、このアプリを操作せずにトンネルが接続または切断されたときに、システム通知を表示します。",
     "section_updates": "アップデート",
     "auto_update_check": "アップデートを自動で確認",
     "auto_update_check_hint": "1 日に 1 回、新しいバージョンを確認します。",
