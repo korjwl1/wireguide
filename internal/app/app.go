@@ -73,10 +73,43 @@ type TunnelService struct {
 // resulting history row is labelled "user" instead of the default
 // "reconnect" — without this, every user disconnect would look
 // indistinguishable from a helper-driven one in the timeline.
+//
+// rx/tx are the SESSION totals; rawRx/rawTx are the last raw counter reading
+// from the helper. They differ because the helper's per-device counters are
+// not monotonic over a session: a tunnel in the Connecting/Disconnecting
+// state reports 0/0 while still listed as active, and a reconnect builds a
+// fresh WireGuard device whose counters restart from zero. The cache therefore
+// folds each raw reading into the totals (see merge) rather than storing it.
 type lastKnownTunnelStats struct {
 	rx     int64
 	tx     int64
+	rawRx  int64
+	rawTx  int64
 	reason string
+}
+
+// merge folds a fresh raw counter reading into the session totals. A reading
+// below the previous one means the underlying counters were reset (teardown or
+// a new device), so everything counted so far is carried over as a base.
+func (st lastKnownTunnelStats) merge(rawRx, rawTx int64) lastKnownTunnelStats {
+	// A 0/0 reading is a failed or mid-transition read, not evidence of a
+	// counter reset: keep what we have so a one-tick blip does not make the
+	// next real reading count the whole session again.
+	if rawRx == 0 && rawTx == 0 {
+		return st
+	}
+	// A new device resets both directions together, so a drop in either
+	// counter means both bases must carry the totals counted so far.
+	reset := rawRx < st.rawRx || rawTx < st.rawTx
+	baseRx, baseTx := st.rx-st.rawRx, st.tx-st.rawTx
+	if reset {
+		baseRx, baseTx = st.rx, st.tx
+	}
+	return lastKnownTunnelStats{
+		rx: baseRx + rawRx, tx: baseTx + rawTx,
+		rawRx: rawRx, rawTx: rawTx,
+		reason: st.reason,
+	}
 }
 
 // NewTunnelService creates a service. Set the app reference via SetApp()
