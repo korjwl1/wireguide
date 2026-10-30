@@ -318,12 +318,24 @@ func daemonLoadedFromPrint(out []byte, err error) error {
 	return nil
 }
 
+// runAuthorizationScript runs the administrator-privileges AppleScript; a seam
+// for tests so they can never open a real password prompt.
+var runAuthorizationScript = func(script string) ([]byte, error) {
+	return exec.Command("osascript", "-e", script).CombinedOutput()
+}
+
 func runDaemonAuthorization(shellScript string) error {
+	// Explain BEFORE the password prompt, and only here: this runs solely
+	// when an install or repair really needs administrator rights, never on
+	// the passive no-prompt start path.
+	if err := showAuthorizationNotice(); err != nil {
+		return err
+	}
 	escaped := strings.ReplaceAll(shellScript, `\`, `\\`)
 	escaped = strings.ReplaceAll(escaped, `"`, `\"`)
-	script := fmt.Sprintf(`do shell script "%s" with administrator privileges with prompt "WireGuide needs administrator access to start or repair its VPN helper service."`, escaped)
+	script := fmt.Sprintf(`do shell script "%s" with administrator privileges with prompt "%s"`, escaped, currentAuthNotice().Prompt)
 	slog.Info("starting LaunchDaemon (administrator authorization)")
-	out, err := exec.Command("osascript", "-e", script).CombinedOutput()
+	out, err := runAuthorizationScript(script)
 	if err != nil {
 		if strings.Contains(string(out), "(-128)") {
 			return fmt.Errorf("%w: %s", ErrAuthorizationCanceled, tailOf(out, 500))
