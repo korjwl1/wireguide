@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/korjwl1/wireguide/internal/ipc"
+	"github.com/korjwl1/wireguide/internal/logrotate"
 	"github.com/korjwl1/wireguide/internal/version"
 )
 
@@ -139,13 +140,17 @@ func generatePlistContent(exe string, args Args) string {
          respawn rate to once per 5s in case of a crash loop. -->
     <key>ThrottleInterval</key>
     <integer>5</integer>
+    <!-- The helper writes its own size-rotated log to %s;
+         launchd only captures panics and runtime output here, so this
+         file stays tiny. -->
     <key>StandardErrorPath</key>
-    <string>/var/log/wireguide-helper.log</string>
+    <string>%s</string>
     <key>StandardOutPath</key>
-    <string>/var/log/wireguide-helper.log</string>
+    <string>%s</string>
 </dict>
 </plist>
-`, daemonLabel, daemonBinary, args.SocketPath, uid, args.DataDir, ipc.DarwinSocketPath, uid)
+`, daemonLabel, daemonBinary, args.SocketPath, uid, args.DataDir, ipc.DarwinSocketPath, uid,
+		logrotate.HelperLogPath, logrotate.HelperStderrPath, logrotate.HelperStderrPath)
 }
 
 // PlistNeedsReinstall reports whether the on-disk LaunchDaemon plist differs
@@ -231,7 +236,7 @@ func installAndLoadDaemon(ctx context.Context, args Args) error {
 	if disabled := checkDaemonEnabled(ctx); disabled != nil {
 		return disabled
 	}
-	return fmt.Errorf("%w\nHelper state: %s. Check /var/log/wireguide-helper.log and System Settings > General > Login Items & Extensions; allow WireGuide if macOS has blocked it", err, daemonStateSummary(ctx))
+	return fmt.Errorf("%w\nHelper state: %s. Check %s and %s and System Settings > General > Login Items & Extensions; allow WireGuide if macOS has blocked it", err, daemonStateSummary(ctx), logrotate.HelperLogPath, logrotate.HelperStderrPath)
 }
 
 // daemonOps are the external effects of a start attempt, injectable so the

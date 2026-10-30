@@ -3,6 +3,7 @@ package helper
 import (
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -12,7 +13,42 @@ import (
 	"time"
 
 	"github.com/korjwl1/wireguide/internal/ipc"
+	"github.com/korjwl1/wireguide/internal/logrotate"
 )
+
+// helperLogFile returns the rotating log file the helper writes slog output
+// to, or "" when the helper should keep writing to stderr. macOS always
+// rotates /var/log/wireguide-helper.log (launchd's own capture of the process
+// goes to a separate file). Windows rotates <dataDir>/helper-stderr.log only
+// when WIREGUIDE_HELPER_STDERR=1. Linux keeps stderr (pkexec discards it).
+func helperLogFile(goos, dataDir string, windowsOptIn bool) string {
+	switch goos {
+	case "darwin":
+		return logrotate.HelperLogPath
+	case "windows":
+		if windowsOptIn && dataDir != "" {
+			return filepath.Join(dataDir, logrotate.WindowsLogName)
+		}
+	}
+	return ""
+}
+
+// openHelperLog opens the rotating helper log, or returns nil when this
+// platform has none or it cannot be opened (the caller falls back to stderr).
+func openHelperLog(dataDir string) io.Writer {
+	path := helperLogFile(runtime.GOOS, dataDir, os.Getenv("WIREGUIDE_HELPER_STDERR") == "1")
+	if path == "" {
+		return nil
+	}
+	if runtime.GOOS == "windows" {
+		_ = os.MkdirAll(filepath.Dir(path), 0o755)
+	}
+	w, err := logrotate.Open(path, logrotate.HelperLogMaxBytes, logrotate.HelperLogMaxFiles)
+	if err != nil {
+		return nil
+	}
+	return w
+}
 
 // broadcastHandler is an slog.Handler that chains to a stderr handler AND
 // broadcasts every log record to any IPC subscriber. This lets the GUI's
@@ -39,8 +75,16 @@ type broadcastHandler struct {
 	group string
 }
 
-func newBroadcastHandler(levelVar *slog.LevelVar, getBroadcaster func() func(string, interface{})) *broadcastHandler {
-	stderr := slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
+func newBroadcastHandler(levelVar *slog.LevelVar, getBroadcaster func() func(string, interface{}), dataDir string) *broadcastHandler {
+	out := openHelperLog(dataDir)
+	if out == nil {
+		out = os.Stderr
+	}
+	return newBroadcastHandlerTo(levelVar, getBroadcaster, out)
+}
+
+func newBroadcastHandlerTo(levelVar *slog.LevelVar, getBroadcaster func() func(string, interface{}), out io.Writer) *broadcastHandler {
+	stderr := slog.NewTextHandler(out, &slog.HandlerOptions{
 		Level:     levelVar,
 		AddSource: true,
 	})
@@ -56,8 +100,8 @@ func (h *broadcastHandler) Enabled(_ context.Context, l slog.Level) bool {
 }
 
 func (h *broadcastHandler) Handle(ctx context.Context, r slog.Record) error {
-	// Always write to stderr (for tail -f helper.log in dev, for apple
-	// unified log ingestion in prod).
+	// Always write to the helper log (rotating file on macOS, stderr
+	// elsewhere).
 	_ = h.stderr.Handle(ctx, r)
 
 	// Render the same record as a single flat string for the viewer.
