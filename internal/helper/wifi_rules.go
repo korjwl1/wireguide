@@ -200,6 +200,7 @@ func (h *Helper) handleAutomationPreview(_ json.RawMessage) (interface{}, error)
 				Active:    active[name],
 				Held:      info.Held,
 				Latched:   latched,
+				Blocked:   h.isWatchdogBlocked(name),
 			})
 		}
 	}

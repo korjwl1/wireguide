@@ -30,6 +30,7 @@ var dockWindow *application.WebviewWindow
 
 func showDock() {
 	C.dockShowAndActivate()
+	emitWindowVisibility(true)
 
 	go func() {
 		for i := 0; i < 10; i++ {

@@ -9,6 +9,8 @@
   import { errText } from './errors.js';
   import SSIDPermissionBanner from './SSIDPermissionBanner.svelte';
   import { loadSettings } from '../stores/settings.js';
+  import { automationPreview, automationCheckedAt, locationAuth, AUTOMATION_POLL_MS, refreshAutomationPreview } from '../stores/automation.js';
+  import { networkLines, verdictFor, verdictText, verdictTone } from './automationLine.js';
 
   export let TunnelService;
   export let tunnelName = '';
@@ -32,6 +34,15 @@
   // loadGen tags each async load so a slow in-flight load(A) can't clobber
   // the rules after the user has already switched to load(B) (issue #12).
   let loadGen = 0;
+
+  // Live "why" strip: what network the engine sees and what it decided for
+  // this tunnel. The shared poller keeps it fresh; refresh once on open so it
+  // never shows a minute-old verdict.
+  $: whyNet = networkLines($t, $automationPreview, $locationAuth);
+  $: whyVerdict = verdictFor($automationPreview, tunnelName);
+  $: whyLine = whyVerdict ? verdictText($t, whyVerdict) : '';
+  $: whySlowPoll = AUTOMATION_POLL_MS > 5000;
+  $: if (open) refreshAutomationPreview();
 
   // Reload whenever the modal opens for a (possibly different) tunnel.
   $: if (open && tunnelName && loadedFor !== tunnelName) {
@@ -367,6 +378,20 @@
         </div>
         <button class="am-close" on:click={close} aria-label={$t('settings.close')}><Icon name="x" size={16} strokeWidth={2} /></button>
       </div>
+      {#if $automationPreview?.available}
+        <div class="am-why" role="status" aria-live="polite" aria-label={$t('automation.why.title')}>
+          <div class="am-why-net">
+            <span>{whyNet.network}</span>
+            {#if whyNet.settle}<span class="am-why-sep">·</span><span>{whyNet.settle}</span>{/if}
+            {#if whySlowPoll && $automationCheckedAt}
+              <span class="am-why-sep">·</span><span>{$t('automation.why.checked_at', { time: new Date($automationCheckedAt).toLocaleTimeString() })}</span>
+            {/if}
+          </div>
+          {#if whyVerdict}
+            <div class="am-why-verdict am-why-{verdictTone(whyVerdict)}">{whyLine || $t('automation.why.v_no_match')}</div>
+          {/if}
+        </div>
+      {/if}
       <p class="am-hint">{$t('automation.hint')}</p>
 
       <SSIDPermissionBanner {TunnelService} />
@@ -492,6 +517,20 @@
   .am-sub { margin: 2px 0 0; font: 400 12px/1.2 var(--font-mono); color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .am-close { background: transparent; border: 0; color: var(--text-muted); cursor: pointer; padding: 4px; border-radius: 6px; }
   .am-close:hover { background: var(--bg-hover); color: var(--text-primary); }
+  .am-why {
+    margin: 0 0 10px;
+    padding: 8px 10px;
+    border-radius: 8px;
+    background: var(--bg-card);
+    border: 0.5px solid var(--border);
+    font: 400 12px/16px var(--font-sans);
+    color: var(--text-secondary);
+    flex-shrink: 0;
+  }
+  .am-why-net { display: flex; flex-wrap: wrap; gap: 0 6px; }
+  .am-why-sep { color: var(--text-muted); }
+  .am-why-verdict { margin-top: 3px; font-weight: 500; color: var(--text-primary); }
+  .am-why-warn { color: var(--orange, #FF9500); }
   .am-hint { margin: 12px 0; font: 400 12px/1.5 var(--font-sans); color: var(--text-secondary); flex-shrink: 0; }
   /* The one scrolling region: fills the space between the fixed header
      and the fixed add-button, so the dialog stays a constant size. The

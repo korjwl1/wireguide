@@ -11,6 +11,201 @@ import { Create as $Create } from "@wailsio/runtime";
 import * as domain$0 from "../domain/models.js";
 
 /**
+ * AutomationPreview is the GUI-facing view of the helper's read-only
+ * Automation.Preview: the network the engine currently sees plus one
+ * verdict per rule-bearing tunnel. The strings the user reads are built
+ * in the frontend from these structured fields (so they go through i18n).
+ */
+export class AutomationPreview {
+    /**
+     * Creates a new AutomationPreview instance.
+     * @param {Partial<AutomationPreview>} [$$source = {}] - The source object to create the AutomationPreview.
+     */
+    constructor($$source = {}) {
+        if (!("available" in $$source)) {
+            /**
+             * Available is false when the helper could not be asked (the frontend
+             * then hides the strip instead of showing stale or wrong state).
+             * @member
+             * @type {boolean}
+             */
+            this["available"] = false;
+        }
+        if (!("ssid" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["ssid"] = "";
+        }
+        if (!("ssid_unknown" in $$source)) {
+            /**
+             * SSIDUnknown is true only when we are online, the primary interface is
+             * known to be Wi-Fi, and no SSID is readable (Location Services denied,
+             * or a roam blip). An unknown interface (offline, Windows, a utun
+             * default route) never counts.
+             * @member
+             * @type {boolean}
+             */
+            this["ssid_unknown"] = false;
+        }
+        if (!("primary_known" in $$source)) {
+            /**
+             * PrimaryKnown is true when the helper identified the default-route
+             * interface; when false, PrimaryIsWiFi is only a placeholder.
+             * @member
+             * @type {boolean}
+             */
+            this["primary_known"] = false;
+        }
+        if (!("primary_is_wifi" in $$source)) {
+            /**
+             * @member
+             * @type {boolean}
+             */
+            this["primary_is_wifi"] = false;
+        }
+        if (!("online" in $$source)) {
+            /**
+             * @member
+             * @type {boolean}
+             */
+            this["online"] = false;
+        }
+        if (!("settled" in $$source)) {
+            /**
+             * @member
+             * @type {boolean}
+             */
+            this["settled"] = false;
+        }
+        if (!("settle_remaining_sec" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["settle_remaining_sec"] = 0;
+        }
+        if (!("has_negated_rules" in $$source)) {
+            /**
+             * HasNegatedRules is true when any tunnel has an "is not" rule, i.e.
+             * the settle window actually holds something back.
+             * @member
+             * @type {boolean}
+             */
+            this["has_negated_rules"] = false;
+        }
+        if (!("tunnels" in $$source)) {
+            /**
+             * @member
+             * @type {AutomationVerdict[]}
+             */
+            this["tunnels"] = [];
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new AutomationPreview instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {AutomationPreview}
+     */
+    static createFrom($$source = {}) {
+        const $$createField9_0 = $$createType1;
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("tunnels" in $$parsedSource) {
+            $$parsedSource["tunnels"] = $$createField9_0($$parsedSource["tunnels"]);
+        }
+        return new AutomationPreview(/** @type {Partial<AutomationPreview>} */($$parsedSource));
+    }
+}
+
+/**
+ * AutomationVerdict is one tunnel's evaluated automation state.
+ */
+export class AutomationVerdict {
+    /**
+     * Creates a new AutomationVerdict instance.
+     * @param {Partial<AutomationVerdict>} [$$source = {}] - The source object to create the AutomationVerdict.
+     */
+    constructor($$source = {}) {
+        if (!("name" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["name"] = "";
+        }
+        if (!("verdict" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["verdict"] = "";
+        }
+        if (!("active" in $$source)) {
+            /**
+             * @member
+             * @type {boolean}
+             */
+            this["active"] = false;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * RuleIndex is the 1-based position of the deciding rule (0 = none).
+             * @member
+             * @type {number | undefined}
+             */
+            this["rule_index"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * RuleType/RuleNegate/RuleValue describe the deciding rule's condition:
+             * type is ssid|subnet|network|none_match, value the SSID / CIDR / MAC
+             * (or the network's label when it has one).
+             * @member
+             * @type {string | undefined}
+             */
+            this["rule_type"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {boolean | undefined}
+             */
+            this["rule_negate"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {string | undefined}
+             */
+            this["rule_value"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {string | undefined}
+             */
+            this["overlap_cidr"] = undefined;
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new AutomationVerdict instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {AutomationVerdict}
+     */
+    static createFrom($$source = {}) {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new AutomationVerdict(/** @type {Partial<AutomationVerdict>} */($$parsedSource));
+    }
+}
+
+/**
  * ConnectionStatus is re-exported from the domain package so Wails bindings
  * expose the same type that the helper broadcasts — preventing field drift
  * between wire format and frontend expectations.
@@ -126,8 +321,8 @@ export class DNSLeakResult {
      * @returns {DNSLeakResult}
      */
     static createFrom($$source = {}) {
-        const $$createField1_0 = $$createType1;
-        const $$createField5_0 = $$createType2;
+        const $$createField1_0 = $$createType3;
+        const $$createField5_0 = $$createType4;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("dns_servers" in $$parsedSource) {
             $$parsedSource["dns_servers"] = $$createField1_0($$parsedSource["dns_servers"]);
@@ -235,7 +430,7 @@ export class KnownSSIDs {
      * @returns {KnownSSIDs}
      */
     static createFrom($$source = {}) {
-        const $$createField1_0 = $$createType2;
+        const $$createField1_0 = $$createType4;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("known" in $$parsedSource) {
             $$parsedSource["known"] = $$createField1_0($$parsedSource["known"]);
@@ -608,7 +803,7 @@ export class UpdateState {
      * @returns {UpdateState}
      */
     static createFrom($$source = {}) {
-        const $$createField3_0 = $$createType2;
+        const $$createField3_0 = $$createType4;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("dismissed_versions" in $$parsedSource) {
             $$parsedSource["dismissed_versions"] = $$createField3_0($$parsedSource["dismissed_versions"]);
@@ -656,6 +851,8 @@ export class ZipImportResult {
 }
 
 // Private type creation functions
-const $$createType0 = DNSServer.createFrom;
+const $$createType0 = AutomationVerdict.createFrom;
 const $$createType1 = $Create.Array($$createType0);
-const $$createType2 = $Create.Array($Create.Any);
+const $$createType2 = DNSServer.createFrom;
+const $$createType3 = $Create.Array($$createType2);
+const $$createType4 = $Create.Array($Create.Any);

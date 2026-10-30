@@ -31,6 +31,7 @@ func showDock() {
 		return
 	}
 	restoreMainWindow(dockWindow, runtime.GOOS == "linux")
+	emitWindowVisibility(true)
 }
 
 // hideDock only exists to hide the macOS dock icon — the window itself is

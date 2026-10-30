@@ -33,6 +33,7 @@ declare module "@wailsio/runtime" {
             "tunnels_changed": {};
             "update-available": update$0.UpdateInfo;
             "update_progress": { [_ in string]?: any };
+            "window_visibility": gui$0.WindowVisibilityEvent;
         }
     }
 }
