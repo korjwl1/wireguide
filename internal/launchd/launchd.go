@@ -9,6 +9,12 @@ import (
 	"syscall"
 )
 
+// AppBundleID is the app's CFBundleIdentifier (build/darwin/Info.plist). Both
+// generated launchd plists list it under AssociatedBundleIdentifiers so
+// System Settings > Login Items & Extensions attributes the background items
+// to WireGuide instead of to an unidentified developer.
+const AppBundleID = "com.korjwl1.wireguide"
+
 // SocketName is the key under the plist's Sockets dictionary.
 const SocketName = "Listeners"
 

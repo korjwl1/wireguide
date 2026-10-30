@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/korjwl1/wireguide/internal/ipc"
+	"github.com/korjwl1/wireguide/internal/launchd"
 )
 
 // testArgs returns a representative Args for plist generation.
@@ -77,6 +78,22 @@ func plistExtract(t *testing.T, path, keypath string) string {
 		t.Fatalf("plutil -extract %s: %v\n%s", keypath, err, out)
 	}
 	return strings.TrimSpace(string(out))
+}
+
+// TestPlistAssociatesAppBundle pins the attribution of the LaunchDaemon to the
+// WireGuide app in System Settings > Login Items & Extensions.
+func TestPlistAssociatesAppBundle(t *testing.T) {
+	plist := generatePlistContent("/Library/PrivilegedHelperTools/com.wireguide.helper", testArgs())
+	path := filepath.Join(t.TempDir(), "test.plist")
+	if err := os.WriteFile(path, []byte(plist), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if got := plistExtract(t, path, "AssociatedBundleIdentifiers.0"); got != launchd.AppBundleID {
+		t.Errorf("AssociatedBundleIdentifiers.0 = %q, want %q", got, launchd.AppBundleID)
+	}
+	if got := plistExtract(t, path, "AssociatedBundleIdentifiers"); got != "1" {
+		t.Errorf("AssociatedBundleIdentifiers has %s entries, want 1", got)
+	}
 }
 
 // TestPlistDeclaresLaunchdSocket pins the socket-activation contract: launchd
