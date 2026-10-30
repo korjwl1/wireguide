@@ -137,7 +137,7 @@
     "dns_protection": "DNS 保护",
     "dns_protection_hint": "阻止向已连接隧道未指定的服务器发送 DNS 请求。在 Windows 上对全隧道连接自动应用。",
     "health_check": "检查连接并重新连接",
-    "health_check_hint": "如果 180 秒内没有新的握手，则重新连接。建议对启用了 PersistentKeepalive 的隧道使用。",
+    "health_check_hint": "如果 180 秒内没有新的握手，则重新连接。建议对启用了 PersistentKeepalive 的隧道使用。睡眠时间不计入：唤醒后 90 秒内以及 macOS 无网络连接时，检查会暂停。",
     "pin_interface": "固定 VPN 服务器路由",
     "pin_interface_hint": "将到 VPN 服务器的路由保留在当前网络适配器上。",
     "tunnel_backend": "WireGuard 引擎",

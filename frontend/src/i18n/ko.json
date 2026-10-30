@@ -137,7 +137,7 @@
     "dns_protection": "DNS 보호",
     "dns_protection_hint": "연결된 터널에 지정된 DNS 서버 외의 DNS 요청을 차단합니다. Windows의 전체 터널 연결에는 자동으로 적용됩니다.",
     "health_check": "연결 상태 확인 및 재연결",
-    "health_check_hint": "180초 동안 새 핸드셰이크가 없으면 다시 연결합니다. 연결 유지(PersistentKeepalive)가 설정된 터널에 권장합니다.",
+    "health_check_hint": "180초 동안 새 핸드셰이크가 없으면 다시 연결합니다. 연결 유지(PersistentKeepalive)가 설정된 터널에 권장합니다. 잠자기 시간은 포함되지 않으며, 깨어난 후 90초 동안과 macOS에서 네트워크가 없는 동안에는 확인을 일시 중지합니다.",
     "pin_interface": "VPN 서버 연결 경로 고정",
     "pin_interface_hint": "VPN 서버로 향하는 경로를 현재 네트워크 어댑터에 고정합니다.",
     "tunnel_backend": "WireGuard 엔진",

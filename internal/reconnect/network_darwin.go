@@ -9,24 +9,25 @@ package reconnect
 #include <CoreFoundation/CoreFoundation.h>
 #include <string.h>
 
-// fetchPrimaryInterface reads State:/Network/Global/IPv4 from the
-// SCDynamicStore and copies the PrimaryInterface name into the
-// caller's buffer. Returns 1 on success, 0 if the key is missing or
-// truncation occurred. This is the canonical way macOS networking
-// code answers "which interface is currently the default route?":
-// Wi-Fi → Ethernet handovers and Ethernet plug/unplug both change
-// this value, while a wildcard SCNetworkReachability target reports
-// the same "reachable" flag for any non-zero set of active interfaces.
-static int fetchPrimaryInterface(char *out, int out_len) {
+// fetchPrimaryInterfaceForKey reads the given State:/Network/Global/*
+// key from the SCDynamicStore and copies the PrimaryInterface name into
+// the caller's buffer. Returns 1 on success (out is empty when the key
+// is missing), 0 on API failure or truncation. This is the canonical
+// way macOS networking code answers "which interface is currently the
+// default route?": Wi-Fi → Ethernet handovers and Ethernet plug/unplug
+// both change this value, while a wildcard SCNetworkReachability target
+// reports the same "reachable" flag for any non-zero set of active
+// interfaces.
+static int fetchPrimaryInterfaceForKey(CFStringRef key, char *out, int out_len) {
     SCDynamicStoreRef store = SCDynamicStoreCreate(NULL,
         CFSTR("io.github.korjwl1.wireguide.netmon"), NULL, NULL);
     if (store == NULL) {
         return 0;
     }
-    CFTypeRef value = SCDynamicStoreCopyValue(store, CFSTR("State:/Network/Global/IPv4"));
+    CFTypeRef value = SCDynamicStoreCopyValue(store, key);
     CFRelease(store);
     if (value == NULL) {
-        // No IPv4 default route configured at all.
+        // No default route configured for this address family.
         if (out_len > 0) {
             out[0] = '\0';
         }
@@ -50,12 +51,21 @@ static int fetchPrimaryInterface(char *out, int out_len) {
     CFRelease(value);
     return ok;
 }
+
+static int fetchPrimaryInterface(char *out, int out_len) {
+    return fetchPrimaryInterfaceForKey(CFSTR("State:/Network/Global/IPv4"), out, out_len);
+}
+
+static int fetchPrimaryInterfaceV6(char *out, int out_len) {
+    return fetchPrimaryInterfaceForKey(CFSTR("State:/Network/Global/IPv6"), out, out_len);
+}
 */
 import "C"
 
 import (
 	"log/slog"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unsafe"
 )
@@ -89,6 +99,17 @@ type darwinNetworkChangeDetector struct {
 	stopCh   chan struct{}
 	wg       sync.WaitGroup
 	running  bool
+	// offline is set by poll (never under mu: Stop holds mu across the
+	// poller's exit) when the last successful read found no primary
+	// IPv4 or IPv6 interface (see onlineFromPrimaries). False until the
+	// first read, so the detector reports online until it knows otherwise.
+	offline atomic.Bool
+}
+
+// Online reports whether a primary network interface exists (see
+// OnlineReporter). True until the first poll has completed.
+func (d *darwinNetworkChangeDetector) Online() bool {
+	return !d.offline.Load()
 }
 
 const networkPollInterval = 1 * time.Second
@@ -149,9 +170,26 @@ func (d *darwinNetworkChangeDetector) sendChange() {
 // or an empty string if none is configured. Returns ok=false on
 // API failure (logged once by the caller).
 func fetchPrimaryInterface() (string, bool) {
+	return fetchGlobalInterface(false)
+}
+
+// fetchPrimaryInterfaceV6 is fetchPrimaryInterface for the IPv6 key. It
+// feeds only Online(); change detection stays on the IPv4 primary.
+func fetchPrimaryInterfaceV6() (string, bool) {
+	return fetchGlobalInterface(true)
+}
+
+func fetchGlobalInterface(v6 bool) (string, bool) {
 	const bufLen = 64 // BSD interface names are at most ~16 chars
 	buf := make([]byte, bufLen)
-	if C.fetchPrimaryInterface((*C.char)(unsafe.Pointer(&buf[0])), C.int(bufLen)) == 0 {
+	p := (*C.char)(unsafe.Pointer(&buf[0]))
+	var rc C.int
+	if v6 {
+		rc = C.fetchPrimaryInterfaceV6(p, C.int(bufLen))
+	} else {
+		rc = C.fetchPrimaryInterface(p, C.int(bufLen))
+	}
+	if rc == 0 {
 		return "", false
 	}
 	// Find the null terminator written by CFStringGetCString.
@@ -187,6 +225,8 @@ func (d *darwinNetworkChangeDetector) poll() {
 				slog.Warn("SCDynamicStoreCopyValue failed")
 				continue
 			}
+			iface6, ok6 := fetchPrimaryInterfaceV6()
+			d.offline.Store(!onlineFromPrimaries(iface, iface6, ok6))
 			if !gate.initialized {
 				gate.observe(iface, time.Now())
 				slog.Info("network primary interface initial", "iface", iface)
