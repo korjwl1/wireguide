@@ -261,7 +261,8 @@ func Run(assetsHandler http.Handler, dataDir string) error {
 	healthDone := make(chan struct{})
 	var stopHealthOnce sync.Once
 	stopHealth := func() { stopHealthOnce.Do(func() { close(healthDone) }) }
-	shutdown = &guiShutdown{instance: instance, indicator: connectionIndicator, stopHealth: stopHealth, service: tunnelService, history: historyStore, clients: clients}
+	notify := newNotifier(settingsStore, tunnelService.UserActions())
+	shutdown = &guiShutdown{instance: instance, indicator: connectionIndicator, stopHealth: stopHealth, service: tunnelService, history: historyStore, clients: clients, notify: notify}
 	defer shutdown.run()
 
 	trayMgr := newTrayManager(app, win, tray, tunnelService, shutdown.run)
@@ -285,6 +286,7 @@ func Run(assetsHandler http.Handler, dataDir string) error {
 	// Pass the tray's cheap icon-update hook — NOT the full menu rebuild —
 	// so the 1 Hz status stream doesn't trigger IPC round-trips on every event.
 	bridge := newEventBridge(app, clients, trayMgr.setIconState, tunnelService.ReconcileHistoryFromStatus, trayMgr.quitApp)
+	bridge.notify = notify
 	bridge.start()
 
 	// Push the persisted log level to the helper now that the event

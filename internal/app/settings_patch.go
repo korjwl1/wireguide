@@ -28,6 +28,8 @@ type SettingsPatch struct {
 	ListSort        *string `json:"list_sort,omitempty"`
 	ListActiveOnTop *bool   `json:"list_active_on_top,omitempty"`
 	ListPaneWidth   *int    `json:"list_pane_width,omitempty"`
+	// NotifyAutoChanges is GUI-only: no helper side effect to apply.
+	NotifyAutoChanges *bool `json:"notify_auto_changes,omitempty"`
 }
 
 func (p SettingsPatch) apply(s *storage.Settings) {
@@ -45,6 +47,7 @@ func (p SettingsPatch) apply(s *storage.Settings) {
 	assignSetting(&s.ListSort, p.ListSort)
 	assignSetting(&s.ListActiveOnTop, p.ListActiveOnTop)
 	assignSetting(&s.ListPaneWidth, p.ListPaneWidth)
+	assignSetting(&s.NotifyAutoChanges, p.NotifyAutoChanges)
 	if p.AutoUpdateCheck != nil {
 		value := *p.AutoUpdateCheck
 		s.AutoUpdateCheck = &value

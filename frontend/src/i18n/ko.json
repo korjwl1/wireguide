@@ -1,5 +1,6 @@
 {
   "app": {
+    "automation_connected": "자동화가 {name} 터널을 연결했습니다",
     "automation_lan_overlap": "{name}: 터널 경로가 로컬 네트워크와 겹쳐 자동 연결을 보류했습니다.",
     "disconnected": "연결 안 됨",
     "connecting": "연결 중…",
@@ -157,6 +158,9 @@
     "about_footer_copyright": "© 2026 WireGuide",
     "section_appearance": "외관",
     "section_startup": "시작",
+    "section_notifications": "알림",
+    "notify_auto_changes": "터널 자동 변경 시 알림",
+    "notify_auto_changes_hint": "자동화 등으로 이 앱을 쓰지 않고 터널이 연결되거나 해제될 때 시스템 알림을 표시합니다.",
     "section_updates": "업데이트",
     "auto_update_check": "업데이트 자동 확인",
     "auto_update_check_hint": "하루에 한 번 새 버전이 있는지 확인합니다.",

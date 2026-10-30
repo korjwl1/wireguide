@@ -29,6 +29,11 @@ type TunnelService struct {
 	clients       *ipc.ClientHolder
 	app           *application.App
 
+	// userActions records connects/disconnects the user (window, tray)
+	// made in THIS process, so the notifier can tell them apart from
+	// automatic changes (automation, wake, health check, CLI).
+	userActions *UserActions
+
 	// updateScheduler + updateStore are wired in by the GUI Run() entry
 	// after the Wails service registers (we can't inject them at
 	// construction time because the scheduler needs the app reference to
@@ -87,8 +92,15 @@ func NewTunnelService(ts *storage.TunnelStore, ss *storage.SettingsStore, hs *st
 		settingsStore: ss,
 		historyStore:  hs,
 		clients:       clients,
+		userActions:   NewUserActions(),
 	}
 }
+
+// UserActions exposes the record of user-initiated connects/disconnects
+// to the GUI's notifier. Not bound to the frontend.
+//
+//wails:ignore
+func (s *TunnelService) UserActions() *UserActions { return s.userActions }
 
 // SetApp injects the Wails app for dialog access.
 func (s *TunnelService) SetApp(app *application.App) {

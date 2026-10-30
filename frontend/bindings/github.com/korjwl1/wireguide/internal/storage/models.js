@@ -280,6 +280,18 @@ export class Settings {
              */
             this["auto_update_check"] = undefined;
         }
+        if (!("notify_auto_changes" in $$source)) {
+            /**
+             * NotifyAutoChanges: show a native notification when a tunnel connects
+             * or disconnects without a user action in this GUI process (automation,
+             * wake, health-check recovery, CLI) and on helper problems. A plain
+             * bool is enough: Load starts from DefaultSettings, so a settings.json
+             * that predates the field keeps the default (true).
+             * @member
+             * @type {boolean}
+             */
+            this["notify_auto_changes"] = false;
+        }
         if (!("wifi_rules" in $$source)) {
             /**
              * WifiRules holds the LEGACY SSID-based auto-connect / auto-disconnect
@@ -312,10 +324,10 @@ export class Settings {
      * @returns {Settings}
      */
     static createFrom($$source = {}) {
-        const $$createField15_0 = $$createType0;
+        const $$createField16_0 = $$createType0;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("wifi_rules" in $$parsedSource) {
-            $$parsedSource["wifi_rules"] = $$createField15_0($$parsedSource["wifi_rules"]);
+            $$parsedSource["wifi_rules"] = $$createField16_0($$parsedSource["wifi_rules"]);
         }
         return new Settings(/** @type {Partial<Settings>} */($$parsedSource));
     }

@@ -443,6 +443,14 @@ export class SettingsPatch {
              */
             this["list_pane_width"] = undefined;
         }
+        if (/** @type {any} */(false)) {
+            /**
+             * NotifyAutoChanges is GUI-only: no helper side effect to apply.
+             * @member
+             * @type {boolean | null | undefined}
+             */
+            this["notify_auto_changes"] = undefined;
+        }
 
         Object.assign(this, $$source);
     }

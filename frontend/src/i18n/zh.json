@@ -1,5 +1,6 @@
 {
   "app": {
+    "automation_connected": "自动化已连接 {name}",
     "automation_lan_overlap": "{name}：自动连接已暂停，因为其路由与本地网络重叠。",
     "disconnected": "已断开",
     "connecting": "正在连接……",
@@ -158,6 +159,9 @@
     "up_to_date": "你已使用最新版本。",
     "section_appearance": "外观",
     "section_startup": "启动",
+    "section_notifications": "通知",
+    "notify_auto_changes": "隧道自动变更时通知",
+    "notify_auto_changes_hint": "当隧道在未通过本应用操作的情况下（例如由自动化）连接或断开时，显示系统通知。",
     "section_updates": "更新",
     "auto_update_check": "自动检查更新",
     "auto_update_check_hint": "每天检查一次新版本。",

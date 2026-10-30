@@ -145,6 +145,7 @@
     tunnel_backend: 'userspace',
     tray_icon_style: 'color',
     auto_update_check: true,
+    notify_auto_changes: true,
     compact_list: false,
   };
   let loaded = false;
@@ -184,6 +185,7 @@
         // the Go side becomes undefined here; default to true to match
         // Settings.AutoUpdateCheckEnabled() semantics.
         settings.auto_update_check = (s.auto_update_check === false) ? false : true;
+        settings.notify_auto_changes = s.notify_auto_changes !== false;
       }
       loaded = true;
       loadError = '';
@@ -252,6 +254,11 @@
     // then persist.
     compactList.set(settings.compact_list);
     queuePatch({ compact_list: settings.compact_list });
+  }
+
+  function onNotifyAutoChange(e) {
+    settings.notify_auto_changes = e.target.checked;
+    queuePatch({ notify_auto_changes: settings.notify_auto_changes });
   }
 
   function onAutoStartChange(e) {
@@ -435,6 +442,25 @@
               </div>
             </div>
           </div>
+
+          <!-- Windows has no notification backend; hide the toggle there. -->
+          {#if !/Windows/i.test(navigator.userAgent)}
+          <div class="settings-section">
+            <h4 class="section-title">{$t('settings.section_notifications')}</h4>
+            <div class="settings-card">
+              <div class="setting-row setting-row--toggle">
+                <div class="setting-info">
+                  <label class="setting-label" for="notify-auto">{$t('settings.notify_auto_changes')}</label>
+                  <p class="setting-desc">{$t('settings.notify_auto_changes_hint')}</p>
+                </div>
+                <label class="toggle">
+                  <input id="notify-auto" type="checkbox" checked={settings.notify_auto_changes} on:change={onNotifyAutoChange} />
+                  <span class="toggle-track"></span>
+                </label>
+              </div>
+            </div>
+          </div>
+          {/if}
 
           <div class="settings-section">
             <h4 class="section-title">{$t('settings.section_updates')}</h4>

@@ -45,6 +45,13 @@ type Settings struct {
 	// silence the failed-check log noise.
 	AutoUpdateCheck *bool `json:"auto_update_check,omitempty"`
 
+	// NotifyAutoChanges: show a native notification when a tunnel connects
+	// or disconnects without a user action in this GUI process (automation,
+	// wake, health-check recovery, CLI) and on helper problems. A plain
+	// bool is enough: Load starts from DefaultSettings, so a settings.json
+	// that predates the field keeps the default (true).
+	NotifyAutoChanges bool `json:"notify_auto_changes"`
+
 	// WifiRules holds the LEGACY SSID-based auto-connect / auto-disconnect
 	// policy. Retained for migration; superseded by Automation. Once
 	// Automation is populated it is the source of truth and WifiRules is
@@ -124,6 +131,9 @@ func DefaultSettings() *Settings {
 		ListSort:        "name_asc",
 		ListActiveOnTop: true,
 		ListPaneWidth:   240,
+
+		NotifyAutoChanges: true,
+
 		WifiRules: automation.Rules{
 			// Initialize the map so JSON serialization round-trips
 			// produce {} rather than null for an empty mapping.
