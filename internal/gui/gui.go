@@ -12,10 +12,12 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"os"
 	"runtime"
 	"sync"
 
 	wgapp "github.com/korjwl1/wireguide/internal/app"
+	"github.com/korjwl1/wireguide/internal/autostart"
 	"github.com/korjwl1/wireguide/internal/domain"
 	"github.com/korjwl1/wireguide/internal/guiinstance"
 	"github.com/korjwl1/wireguide/internal/ipc"
@@ -102,6 +104,20 @@ func Run(assetsHandler http.Handler, dataDir string) error {
 	// gets it after ensureHelper + the UpdateSettings path).
 	if s, err := settingsStore.Load(); err == nil && s != nil && s.LogLevel != "" {
 		setGUILogLevel(s.LogLevel)
+	}
+
+	// Bring an existing login item up to date with the current template
+	// (macOS: AssociatedBundleIdentifiers). Saving settings only rewrites it
+	// when the toggle changes, so an upgraded user would otherwise keep the
+	// old LaunchAgent. User-level file, no prompt; best-effort.
+	if s, err := settingsStore.Load(); err == nil && s != nil && s.AutoStart {
+		if exe, err := os.Executable(); err == nil {
+			if changed, err := autostart.SyncAutostart(exe); err != nil {
+				slog.Warn("autostart: cannot refresh login item", "error", err)
+			} else if changed {
+				slog.Info("autostart: login item updated to the current template")
+			}
+		}
 	}
 
 	initialClient, err := connectInitialHelper(dataDir)

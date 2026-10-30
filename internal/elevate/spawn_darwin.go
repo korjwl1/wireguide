@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/korjwl1/wireguide/internal/ipc"
+	"github.com/korjwl1/wireguide/internal/launchd"
 	"github.com/korjwl1/wireguide/internal/version"
 )
 
@@ -84,6 +85,12 @@ func generatePlistContent(exe string, args Args) string {
 <dict>
     <key>Label</key>
     <string>%s</string>
+    <!-- Ties this background item to the WireGuide app in System Settings
+         (Login Items and Extensions). -->
+    <key>AssociatedBundleIdentifiers</key>
+    <array>
+        <string>%s</string>
+    </array>
     <key>ProgramArguments</key>
     <array>
         <string>%s</string>
@@ -145,7 +152,7 @@ func generatePlistContent(exe string, args Args) string {
     <string>/var/log/wireguide-helper.log</string>
 </dict>
 </plist>
-`, daemonLabel, daemonBinary, args.SocketPath, uid, args.DataDir, ipc.DarwinSocketPath, uid)
+`, daemonLabel, launchd.AppBundleID, daemonBinary, args.SocketPath, uid, args.DataDir, ipc.DarwinSocketPath, uid)
 }
 
 // PlistNeedsReinstall reports whether the on-disk LaunchDaemon plist differs
