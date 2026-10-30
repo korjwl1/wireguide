@@ -1,13 +1,16 @@
 <script>
   import { onMount, onDestroy, createEventDispatcher } from 'svelte';
   import { EditorView, keymap, lineNumbers, highlightActiveLine } from '@codemirror/view';
+  import { lintGutter } from '@codemirror/lint';
+  import { get } from 'svelte/store';
+  import { TunnelService } from '../../bindings/github.com/korjwl1/wireguide/internal/app';
   import { EditorState, Compartment } from '@codemirror/state';
   import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands';
   import { oneDark } from '@codemirror/theme-one-dark';
   import { HighlightStyle, syntaxHighlighting } from '@codemirror/language';
   import { tags as tg } from '@lezer/highlight';
   import { autocompletion } from '@codemirror/autocomplete';
-  import { wireguardLanguage, wireguardCompletion } from './wireguard-lang.js';
+  import { wireguardLanguage, createWireguardCompletion, wireguardLinter, wireguardHover } from './wireguard-lang.js';
   import { resolvedTheme } from '../stores/theme.js';
   import { t } from '../i18n/index.js';
 
@@ -19,6 +22,9 @@
   export let name = '';
   export let isNew = false;
   export let nameEditable = true;
+  // Saved tunnel name being edited ('' for a new tunnel); passed to the linter
+  // so checks against other saved tunnels can exclude the one being edited.
+  export let lintName = '';
 
   const dispatch = createEventDispatcher();
 
@@ -32,6 +38,9 @@
     return btoa(String.fromCharCode(...bytes));
   }
 
+  // Translator for non-reactive code (template text, CodeMirror extensions).
+  const tr = (key, params) => get(t)(key, params);
+
   // Build default template for new configs with auto-generated private key
   function buildNewTemplate() {
     const key = generatePrivateKey();
@@ -39,6 +48,8 @@
 PrivateKey = ${key}
 Address = 10.0.0.2/24
 DNS = 1.1.1.1
+# DNS = 10.0.0.1  (${tr('editor.tpl_dns_global')})
+# DNS = 10.0.0.1, ~corp.lan  (${tr('editor.tpl_dns_split')})
 
 [Peer]
 PublicKey =
@@ -127,11 +138,21 @@ PersistentKeepalive = 25
         history(),
         keymap.of([indentWithTab, ...defaultKeymap, ...historyKeymap]),
         wireguardLanguage,
-        autocompletion({ override: [wireguardCompletion] }),
+        autocompletion({ override: [createWireguardCompletion(tr)] }),
+        wireguardLinter((text) => TunnelService.LintConfigFor(lintName, text), tr),
+        lintGutter(),
+        wireguardHover(tr),
         themeCompartment.of(initialThemeExt),
         EditorView.theme({
           '&': { height: '100%', fontSize: '13px' },
           '.cm-content': { fontFamily: 'monospace' },
+          '.cm-tooltip.cm-wg-hover, .cm-wg-hover': {
+            maxWidth: '380px',
+            padding: '8px 10px',
+            font: '12px/17px var(--font-sans)',
+          },
+          '.cm-wg-hover p': { margin: '0 0 6px' },
+          '.cm-wg-hover p:last-child': { marginBottom: '0' },
           '.cm-gutters': {
             background: 'var(--editor-gutter-bg)',
             borderRight: '1px solid var(--editor-border)',

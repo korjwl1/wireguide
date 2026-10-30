@@ -828,6 +828,7 @@
           errors={editorErrors}
           isNew={editorIsNew}
           nameEditable={true}
+          lintName={editorIsNew ? '' : editorOriginalName}
           on:save={doSave}
           on:cancel={() => showEditor = false} />
       </div>

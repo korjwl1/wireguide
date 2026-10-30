@@ -106,57 +106,8 @@ func validateInterface(iface *InterfaceConfig, result *ValidationResult) {
 	//
 	// A "~name" entry is a split-DNS routing domain: the tunnel's IP servers
 	// then answer only for that domain and system DNS is left alone.
-	var hasIP bool
-	matchSeen := make(map[string]struct{})
-	for _, dns := range iface.DNS {
-		if strings.HasPrefix(dns, "~") {
-			dom := dns[1:]
-			switch {
-			case dom == "":
-				result.addError("Interface.DNS", `invalid DNS entry "~": a split-DNS domain is required after "~"`)
-			case dom == ".":
-				result.addError("Interface.DNS", `invalid DNS entry "~.": use plain DNS servers to send all queries through the tunnel`)
-			case strings.HasPrefix(dom, "~"):
-				result.addError("Interface.DNS", fmt.Sprintf("invalid DNS entry %q: only one leading \"~\" is allowed", dns))
-			case strings.HasSuffix(dom, "."):
-				result.addError("Interface.DNS", fmt.Sprintf("invalid DNS entry %q: trailing dot is not allowed", dns))
-			case len(dom) > maxSplitDomainLen || !hostnameRegex.MatchString(dom):
-				result.addError("Interface.DNS", fmt.Sprintf("invalid split-DNS domain: %q", dns))
-			default:
-				matchSeen[strings.ToLower(dom)] = struct{}{}
-			}
-			continue
-		}
-		if net.ParseIP(dns) != nil {
-			hasIP = true
-			continue
-		}
-		if !hostnameRegex.MatchString(dns) {
-			result.addError("Interface.DNS", fmt.Sprintf("invalid DNS entry (not an IP or hostname): %q", dns))
-		}
-	}
-	if len(matchSeen) > 0 && !hasIP {
-		result.addError("Interface.DNS", `split DNS ("~domain") requires at least one DNS server IP address`)
-	}
-	if len(matchSeen) > maxSplitDomains {
-		result.addError("Interface.DNS", fmt.Sprintf("too many split-DNS domains (%d, max %d)", len(matchSeen), maxSplitDomains))
-	}
-
-	if len(matchSeen) > 0 {
-		parsed := iface.ParseDNS()
-		if len(parsed.Match)+len(parsed.Search) > maxSplitDomains {
-			result.addError("Interface.DNS", "too many split DNS match/search domains (max 32 total)")
-		}
-		for _, line := range []string{
-			"d.add ServerAddresses * " + strings.Join(parsed.Servers, " "),
-			"d.add SupplementalMatchDomains * " + strings.Join(parsed.Match, " "),
-			"d.add SupplementalMatchDomains * " + strings.Join(parsed.Search, " "),
-		} {
-			if len(line) > 2000 {
-				result.addError("Interface.DNS", "split DNS list exceeds the 2000-byte platform command limit")
-				break
-			}
-		}
+	for _, msg := range dnsErrors(iface.DNS) {
+		result.addError("Interface.DNS", msg)
 	}
 
 	// MTU: optional, valid range
@@ -168,6 +119,66 @@ func validateInterface(iface *InterfaceConfig, result *ValidationResult) {
 	if iface.ListenPort != 0 && (iface.ListenPort < 1 || iface.ListenPort > 65535) {
 		result.addError("Interface.ListenPort", fmt.Sprintf("ListenPort must be between 1 and 65535, got %d", iface.ListenPort))
 	}
+}
+
+// dnsErrors returns the validation messages for an Interface DNS list. It is
+// shared by Validate (blocking) and Lint (inline editor diagnostics) so both
+// report identical text.
+func dnsErrors(entries []string) []string {
+	var errs []string
+	var hasIP bool
+	matchSeen := make(map[string]struct{})
+	for _, dns := range entries {
+		if strings.HasPrefix(dns, "~") {
+			dom := dns[1:]
+			switch {
+			case dom == "":
+				errs = append(errs, `invalid DNS entry "~": a split-DNS domain is required after "~"`)
+			case dom == ".":
+				errs = append(errs, `invalid DNS entry "~.": use plain DNS servers to send all queries through the tunnel`)
+			case strings.HasPrefix(dom, "~"):
+				errs = append(errs, fmt.Sprintf("invalid DNS entry %q: only one leading \"~\" is allowed", dns))
+			case strings.HasSuffix(dom, "."):
+				errs = append(errs, fmt.Sprintf("invalid DNS entry %q: trailing dot is not allowed", dns))
+			case len(dom) > maxSplitDomainLen || !hostnameRegex.MatchString(dom):
+				errs = append(errs, fmt.Sprintf("invalid split-DNS domain: %q", dns))
+			default:
+				matchSeen[strings.ToLower(dom)] = struct{}{}
+			}
+			continue
+		}
+		if net.ParseIP(dns) != nil {
+			hasIP = true
+			continue
+		}
+		if !hostnameRegex.MatchString(dns) {
+			errs = append(errs, fmt.Sprintf("invalid DNS entry (not an IP or hostname): %q", dns))
+		}
+	}
+	if len(matchSeen) > 0 && !hasIP {
+		errs = append(errs, `split DNS ("~domain") requires at least one DNS server IP address`)
+	}
+	if len(matchSeen) > maxSplitDomains {
+		errs = append(errs, fmt.Sprintf("too many split-DNS domains (%d, max %d)", len(matchSeen), maxSplitDomains))
+	}
+
+	if len(matchSeen) > 0 {
+		parsed := (&InterfaceConfig{DNS: entries}).ParseDNS()
+		if len(parsed.Match)+len(parsed.Search) > maxSplitDomains {
+			errs = append(errs, "too many split DNS match/search domains (max 32 total)")
+		}
+		for _, line := range []string{
+			"d.add ServerAddresses * " + strings.Join(parsed.Servers, " "),
+			"d.add SupplementalMatchDomains * " + strings.Join(parsed.Match, " "),
+			"d.add SupplementalMatchDomains * " + strings.Join(parsed.Search, " "),
+		} {
+			if len(line) > 2000 {
+				errs = append(errs, "split DNS list exceeds the 2000-byte platform command limit")
+				break
+			}
+		}
+	}
+	return errs
 }
 
 func validatePeer(peer *PeerConfig, index int, result *ValidationResult) {
