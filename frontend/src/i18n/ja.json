@@ -137,7 +137,7 @@
     "dns_protection": "DNS 保護",
     "dns_protection_hint": "接続中のトンネルに指定されていない DNS サーバーへのリクエストをブロックします。Windows のフルトンネル接続には自動的に適用します。",
     "health_check": "接続確認と再接続",
-    "health_check_hint": "180 秒間新しいハンドシェイクがない場合に再接続します。PersistentKeepalive を設定したトンネルに推奨します。",
+    "health_check_hint": "180 秒間新しいハンドシェイクがない場合に再接続します。PersistentKeepalive を設定したトンネルに推奨します。スリープ中の時間は数えず、スリープ解除後 90 秒間と、macOS でネットワークに接続していない間はチェックを一時停止します。",
     "pin_interface": "VPN サーバーへの経路を固定",
     "pin_interface_hint": "VPN サーバーへの経路を現在のネットワークアダプターに固定します。",
     "tunnel_backend": "WireGuard エンジン",
