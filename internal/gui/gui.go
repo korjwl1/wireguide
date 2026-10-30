@@ -17,6 +17,7 @@ import (
 
 	wgapp "github.com/korjwl1/wireguide/internal/app"
 	"github.com/korjwl1/wireguide/internal/domain"
+	"github.com/korjwl1/wireguide/internal/elevate"
 	"github.com/korjwl1/wireguide/internal/guiinstance"
 	"github.com/korjwl1/wireguide/internal/ipc"
 	"github.com/korjwl1/wireguide/internal/storage"
@@ -103,6 +104,15 @@ func Run(assetsHandler http.Handler, dataDir string) error {
 	if s, err := settingsStore.Load(); err == nil && s != nil && s.LogLevel != "" {
 		setGUILogLevel(s.LogLevel)
 	}
+
+	// The explanation shown before the administrator prompt follows the same
+	// language rule as the tray: the Settings language, else the system's.
+	elevate.SetNoticeLanguage(func() string {
+		if s, err := settingsStore.Load(); err == nil && s != nil && s.Language != "" && s.Language != "auto" {
+			return s.Language
+		}
+		return preferredGUILanguage()
+	})
 
 	initialClient, err := connectInitialHelper(dataDir)
 	if err != nil {
