@@ -45,6 +45,39 @@ func (s *TunnelService) ValidateConfig(content string) ([]string, error) {
 	return result.ErrorMessages(), nil
 }
 
+// LintConfigFor returns advisory (non-blocking) editor diagnostics for a raw
+// config string: DNS errors mirroring ValidateConfig, plus warnings and hints.
+// editing is the saved tunnel name being edited ("" for a new tunnel); it is
+// reserved for cross-tunnel checks. It never affects whether a config is
+// valid. Content that does not parse yields no diagnostics (ValidateConfig
+// reports the parse error).
+func (s *TunnelService) LintConfigFor(editing, content string) ([]config.Diagnostic, error) {
+	_ = editing
+	cfg, err := config.Parse(content)
+	if err != nil {
+		return []config.Diagnostic{}, nil
+	}
+	ds := safeLint(cfg, nil)
+	if ds == nil {
+		ds = []config.Diagnostic{}
+	}
+	return ds, nil
+}
+
+// lintConfig is the linter safeLint guards; a variable so tests can make it panic.
+var lintConfig = config.Lint
+
+// safeLint runs config.Lint but never lets a panic escape: linting is advisory
+// and must not be able to kill the GUI.
+func safeLint(cfg *config.WireGuardConfig, others map[string]*config.WireGuardConfig) (ds []config.Diagnostic) {
+	defer func() {
+		if r := recover(); r != nil {
+			ds = nil
+		}
+	}()
+	return lintConfig(cfg, others)
+}
+
 // GetConfigText returns the serialized form of a stored tunnel's config.
 func (s *TunnelService) GetConfigText(name string) (string, error) {
 	cfg, err := s.tunnelStore.Load(name)

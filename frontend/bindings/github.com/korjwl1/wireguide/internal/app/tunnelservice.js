@@ -20,6 +20,9 @@ import { Call as $Call, CancellablePromise as $CancellablePromise, Create as $Cr
 import * as automation$0 from "../automation/models.js";
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
+import * as config$0 from "../config/models.js";
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore: Unused imports
 import * as diag$0 from "../diag/models.js";
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
@@ -411,13 +414,30 @@ export function ImportZipData(data) {
 }
 
 /**
+ * LintConfigFor returns advisory (non-blocking) editor diagnostics for a raw
+ * config string: DNS errors mirroring ValidateConfig, plus warnings and hints.
+ * editing is the saved tunnel name being edited ("" for a new tunnel); it is
+ * reserved for cross-tunnel checks. It never affects whether a config is
+ * valid. Content that does not parse yields no diagnostics (ValidateConfig
+ * reports the parse error).
+ * @param {string} editing
+ * @param {string} content
+ * @returns {$CancellablePromise<config$0.Diagnostic[]>}
+ */
+export function LintConfigFor(editing, content) {
+    return $Call.ByID(527601885, editing, content).then(/** @type {($result: any) => any} */(($result) => {
+        return $$createType28($result);
+    }));
+}
+
+/**
  * ListTunnels decorates the local summaries with the helper's complete
  * active set. A failed probe leaves a useful local list for offline editing.
  * @returns {$CancellablePromise<$models.TunnelInfo[]>}
  */
 export function ListTunnels() {
     return $Call.ByID(3587038916).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType27($result);
+        return $$createType29($result);
     }));
 }
 
@@ -432,7 +452,7 @@ export function ListTunnels() {
  */
 export function ListTunnelsLocal() {
     return $Call.ByID(3031176175).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType27($result);
+        return $$createType29($result);
     }));
 }
 
@@ -525,7 +545,7 @@ export function RenameTunnel(oldName, newName) {
  */
 export function RunDNSLeakTest() {
     return $Call.ByID(2469114850).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType29($result);
+        return $$createType31($result);
     }));
 }
 
@@ -761,6 +781,8 @@ const $$createType23 = $models.TunnelInfo.createFrom;
 const $$createType24 = $Create.Nullable($$createType23);
 const $$createType25 = $models.ZipImportResult.createFrom;
 const $$createType26 = $Create.Array($$createType25);
-const $$createType27 = $Create.Array($$createType23);
-const $$createType28 = $models.DNSLeakResult.createFrom;
-const $$createType29 = $Create.Nullable($$createType28);
+const $$createType27 = config$0.Diagnostic.createFrom;
+const $$createType28 = $Create.Array($$createType27);
+const $$createType29 = $Create.Array($$createType23);
+const $$createType30 = $models.DNSLeakResult.createFrom;
+const $$createType31 = $Create.Nullable($$createType30);
