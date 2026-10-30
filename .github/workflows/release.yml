@@ -533,6 +533,12 @@ jobs:
                   "~/Library/Preferences/com.korjwl1.wireguide.plist",
                   "/var/run/wireguide",
                   "/var/log/wireguide-helper.log",
+                  "/var/log/wireguide-helper.log.1",
+                  "/var/log/wireguide-helper.log.2",
+                  "/var/log/wireguide-helper.log.3",
+                  "/var/log/wireguide-helper.log.4",
+                  "/var/log/wireguide-helper.log.5",
+                  "/var/log/wireguide-helper.stderr.log",
                 ]
           end
           EOF
