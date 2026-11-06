@@ -109,8 +109,13 @@ func Lint(cfg *WireGuardConfig, _ map[string]*WireGuardConfig) []Diagnostic {
 		}
 	}
 
-	// Warning: .local routing domains collide with mDNS.
+	// Warning: .local routing domains collide with mDNS. Not on Windows,
+	// where dns_split_windows already says to remove every ~ entry and
+	// suggesting another suffix would still not connect.
 	for _, m := range dns.Match {
+		if lintGOOS == "windows" {
+			break
+		}
 		lower := strings.ToLower(m)
 		if lower == "local" || strings.HasSuffix(lower, ".local") {
 			out = append(out, Diagnostic{
