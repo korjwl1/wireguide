@@ -141,8 +141,8 @@ func generatePlistContent(exe string, args Args) string {
     <key>ThrottleInterval</key>
     <integer>5</integer>
     <!-- The helper writes its own size-rotated log to %s;
-         launchd only captures panics and runtime output here, so this
-         file stays tiny. -->
+         launchd only captures panics and runtime output here, which
+         it appends to without rotation. -->
     <key>StandardErrorPath</key>
     <string>%s</string>
     <key>StandardOutPath</key>

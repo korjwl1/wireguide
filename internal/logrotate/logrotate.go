@@ -12,6 +12,12 @@ import (
 // Writer is an io.WriteCloser that appends to Path and rotates by size:
 // Path -> Path.1 -> ... -> Path.<MaxFiles>; the oldest is dropped. Rotation
 // happens in-process so no external signal is needed.
+//
+// maxBytes is a nominal per-file threshold checked before each write: a write
+// that would push a non-empty file past it rotates first. A single Write
+// larger than maxBytes is written whole, so a file can exceed the threshold.
+// Steady-state usage is about maxBytes x (maxFiles+1); this is not a hard
+// disk cap.
 type Writer struct {
 	path     string
 	maxBytes int64
@@ -23,8 +29,9 @@ type Writer struct {
 }
 
 // Open opens (creating if needed, mode 0644, O_APPEND) the log at path. If an
-// existing file is already larger than maxBytes it is rotated immediately so
-// an oversized existing log is retired at once.
+// existing file is already larger than maxBytes it is rotated immediately:
+// it is kept, whole, as the .1 sibling (not truncated) and ages out as later
+// rotations shift it up.
 func Open(path string, maxBytes int64, maxFiles int) (*Writer, error) {
 	if maxBytes <= 0 || maxFiles < 1 {
 		return nil, fmt.Errorf("logrotate: invalid limits (%d bytes, %d files)", maxBytes, maxFiles)

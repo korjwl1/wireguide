@@ -6,7 +6,8 @@ const (
 	// HelperLogPath is the macOS helper's own rotated log (slog output).
 	HelperLogPath = "/var/log/wireguide-helper.log"
 	// HelperStderrPath is where launchd captures the helper's raw
-	// stdout/stderr on macOS: panics and runtime output only.
+	// stdout/stderr on macOS: panics and runtime output only. launchd
+	// appends to it; the helper neither rotates nor trims it.
 	HelperStderrPath = "/var/log/wireguide-helper.stderr.log"
 
 	// WindowsLogName is the rotated slog file the Windows helper writes
@@ -14,11 +15,17 @@ const (
 	WindowsLogName = "helper-stderr.log"
 	// WindowsPanicLogName receives the Windows helper's raw stderr (runtime
 	// fatal errors, panics) under the same opt-in. It is not rotated per
-	// write; see the main package for its startup trimming.
+	// write; the main package only moves it aside to .1 at startup when it
+	// is already larger than HelperLogMaxBytes.
 	WindowsPanicLogName = "helper-stderr.panic.log"
 
-	// HelperLogMaxBytes and HelperLogMaxFiles bound each rotated helper log:
-	// the live file plus up to MaxFiles numbered siblings (.1 ... .N).
+	// HelperLogMaxBytes is the nominal per-file rotation threshold, checked
+	// before each write; HelperLogMaxFiles is how many numbered siblings
+	// (.1 ... .N) are kept besides the live file. Steady-state usage is about
+	// MaxBytes x (MaxFiles+1), but this is not a hard disk cap: a single
+	// Write larger than MaxBytes is written whole, an oversized existing log
+	// is kept as the .1 sibling, and the raw stderr/panic capture is not
+	// rotated per write.
 	HelperLogMaxBytes int64 = 10 << 20
 	HelperLogMaxFiles       = 5
 )

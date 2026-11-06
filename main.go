@@ -68,12 +68,13 @@ func main() {
 		// forensic trail. Append mode, so a crash + relaunch accumulates both
 		// runs in one place. On Windows slog output is written separately to
 		// a size-rotated helper-stderr.log (see internal/helper), so stderr
-		// goes to helper-stderr.panic.log, trimmed at startup when oversized;
-		// elsewhere stderr keeps going to helper-stderr.log. Off by default:
-		// a privileged process writing to a known path on every install is a
-		// bigger surface than most users want without opting in. Failure to
-		// open a file is silent and the helper proceeds with the default
-		// (detached) stderr.
+		// goes to helper-stderr.panic.log, moved aside to .1 at startup when
+		// oversized (never rotated per write); elsewhere stderr keeps going
+		// to helper-stderr.log, which is neither rotated nor trimmed. Off by
+		// default: a privileged process writing to a known path on every
+		// install is a bigger surface than most users want without opting
+		// in. Failure to open a file is silent and the helper proceeds with
+		// the default (detached) stderr.
 		if os.Getenv("WIREGUIDE_HELPER_STDERR") == "1" {
 			_ = os.MkdirAll(*dataDir, 0755)
 			stderrLog := filepath.Join(*dataDir, "helper-stderr.log")

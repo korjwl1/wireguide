@@ -30,8 +30,8 @@ func TestHelperLogFile(t *testing.T) {
 	}
 }
 
-// Handler output must go through the rotating writer so the live file stays
-// bounded.
+// Handler output must go through the rotating writer so the live file is
+// rotated at the size threshold.
 func TestBroadcastHandlerWritesThroughRotatingLog(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "helper.log")
 	w, err := logrotate.Open(path, 2048, 2)
