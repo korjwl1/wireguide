@@ -247,18 +247,24 @@
   }
 
   /* --- Sort bar (issue #17) --- */
+  /* The sort control and the checkbox need about 300px side by side, wider
+     than the default list pane. They wrap onto two lines instead of
+     overlapping; neither item shrinks below its text, except that the
+     checkbox label ellipsizes at the narrowest pane widths (the title
+     attribute carries the full text). */
   .sort-bar {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
     justify-content: space-between;
-    gap: 8px;
+    gap: 4px 8px;
     padding: 0 var(--space-3) 6px;
   }
   .sort-select-wrap {
     display: flex;
     align-items: center;
     gap: 5px;
-    min-width: 0;
+    flex: 0 0 auto;
   }
   .sort-label {
     font: 400 11px/1 var(--font-sans);
@@ -281,16 +287,22 @@
     display: flex;
     align-items: center;
     gap: 5px;
+    min-width: 0;
     font: 400 11px/1 var(--font-sans);
     color: var(--text-muted);
     cursor: pointer;
     white-space: nowrap;
   }
   .sort-active-top input {
+    flex: 0 0 auto;
     width: 12px;
     height: 12px;
     accent-color: var(--accent);
     cursor: pointer;
+  }
+  .sort-active-top span {
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   /* --- List items: card-style with name + endpoint --- */
