@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/korjwl1/wireguide/internal/ipc"
@@ -324,12 +325,27 @@ var runAuthorizationScript = func(script string) ([]byte, error) {
 	return exec.Command("osascript", "-e", script).CombinedOutput()
 }
 
+// authNoticeShown records that the explanation dialog has already been
+// displayed in this process. The longer explanation is shown at most once per
+// process ("session", nothing is persisted) so repeated repair retries do not
+// stack a second modal dialog in front of every password prompt.
+var authNoticeShown atomic.Bool
+
 func runDaemonAuthorization(shellScript string) error {
 	// Explain BEFORE the password prompt, and only here: this runs solely
 	// when an install or repair really needs administrator rights, never on
-	// the passive no-prompt start path.
-	if err := showAuthorizationNotice(); err != nil {
-		return err
+	// the passive no-prompt start path. Once per process: the claim is taken
+	// before showing so concurrent attempts cannot both show it, kept when the
+	// user saw the dialog (accepted or declined), and released when the dialog
+	// could not be shown at all so a later attempt may try again.
+	if authNoticeShown.CompareAndSwap(false, true) {
+		shown, err := showAuthorizationNotice()
+		if !shown {
+			authNoticeShown.Store(false)
+		}
+		if err != nil {
+			return err
+		}
 	}
 	escaped := strings.ReplaceAll(shellScript, `\`, `\\`)
 	escaped = strings.ReplaceAll(escaped, `"`, `\"`)

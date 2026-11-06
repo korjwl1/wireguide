@@ -72,18 +72,21 @@ var runNoticeScript = func(script string) ([]byte, error) {
 }
 
 // showAuthorizationNotice tells the user why a password is about to be asked
-// for. It returns ErrAuthorizationCanceled when they decline, so the existing
-// retry flow handles it like a cancelled password prompt. A dialog that cannot
-// be shown at all (no osascript, no window server) never blocks the install:
-// the password prompt that follows carries its own explanation.
-var showAuthorizationNotice = func() error {
+// for. shown reports whether the dialog actually reached the user (accepted or
+// declined), which is what the once-per-process gate in runDaemonAuthorization
+// keys on. It returns ErrAuthorizationCanceled when they decline, so the
+// existing retry flow handles it like a cancelled password prompt. A dialog
+// that cannot be shown at all (no osascript, no window server) never blocks the
+// install: it returns shown=false and a nil error, and the password prompt that
+// follows carries its own explanation.
+var showAuthorizationNotice = func() (shown bool, err error) {
 	out, err := runNoticeScript(authNoticeScript(currentAuthNotice()))
 	if err == nil {
-		return nil
+		return true, nil
 	}
 	if strings.Contains(string(out), "(-128)") {
-		return fmt.Errorf("%w: declined in the explanation dialog", ErrAuthorizationCanceled)
+		return true, fmt.Errorf("%w: declined in the explanation dialog", ErrAuthorizationCanceled)
 	}
 	slog.Warn("authorization explanation dialog could not be shown; continuing", "error", err)
-	return nil
+	return false, nil
 }
