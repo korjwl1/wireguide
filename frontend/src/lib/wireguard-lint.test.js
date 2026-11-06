@@ -1,9 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import {
   scanSections, fieldLines, fieldRange, diagText, fixLabel, mapDiagnostics, fixChanges,
   allowedIPsFromText, gatewayCandidates, reverseZones,
-  dnsValueContext, dnsCompletionOptions, dnsHoverAt, dnsHoverText,
+  dnsValueContext, dnsCompletionOptions, dnsHoverAt, dnsHoverText, splitDnsSupported,
 } from './wireguard-lint.js';
 
 // Pick the fields named in `want` from `got` so a partial match can use
@@ -207,4 +208,84 @@ test('hover text is platform-neutral about the dig caveat', () => {
     const texts = dnsHoverText(hit, (k) => k).map((p) => p.text);
     assert.ok(texts.includes('lint.hover_dig'));
   }
+});
+
+// ---- shared round-trip fixture (also read by internal/config) ------------
+
+const ROUNDTRIP = JSON.parse(readFileSync(
+  new URL('../../../internal/config/testdata/dns_fix_roundtrip.json', import.meta.url), 'utf8'));
+
+function applyChanges(doc, changes) {
+  let out = doc;
+  for (const c of [...changes].sort((a, b) => b.from - a.from)) {
+    out = out.slice(0, c.from) + c.insert + out.slice(c.to);
+  }
+  return out;
+}
+
+test('fixChanges produces the fixture text that the Go parser and validator check', () => {
+  assert.ok(ROUNDTRIP.length >= 8);
+  for (const c of ROUNDTRIP) {
+    const ch = fixChanges(c.input, { action: 'append_dns', value: c.value });
+    assert.ok(ch, c.name);
+    assert.equal(applyChanges(c.input, ch), c.fixed, c.name);
+  }
+});
+
+test('Go comment rules: # starts a comment anywhere, including after headers', () => {
+  const doc = '[Interface] # local\nDNS = 10.0.0.1 # resolver\n[Peer]# office\nAllowedIPs = 10.0.0.0/24 # lan, 10.9.0.0/24\n';
+  const lines = scanSections(doc);
+  assert.deepEqual(lines.map((l) => [l.section, l.header]), [
+    ['interface', true], ['interface', false], ['peer', true], ['peer', false], ['peer', false],
+  ]);
+  assert.deepEqual(fieldLines(doc, 'Interface.DNS').map((l) => l.text), ['DNS = 10.0.0.1 # resolver']);
+  // Everything after # is dropped by the Go parser, including the second CIDR.
+  assert.deepEqual(allowedIPsFromText(doc), ['10.0.0.0/24']);
+  // A ; is a comment only at the start of a line.
+  assert.equal(scanSections('; [Peer]\n')[0].section, null);
+});
+
+test('fixChanges inserts before an inline comment on an empty DNS value', () => {
+  const doc = '[Interface]\nDNS = # todo\n';
+  const next = applyChanges(doc, fixChanges(doc, { action: 'append_dns', value: '~corp.example' }));
+  assert.equal(next, '[Interface]\nDNS = ~corp.example # todo\n');
+});
+
+test('completion and hover ignore text inside an inline comment', () => {
+  assert.equal(dnsValueContext('DNS = 10.0.0.1 # ~co'), null);
+  const line = 'DNS = 10.0.0.1 # ~corp.lan';
+  assert.equal(dnsHoverAt(line, line.indexOf('~corp') + 2), null);
+  assert.deepEqual(pick(dnsHoverAt(line, 1), { kind: 'key' }), { kind: 'key' });
+});
+
+// ---- platform awareness ------------------------------------------------
+
+test('dnsCompletionOptions never suggests split DNS where it is unsupported', () => {
+  const opts = dnsCompletionOptions(DOC, tr, { splitDns: false });
+  assert.ok(opts.length > 0);
+  for (const o of opts) {
+    assert.ok(!o.label.includes('~') && !o.insert.includes('~'), `split suggestion ${o.label}`);
+  }
+  assert.ok(opts.some((o) => o.label === '192.168.1.1'));
+  assert.equal(opts.some((o) => o.kind === 'line'), false);
+  assert.deepEqual(dnsCompletionOptions(DOC, tr, { splitDns: false, valueEmpty: false, token: '~' }), []);
+  // Supported platforms keep the split-DNS options.
+  const split = dnsCompletionOptions(DOC, tr, { splitDns: true });
+  assert.ok(split.some((o) => o.label === '~'));
+  assert.ok(split.some((o) => o.kind === 'line' && o.insert.includes('~corp.lan')));
+});
+
+test('dnsHoverText replaces the split-DNS advice where it is unsupported', () => {
+  const key = dnsHoverText({ kind: 'key' }, (k) => k, { splitDns: false }).map((p) => p.text);
+  assert.ok(!key.includes('lint.hover_split'));
+  assert.ok(key.includes('lint.hover_split_unsupported'));
+  const match = dnsHoverText({ kind: 'match', domain: 'corp.lan' }, (k) => k, { splitDns: false });
+  assert.equal(match[0].text, 'lint.hover_split_unsupported');
+  assert.ok(dnsHoverText({ kind: 'key' }, (k) => k).map((p) => p.text).includes('lint.hover_split'));
+});
+
+test('splitDnsSupported reads the platform from the user agent', () => {
+  assert.equal(splitDnsSupported('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Edg/120.0'), false);
+  assert.equal(splitDnsSupported('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15'), true);
+  assert.equal(splitDnsSupported('Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/605.1.15'), true);
 });

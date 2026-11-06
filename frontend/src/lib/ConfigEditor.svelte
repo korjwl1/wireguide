@@ -11,6 +11,7 @@
   import { tags as tg } from '@lezer/highlight';
   import { autocompletion } from '@codemirror/autocomplete';
   import { wireguardLanguage, createWireguardCompletion, wireguardLinter, wireguardHover } from './wireguard-lang.js';
+  import { splitDnsSupported } from './wireguard-lint.js';
   import { resolvedTheme } from '../stores/theme.js';
   import { t } from '../i18n/index.js';
 
@@ -41,6 +42,9 @@
   // Translator for non-reactive code (template text, CodeMirror extensions).
   const tr = (key, params) => get(t)(key, params);
 
+  // Split DNS cannot connect on Windows: never suggest it there.
+  const splitDns = splitDnsSupported();
+
   // Build default template for new configs with auto-generated private key
   function buildNewTemplate() {
     const key = generatePrivateKey();
@@ -48,8 +52,8 @@
 PrivateKey = ${key}
 Address = 10.0.0.2/24
 DNS = 1.1.1.1
-# DNS = 10.0.0.1  (${tr('editor.tpl_dns_global')})
-# DNS = 10.0.0.1, ~corp.lan  (${tr('editor.tpl_dns_split')})
+# DNS = 10.0.0.1  (${tr('editor.tpl_dns_global')})${splitDns ? `
+# DNS = 10.0.0.1, ~corp.lan  (${tr('editor.tpl_dns_split')})` : ''}
 
 [Peer]
 PublicKey =
@@ -138,10 +142,10 @@ PersistentKeepalive = 25
         history(),
         keymap.of([indentWithTab, ...defaultKeymap, ...historyKeymap]),
         wireguardLanguage,
-        autocompletion({ override: [createWireguardCompletion(tr)] }),
+        autocompletion({ override: [createWireguardCompletion(tr, { splitDns })] }),
         wireguardLinter((text) => TunnelService.LintConfigFor(lintName, text), tr),
         lintGutter(),
-        wireguardHover(tr),
+        wireguardHover(tr, { splitDns }),
         themeCompartment.of(initialThemeExt),
         EditorView.theme({
           '&': { height: '100%', fontSize: '13px' },

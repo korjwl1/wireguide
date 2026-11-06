@@ -18,7 +18,9 @@ const (
 const (
 	// FixRemoveDNS deletes the Interface DNS line(s).
 	FixRemoveDNS = "remove_dns"
-	// FixAppendDNS appends Value (comma separated tokens) to the DNS line.
+	// FixAppendDNS appends Value (comma separated tokens) to the last DNS
+	// line, before any inline "# comment". The Fix carries no positions; the
+	// editor locates the line itself using the parser's comment rules.
 	FixAppendDNS = "append_dns"
 )
 
@@ -62,7 +64,8 @@ func Lint(cfg *WireGuardConfig, _ map[string]*WireGuardConfig) []Diagnostic {
 	var out []Diagnostic
 
 	// Errors mirror the validator's DNS rules, with identical text.
-	for _, msg := range dnsErrors(cfg.Interface.DNS) {
+	dnsErrs := dnsErrors(cfg.Interface.DNS)
+	for _, msg := range dnsErrs {
 		out = append(out, Diagnostic{
 			Field:    "Interface.DNS",
 			Severity: SeverityError,
@@ -86,10 +89,14 @@ func Lint(cfg *WireGuardConfig, _ map[string]*WireGuardConfig) []Diagnostic {
 			list := strings.Join(outside, ", ")
 			// macOS replaces the DNS of every network service; elsewhere
 			// the servers are set on the tunnel adapter, so the wording
-			// (and translation key) differs.
+			// (and translation key) differs. Windows has no split DNS, so
+			// its wording does not suggest ~domain.
 			code := "dns_global_outside_adapter"
-			if lintGOOS == "darwin" {
+			switch lintGOOS {
+			case "darwin":
 				code = "dns_global_outside"
+			case "windows":
+				code = "dns_global_outside_windows"
 			}
 			out = append(out, Diagnostic{
 				Field:    "Interface.DNS",
@@ -148,41 +155,72 @@ func Lint(cfg *WireGuardConfig, _ map[string]*WireGuardConfig) []Diagnostic {
 		})
 	}
 
-	// Info: LAN-only AllowedIPs with no DNS at all.
+	// Info: LAN-only AllowedIPs with no DNS at all. Windows supports neither
+	// split nor search domains, so it is pointed at a plain server only.
 	if len(cfg.Interface.DNS) == 0 && len(allowed) > 0 && allPrivate(allowed) {
 		gw := "<gateway>"
 		if g := GatewayCandidates(allowed); len(g) > 0 {
 			gw = g[0]
 		}
-		out = append(out, Diagnostic{
+		d := Diagnostic{
 			Field:    "Interface.DNS",
 			Severity: SeverityInfo,
 			Code:     "dns_lan_none",
 			Message:  fmt.Sprintf("No private-name resolution: add DNS = %s, ~<domain> to resolve names on the remote network.", gw),
 			Args:     map[string]string{"gateway": gw},
-		})
+		}
+		if lintGOOS == "windows" {
+			d.Code = "dns_lan_none_windows"
+			d.Message = fmt.Sprintf("No private-name resolution: add DNS = %s to resolve names on the remote network. Windows then uses it for all DNS while connected; split DNS is not supported.", gw)
+		}
+		out = append(out, d)
 	}
 
-	// Info: split DNS without reverse zones.
-	if len(dns.Match) > 0 && !hasReverseZone(dns.Match) {
-		if zones := ReverseZones(allowed); len(zones) > 0 {
-			toks := make([]string, len(zones))
-			for i, z := range zones {
-				toks[i] = "~" + z
-			}
-			val := strings.Join(toks, ", ")
-			out = append(out, Diagnostic{
-				Field:    "Interface.DNS",
-				Severity: SeverityInfo,
-				Code:     "dns_no_reverse",
-				Message:  "Split DNS has no reverse zone, so IP-to-name lookups for the remote network use system DNS. Add " + val + " to resolve them through the tunnel.",
-				Args:     map[string]string{"zones": val},
-				Fix:      &Fix{Label: "Add reverse zones", Action: FixAppendDNS, Value: val},
-			})
+	// Info: split DNS without reverse zones. Not on Windows, where split DNS
+	// cannot connect at all, and not while the DNS line has errors of its own.
+	if len(dns.Match) > 0 && !hasReverseZone(dns.Match) && lintGOOS != "windows" && len(dnsErrs) == 0 {
+		if d, ok := reverseZoneDiagnostic(cfg.Interface.DNS, allowed); ok {
+			out = append(out, d)
 		}
 	}
 
 	return out
+}
+
+// reverseZoneDiagnostic suggests every reverse zone the routes need. The
+// one-click fix is offered only when the DNS list with all of them appended
+// still passes the validator (match/search counts and the platform command
+// size); otherwise the advice stays, without a fix, rather than proposing an
+// unsavable config or a silently trimmed, incomplete set of zones.
+func reverseZoneDiagnostic(entries, allowed []string) (Diagnostic, bool) {
+	zones := reverseZones(allowed, 0)
+	if len(zones) == 0 {
+		return Diagnostic{}, false
+	}
+	toks := make([]string, len(zones))
+	for i, z := range zones {
+		toks[i] = "~" + z
+	}
+	val := strings.Join(toks, ", ")
+	proposed := append(append([]string(nil), entries...), toks...)
+	if len(dnsErrors(proposed)) > 0 {
+		return Diagnostic{
+			Field:    "Interface.DNS",
+			Severity: SeverityInfo,
+			Code:     "dns_no_reverse_limit",
+			Message: "Split DNS has no reverse zone, so IP-to-name lookups for the remote network use system DNS. Adding " + val +
+				" would exceed the split-DNS limits (32 match and search domains, 2000-byte command), so there is no one-click fix. Remove unused domains first.",
+			Args: map[string]string{"zones": val},
+		}, true
+	}
+	return Diagnostic{
+		Field:    "Interface.DNS",
+		Severity: SeverityInfo,
+		Code:     "dns_no_reverse",
+		Message:  "Split DNS has no reverse zone, so IP-to-name lookups for the remote network use system DNS. Add " + val + " to resolve them through the tunnel.",
+		Args:     map[string]string{"zones": val},
+		Fix:      &Fix{Label: "Add reverse zones", Action: FixAppendDNS, Value: val},
+	}, true
 }
 
 func allAllowedIPs(cfg *WireGuardConfig) []string {
@@ -292,8 +330,14 @@ func GatewayCandidates(allowed []string) []string {
 // skipped; 10.1.0.0/22 yields four) only when at most 8. Prefixes longer than
 // /24 (such as a single host) and shorter than /8 yield nothing, because the
 // smallest zone this derives is a /24 and it would cover more than the route.
-// De-duplicated and capped at 8.
+// De-duplicated and capped at 8 (completion suggestions).
 func ReverseZones(allowed []string) []string {
+	return reverseZones(allowed, 8)
+}
+
+// reverseZones is ReverseZones capped at limit zones; limit <= 0 means no cap
+// (the lint fix must cover every route or not be offered).
+func reverseZones(allowed []string, limit int) []string {
 	var out []string
 	seen := map[string]bool{}
 	add := func(zone string) {
@@ -333,8 +377,8 @@ func ReverseZones(allowed []string) []string {
 			}
 			add(strings.Join(parts, ".") + ".in-addr.arpa")
 		}
-		if len(out) >= 8 {
-			out = out[:8]
+		if limit > 0 && len(out) >= limit {
+			out = out[:limit]
 			break
 		}
 	}
@@ -343,8 +387,12 @@ func ReverseZones(allowed []string) []string {
 
 // globalOutsideMessage words the global-DNS warning per platform: macOS
 // replaces the DNS of every network service, other platforms scope it to the
-// tunnel adapter.
+// tunnel adapter, and Windows (no split DNS) is not told to add ~domain.
 func globalOutsideMessage(list string) string {
+	if lintGOOS == "windows" {
+		return fmt.Sprintf("%s is reached over your normal network, not the tunnel, and is used for all DNS while connected. "+
+			"Remove DNS, or use a server inside the tunnel's AllowedIPs.", list)
+	}
 	if lintGOOS == "darwin" {
 		return fmt.Sprintf("%s is reached over your normal network, not the tunnel, and replaces system DNS on every network service while connected "+
 			"(DNS protection will then allow only this server). Add ~domain to scope it, or remove DNS.", list)

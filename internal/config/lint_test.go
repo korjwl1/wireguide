@@ -24,6 +24,9 @@ func findGlobalOutside(ds []Diagnostic) *Diagnostic {
 	if d := find(ds, "dns_global_outside"); d != nil {
 		return d
 	}
+	if d := find(ds, "dns_global_outside_windows"); d != nil {
+		return d
+	}
 	return find(ds, "dns_global_outside_adapter")
 }
 
@@ -86,6 +89,10 @@ func TestLintGlobalDNSOutsideAllowedIPs(t *testing.T) {
 		t.Errorf("darwin diagnostic: %+v", g)
 	}
 	lintGOOS = "windows"
+	if g := findGlobalOutside(Lint(cfg, nil)); g.Code != "dns_global_outside_windows" || strings.Contains(g.Message, "network service") || strings.Contains(g.Message, "~") {
+		t.Errorf("windows diagnostic: %+v", g)
+	}
+	lintGOOS = "linux"
 	if g := findGlobalOutside(Lint(cfg, nil)); g.Code != "dns_global_outside_adapter" || strings.Contains(g.Message, "network service") {
 		t.Errorf("non-darwin diagnostic: %+v", g)
 	}
@@ -300,5 +307,54 @@ func TestDNSErrorsValidInput(t *testing.T) {
 	}
 	if errs := dnsErrors(nil); len(errs) != 0 {
 		t.Fatalf("unexpected errors %v", errs)
+	}
+}
+
+// TestLintWindowsNeverSuggestsSplitDNS: split DNS fails the connect on
+// Windows, so no Windows diagnostic may recommend a ~domain entry.
+func TestLintWindowsNeverSuggestsSplitDNS(t *testing.T) {
+	old := lintGOOS
+	defer func() { lintGOOS = old }()
+	none := lintCfg(t, "MTU = 1380", "192.168.50.0/24")
+	outside := lintCfg(t, "DNS = 1.1.1.1\nMTU = 1380", "192.168.50.0/24")
+	split := lintCfg(t, "DNS = 192.168.50.1, ~corp.example\nMTU = 1380", "192.168.50.0/24")
+
+	lintGOOS = "windows"
+	d := find(Lint(none, nil), "dns_lan_none_windows")
+	if d == nil || d.Severity != SeverityInfo || d.Args["gateway"] != "192.168.50.1" {
+		t.Fatalf("expected windows LAN info, got %+v", Lint(none, nil))
+	}
+	if find(Lint(none, nil), "dns_lan_none") != nil {
+		t.Error("split-DNS advice dns_lan_none on windows")
+	}
+	g := find(Lint(outside, nil), "dns_global_outside_windows")
+	if g == nil || g.Fix == nil || g.Fix.Action != FixRemoveDNS {
+		t.Fatalf("expected windows global-outside warning, got %+v", Lint(outside, nil))
+	}
+	ds := append(append(Lint(none, nil), Lint(outside, nil)...), Lint(split, nil)...)
+	for _, d := range ds {
+		if strings.Contains(d.Message, "~") && d.Code != "dns_split_windows" {
+			t.Errorf("windows diagnostic suggests split DNS: %+v", d)
+		}
+		if d.Fix != nil && d.Fix.Action == FixAppendDNS {
+			t.Errorf("windows diagnostic offers to add ~ entries: %+v", d)
+		}
+	}
+	if find(Lint(split, nil), "dns_split_windows") == nil {
+		t.Error("missing windows split warning")
+	}
+
+	for _, goos := range []string{"darwin", "linux"} {
+		lintGOOS = goos
+		d := find(Lint(none, nil), "dns_lan_none")
+		if d == nil || !strings.Contains(d.Message, "~<domain>") {
+			t.Errorf("%s: expected split-DNS advice, got %+v", goos, Lint(none, nil))
+		}
+		if find(Lint(none, nil), "dns_lan_none_windows") != nil {
+			t.Errorf("%s: windows advice", goos)
+		}
+		if find(Lint(split, nil), "dns_no_reverse") == nil {
+			t.Errorf("%s: missing reverse-zone fix", goos)
+		}
 	}
 }

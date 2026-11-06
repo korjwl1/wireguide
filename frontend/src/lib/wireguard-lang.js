@@ -89,11 +89,11 @@ const identityTr = (key) => key;
  * Completion for `DNS = ` values: the `~` split-DNS snippet, gateway
  * candidates, derived reverse zones and a whole-line template.
  */
-function dnsValueCompletion(context, line, lineBefore, tr) {
+function dnsValueCompletion(context, line, lineBefore, tr, splitDns) {
   const ctx = dnsValueContext(lineBefore);
   if (!ctx) return null;
   const doc = context.state.doc.toString();
-  const options = dnsCompletionOptions(doc, tr, { valueEmpty: ctx.valueEmpty, token: ctx.token }).map((o) => {
+  const options = dnsCompletionOptions(doc, tr, { valueEmpty: ctx.valueEmpty, token: ctx.token, splitDns }).map((o) => {
     const opt = {
       label: o.label,
       type: o.kind === 'tilde' ? 'keyword' : o.kind === 'line' ? 'text' : 'constant',
@@ -124,14 +124,17 @@ function dnsValueCompletion(context, line, lineBefore, tr) {
   };
 }
 
-/** Build the CodeMirror completion source. `tr(key, params)` translates. */
-export function createWireguardCompletion(tr = identityTr) {
+/**
+ * Build the CodeMirror completion source. `tr(key, params)` translates;
+ * `splitDns: false` drops the split-DNS suggestions (Windows).
+ */
+export function createWireguardCompletion(tr = identityTr, { splitDns = true } = {}) {
   return function wireguardCompletionSource(context) {
     const line = context.state.doc.lineAt(context.pos);
     const lineBefore = line.text.substring(0, context.pos - line.from);
 
     // Value completion after `DNS =` must work even with nothing typed yet.
-    const dnsResult = dnsValueCompletion(context, line, lineBefore, tr);
+    const dnsResult = dnsValueCompletion(context, line, lineBefore, tr, splitDns);
     if (dnsResult) return dnsResult;
 
     const before = context.matchBefore(/\w*/);
@@ -196,7 +199,7 @@ export function wireguardLinter(lintFn, tr = identityTr) {
 }
 
 /** Hover tooltips on the `DNS` key and on `~domain` tokens. */
-export function wireguardHover(tr = identityTr) {
+export function wireguardHover(tr = identityTr, { splitDns = true } = {}) {
   return hoverTooltip((view, pos) => {
     const line = view.state.doc.lineAt(pos);
     const hit = dnsHoverAt(line.text, pos - line.from);
@@ -208,7 +211,7 @@ export function wireguardHover(tr = identityTr) {
       create() {
         const dom = document.createElement('div');
         dom.className = 'cm-wg-hover';
-        for (const p of dnsHoverText(hit, tr)) {
+        for (const p of dnsHoverText(hit, tr, { splitDns })) {
           const para = document.createElement('p');
           if (p.strong) {
             const b = document.createElement('strong');

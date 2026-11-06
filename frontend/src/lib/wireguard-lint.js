@@ -16,8 +16,19 @@ export function scanLines(text) {
   return out;
 }
 
+/**
+ * The part of a line the Go parser reads (internal/config Parse): everything
+ * before the first `#`. `#` is never literal, also after a section header or
+ * inside a value. A `;` is a comment only at the start of a line, which the
+ * key and header patterns already reject. Being a prefix, it keeps offsets.
+ */
+export function stripComment(lineText) {
+  const i = lineText.indexOf('#');
+  return i < 0 ? lineText : lineText.slice(0, i);
+}
+
 function sectionOf(line) {
-  const t = line.text.trim().toLowerCase();
+  const t = stripComment(line.text).trim().toLowerCase();
   if (t === '[interface]') return 'interface';
   if (t === '[peer]') return 'peer';
   return null;
@@ -42,7 +53,7 @@ export function scanSections(text) {
 }
 
 function keyOf(lineText) {
-  const m = /^\s*([A-Za-z]+)\s*=/.exec(lineText);
+  const m = /^\s*([A-Za-z]+)\s*=/.exec(stripComment(lineText));
   return m ? m[1].toLowerCase() : null;
 }
 
@@ -138,9 +149,12 @@ export function fixChanges(text, fix) {
     }));
   }
   if (fix.action === 'append_dns' && fix.value) {
+    // Insert after the value but before any inline comment, which the Go
+    // parser would otherwise swallow the new entries into.
     const last = dns[dns.length - 1];
-    const end = last.from + last.text.trimEnd().length;
-    const afterEq = last.text.slice(last.text.indexOf('=') + 1).trim();
+    const code = stripComment(last.text);
+    const end = last.from + code.trimEnd().length;
+    const afterEq = code.slice(code.indexOf('=') + 1).trim();
     return [{ from: end, to: end, insert: (afterEq ? ', ' : ' ') + fix.value }];
   }
   return null;
@@ -164,7 +178,8 @@ export function allowedIPsFromText(text) {
   const out = [];
   for (const l of scanSections(text)) {
     if (l.section !== 'peer' || l.header || keyOf(l.text) !== 'allowedips') continue;
-    for (const part of l.text.slice(l.text.indexOf('=') + 1).split(',')) {
+    const code = stripComment(l.text);
+    for (const part of code.slice(code.indexOf('=') + 1).split(',')) {
       const p = part.trim();
       if (p) out.push(p);
     }
@@ -223,6 +238,18 @@ export function reverseZones(allowed) {
   return out;
 }
 
+// ---- platform ------------------------------------------------------------
+
+/**
+ * Whether split DNS ("~domain") can work on this platform. Windows cannot
+ * apply it (connecting fails), so the editor must not suggest it there. Linux
+ * needs systemd-resolved, which only the backend can check; the linter reports
+ * that case. Reads the platform the same way Settings.svelte does.
+ */
+export function splitDnsSupported(userAgent = globalThis.navigator?.userAgent || '') {
+  return !/Windows/i.test(userAgent);
+}
+
 // ---- DNS value completion ---------------------------------------------
 
 const DNS_VALUE = /^(\s*DNS\s*=\s*)(.*)$/i;
@@ -232,6 +259,7 @@ const DNS_VALUE = /^(\s*DNS\s*=\s*)(.*)$/i;
  * return { valueStart, tokenStart, token, valueEmpty } (columns); else null.
  */
 export function dnsValueContext(lineBefore) {
+  if (lineBefore.includes('#')) return null; // inside a comment
   const m = DNS_VALUE.exec(lineBefore);
   if (!m) return null;
   const valueStart = m[1].length;
@@ -247,12 +275,20 @@ export function dnsValueContext(lineBefore) {
  * Completion candidates for a `DNS =` value:
  * [{ label, kind: 'tilde'|'token'|'line', insert, detail, info }].
  * `kind: 'line'` replaces the whole value; 'tilde' inserts a snippet.
+ * With `splitDns: false` (Windows) only plain servers are offered: no `~`,
+ * no reverse zones and no split-DNS template line.
  */
-export function dnsCompletionOptions(docText, tr, { valueEmpty = true, token = '' } = {}) {
+export function dnsCompletionOptions(docText, tr, { valueEmpty = true, token = '', splitDns = true } = {}) {
   const allowed = allowedIPsFromText(docText);
   const gateways = gatewayCandidates(allowed);
-  const zones = reverseZones(allowed);
   const opts = [];
+  if (!splitDns) {
+    for (const gw of gateways) {
+      opts.push({ label: gw, kind: 'token', insert: gw, detail: tr('lint.cmp_gateway'), info: '' });
+    }
+    return opts.filter((o) => o.label.startsWith(token) && o.label !== token);
+  }
+  const zones = reverseZones(allowed);
 
   opts.push({
     label: '~',
@@ -283,7 +319,7 @@ export function dnsCompletionOptions(docText, tr, { valueEmpty = true, token = '
  * Returns { kind: 'key'|'match', from, to, domain? } (columns) or null.
  */
 export function dnsHoverAt(lineText, col) {
-  const m = /^(\s*)(DNS)(\s*=\s*)(.*)$/i.exec(lineText);
+  const m = /^(\s*)(DNS)(\s*=\s*)(.*)$/i.exec(stripComment(lineText));
   if (!m) return null;
   const keyFrom = m[1].length;
   const keyTo = keyFrom + m[2].length;
@@ -303,18 +339,21 @@ export function dnsHoverAt(lineText, col) {
   return null;
 }
 
-/** Hover content as [{ strong?: string, text: string }] paragraphs. */
-export function dnsHoverText(hit, tr) {
+/**
+ * Hover content as [{ strong?: string, text: string }] paragraphs. With
+ * `splitDns: false` (Windows) the split-DNS advice says it is unsupported.
+ */
+export function dnsHoverText(hit, tr, { splitDns = true } = {}) {
   if (hit.kind === 'match') {
     return [
-      { text: tr('lint.hover_match', { domain: hit.domain || '' }) },
+      { text: splitDns ? tr('lint.hover_match', { domain: hit.domain || '' }) : tr('lint.hover_split_unsupported') },
       { text: tr('lint.hover_nxdomain') },
       { text: tr('lint.hover_dig') },
     ];
   }
   return [
     { strong: tr('lint.hover_global_title'), text: tr('lint.hover_global') },
-    { strong: tr('lint.hover_split_title'), text: tr('lint.hover_split') },
+    { strong: tr('lint.hover_split_title'), text: tr(splitDns ? 'lint.hover_split' : 'lint.hover_split_unsupported') },
     { strong: tr('lint.hover_none_title'), text: tr('lint.hover_none') },
     { text: tr('lint.hover_nxdomain') },
     { text: tr('lint.hover_dig') },

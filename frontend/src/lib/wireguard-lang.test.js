@@ -42,3 +42,13 @@ test('non-DNS lines keep the key completion', () => {
   const res = run('[Interface]\nAdd', true);
   assert.ok(res.options.map((o) => o.label).includes('Address = '));
 });
+
+test('DNS value completion offers no split DNS when the platform lacks it', () => {
+  const noSplit = createWireguardCompletion(tr, { splitDns: false });
+  const doc = DOC + PEER;
+  const pos = doc.indexOf('DNS = ') + 6;
+  const res = noSplit(new CompletionContext(EditorState.create({ doc }), pos, false));
+  const labels = res.options.map((o) => o.label);
+  assert.ok(labels.includes('192.168.1.1'));
+  assert.equal(labels.some((l) => l.includes('~')), false);
+});
