@@ -91,6 +91,15 @@ type lastKnownTunnelStats struct {
 // merge folds a fresh raw counter reading into the session totals. A reading
 // below the previous one means the underlying counters were reset (teardown or
 // a new device), so everything counted so far is carried over as a base.
+//
+// A reset is recognised only when a counter goes backwards. A new device whose
+// first reading is at or above the previous reading in both directions looks
+// like continued traffic, so the bytes counted before it are not added (for
+// example 1000 -> 0/0 -> 5000 keeps 5000, not 6000). Totals are therefore not
+// guaranteed to survive every reconnect. A 0/0 reading is deliberately not
+// treated as a reset: a transient failed read would count the session twice.
+// Closing this gap needs a device generation or transition identifier from
+// the helper.
 func (st lastKnownTunnelStats) merge(rawRx, rawTx int64) lastKnownTunnelStats {
 	// A 0/0 reading is a failed or mid-transition read, not evidence of a
 	// counter reset: keep what we have so a one-tick blip does not make the
