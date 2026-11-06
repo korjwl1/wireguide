@@ -267,11 +267,11 @@ func Run(assetsHandler http.Handler, dataDir string) error {
 
 	trayMgr := newTrayManager(app, win, tray, tunnelService, shutdown.run)
 	trayMgr.connectionIcon = connectionIndicator
-	wgapp.SetGUIPreferencesChanged(func() {
+	wgapp.SetGUIPreferencesChanged(preferencesChangedHook(notify, func() {
 		if !appQuitting.Load() {
 			trayMgr.scheduleRebuild()
 		}
-	})
+	}))
 	trayMgr.initialBuild()
 
 	if runtime.GOOS == "darwin" {

@@ -74,17 +74,29 @@ type notifier struct {
 	differ   wgapp.StatusDiffer
 
 	mu       sync.Mutex
-	pending  map[string]*time.Timer // "up|name" / "down|name" -> hold-back timer
-	claimed  map[string]time.Time   // "up|name" / "down|name" -> when an event claimed it
+	pending  map[string]stopper   // "up|name" / "down|name" -> hold-back timer
+	claimed  map[string]time.Time // "up|name" / "down|name" -> when an event claimed it
 	quitting bool
+	// gen is the cancellation generation. Every queued or in-flight
+	// notification carries the gen current when it was queued; stop(),
+	// reset() and turning the Settings toggle off bump it, so work queued
+	// before then is dropped at its next checkpoint (timer expiry, after an
+	// authorization wait, right before posting).
+	gen uint64
 	// pendingDelay and downPendingDelay override the package defaults
 	// (tests). A zero downPendingDelay falls back to pendingDelay when that
 	// is set, so one override covers both directions.
 	pendingDelay     time.Duration
 	downPendingDelay time.Duration
 
-	// post delivers one notification; deliver in production, a stub in tests.
-	post func(title, body string)
+	// post delivers one notification queued at gen; deliver in
+	// production, a stub in tests.
+	post func(gen uint64, title, body string)
+	// afterFunc arms a hold-back timer (time.AfterFunc; a fake in tests).
+	afterFunc func(d time.Duration, f func()) stopper
+	// spawn runs a delivery off the caller's goroutine (go f(); inline in
+	// tests).
+	spawn func(f func())
 	// systemLanguage reports the OS UI language; preferredGUILanguage in
 	// production, a stub in tests.
 	systemLanguage func() string
@@ -108,14 +120,21 @@ type notifier struct {
 	authTimedOut bool
 }
 
+// stopper is the part of *time.Timer the notifier uses.
+type stopper interface {
+	Stop() bool
+}
+
 func newNotifier(settings *storage.SettingsStore, actions *wgapp.UserActions) *notifier {
 	n := &notifier{
 		settings:       settings,
 		actions:        actions,
-		pending:        map[string]*time.Timer{},
+		pending:        map[string]stopper{},
 		claimed:        map[string]time.Time{},
 		systemLanguage: preferredGUILanguage,
 		newBackend:     newNotificationBackend,
+		afterFunc:      func(d time.Duration, f func()) stopper { return time.AfterFunc(d, f) },
+		spawn:          func(f func()) { go f() },
 	}
 	if runtime.GOOS == "darwin" {
 		n.fallback = osascriptNotify
@@ -139,8 +158,16 @@ func (n *notifier) stop() {
 	}
 	n.mu.Lock()
 	n.quitting = true
-	n.cancelAllLocked()
+	n.invalidateLocked()
 	n.mu.Unlock()
+}
+
+// invalidateLocked drops every held-back message and bumps the generation,
+// so work already past its timer (waiting on authorization, or about to
+// post) is dropped too. Caller holds n.mu.
+func (n *notifier) invalidateLocked() {
+	n.gen++
+	n.cancelAllLocked()
 }
 
 func (n *notifier) cancelAllLocked() {
@@ -158,8 +185,63 @@ func (n *notifier) reset() {
 	}
 	n.differ.Reset()
 	n.mu.Lock()
-	n.cancelAllLocked()
+	n.invalidateLocked()
 	n.mu.Unlock()
+}
+
+// preferencesChanged is called after the GUI saved settings
+// (TunnelService.UpdateSettings). Turning automatic-change notifications
+// off drops everything already queued; turning them on, or any other
+// change, leaves queued work alone. The settings read happens without n.mu
+// held.
+func (n *notifier) preferencesChanged() {
+	if n == nil || n.enabled() {
+		return
+	}
+	n.mu.Lock()
+	n.invalidateLocked()
+	n.mu.Unlock()
+}
+
+// preferencesChangedHook is the callback gui.Run installs with
+// wgapp.SetGUIPreferencesChanged: TunnelService.UpdateSettings runs it after
+// every settings save. It refreshes the tray (rebuild, may be nil) and lets
+// the notifier drop queued work when the toggle was turned off.
+func preferencesChangedHook(notify *notifier, rebuild func()) func() {
+	return func() {
+		notify.preferencesChanged()
+		if rebuild != nil {
+			rebuild()
+		}
+	}
+}
+
+// generation returns the current cancellation generation. Handlers read it
+// BEFORE reading the preference, so a disable that lands in between still
+// invalidates what they queue.
+func (n *notifier) generation() uint64 {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return n.gen
+}
+
+// liveLocked reports whether work queued at gen may still go out as far as
+// the lifecycle is concerned. Caller holds n.mu.
+func (n *notifier) liveLocked(gen uint64) bool {
+	return !n.quitting && gen == n.gen
+}
+
+// current is the delivery checkpoint: work queued at gen goes out only if
+// the notifier has not been stopped, reset or disabled since, and the saved
+// preference is still on. The preference is re-read from disk so a change
+// made outside this process (the CLI) is honoured too. The read takes the
+// settings store's lock for one small file read, the same read language()
+// does on the delivery goroutine; it runs with neither n.mu nor svcMu held.
+func (n *notifier) current(gen uint64) bool {
+	n.mu.Lock()
+	live := n.liveLocked(gen)
+	n.mu.Unlock()
+	return live && n.enabled()
 }
 
 func (n *notifier) enabled() bool {
@@ -211,6 +293,7 @@ func (n *notifier) onStatus(connected []string) {
 	if len(events) == 0 {
 		return
 	}
+	gen := n.generation()
 	enabled := n.enabled()
 	now := time.Now()
 	for _, ev := range events {
@@ -229,32 +312,44 @@ func (n *notifier) onStatus(connected []string) {
 		if up {
 			kind = msgUp
 		}
-		n.schedule(changeKey(ev.Tunnel, up), kind, ev.Tunnel)
+		n.schedule(changeKey(ev.Tunnel, up), kind, ev.Tunnel, gen)
 	}
 }
 
 // schedule holds a status-diff notification back (pendingDelay for up,
 // downPendingDelay for down) so a helper event can claim the change first and
-// a reconnect can cancel it.
-func (n *notifier) schedule(key string, kind msgKind, tunnel string) {
+// a reconnect can cancel it. gen is the generation captured before the
+// preference was read.
+func (n *notifier) schedule(key string, kind msgKind, tunnel string, gen uint64) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	if n.quitting || n.claimedLocked(key, time.Now()) {
+	if !n.liveLocked(gen) {
+		return // stopped, reset or disabled since the change was seen
+	}
+	if n.claimedLocked(key, time.Now()) {
 		return // a helper event already announced (or will, via the claim)
 	}
 	if old, ok := n.pending[key]; ok {
 		old.Stop()
 	}
-	n.pending[key] = time.AfterFunc(n.delay(kind), func() {
+	var timer stopper
+	timer = n.afterFunc(n.delay(kind), func() {
 		n.mu.Lock()
-		delete(n.pending, key)
-		skip := n.quitting || n.claimedLocked(key, time.Now())
+		// A timer that fired after being replaced or cancelled must not
+		// remove its successor.
+		if n.pending[key] == timer {
+			delete(n.pending, key)
+		}
+		skip := !n.liveLocked(gen) || n.claimedLocked(key, time.Now())
 		n.mu.Unlock()
-		if skip {
+		// Checkpoint at expiry: the toggle may have been turned off (here
+		// or from the CLI) while the message was held back.
+		if skip || !n.current(gen) {
 			return
 		}
-		n.send(kind, tunnel)
+		n.send(kind, tunnel, gen)
 	})
+	n.pending[key] = timer
 }
 
 func (n *notifier) delay(kind msgKind) time.Duration {
@@ -293,9 +388,10 @@ func (n *notifier) onAutoConnected(name string) {
 	if n == nil || name == "" {
 		return
 	}
+	gen := n.generation()
 	n.claim(changeKey(name, true), time.Now())
 	if wgapp.ShouldNotify(n.enabled(), wgapp.NotifyEvent{Kind: wgapp.NotifyAutoConnected, Tunnel: name}, n.actions, time.Now()) {
-		n.send(msgAuto, name)
+		n.send(msgAuto, name, gen)
 	}
 }
 
@@ -305,9 +401,10 @@ func (n *notifier) onForcedDisconnect(name string) {
 	if n == nil || name == "" {
 		return
 	}
+	gen := n.generation()
 	n.claim(changeKey(name, false), time.Now())
 	if wgapp.ShouldNotify(n.enabled(), wgapp.NotifyEvent{Kind: wgapp.NotifyForcedDisconnect, Tunnel: name}, n.actions, time.Now()) {
-		n.send(msgForced, name)
+		n.send(msgForced, name, gen)
 	}
 }
 
@@ -316,23 +413,25 @@ func (n *notifier) onCriticalError(where string) {
 	if n == nil {
 		return
 	}
+	gen := n.generation()
 	if wgapp.ShouldNotify(n.enabled(), wgapp.NotifyEvent{Kind: wgapp.NotifyCriticalError}, n.actions, time.Now()) {
-		n.send(msgCritical, where)
+		n.send(msgCritical, where, gen)
 	}
 }
 
-// send localises and delivers one message off the caller's goroutine.
-func (n *notifier) send(kind msgKind, arg string) {
+// send localises and delivers one message, queued at gen, off the caller's
+// goroutine.
+func (n *notifier) send(kind msgKind, arg string, gen uint64) {
 	n.mu.Lock()
-	q := n.quitting
+	live := n.liveLocked(gen)
 	n.mu.Unlock()
-	if q {
+	if !live {
 		return
 	}
-	go func() {
+	n.spawn(func() {
 		title, body := notifyText(n.language(), kind, arg)
-		n.post(title, body)
-	}()
+		n.post(gen, title, body)
+	})
 }
 
 // language resolves the notification language: the Settings language, or
@@ -358,8 +457,9 @@ const (
 	// serviceDelivered: the service posted the notification.
 	serviceDelivered serviceResult = iota
 	// serviceDrop: the user has not allowed notifications (denied, or the
-	// authorization prompt is still unanswered); the notification is
-	// dropped so the user's choice is respected.
+	// authorization prompt is still unanswered), or the message went stale
+	// (stop, reset, toggle off) while waiting; the notification is dropped
+	// so the user's choice is respected.
 	serviceDrop
 	// serviceFailed: the service could not start, or authorization (other
 	// than a timeout) or delivery returned an error; the fallback may post
@@ -371,8 +471,16 @@ const (
 // authorization lazily on first use. The osascript fallback (macOS) is used
 // only when the service fails; a denied or still-pending authorization
 // drops the notification instead of routing around the user's choice.
-func (n *notifier) deliver(title, body string) {
-	if n.sendViaService(title, body) != serviceFailed || n.fallback == nil {
+//
+// gen is the generation the message was queued at; it is re-checked (with
+// the saved preference) after any authorization wait and right before the
+// service or the fallback posts, so a stop, reset or disable that happens
+// while delivery is under way drops the message.
+func (n *notifier) deliver(gen uint64, title, body string) {
+	if n.sendViaService(gen, title, body) != serviceFailed || n.fallback == nil {
+		return
+	}
+	if !n.current(gen) {
 		return
 	}
 	if err := n.fallback(title, body); err != nil {
@@ -393,7 +501,7 @@ func (n *notifier) deliver(title, body string) {
 // re-check the authorization without prompting and post only once it is
 // granted. Only a start failure or another error sends delivery around the
 // service.
-func (n *notifier) sendViaService(title, body string) serviceResult {
+func (n *notifier) sendViaService(gen uint64, title, body string) serviceResult {
 	n.svcMu.Lock()
 	if !n.svcStarted {
 		n.svcStarted = true
@@ -456,6 +564,12 @@ func (n *notifier) sendViaService(title, body string) serviceResult {
 		n.svcMu.Unlock()
 	} else {
 		n.svcMu.Unlock()
+	}
+	// Checkpoint after the authorization wait and right before posting:
+	// the prompt (or the re-check) can take minutes, and the app may have
+	// quit or the toggle been turned off meanwhile.
+	if !n.current(gen) {
+		return serviceDrop
 	}
 	if err := svc.send(fmt.Sprintf("wireguide-%d", time.Now().UnixNano()), title, body); err != nil {
 		slog.Info("notification delivery failed, using fallback", "error", err)

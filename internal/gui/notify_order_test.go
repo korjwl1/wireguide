@@ -14,7 +14,7 @@ type captured struct {
 	msgs []string
 }
 
-func (c *captured) add(_, body string) {
+func (c *captured) add(_ uint64, _, body string) {
 	c.mu.Lock()
 	c.msgs = append(c.msgs, body)
 	c.mu.Unlock()

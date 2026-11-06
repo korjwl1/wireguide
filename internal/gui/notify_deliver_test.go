@@ -20,6 +20,8 @@ type fakeBackend struct {
 	sendErr  error
 	sent     int
 	asked    int
+	// onSend runs inside send, before it returns (tests).
+	onSend func()
 }
 
 func (f *fakeBackend) start() error { return f.startErr }
@@ -42,7 +44,16 @@ func (f *fakeBackend) send(string, string, string) error {
 	f.mu.Lock()
 	f.sent++
 	f.mu.Unlock()
+	if f.onSend != nil {
+		f.onSend()
+	}
 	return f.sendErr
+}
+
+func (f *fakeBackend) sentCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.sent
 }
 
 func deliverNotifier(b *fakeBackend) (*notifier, *int) {
@@ -58,8 +69,8 @@ func deliverNotifier(b *fakeBackend) (*notifier, *int) {
 func TestDeliverDeniedDropsWithoutFallback(t *testing.T) {
 	b := &fakeBackend{granted: false}
 	n, fallbacks := deliverNotifier(b)
-	n.deliver("WireGuide", "one")
-	n.deliver("WireGuide", "two")
+	n.deliver(0, "WireGuide", "one")
+	n.deliver(0, "WireGuide", "two")
 	if *fallbacks != 0 {
 		t.Fatalf("denied authorization must not fall back, fallbacks=%d", *fallbacks)
 	}
@@ -74,8 +85,8 @@ func TestDeliverDeniedDropsWithoutFallback(t *testing.T) {
 func TestDeliverGrantedUsesService(t *testing.T) {
 	b := &fakeBackend{granted: true}
 	n, fallbacks := deliverNotifier(b)
-	n.deliver("WireGuide", "one")
-	n.deliver("WireGuide", "two")
+	n.deliver(0, "WireGuide", "one")
+	n.deliver(0, "WireGuide", "two")
 	if b.sent != 2 || *fallbacks != 0 || b.asked != 1 {
 		t.Fatalf("sent=%d fallbacks=%d asked=%d", b.sent, *fallbacks, b.asked)
 	}
@@ -92,7 +103,7 @@ func TestDeliverServiceFailureFallsBack(t *testing.T) {
 	}
 	for name, b := range cases {
 		n, fallbacks := deliverNotifier(b)
-		n.deliver("WireGuide", "one")
+		n.deliver(0, "WireGuide", "one")
 		if *fallbacks != 1 {
 			t.Errorf("%s error: want 1 fallback, got %d", name, *fallbacks)
 		}
@@ -105,10 +116,10 @@ func TestDeliverDuringPendingAuthDrops(t *testing.T) {
 	b := &fakeBackend{granted: true}
 	n, fallbacks := deliverNotifier(b)
 	n.svcStarted, n.svcUsable, n.svc, n.authPending = true, true, b, true
-	if got := n.sendViaService("WireGuide", "one"); got != serviceDrop {
+	if got := n.sendViaService(0, "WireGuide", "one"); got != serviceDrop {
 		t.Fatalf("pending authorization: got %v, want serviceDrop", got)
 	}
-	n.deliver("WireGuide", "two")
+	n.deliver(0, "WireGuide", "two")
 	if *fallbacks != 0 || b.sent != 0 {
 		t.Fatalf("fallbacks=%d sent=%d", *fallbacks, b.sent)
 	}
@@ -121,9 +132,9 @@ func TestDeliverAuthTimeoutThenDenialDropsWithoutFallback(t *testing.T) {
 	timeout := fmt.Errorf("notification authorization timed out after 3 minutes: %w", context.DeadlineExceeded)
 	b := &fakeBackend{authErr: timeout, checkOK: false}
 	n, fallbacks := deliverNotifier(b)
-	n.deliver("WireGuide", "one")
-	n.deliver("WireGuide", "two")
-	n.deliver("WireGuide", "three")
+	n.deliver(0, "WireGuide", "one")
+	n.deliver(0, "WireGuide", "two")
+	n.deliver(0, "WireGuide", "three")
 	if *fallbacks != 0 {
 		t.Fatalf("a timed-out prompt must not fall back, fallbacks=%d", *fallbacks)
 	}
@@ -143,13 +154,13 @@ func TestDeliverAuthTimeoutThenGrantSends(t *testing.T) {
 	timeout := fmt.Errorf("timed out: %w", context.DeadlineExceeded)
 	b := &fakeBackend{authErr: timeout}
 	n, fallbacks := deliverNotifier(b)
-	n.deliver("WireGuide", "one") // the request times out: dropped
+	n.deliver(0, "WireGuide", "one") // the request times out: dropped
 	if b.sent != 0 {
 		t.Fatalf("timeout must drop the first notification, sent=%d", b.sent)
 	}
 	b.checkOK = true
-	n.deliver("WireGuide", "two")
-	n.deliver("WireGuide", "three")
+	n.deliver(0, "WireGuide", "two")
+	n.deliver(0, "WireGuide", "three")
 	if b.sent != 2 || *fallbacks != 0 || b.asked != 1 {
 		t.Fatalf("sent=%d fallbacks=%d asked=%d", b.sent, *fallbacks, b.asked)
 	}
@@ -162,8 +173,8 @@ func TestDeliverAuthTimeoutThenGrantSends(t *testing.T) {
 func TestDeliverAuthTimeoutThenCheckErrorDrops(t *testing.T) {
 	b := &fakeBackend{authErr: context.DeadlineExceeded, checkErr: errors.New("boom")}
 	n, fallbacks := deliverNotifier(b)
-	n.deliver("WireGuide", "one")
-	n.deliver("WireGuide", "two")
+	n.deliver(0, "WireGuide", "one")
+	n.deliver(0, "WireGuide", "two")
 	if *fallbacks != 0 || b.sent != 0 {
 		t.Fatalf("fallbacks=%d sent=%d", *fallbacks, b.sent)
 	}
