@@ -61,6 +61,7 @@ func TestPrepareKernelInterface(t *testing.T) {
 		name       string
 		links      string
 		wantErr    error
+		wantHint   string
 		wantDelete bool
 	}{
 		{
@@ -73,9 +74,10 @@ func TestPrepareKernelInterface(t *testing.T) {
 			wantDelete: true,
 		},
 		{
-			name:    "foreign wireguard link is a conflict",
-			links:   linkJSON(iface, "", "wireguard"),
-			wantErr: errKernelInterfaceConflict,
+			name:     "markerless wireguard link names the manual cleanup",
+			links:    linkJSON(iface, "", "wireguard"),
+			wantErr:  errKernelInterfaceConflict,
+			wantHint: "ip link delete dev " + iface,
 		},
 		{
 			name:    "unrelated alias is a conflict",
@@ -100,6 +102,9 @@ func TestPrepareKernelInterface(t *testing.T) {
 				}
 			} else if !errors.Is(err, tc.wantErr) {
 				t.Fatalf("prepareKernelInterface error = %v, want %v", err, tc.wantErr)
+			}
+			if tc.wantHint != "" && (err == nil || !strings.Contains(err.Error(), tc.wantHint)) {
+				t.Fatalf("prepareKernelInterface error = %v, want it to mention %q", err, tc.wantHint)
 			}
 
 			log, err := os.ReadFile(calls)

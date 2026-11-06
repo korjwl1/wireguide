@@ -240,6 +240,14 @@ func prepareKernelInterface(name, tunnel string) error {
 	}
 	want := kernelOwnershipAliasPrefix + tunnel
 	if info.IfAlias != want {
+		if info.IfAlias == "" {
+			// Interfaces created before ownership markers existed carry no
+			// alias, so they can never be recognised as ours. Name the manual
+			// command instead of leaving the user with a connect that fails
+			// forever.
+			return fmt.Errorf("%w: %q has no WireGuide ownership marker; if it is a leftover from an older WireGuide version, remove it with `ip link delete dev %s`",
+				errKernelInterfaceConflict, name, name)
+		}
 		return fmt.Errorf("%w: %q is not owned by WireGuide (alias %q)",
 			errKernelInterfaceConflict, name, info.IfAlias)
 	}
