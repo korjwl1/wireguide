@@ -43,9 +43,17 @@ type kernelEngine struct {
 // does not apply here.
 func newKernelEngine(cfg, resolved *config.WireGuardConfig, resolvedEndpointIPs, resolvedEndpoints []string) (*Engine, error) {
 	name := platformTUNName(runtime.GOOS, cfg.Name)
-	removeStaleKernelInterface(name)
+	if err := prepareKernelInterface(name, cfg.Name); err != nil {
+		return nil, err
+	}
 	if _, err := runIP("link", "add", "dev", name, "type", "wireguard"); err != nil {
 		return nil, kernelInterfaceError(name, err)
+	}
+	// Crash recovery relies on this marker, so failing to write it leaves no
+	// safe way to identify the interface later.
+	if _, err := runIP("link", "set", "dev", name, "alias", kernelOwnershipAliasPrefix+cfg.Name); err != nil {
+		_ = deleteKernelInterface(name)
+		return nil, fmt.Errorf("marking kernel interface %q as WireGuide-owned: %w", name, err)
 	}
 
 	wgCfg, err := kernelWgtypesConfig(resolved)
@@ -169,43 +177,76 @@ func kernelInterfaceError(name string, err error) error {
 	return fmt.Errorf("creating WireGuard kernel interface %q: %w%s", name, err, hint)
 }
 
+// kernelOwnershipAliasPrefix marks netdevs created by this helper.
+//
+// The interface name is a hash of the tunnel name, so two profiles can
+// collide, and neither the name nor the link kind proves the interface is
+// ours. A leftover netdev may only be deleted when it carries this marker.
+const kernelOwnershipAliasPrefix = "wireguide:"
+
+// errKernelInterfaceConflict reports that the target interface name is
+// already taken by a link this helper does not own. Callers surface it as a
+// connect failure instead of destroying someone else's interface.
+var errKernelInterfaceConflict = errors.New("kernel interface name is already in use")
+
 // ipLinkInfo is the subset of `ip -j -d link show` needed to identify a
-// link's kind without parsing human-readable output.
+// link's kind and owner without parsing human-readable output.
 type ipLinkInfo struct {
+	IfName   string `json:"ifname"`
+	IfAlias  string `json:"ifalias"`
 	LinkInfo struct {
 		Kind string `json:"info_kind"`
 	} `json:"linkinfo"`
 }
 
-// isWireGuardInterface reports whether name exists and is a wireguard-type
-// netdev. The JSON form is deliberate: searching the detailed text listing
-// for "wireguard" would also match an alias or description on an unrelated
-// interface, and that interface must never be deleted as a stale tunnel.
-func isWireGuardInterface(name string) bool {
-	out, err := runIP("-j", "-d", "link", "show", "dev", name)
+// kernelInterfaceState looks up the link named name. exists=false means the
+// interface is absent; a failed query returns an error, which callers must
+// not mistake for absence.
+func kernelInterfaceState(name string) (ipLinkInfo, bool, error) {
+	out, err := runIP("-j", "-d", "link", "show")
 	if err != nil {
-		return false
+		return ipLinkInfo{}, false, err
 	}
 	var links []ipLinkInfo
 	if err := json.Unmarshal(out, &links); err != nil {
-		return false
+		return ipLinkInfo{}, false, fmt.Errorf("parsing ip link output: %w", err)
 	}
-	return len(links) == 1 && links[0].LinkInfo.Kind == "wireguard"
+	for _, link := range links {
+		if link.IfName == name {
+			return link, true, nil
+		}
+	}
+	return ipLinkInfo{}, false, nil
 }
 
-// removeStaleKernelInterface deletes an interface left behind by a previous
-// helper crash. A kernel netdev outlives its creator (unlike a userspace
-// TUN), and the deterministic name would make the next connect fail with
-// EEXIST. Only a wireguard-type link is removed: a same-named interface
-// owned by anything else must surface as a real error instead of being
-// silently destroyed.
-func removeStaleKernelInterface(name string) {
-	if !isWireGuardInterface(name) {
-		return
+// prepareKernelInterface makes name available to this connection.
+//
+// A kernel netdev outlives the process that created it: after a helper crash
+// the deterministic name makes the next `ip link add` fail with EEXIST. Only
+// a leftover interface carrying this helper's ownership marker is deleted; a
+// same-named link owned by anything else is reported as a conflict and left
+// untouched.
+func prepareKernelInterface(name, tunnel string) error {
+	info, exists, err := kernelInterfaceState(name)
+	if err != nil {
+		return fmt.Errorf("inspecting interface %q: %w", name, err)
+	}
+	if !exists {
+		return nil
+	}
+	if info.LinkInfo.Kind != "wireguard" {
+		return fmt.Errorf("%w: %q is a %q link, not a WireGuard interface",
+			errKernelInterfaceConflict, name, info.LinkInfo.Kind)
+	}
+	want := kernelOwnershipAliasPrefix + tunnel
+	if info.IfAlias != want {
+		return fmt.Errorf("%w: %q is not owned by WireGuide (alias %q)",
+			errKernelInterfaceConflict, name, info.IfAlias)
 	}
 	if err := deleteKernelInterface(name); err != nil {
-		slog.Warn("removing stale WireGuard kernel interface failed", "interface", name, "error", err)
+		return fmt.Errorf("removing stale interface %q: %w", name, err)
 	}
+	return nil
 }
 
 // deleteKernelInterface removes the netdev. Callers decide whether a
