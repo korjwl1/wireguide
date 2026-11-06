@@ -3,6 +3,7 @@ package autostart
 import (
 	"encoding/xml"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -65,11 +66,14 @@ func SyncAutostart(appPath string) (bool, error) {
 	return syncMacAutostartFile(path, appPath)
 }
 
-// syncMacAutostartFile rewrites the LaunchAgent at path when it exists,
-// already launches appPath, and differs from the plist rendered for appPath.
-// An entry that launches a different binary (the user installed elsewhere, or
-// this copy runs from a DMG or a translocated path) keeps its launch target:
-// only toggling auto-start moves it.
+// syncMacAutostartFile migrates the LaunchAgent at path to the current
+// template, but only when the file is byte-for-byte a login-item plist that an
+// earlier WireGuide release generated for this very appPath. Anything else is
+// the user's and is left untouched: a customised plist (extra keys, a wrapper
+// executable, Program, comments), a file for another install (the user
+// installed elsewhere, or this copy runs from a DMG or a translocated path),
+// one already current, or one that is unreadable or not XML. Only toggling
+// auto-start retargets or replaces such a file.
 func syncMacAutostartFile(path, appPath string) (bool, error) {
 	cur, err := os.ReadFile(path)
 	if err != nil {
@@ -78,13 +82,6 @@ func syncMacAutostartFile(path, appPath string) (bool, error) {
 		}
 		return false, err
 	}
-	var esc strings.Builder
-	if err := xml.EscapeText(&esc, []byte(appPath)); err != nil {
-		return false, fmt.Errorf("xml-escape app path: %w", err)
-	}
-	if !strings.Contains(string(cur), "<string>"+esc.String()+"</string>") {
-		return false, nil
-	}
 	want, err := renderMacAutostart(appPath)
 	if err != nil {
 		return false, err
@@ -92,11 +89,83 @@ func syncMacAutostartFile(path, appPath string) (bool, error) {
 	if string(cur) == want {
 		return false, nil
 	}
+	legacy, err := legacyMacAutostartPlists(appPath)
+	if err != nil {
+		return false, err
+	}
+	recognised := false
+	for _, l := range legacy {
+		if string(cur) == l {
+			recognised = true
+			break
+		}
+	}
+	if !recognised {
+		slog.Debug("autostart: LaunchAgent is not a recognised WireGuide template; leaving it as is", "path", path)
+		return false, nil
+	}
 	// Atomic: a crash mid-write must not leave a truncated login-item plist.
 	if err := atomicfile.WriteFile(path, []byte(want), 0644); err != nil {
 		return false, err
 	}
 	return true, nil
+}
+
+// legacyMacAutostartPlists renders, for appPath, every login-item plist that
+// earlier WireGuide releases generated, oldest first. They are the only files
+// syncMacAutostartFile will migrate. Keep each renderer frozen: it must
+// reproduce what that release wrote, byte for byte.
+func legacyMacAutostartPlists(appPath string) ([]string, error) {
+	var esc strings.Builder
+	if err := xml.EscapeText(&esc, []byte(appPath)); err != nil {
+		return nil, fmt.Errorf("xml-escape app path: %w", err)
+	}
+	return []string{
+		// First release: appPath was written unescaped and the plist carried
+		// LSUIElement.
+		legacyMacAutostartPlistLSUIElement(appPath),
+		// Later releases: appPath XML-escaped, no LSUIElement, no
+		// AssociatedBundleIdentifiers.
+		legacyMacAutostartPlistEscaped(esc.String()),
+	}, nil
+}
+
+func legacyMacAutostartPlistLSUIElement(appPath string) string {
+	return fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.wireguide.gui</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>%s</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>LSUIElement</key>
+    <true/>
+</dict>
+</plist>
+`, appPath)
+}
+
+func legacyMacAutostartPlistEscaped(safeAppPath string) string {
+	return fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.wireguide.gui</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>%s</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+</dict>
+</plist>
+`, safeAppPath)
 }
 
 // --- macOS: LaunchAgent ---
