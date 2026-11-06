@@ -277,6 +277,9 @@
       // IPC calls was clobbered by our stale snapshot of every setting.
       // An empty set removes the tunnel's entry (same semantics as before).
       await TunnelService.SaveAutomationRules(snap.name, snap.rules);
+      // Re-read the verdict now: adding the first rule moves the poller to
+      // its fast cadence, and removing the last one back to the slow one.
+      refreshAutomationPreview();
     } catch (e) {
       saveError = errText(e);
       console.error('automation save:', e);
