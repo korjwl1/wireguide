@@ -250,7 +250,7 @@ func (n *notifier) enabled() bool {
 	}
 	s, err := n.settings.Load()
 	if err != nil || s == nil {
-		return true // unreadable settings: default is on
+		return false // unreadable settings: default is off (opt-in)
 	}
 	return s.NotifyAutoChanges
 }

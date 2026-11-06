@@ -52,6 +52,7 @@ func cancelNotifier(t *testing.T) (*notifier, *wgapp.TunnelService, *fakeClock, 
 	fallbacks := new(int)
 	n.fallback = func(string, string) error { *fallbacks++; return nil }
 	installPreferencesHook(t, n)
+	setNotifyAutoChanges(t, svc, true) // notifications are opt-in
 	return n, svc, clock, b, fallbacks
 }
 
@@ -162,6 +163,7 @@ func TestNotifierAuthWaitThenStopDrops(t *testing.T) {
 				n := newNotifier(store, wgapp.NewUserActions())
 				n.systemLanguage = func() string { return "en" }
 				installPreferencesHook(t, n)
+				setNotifyAutoChanges(t, svc, true) // notifications are opt-in
 				b := &blockingBackend{waiting: make(chan struct{}), answer: make(chan bool)}
 				n.newBackend = func() notificationBackend { return b }
 				if wait == "recheck" {
@@ -208,5 +210,38 @@ func TestDeliverStopBeforeFallbackDrops(t *testing.T) {
 	n.deliver(n.generation(), "WireGuide", "one")
 	if *fallbacks != 0 {
 		t.Fatalf("fallback posted after stop: fallbacks=%d", *fallbacks)
+	}
+}
+
+// Notifications are opt-in: with default settings an automatic change, a
+// forced disconnect and a critical error neither post nor touch the
+// notification backend, so no authorization prompt can appear.
+func TestNotifierDefaultSettingsStaySilent(t *testing.T) {
+	store := storage.NewSettingsStore(t.TempDir())
+	n := newNotifier(store, wgapp.NewUserActions())
+	n.systemLanguage = func() string { return "en" }
+	clock := &fakeClock{}
+	n.afterFunc = clock.afterFunc
+	n.spawn = func(f func()) { f() }
+	b := &fakeBackend{granted: true}
+	backends := 0
+	n.newBackend = func() notificationBackend { backends++; return b }
+	fallbacks := 0
+	n.fallback = func(string, string) error { fallbacks++; return nil }
+
+	n.onStatus(nil)
+	n.onStatus([]string{"Office"}) // up without a user action
+	n.onStatus(nil)                // and down again
+	n.onAutoConnected("Office")
+	n.onForcedDisconnect("Office")
+	n.onCriticalError("eventLoop")
+	for _, tm := range clock.timers {
+		tm.f()
+	}
+	if b.sentCount() != 0 || fallbacks != 0 {
+		t.Fatalf("default settings must not notify: sent=%d fallbacks=%d", b.sentCount(), fallbacks)
+	}
+	if b.asked != 0 || backends != 0 {
+		t.Fatalf("default settings must not start the backend or request authorization: asked=%d backends=%d", b.asked, backends)
 	}
 }

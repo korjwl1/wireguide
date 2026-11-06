@@ -145,7 +145,7 @@
     tunnel_backend: 'userspace',
     tray_icon_style: 'color',
     auto_update_check: true,
-    notify_auto_changes: true,
+    notify_auto_changes: false,
     compact_list: false,
   };
   let loaded = false;
@@ -185,7 +185,7 @@
         // the Go side becomes undefined here; default to true to match
         // Settings.AutoUpdateCheckEnabled() semantics.
         settings.auto_update_check = (s.auto_update_check === false) ? false : true;
-        settings.notify_auto_changes = s.notify_auto_changes !== false;
+        settings.notify_auto_changes = s.notify_auto_changes === true;
       }
       loaded = true;
       loadError = '';
