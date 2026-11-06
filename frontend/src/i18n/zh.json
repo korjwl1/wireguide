@@ -99,9 +99,9 @@
     "dns_chip_global": "DNS：全局 · 替换系统 DNS",
     "dns_chip_split": "DNS：拆分 · {domains}",
     "dns_chip_search": "DNS：仅搜索域",
-    "dns_chip_global_hint": "连接期间，隧道的 DNS 服务器会替换系统 DNS，所有名称查询都会发往它们。",
-    "dns_chip_split_hint": "只有这些域会发往隧道的 DNS 服务器，其他名称仍由系统 DNS 应答。",
-    "dns_chip_search_hint": "此配置只设置了搜索域，没有 DNS 服务器。系统 DNS 服务器保持不变，但连接期间系统搜索域会被修改。"
+    "dns_chip_global_hint": "此配置要求连接期间用隧道的 DNS 服务器替换系统 DNS，因此所有名称查询都会发往它们。",
+    "dns_chip_split_hint": "此配置要求仅将这些域发往隧道的 DNS 服务器，其他名称仍由系统 DNS 应答。在 macOS 和搭载 systemd-resolved 的 Linux 上受支持；在 Windows 上连接会失败。",
+    "dns_chip_search_hint": "此配置只设置了搜索域，没有 DNS 服务器。它要求保留系统 DNS 服务器，并在连接期间修改系统搜索域。搜索域在 macOS 和 Linux 上生效，Windows 会忽略。"
   },
   "import": {
     "zip_result_title": "导入结果",
