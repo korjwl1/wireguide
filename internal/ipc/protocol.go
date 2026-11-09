@@ -29,9 +29,10 @@ import (
 // CLI status/disconnect/stop even when no GUI or transport is currently up.
 // Minor 4 adds serialized profile deletion in the helper.
 // Minor 5 adds WireGuard backend selection and its settings-change event field.
+// Minor 6 adds AutomationTunnelDecision.Blocked (loop-watchdog block) to Automation.Preview.
 const (
 	ProtocolMajor = 1
-	ProtocolMinor = 5
+	ProtocolMinor = 6
 )
 
 // ProtocolVersion is the canonical "major.minor" string used in
@@ -171,6 +172,7 @@ const (
 	EventReconnect         = "event.reconnect"
 	EventLog               = "event.log"
 	EventWifiSSID          = "event.wifi_ssid"
+	EventAutomationChanged = "event.automation_changed"
 	EventAutoConnect       = "event.auto_connect"
 	EventAutomationSkipped = "event.automation_skipped"
 	// EventForcedDisconnect tells the GUI the helper tore a tunnel down on

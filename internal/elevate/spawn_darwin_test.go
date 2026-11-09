@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"github.com/korjwl1/wireguide/internal/ipc"
+	"github.com/korjwl1/wireguide/internal/logrotate"
+	"github.com/korjwl1/wireguide/internal/launchd"
 )
 
 // testArgs returns a representative Args for plist generation.
@@ -79,6 +81,22 @@ func plistExtract(t *testing.T, path, keypath string) string {
 	return strings.TrimSpace(string(out))
 }
 
+// TestPlistAssociatesAppBundle pins the attribution of the LaunchDaemon to the
+// WireGuide app in System Settings > Login Items & Extensions.
+func TestPlistAssociatesAppBundle(t *testing.T) {
+	plist := generatePlistContent("/Library/PrivilegedHelperTools/com.wireguide.helper", testArgs())
+	path := filepath.Join(t.TempDir(), "test.plist")
+	if err := os.WriteFile(path, []byte(plist), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if got := plistExtract(t, path, "AssociatedBundleIdentifiers.0"); got != launchd.AppBundleID {
+		t.Errorf("AssociatedBundleIdentifiers.0 = %q, want %q", got, launchd.AppBundleID)
+	}
+	if got := plistExtract(t, path, "AssociatedBundleIdentifiers"); got != "1" {
+		t.Errorf("AssociatedBundleIdentifiers has %s entries, want 1", got)
+	}
+}
+
 // TestPlistDeclaresLaunchdSocket pins the socket-activation contract: launchd
 // binds the socket directly under /var/run (it does not create parent
 // directories), private to the owning uid, and the boot behaviour is unchanged.
@@ -136,7 +154,7 @@ func TestLaunchdDemandLifecycle(t *testing.T) {
 	plist = strings.ReplaceAll(plist, ipc.DarwinSocketPath, sock)
 	plist = strings.ReplaceAll(plist, daemonBinary, fixture)
 	plist = strings.ReplaceAll(plist, daemonLabel, label)
-	plist = strings.ReplaceAll(plist, "/var/log/wireguide-helper.log", filepath.Join(dir, "helper.log"))
+	plist = strings.ReplaceAll(plist, logrotate.HelperStderrPath, filepath.Join(dir, "helper.log"))
 	path := filepath.Join(dir, "helper.plist")
 	if err := os.WriteFile(path, []byte(plist), 0600); err != nil {
 		t.Fatal(err)
@@ -235,5 +253,29 @@ sleep() { :; }
 				t.Errorf("command trace = %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+// TestPlistLogPaths pins the helper log split: the helper rotates its own slog
+// output at HelperLogPath, so launchd's stdout/stderr capture must target the
+// separate stderr file. Pointing it at the rotated file again would let
+// launchd's unbounded append fight the in-process rotation.
+func TestPlistLogPaths(t *testing.T) {
+	plist := generatePlistContent("/Library/PrivilegedHelperTools/com.wireguide.helper", testArgs())
+	path := filepath.Join(t.TempDir(), "test.plist")
+	if err := os.WriteFile(path, []byte(plist), 0644); err != nil {
+		t.Fatalf("write plist: %v", err)
+	}
+	for _, key := range []string{"StandardErrorPath", "StandardOutPath"} {
+		out, err := exec.Command("plutil", "-extract", key, "raw", "-o", "-", path).CombinedOutput()
+		if err != nil {
+			t.Fatalf("plutil -extract %s: %v\n%s", key, err, out)
+		}
+		if got := strings.TrimSpace(string(out)); got != logrotate.HelperStderrPath {
+			t.Errorf("%s = %q, want %q", key, got, logrotate.HelperStderrPath)
+		}
+	}
+	if logrotate.HelperStderrPath == logrotate.HelperLogPath {
+		t.Fatal("launchd capture and rotated helper log must be different files")
 	}
 }

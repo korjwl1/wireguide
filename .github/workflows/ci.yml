@@ -49,6 +49,15 @@ jobs:
 
       # main.go embeds frontend/dist, so the frontend must exist before any
       # command that loads the root Go package (test, vet, or bindings).
+      - name: Check generated bindings
+        run: |
+          wails3 generate bindings -clean=true
+          drift=$(git status --porcelain --untracked-files=all -- frontend/bindings)
+          if [ -n "$drift" ]; then
+            printf '%s\n' "$drift"
+            exit 1
+          fi
+
       - name: Build frontend
         working-directory: frontend
         run: |

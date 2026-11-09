@@ -4,5 +4,6 @@
 
 export {
     HelperEvent,
-    ReconnectEvent
+    ReconnectEvent,
+    WindowVisibilityEvent
 } from "./models.js";

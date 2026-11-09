@@ -15,9 +15,12 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/korjwl1/wireguide/internal/ipc"
+	"github.com/korjwl1/wireguide/internal/logrotate"
+	"github.com/korjwl1/wireguide/internal/launchd"
 	"github.com/korjwl1/wireguide/internal/version"
 )
 
@@ -84,6 +87,12 @@ func generatePlistContent(exe string, args Args) string {
 <dict>
     <key>Label</key>
     <string>%s</string>
+    <!-- Ties this background item to the WireGuide app in System Settings
+         (Login Items and Extensions). -->
+    <key>AssociatedBundleIdentifiers</key>
+    <array>
+        <string>%s</string>
+    </array>
     <key>ProgramArguments</key>
     <array>
         <string>%s</string>
@@ -139,13 +148,17 @@ func generatePlistContent(exe string, args Args) string {
          respawn rate to once per 5s in case of a crash loop. -->
     <key>ThrottleInterval</key>
     <integer>5</integer>
+    <!-- The helper writes its own size-rotated log to %s;
+         launchd only captures panics and runtime output here, which
+         it appends to without rotation. -->
     <key>StandardErrorPath</key>
-    <string>/var/log/wireguide-helper.log</string>
+    <string>%s</string>
     <key>StandardOutPath</key>
-    <string>/var/log/wireguide-helper.log</string>
+    <string>%s</string>
 </dict>
 </plist>
-`, daemonLabel, daemonBinary, args.SocketPath, uid, args.DataDir, ipc.DarwinSocketPath, uid)
+`, daemonLabel, launchd.AppBundleID, daemonBinary, args.SocketPath, uid, args.DataDir, ipc.DarwinSocketPath, uid,
+		logrotate.HelperLogPath, logrotate.HelperStderrPath, logrotate.HelperStderrPath)
 }
 
 // PlistNeedsReinstall reports whether the on-disk LaunchDaemon plist differs
@@ -231,7 +244,7 @@ func installAndLoadDaemon(ctx context.Context, args Args) error {
 	if disabled := checkDaemonEnabled(ctx); disabled != nil {
 		return disabled
 	}
-	return fmt.Errorf("%w\nHelper state: %s. Check /var/log/wireguide-helper.log and System Settings > General > Login Items & Extensions; allow WireGuide if macOS has blocked it", err, daemonStateSummary(ctx))
+	return fmt.Errorf("%w\nHelper state: %s. Check %s and %s and System Settings > General > Login Items & Extensions; allow WireGuide if macOS has blocked it", err, daemonStateSummary(ctx), logrotate.HelperLogPath, logrotate.HelperStderrPath)
 }
 
 // daemonOps are the external effects of a start attempt, injectable so the
@@ -318,12 +331,39 @@ func daemonLoadedFromPrint(out []byte, err error) error {
 	return nil
 }
 
+// runAuthorizationScript runs the administrator-privileges AppleScript; a seam
+// for tests so they can never open a real password prompt.
+var runAuthorizationScript = func(script string) ([]byte, error) {
+	return exec.Command("osascript", "-e", script).CombinedOutput()
+}
+
+// authNoticeShown records that the explanation dialog has already been
+// displayed in this process. The longer explanation is shown at most once per
+// process ("session", nothing is persisted) so repeated repair retries do not
+// stack a second modal dialog in front of every password prompt.
+var authNoticeShown atomic.Bool
+
 func runDaemonAuthorization(shellScript string) error {
+	// Explain BEFORE the password prompt, and only here: this runs solely
+	// when an install or repair really needs administrator rights, never on
+	// the passive no-prompt start path. Once per process: the claim is taken
+	// before showing so concurrent attempts cannot both show it, kept when the
+	// user saw the dialog (accepted or declined), and released when the dialog
+	// could not be shown at all so a later attempt may try again.
+	if authNoticeShown.CompareAndSwap(false, true) {
+		shown, err := showAuthorizationNotice()
+		if !shown {
+			authNoticeShown.Store(false)
+		}
+		if err != nil {
+			return err
+		}
+	}
 	escaped := strings.ReplaceAll(shellScript, `\`, `\\`)
 	escaped = strings.ReplaceAll(escaped, `"`, `\"`)
-	script := fmt.Sprintf(`do shell script "%s" with administrator privileges with prompt "WireGuide needs administrator access to start or repair its VPN helper service."`, escaped)
+	script := fmt.Sprintf(`do shell script "%s" with administrator privileges with prompt "%s"`, escaped, currentAuthNotice().Prompt)
 	slog.Info("starting LaunchDaemon (administrator authorization)")
-	out, err := exec.Command("osascript", "-e", script).CombinedOutput()
+	out, err := runAuthorizationScript(script)
 	if err != nil {
 		if strings.Contains(string(out), "(-128)") {
 			return fmt.Errorf("%w: %s", ErrAuthorizationCanceled, tailOf(out, 500))
