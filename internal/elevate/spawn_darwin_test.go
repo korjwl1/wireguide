@@ -13,8 +13,8 @@ import (
 	"time"
 
 	"github.com/korjwl1/wireguide/internal/ipc"
-	"github.com/korjwl1/wireguide/internal/logrotate"
 	"github.com/korjwl1/wireguide/internal/launchd"
+	"github.com/korjwl1/wireguide/internal/logrotate"
 )
 
 // testArgs returns a representative Args for plist generation.
@@ -209,12 +209,13 @@ func TestDaemonInstallScript(t *testing.T) {
 		wantError bool
 		want      string
 	}{
-		{"fresh install", "", false, false, "bootout\nprint\nrm\nmkdir\ncp\nxattr\nchown\nchmod\ncp\nchown\nchmod\nbootstrap\nkickstart\n"},
-		{"kickstart failure after bootstrap", "kickstart", false, true, "bootout\nprint\nrm\nmkdir\ncp\nxattr\nchown\nchmod\ncp\nchown\nchmod\nbootstrap\nkickstart\n"},
+		{"fresh install", "", false, false, "bootout\nprint\nrm\nmkdir\ncp\nxattr\nchown\nchmod\ncodesign\ncp\nchown\nchmod\nbootstrap\nkickstart\n"},
+		{"kickstart failure after bootstrap", "kickstart", false, true, "bootout\nprint\nrm\nmkdir\ncp\nxattr\nchown\nchmod\ncodesign\ncp\nchown\nchmod\nbootstrap\nkickstart\n"},
 		{"copy failure", "cp", false, true, "bootout\nprint\nrm\nmkdir\ncp\n"},
+		{"invalid helper signature", "codesign", false, true, "bootout\nprint\nrm\nmkdir\ncp\nxattr\nchown\nchmod\ncodesign\n"},
 		{"purge failure", "rm", false, true, "bootout\nprint\nrm\n"},
-		{"quarantine absent", "xattr", false, false, "bootout\nprint\nrm\nmkdir\ncp\nxattr\nchown\nchmod\ncp\nchown\nchmod\nbootstrap\nkickstart\n"},
-		{"bootstrap failure", "bootstrap", false, true, "bootout\nprint\nrm\nmkdir\ncp\nxattr\nchown\nchmod\ncp\nchown\nchmod\nbootstrap\n"},
+		{"quarantine absent", "xattr", false, false, "bootout\nprint\nrm\nmkdir\ncp\nxattr\nchown\nchmod\ncodesign\ncp\nchown\nchmod\nbootstrap\nkickstart\n"},
+		{"bootstrap failure", "bootstrap", false, true, "bootout\nprint\nrm\nmkdir\ncp\nxattr\nchown\nchmod\ncodesign\ncp\nchown\nchmod\nbootstrap\n"},
 		{"teardown timeout", "", true, true, ""},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -233,9 +234,12 @@ cp() { record cp; }
 xattr() { record xattr; }
 chown() { record chown; }
 chmod() { record chmod; }
+codesign() { record codesign; }
 sleep() { :; }
 `
-			cmd := exec.Command("/bin/sh", "-c", stubs+daemonInstallScript("/tmp/app's binary", "/tmp/helper.plist"))
+			script := daemonInstallScript("/tmp/app's bundle.app/Contents/Library/LaunchServices/"+daemonLabel, "/tmp/helper.plist")
+			script = strings.ReplaceAll(script, "/usr/bin/codesign", "codesign")
+			cmd := exec.Command("/bin/sh", "-c", stubs+script)
 			cmd.Env = append(os.Environ(), "TRACE="+trace, "FAIL="+tt.fail, fmt.Sprintf("LOADED=%t", tt.loaded))
 			out, err := cmd.CombinedOutput()
 			if (err != nil) != tt.wantError {
@@ -253,6 +257,13 @@ sleep() { :; }
 				t.Errorf("command trace = %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestBareDaemonInstallDoesNotRequireSignature(t *testing.T) {
+	script := daemonInstallScript("/tmp/unsigned Intel binary", "/tmp/helper.plist")
+	if strings.Contains(script, "codesign") {
+		t.Fatal("bare development helper unexpectedly requires a code signature")
 	}
 }
 

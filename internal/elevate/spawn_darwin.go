@@ -19,8 +19,8 @@ import (
 	"time"
 
 	"github.com/korjwl1/wireguide/internal/ipc"
-	"github.com/korjwl1/wireguide/internal/logrotate"
 	"github.com/korjwl1/wireguide/internal/launchd"
+	"github.com/korjwl1/wireguide/internal/logrotate"
 	"github.com/korjwl1/wireguide/internal/version"
 )
 
@@ -182,7 +182,14 @@ func PlistNeedsReinstall(args Args) bool {
 		return false
 	}
 	expected := generatePlistContent(exe, args)
-	return string(existing) != expected
+	if string(existing) != expected {
+		return true
+	}
+	source, err := daemonSource(exe)
+	if err != nil {
+		return false
+	}
+	return !daemonBinariesMatch(source, daemonBinary)
 }
 
 // installAndLoadDaemon brings the LaunchDaemon to a state where the helper
@@ -204,6 +211,13 @@ func PlistNeedsReinstall(args Args) bool {
 func installAndLoadDaemon(ctx context.Context, args Args) error {
 	exe, err := SelfPath()
 	if err != nil {
+		return err
+	}
+	exe, err = daemonSource(exe)
+	if err != nil {
+		return err
+	}
+	if err := validateDaemonSource(ctx, exe); err != nil {
 		return err
 	}
 
@@ -467,6 +481,10 @@ func daemonStateSummary(ctx context.Context) string {
 // starts the helper right away rather than waiting for the first connect. A
 // stale socket file left by bootout is simply rebound by launchd.)
 func daemonInstallScript(exe, tmpPlist string) string {
+	verify := ":"
+	if daemonSourceBundle(exe) != "" {
+		verify = "/usr/bin/codesign --verify --strict --all-architectures " + shellQuote(daemonBinary)
+	}
 	return fmt.Sprintf(
 		`launchctl bootout system/%s 2>/dev/null; `+
 			`i=0; while [ $i -lt 150 ] && launchctl print system/%s >/dev/null 2>&1; do sleep 0.1; i=$((i+1)); done; `+
@@ -477,6 +495,7 @@ func daemonInstallScript(exe, tmpPlist string) string {
 			`{ xattr -d com.apple.quarantine %s 2>/dev/null || true; } && `+
 			`chown root:wheel %s && `+
 			`chmod 755 %s && `+
+			`%s && `+
 			`cp -f %s %s && `+
 			`chown root:wheel %s && `+
 			`chmod 644 %s && `+
@@ -489,6 +508,7 @@ func daemonInstallScript(exe, tmpPlist string) string {
 		shellQuote(daemonBinary),
 		shellQuote(daemonBinary),
 		shellQuote(daemonBinary),
+		verify,
 		shellQuote(tmpPlist), shellQuote(daemonPlist),
 		shellQuote(daemonPlist),
 		shellQuote(daemonPlist),
@@ -502,15 +522,23 @@ func daemonInstallScript(exe, tmpPlist string) string {
 // plist content. Used to route SpawnHelper onto the no-authorization path.
 // Any read error (not installed yet, permissions) → false → full install.
 func daemonUpToDate(exe, wantPlist string) bool {
-	onDisk, err := os.ReadFile(daemonPlist)
+	return daemonUpToDateAt(exe, wantPlist, daemonBinary, daemonPlist)
+}
+
+func daemonUpToDateAt(exe, wantPlist, binaryPath, plistPath string) bool {
+	onDisk, err := os.ReadFile(plistPath)
 	if err != nil || !bytes.Equal(onDisk, []byte(wantPlist)) {
 		return false
 	}
+	return daemonBinariesMatch(exe, binaryPath)
+}
+
+func daemonBinariesMatch(exe, binaryPath string) bool {
 	selfSum, err := fileSHA256(exe)
 	if err != nil {
 		return false
 	}
-	installedSum, err := fileSHA256(daemonBinary)
+	installedSum, err := fileSHA256(binaryPath)
 	if err != nil {
 		return false
 	}
