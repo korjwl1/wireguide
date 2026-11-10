@@ -264,7 +264,7 @@ func TestKernelLinkCrashCheckpointsDeleteOnlyOwnedIndex(t *testing.T) {
 			if got := !f.has(idxA); got != tc.wantGone {
 				t.Fatalf("link gone = %v, want %v", got, tc.wantGone)
 			}
-			if intentExists(dir) != tc.wantKeep {
+			if intentExists(dir) {
 				t.Fatalf("intent kept = %v, want %v", intentExists(dir), tc.wantKeep)
 			}
 			if tc.wantNoDel && len(f.deletes) != 0 {
@@ -471,8 +471,9 @@ func TestKernelLinkPrepareRefusesUnresolvedIntent(t *testing.T) {
 	dir := t.TempDir()
 	f := newFakeLinkBackend()
 	f.add(ours(idxA, "other-tool"))
+	f.lookupErr = errors.New("link inspection unavailable")
 	writeTestIntent(t, dir, idxA)
-	if _, err := createKernelLink(request(f, dir)); !errors.Is(err, errKernelLinkNotOwned) {
+	if _, err := createKernelLink(request(f, dir)); err == nil {
 		t.Fatalf("err = %v", err)
 	}
 	in, err := readKernelIntent(intentPath(dir))
@@ -716,7 +717,7 @@ func TestRecoverFromCrashKernelDeleteFailureKeepsJournal(t *testing.T) {
 		t.Fatal("failed index deletion must keep the journal and never delete by name")
 	}
 	f.deleteErr = nil
-	handled, err := kernelRecoveryLinkGuard(dir, testIface)
+	handled, err := kernelStateLinkGuard(*LoadActiveState(dir)[0], testIface)
 	if !handled || err != nil || f.has(idxA) {
 		t.Fatalf("adoption retry guard: handled=%v err=%v", handled, err)
 	}

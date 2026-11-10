@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/korjwl1/wireguide/internal/domain"
 	"github.com/korjwl1/wireguide/internal/ipc"
 	"github.com/korjwl1/wireguide/internal/storage"
 )
@@ -14,6 +15,7 @@ import (
 // recent connection start, from history. Missing tunnels get the zero
 // value (0 = never connected). Computed once per list call.
 type counterSample struct {
+	source    *ipc.Client
 	historyID string
 	snapshot  bool
 	name      string
@@ -39,20 +41,20 @@ func countersFromStatus(status ConnectionStatus) map[string]counterSample {
 	return out
 }
 
-func ObserveHistoryStatus(s *TunnelService, status ConnectionStatus) {
-	s.reconcileHistoryFromStatus(status.ActiveTunnels, countersFromStatus(status), "")
+func ObserveHistoryStatus(s *TunnelService, status ConnectionStatus, sources ...*ipc.Client) {
+	s.reconcileHistoryFromStatus(status.ActiveTunnels, countersFromStatus(status), "", sources...)
 }
 
 func (s *TunnelService) snapshotCounterSamples() map[string]counterSample {
 	historyIDs := make(map[string]string)
 	s.activeSessions.Range(func(k, v any) bool { name, _ := k.(string); id, _ := v.(string); historyIDs[name] = id; return true })
-	status, err := s.GetStatus()
+	status, source, err := s.statusSnapshot()
 	if err != nil || status == nil {
 		return nil
 	}
 	samples := countersFromStatus(*status)
 	for name, sample := range samples {
-		sample.historyID, sample.snapshot = historyIDs[name], true
+		sample.historyID, sample.snapshot, sample.source = historyIDs[name], true, source
 		samples[name] = sample
 	}
 	return samples
@@ -65,17 +67,27 @@ func (s *TunnelService) snapshotCounterSample(wantName string) counterSample {
 	return counterSample{name: wantName}
 }
 
+type disconnectTarget struct {
+	historyID string
+	epoch     string
+	source    *ipc.Client
+}
+
 func (s *TunnelService) markUserDisconnectSample(sample counterSample) string {
+	return s.prepareUserDisconnect(sample).historyID
+}
+
+func (s *TunnelService) prepareUserDisconnect(sample counterSample) disconnectTarget {
 	if sample.epoch == "" {
-		return s.markUserDisconnect(sample.name, sample.rx, sample.tx)
+		return disconnectTarget{historyID: s.markUserDisconnect(sample.name, sample.rx, sample.tx, sample.source), source: sample.source}
 	}
 	if sample.name == "" {
-		return ""
+		return disconnectTarget{}
 	}
 	s.reconcileMu.Lock()
 	defer s.reconcileMu.Unlock()
-	if s.historyClosed {
-		return ""
+	if s.historyClosed || !s.currentHistorySource(sample.source) {
+		return disconnectTarget{}
 	}
 	id, open := s.activeSessions.Load(sample.name)
 	currentID, _ := id.(string)
@@ -88,24 +100,23 @@ func (s *TunnelService) markUserDisconnectSample(sample counterSample) string {
 			previous.reason = "user"
 			s.lastKnownStats.Store(sample.name, previous)
 		}
-		return currentID
+		return disconnectTarget{historyID: currentID, epoch: previous.epoch, source: sample.source}
 	}
 	if sample.snapshot && sample.historyID != currentID {
 		if !open {
-			return ""
+			return disconnectTarget{}
 		}
 		if peak, sameEngine := previous.epochs[sample.epoch]; previous.epoch != sample.epoch && (!sameEngine || peak.inherited) {
 			previous.reason = "user"
 			s.lastKnownStats.Store(sample.name, previous)
-			return currentID
+			return disconnectTarget{historyID: currentID, epoch: previous.epoch, source: sample.source}
 		}
 	}
 	if !open && s.staleClosedEpochLocked(sample.name, sample) {
-		return ""
+		return disconnectTarget{}
 	}
 	if !open && s.historyStore != nil {
 		previous = s.seedClosedPeaksLocked(sample.name, lastKnownTunnelStats{})
-		delete(s.closedPeaks, sample.name)
 		currentID = s.historyStore.RecordConnect(sample.name)
 		s.activeSessions.Store(sample.name, currentID)
 		s.refreshHistorySignature()
@@ -113,7 +124,7 @@ func (s *TunnelService) markUserDisconnectSample(sample counterSample) string {
 	updated := previous.mergeEpoch(sample.rx, sample.tx, sample.epoch)
 	updated.reason = "user"
 	s.lastKnownStats.Store(sample.name, updated)
-	return currentID
+	return disconnectTarget{historyID: currentID, epoch: updated.epoch, source: sample.source}
 }
 
 func (s *TunnelService) refreshHistorySignature() {
@@ -126,13 +137,14 @@ func (s *TunnelService) refreshHistorySignature() {
 	s.lastReconcileSig = activeSetSignature(active)
 }
 
-func (s *TunnelService) finishUserDisconnect(name, historyID string) {
+func (s *TunnelService) finishUserDisconnect(name string, target disconnectTarget) {
+	historyID := target.historyID
 	if s.historyStore == nil || historyID == "" {
 		return
 	}
 	s.reconcileMu.Lock()
 	defer s.reconcileMu.Unlock()
-	if s.historyClosed {
+	if s.historyClosed || !s.currentHistorySource(target.source) {
 		return
 	}
 	id, ok := s.activeSessions.Load(name)
@@ -143,14 +155,38 @@ func (s *TunnelService) finishUserDisconnect(name, historyID string) {
 	if cached, ok := s.lastKnownStats.LoadAndDelete(name); ok {
 		stats, _ = cached.(lastKnownTunnelStats)
 	}
-	if stats.epoch != "" {
-		if _, seen := stats.epochs[stats.epoch]; !seen {
-			if stats.epochs == nil {
-				stats.epochs = make(map[string]counterPeak)
-			}
-			stats.epochs[stats.epoch] = counterPeak{}
-		}
+	if target.epoch == "" {
+		target.epoch = stats.epoch
 	}
+	stats.ensureEpochIdentity(stats.epoch)
+	future := lastKnownTunnelStats{epochs: make(map[string]counterPeak)}
+	owner, cutoff, ordered := domain.ParseCounterEpoch(target.epoch)
+	currentOwner, _, currentOrdered := domain.ParseCounterEpoch(stats.epoch)
+	for epoch, peak := range stats.epochs {
+		incarnation, sequence, ok := domain.ParseCounterEpoch(epoch)
+		newer := ordered && ok && (owner == incarnation && sequence > cutoff || currentOrdered && currentOwner != owner && incarnation == currentOwner)
+		if !ordered {
+			newer = epoch == stats.epoch && epoch != target.epoch
+		}
+		if !newer {
+			continue
+		}
+		rx, tx := peak.rx-peak.baseRx, peak.tx-peak.baseTx
+		future.rx += rx
+		future.tx += tx
+		stats.rx -= rx
+		stats.tx -= tx
+		future.epochs[epoch] = peak
+		if future.epoch == "" || earlierCounterEpoch(future.epoch, epoch) || epoch == stats.epoch {
+			future.epoch = epoch
+			future.rawRx = peak.rx
+			future.rawTx = peak.tx
+		}
+		delete(stats.epochs, epoch)
+	}
+	stats.epoch = target.epoch
+	stats.ensureEpochIdentity(target.epoch)
+
 	for epoch, peak := range stats.epochs {
 		if !peak.inherited || epoch == stats.epoch && !peak.terminal {
 			peak.inherited = false
@@ -158,9 +194,13 @@ func (s *TunnelService) finishUserDisconnect(name, historyID string) {
 			stats.epochs[epoch] = peak
 		}
 	}
-	s.rememberClosedPeaksLocked(name, stats)
+	s.rememberClosedPeaksLocked(name, stats, historyID)
 	s.historyStore.RecordDisconnect(historyID, stats.rx, stats.tx, "user")
 	s.activeSessions.Delete(name)
+	if len(future.epochs) > 0 {
+		s.activeSessions.Store(name, s.historyStore.RecordConnect(name))
+		s.lastKnownStats.Store(name, future)
+	}
 	s.refreshHistorySignature()
 }
 
@@ -181,10 +221,10 @@ func (s *TunnelService) lastUsedByTunnel() map[string]int64 {
 // "user", preserving any rx/tx the Reconcile-driven cache refresh has
 // already recorded. snapRx/snapTx is a fallback for the cold case (no
 // cache entry yet — first Disconnect before any status event was reconciled).
-func (s *TunnelService) markUserDisconnect(name string, snapRx, snapTx int64) string {
+func (s *TunnelService) markUserDisconnect(name string, snapRx, snapTx int64, sources ...*ipc.Client) string {
 	s.reconcileMu.Lock()
 	defer s.reconcileMu.Unlock()
-	if name == "" || s.historyClosed {
+	if name == "" || s.historyClosed || !s.currentHistorySources(sources) {
 		return ""
 	}
 	id, _ := s.activeSessions.Load(name)
@@ -203,9 +243,20 @@ func (s *TunnelService) markUserDisconnect(name string, snapRx, snapTx int64) st
 // clearUserDisconnect removes the "user" reason hint after a failed
 // Disconnect IPC, leaving rx/tx intact. Other reasons (or empty) are left
 // alone — only the hint we set ourselves is cleared.
-func (s *TunnelService) clearUserDisconnect(name string) {
+func (s *TunnelService) clearUserDisconnect(name string, historyIDs ...string) {
 	s.reconcileMu.Lock()
 	defer s.reconcileMu.Unlock()
+	s.clearUserDisconnectLocked(name, historyIDs)
+}
+
+func (s *TunnelService) clearUserDisconnectLocked(name string, historyIDs []string) {
+	if len(historyIDs) != 0 {
+		id, _ := s.activeSessions.Load(name)
+		currentID, _ := id.(string)
+		if currentID != historyIDs[0] {
+			return
+		}
+	}
 	if name == "" {
 		return
 	}
@@ -275,13 +326,13 @@ func (s *TunnelService) ReconcileHistoryFromStatus(activeNames []string, rxByTun
 	s.reconcileHistoryFromStatus(activeNames, samples, disappearReason)
 }
 
-func (s *TunnelService) reconcileHistoryFromStatus(activeNames []string, samples map[string]counterSample, disappearReason string) {
+func (s *TunnelService) reconcileHistoryFromStatus(activeNames []string, samples map[string]counterSample, disappearReason string, sources ...*ipc.Client) {
 	if s.historyStore == nil {
 		return
 	}
 	s.reconcileMu.Lock()
 	defer s.reconcileMu.Unlock()
-	if s.historyClosed {
+	if s.historyClosed || !s.currentHistorySources(sources) {
 		return
 	}
 	if disappearReason == "" {
@@ -372,7 +423,7 @@ func (s *TunnelService) reconcileHistoryFromStatus(activeNames []string, samples
 					if st.reason != "" {
 						reason = st.reason
 					}
-					s.rememberClosedPeaksLocked(name, st)
+					s.rememberClosedPeaksLocked(name, st, id)
 				}
 			}
 			s.historyStore.RecordDisconnect(id, rx, tx, reason)
@@ -390,7 +441,6 @@ func (s *TunnelService) reconcileHistoryFromStatus(activeNames []string, samples
 		}
 		id := s.historyStore.RecordConnect(name)
 		s.activeSessions.Store(name, id)
-		delete(s.closedPeaks, name)
 	}
 }
 
@@ -490,7 +540,13 @@ func (s *TunnelService) ClearConnectionHistory() error {
 	if s.historyStore == nil {
 		return nil
 	}
-	return s.historyStore.Clear()
+	s.reconcileMu.Lock()
+	defer s.reconcileMu.Unlock()
+	if err := s.historyStore.Clear(); err != nil {
+		return err
+	}
+	s.closedPeaks = nil
+	return nil
 }
 
 func (s *TunnelService) staleClosedEpochLocked(name string, sample counterSample) bool {
@@ -511,8 +567,12 @@ func (s *TunnelService) seedClosedPeaksLocked(name string, st lastKnownTunnelSta
 		epochs[epoch] = peak
 	}
 	for epoch, peak := range closed {
+		if peak.terminal {
+			continue
+		}
 		if _, ok := epochs[epoch]; !ok {
 			peak.inherited = true
+			peak.baseRx, peak.baseTx = peak.rx, peak.tx
 			epochs[epoch] = peak
 		}
 	}
@@ -520,21 +580,61 @@ func (s *TunnelService) seedClosedPeaksLocked(name string, st lastKnownTunnelSta
 	return st
 }
 
-func (s *TunnelService) rememberClosedPeaksLocked(name string, st lastKnownTunnelStats) {
-	own := make(map[string]counterPeak, len(st.epochs))
-	for epoch, peak := range st.epochs {
-		if !peak.inherited {
-			own[epoch] = peak
-		}
-	}
-	if len(own) == 0 {
-		delete(s.closedPeaks, name)
-		return
-	}
+func (s *TunnelService) rememberClosedPeaksLocked(name string, st lastKnownTunnelStats, historyID string) {
 	if s.closedPeaks == nil {
 		s.closedPeaks = make(map[string]map[string]counterPeak)
 	}
-	s.closedPeaks[name] = own
+	peaks := make(map[string]counterPeak, len(st.epochs)+len(s.closedPeaks[name]))
+	for epoch, peak := range s.closedPeaks[name] {
+		if peak.terminal {
+			peaks[epoch] = peak
+		}
+	}
+	for epoch, peak := range st.epochs {
+		if peak.inherited {
+			continue
+		}
+		if peak.historyID == "" {
+			peak.historyID = historyID
+		}
+		if previous, exists := peaks[epoch]; !exists || !previous.terminal {
+			peaks[epoch] = peak
+		}
+	}
+	s.closedPeaks[name] = peaks
+	incarnation, _, ordered := domain.ParseCounterEpoch(st.epoch)
+	if ordered {
+		watermark := s.closedWatermarks[name]
+		if watermark.incarnation != incarnation {
+			watermark = counterWatermark{incarnation: incarnation}
+		}
+		for epoch, peak := range peaks {
+			owner, sequence, ok := domain.ParseCounterEpoch(epoch)
+			if ok && owner == incarnation && peak.terminal {
+				watermark.sequence = max(watermark.sequence, sequence)
+			}
+		}
+		if watermark.sequence != 0 {
+			if s.closedWatermarks == nil {
+				s.closedWatermarks = make(map[string]counterWatermark)
+			}
+			s.closedWatermarks[name] = watermark
+		}
+	}
+	retained := make(map[string]bool)
+	for _, session := range s.historyStore.GetAll() {
+		retained[session.ID] = true
+	}
+	for tunnel, entries := range s.closedPeaks {
+		for epoch, peak := range entries {
+			if !retained[peak.historyID] {
+				delete(entries, epoch)
+			}
+		}
+		if len(entries) == 0 {
+			delete(s.closedPeaks, tunnel)
+		}
+	}
 }
 
 func (s *TunnelService) foldTerminalSampleLocked(name string, sample counterSample) bool {
@@ -550,7 +650,9 @@ func (s *TunnelService) foldTerminalSampleLocked(name string, sample counterSamp
 		peak, known = peaks[sample.epoch]
 	}
 	if !known || !peak.terminal {
-		return false
+		incarnation, sequence, ordered := domain.ParseCounterEpoch(sample.epoch)
+		watermark := s.closedWatermarks[name]
+		return ordered && watermark.incarnation == incarnation && sequence <= watermark.sequence
 	}
 	rx, tx := max(sample.rx-peak.rx, 0), max(sample.tx-peak.tx, 0)
 	if rx != 0 || tx != 0 {
@@ -559,4 +661,43 @@ func (s *TunnelService) foldTerminalSampleLocked(name string, sample counterSamp
 		s.historyStore.AddClosedSessionTraffic(peak.historyID, rx, tx)
 	}
 	return true
+}
+
+func (s *TunnelService) currentHistorySource(source *ipc.Client) bool {
+	return source == nil || s.clients != nil && s.clients.Get() == source
+}
+
+func (s *TunnelService) currentHistorySources(sources []*ipc.Client) bool {
+	return len(sources) == 0 || s.currentHistorySource(sources[0])
+}
+
+func (s *TunnelService) observeHistoryCounters(status ConnectionStatus, source *ipc.Client) {
+	samples := countersFromStatus(status)
+	s.reconcileMu.Lock()
+	defer s.reconcileMu.Unlock()
+	if s.historyClosed || !s.currentHistorySource(source) {
+		return
+	}
+	for _, name := range status.ActiveTunnels {
+		sample := samples[name]
+		if s.foldTerminalSampleLocked(name, sample) {
+			continue
+		}
+		if _, open := s.activeSessions.Load(name); !open {
+			continue
+		}
+		if cached, ok := s.lastKnownStats.Load(name); ok {
+			previous, _ := cached.(lastKnownTunnelStats)
+			s.lastKnownStats.Store(name, previous.mergeEpoch(sample.rx, sample.tx, sample.epoch))
+		}
+	}
+}
+
+func (s *TunnelService) clearDisconnectTarget(name string, target disconnectTarget) {
+	s.reconcileMu.Lock()
+	defer s.reconcileMu.Unlock()
+	if !s.currentHistorySource(target.source) {
+		return
+	}
+	s.clearUserDisconnectLocked(name, []string{target.historyID})
 }

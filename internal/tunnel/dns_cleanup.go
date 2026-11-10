@@ -254,6 +254,7 @@ func (m *Manager) AdoptPendingRecovery() {
 			m.CapturePreModDNS(network.DNSSnapshot{Servers: state.PreModDNS, Search: state.PreModSearch})
 		}
 		manager := newRecoveryManager()
+		installKernelLinkGuard(manager, state)
 		if setter, ok := manager.(network.PersistentStateDirSetter); ok {
 			setter.SetPersistentStateDir(m.dataDir)
 		}

@@ -26,7 +26,7 @@ func TestZRUnknownSnapshotNotMergedIntoZeroReplacement(t *testing.T) {
 	ObserveHistoryStatus(s, ConnectionStatus{TunnelName: "a", CounterEpoch: "E2", ActiveTunnels: []string{"a"}})
 	time.Sleep(1100 * time.Millisecond)
 	id := s.markUserDisconnectSample(old)
-	s.finishUserDisconnect("a", id)
+	s.finishUserDisconnect("a", disconnectTarget{historyID: id})
 	ObserveHistoryStatus(s, ConnectionStatus{TunnelName: "a", CounterEpoch: "E2", RxBytes: 30, ActiveTunnels: []string{"a"}})
 	ObserveHistoryStatus(s, ConnectionStatus{})
 	rows, rx := zrRows(t, s)

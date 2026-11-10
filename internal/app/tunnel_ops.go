@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"strings"
 
 	"github.com/korjwl1/wireguide/internal/config"
@@ -103,9 +104,9 @@ func (s *TunnelService) Connect(name string) error {
 // but the cache still holds the fresh values from the steady state.
 func (s *TunnelService) Disconnect() error {
 	samples := s.snapshotCounterSamples()
-	historyIDs := make(map[string]string, len(samples))
+	targets := make(map[string]disconnectTarget, len(samples))
 	for name, sample := range samples {
-		historyIDs[name] = s.markUserDisconnectSample(sample)
+		targets[name] = s.prepareUserDisconnect(sample)
 	}
 	s.userActions.Begin(AnyTunnel, false)
 	defer s.userActions.End(AnyTunnel, false)
@@ -114,21 +115,51 @@ func (s *TunnelService) Disconnect() error {
 	err := s.callLong(ipc.MethodDisconnect, nil, nil)
 	if err != nil && isClientClosed(err) {
 		slog.Info("disconnect got client-closed, retrying with fresh client")
+		if refreshed := s.snapshotCounterSamples(); refreshed != nil {
+			if samples == nil {
+				samples = make(map[string]counterSample)
+			}
+			for name, sample := range refreshed {
+				samples[name] = sample
+				targets[name] = s.prepareUserDisconnect(sample)
+			}
+		}
 		err = s.callLong(ipc.MethodDisconnect, nil, nil)
+		if confirmed, source := s.confirmDisconnectedRetry(err, ""); confirmed {
+			err = nil
+			for name, target := range targets {
+				target.source = source
+				targets[name] = target
+			}
+		}
+	}
+	var after *ConnectionStatus
+	var afterSource *ipc.Client
+	if err != nil {
+		after, afterSource, _ = s.statusSnapshot()
+	}
+	active := make(map[string]bool)
+	if after != nil {
+		for _, name := range after.ActiveTunnels {
+			active[name] = true
+		}
 	}
 	for name, sample := range samples {
-		if err != nil {
-			s.clearUserDisconnect(name)
+		if err != nil && (after == nil || active[name]) {
+			s.clearDisconnectTarget(name, targets[name])
 		} else if sample.epoch != "" {
-			s.finishUserDisconnect(name, historyIDs[name])
+			s.finishUserDisconnect(name, targets[name])
 		}
+	}
+	if after != nil {
+		s.observeHistoryCounters(*after, afterSource)
 	}
 	return err
 }
 
 func (s *TunnelService) DisconnectTunnel(name string) error {
 	sample := s.snapshotCounterSample(name)
-	historyID := s.markUserDisconnectSample(sample)
+	target := s.prepareUserDisconnect(sample)
 	s.userActions.Begin(name, false)
 	defer s.userActions.End(name, false)
 
@@ -138,12 +169,25 @@ func (s *TunnelService) DisconnectTunnel(name string) error {
 	if err != nil && isClientClosed(err) {
 		slog.Info("disconnect-tunnel got client-closed, retrying with fresh client",
 			"tunnel", name)
+		if refreshed, source, statusErr := s.statusSnapshot(); statusErr == nil {
+			if fresh, ok := countersFromStatus(*refreshed)[name]; ok {
+				fresh.source = source
+				fresh.snapshot = true
+				fresh.historyID = target.historyID
+				sample = fresh
+				target = s.prepareUserDisconnect(sample)
+			}
+		}
 		err = s.callLong(ipc.MethodDisconnect, ipc.DisconnectRequest{TunnelName: name}, nil)
+		if confirmed, source := s.confirmDisconnectedRetry(err, name); confirmed {
+			err = nil
+			target.source = source
+		}
 	}
 	if err != nil {
-		s.clearUserDisconnect(name)
+		s.clearDisconnectTarget(name, target)
 	} else if sample.epoch != "" {
-		s.finishUserDisconnect(name, historyID)
+		s.finishUserDisconnect(name, target)
 	}
 	return err
 }
@@ -161,11 +205,26 @@ func isClientClosed(err error) bool {
 // are surfaced to the caller — the frontend needs to distinguish "helper says
 // disconnected" from "helper unreachable".
 func (s *TunnelService) GetStatus() (*ConnectionStatus, error) {
-	var status ConnectionStatus
-	if err := s.call(ipc.MethodStatus, nil, &status); err != nil {
-		return nil, err
+	status, _, err := s.statusSnapshot()
+	return status, err
+}
+
+func (s *TunnelService) statusSnapshot() (*ConnectionStatus, *ipc.Client, error) {
+	if s.clients == nil {
+		return nil, nil, errHelperUnavailable
 	}
-	return &status, nil
+	client := s.clients.Get()
+	if client == nil {
+		return nil, nil, errHelperUnavailable
+	}
+	var status ConnectionStatus
+	if err := client.Call(ipc.MethodStatus, nil, &status); err != nil {
+		return nil, nil, err
+	}
+	if s.clients.Get() != client {
+		return nil, nil, ipc.ErrClientClosed
+	}
+	return &status, client, nil
 }
 
 // GetTunnelDetail returns the full WireGuardConfig for a tunnel. Used by the
@@ -281,4 +340,49 @@ func isMethodNotFound(err error) bool {
 // TunnelExists reports whether a tunnel with the given name is stored.
 func (s *TunnelService) TunnelExists(name string) bool {
 	return s.tunnelStore.Exists(name)
+}
+
+func (s *TunnelService) confirmDisconnectedRetry(err error, name string) (bool, *ipc.Client) {
+	if !isNotConnectedError(err, name) {
+		return false, nil
+	}
+	status, source, statusErr := s.statusSnapshot()
+	if statusErr != nil {
+		return false, nil
+	}
+	for _, active := range status.ActiveTunnels {
+		if name == "" || active == name {
+			return false, nil
+		}
+	}
+	return true, source
+}
+
+func isNotConnectedError(err error, name string) bool {
+	var remote *ipc.Error
+	if !errors.As(err, &remote) {
+		return false
+	}
+	if remote.Code == ipc.ErrCodeNotConnected {
+		return true
+	}
+	if remote.Code != ipc.ErrCodeAppError {
+		return false
+	}
+	if remote.Message == "no tunnel is connected" {
+		return true
+	}
+	if name != "" {
+		return remote.Message == fmt.Sprintf("tunnel %q is not connected", name)
+	}
+	quoted, ok := strings.CutPrefix(remote.Message, "tunnel ")
+	if !ok {
+		return false
+	}
+	quoted, ok = strings.CutSuffix(quoted, " is not connected")
+	if !ok {
+		return false
+	}
+	_, parseErr := strconv.Unquote(quoted)
+	return parseErr == nil
 }

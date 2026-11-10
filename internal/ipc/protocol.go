@@ -32,7 +32,7 @@ import (
 // Minor 6 adds AutomationTunnelDecision.Blocked (loop-watchdog block) to Automation.Preview.
 const (
 	ProtocolMajor = 1
-	ProtocolMinor = 7
+	ProtocolMinor = 8
 )
 
 // ProtocolVersion is the canonical "major.minor" string used in
@@ -120,6 +120,7 @@ const (
 	ErrCodeInvalidParams  = -32602
 	ErrCodeInternalError  = -32603
 	ErrCodeAppError       = -32000
+	ErrCodeNotConnected   = -32001
 )
 
 // RPC method names

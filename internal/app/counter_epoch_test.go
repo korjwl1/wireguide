@@ -104,7 +104,7 @@ func TestDisconnectCompletionDoesNotMergeAnUnknownOldSnapshotIntoReplacement(t *
 	ObserveHistoryStatus(s, ConnectionStatus{TunnelName: "a", CounterEpoch: "new", RxBytes: 200, ActiveTunnels: []string{"a"}})
 	stale := counterSample{name: "a", epoch: "old", rx: 150, snapshot: true, historyID: "closed"}
 	id := s.markUserDisconnectSample(stale)
-	s.finishUserDisconnect("a", id)
+	s.finishUserDisconnect("a", disconnectTarget{historyID: id})
 	if got := lastSession(t, s); got.RxBytes != 200 {
 		t.Fatalf("old snapshot polluted replacement: %+v", got)
 	}

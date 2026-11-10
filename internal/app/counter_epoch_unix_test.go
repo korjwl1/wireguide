@@ -18,6 +18,10 @@ func epochRPCService(t *testing.T, sample ConnectionStatus) *TunnelService {
 }
 
 func epochRPCServiceWithDisconnect(t *testing.T, sample ConnectionStatus, disconnect func(json.RawMessage) (interface{}, error)) *TunnelService {
+	return epochRPCServiceWithStatus(t, func() ConnectionStatus { return sample }, disconnect)
+}
+
+func epochRPCServiceWithStatus(t *testing.T, status func() ConnectionStatus, disconnect func(json.RawMessage) (interface{}, error)) *TunnelService {
 	t.Helper()
 	dir, err := os.MkdirTemp("/tmp", "wgce-")
 	if err != nil {
@@ -31,7 +35,7 @@ func epochRPCServiceWithDisconnect(t *testing.T, sample ConnectionStatus, discon
 	}
 	server := ipc.NewServer(listener)
 	server.Handle(ipc.MethodPing, func(json.RawMessage) (interface{}, error) { return ipc.PingResponse{Version: ipc.ProtocolVersion}, nil })
-	server.Handle(ipc.MethodStatus, func(json.RawMessage) (interface{}, error) { return sample, nil })
+	server.Handle(ipc.MethodStatus, func(json.RawMessage) (interface{}, error) { return status(), nil })
 	server.Handle(ipc.MethodDisconnect, disconnect)
 	go server.Serve()
 	t.Cleanup(func() { server.Shutdown() })
@@ -126,7 +130,7 @@ func TestDisconnectCompletionCannotCloseReplacementSession(t *testing.T) {
 	oldID := s.markUserDisconnectSample(counterSample{name: "a", epoch: "old", rx: 150})
 	ObserveHistoryStatus(s, ConnectionStatus{})
 	ObserveHistoryStatus(s, ConnectionStatus{TunnelName: "a", CounterEpoch: "new", RxBytes: 200, ActiveTunnels: []string{"a"}})
-	s.finishUserDisconnect("a", oldID)
+	s.finishUserDisconnect("a", disconnectTarget{historyID: oldID})
 	var open int
 	for _, sess := range s.historyStore.GetAll() {
 		if sess.EndTime == nil {

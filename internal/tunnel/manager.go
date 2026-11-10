@@ -11,7 +11,6 @@ package tunnel
 
 import (
 	"context"
-	"crypto/rand"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -442,7 +441,7 @@ func (m *Manager) ConnectWithContext(ctx context.Context, cfg *domain.WireGuardC
 	}
 	entry.connectCancel, entry.connectDone = nil, nil
 	entry.engine = engine
-	entry.counterEpoch = rand.Text()
+	entry.counterEpoch = domain.NewCounterEpoch()
 	entry.connectedAt = time.Now()
 	entry.state = domain.StateConnected
 

@@ -52,7 +52,7 @@ func TestFinalSnapshotBeforeZeroBroadcastLosesSnapshotAndPhantom(t *testing.T) {
 	ObserveHistoryStatus(s, ConnectionStatus{TunnelName: "a", CounterEpoch: "E", ActiveTunnels: []string{"a"}})
 	time.Sleep(1100 * time.Millisecond)
 	id := s.markUserDisconnectSample(sample)
-	s.finishUserDisconnect("a", id)
+	s.finishUserDisconnect("a", disconnectTarget{historyID: id})
 	ObserveHistoryStatus(s, ConnectionStatus{TunnelName: "a", CounterEpoch: "E", RxBytes: 170, ActiveTunnels: []string{"a"}})
 	ObserveHistoryStatus(s, ConnectionStatus{})
 	if total, rx := dumpSessions(t, s); total != 1 || rx != 170 {

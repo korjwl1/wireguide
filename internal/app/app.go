@@ -70,6 +70,7 @@ type TunnelService struct {
 	lastReconcileSig string
 	historyClosed    bool
 	closedPeaks      map[string]map[string]counterPeak
+	closedWatermarks map[string]counterWatermark
 }
 
 // lastKnownTunnelStats is the value type for TunnelService.lastKnownStats.
@@ -131,11 +132,30 @@ func (st lastKnownTunnelStats) merge(rawRx, rawTx int64) lastKnownTunnelStats {
 
 // NewTunnelService creates a service. Set the app reference via SetApp()
 // after application.New() for dialog support.
+type counterWatermark struct {
+	incarnation string
+	sequence    uint64
+}
+
 type counterPeak struct {
-	rx, tx    int64
-	inherited bool
-	terminal  bool
-	historyID string
+	baseRx, baseTx int64
+	rx, tx         int64
+	inherited      bool
+	terminal       bool
+	historyID      string
+}
+
+func (st *lastKnownTunnelStats) ensureEpochIdentity(epoch string) {
+	if epoch == "" {
+		return
+	}
+	if _, seen := st.epochs[epoch]; seen {
+		return
+	}
+	if st.epochs == nil {
+		st.epochs = make(map[string]counterPeak)
+	}
+	st.epochs[epoch] = counterPeak{}
 }
 
 func (st lastKnownTunnelStats) mergeEpoch(rx, tx int64, epoch string) lastKnownTunnelStats {
@@ -144,12 +164,20 @@ func (st lastKnownTunnelStats) mergeEpoch(rx, tx int64, epoch string) lastKnownT
 	}
 	if st.epochs == nil {
 		if rx == 0 && tx == 0 {
-			st.epoch = epoch
+			if !earlierCounterEpoch(epoch, st.epoch) {
+				st.epoch = epoch
+			}
 			return st
 		}
+		previousEpoch := st.epoch
 		st = st.merge(rx, tx)
-		st.epoch = epoch
 		st.epochs = map[string]counterPeak{epoch: {rx: st.rawRx, tx: st.rawTx}}
+		if earlierCounterEpoch(epoch, previousEpoch) {
+			st.ensureEpochIdentity(previousEpoch)
+			st.epoch, st.rawRx, st.rawTx = previousEpoch, 0, 0
+		} else {
+			st.epoch = epoch
+		}
 		return st
 	}
 	peak := st.epochs[epoch]
@@ -165,7 +193,11 @@ func (st lastKnownTunnelStats) mergeEpoch(rx, tx int64, epoch string) lastKnownT
 		peak.tx = tx
 	}
 	st.epochs[epoch] = peak
-	st.epoch, st.rawRx, st.rawTx = epoch, peak.rx, peak.tx
+	if !earlierCounterEpoch(epoch, st.epoch) {
+		st.epoch = epoch
+	}
+	current := st.epochs[st.epoch]
+	st.rawRx, st.rawTx = current.rx, current.tx
 	return st
 }
 
@@ -228,7 +260,11 @@ func (s *TunnelService) callWithContext(ctx context.Context, method string, para
 	if c == nil {
 		return errHelperUnavailable
 	}
-	return c.CallWithContext(ctx, method, params, result)
+	err := c.CallWithContext(ctx, method, params, result)
+	if s.clients.Get() != c {
+		return ipc.ErrClientClosed
+	}
+	return err
 }
 
 // callLong performs an RPC with a generous timeout for operations that may
@@ -245,7 +281,11 @@ func (s *TunnelService) callLong(method string, params interface{}, result inter
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	return c.CallWithContext(ctx, method, params, result)
+	err := c.CallWithContext(ctx, method, params, result)
+	if s.clients.Get() != c {
+		return ipc.ErrClientClosed
+	}
+	return err
 }
 
 // TunnelInfo is the summary shown in the tunnel list.
@@ -271,3 +311,9 @@ type TunnelInfo struct {
 // expose the same type that the helper broadcasts — preventing field drift
 // between wire format and frontend expectations.
 type ConnectionStatus = domain.ConnectionStatus
+
+func earlierCounterEpoch(candidate, current string) bool {
+	left, leftSequence, leftOK := domain.ParseCounterEpoch(candidate)
+	right, rightSequence, rightOK := domain.ParseCounterEpoch(current)
+	return leftOK && rightOK && left == right && leftSequence < rightSequence
+}

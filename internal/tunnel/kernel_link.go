@@ -216,6 +216,15 @@ func quarantineKernelIntent(path string, cause error) {
 // the link is provably gone.
 func resolveKernelIntent(b kernelLinkBackend, path string, in *kernelLinkIntent) error {
 	err := deleteOwnedKernelLink(b, in.IfIndex, in.IfName, kernelOwnershipAlias(in.Tunnel), true)
+	if errors.Is(err, errKernelLinkNotOwned) {
+		retired := path + ".foreign-" + rand.Text()
+		if renameErr := os.Rename(path, retired); renameErr != nil {
+			return fmt.Errorf("retiring foreign kernel intent: %w", renameErr)
+		}
+		syncDir(filepath.Dir(path))
+		slog.Warn("kernel intent refers to a foreign link; preserved record without changing device", "intent", retired, "error", err)
+		return nil
+	}
 	if err != nil {
 		return err
 	}
@@ -478,37 +487,28 @@ func kernelLinkGuardFor(owner kernelLinkOwner, iface string) network.LinkCleanup
 // kernelRecoveryLinkGuard deletes, by index, links recorded in recovery
 // journals for iface. Journals without kernel_ifindex keep the legacy
 // name-based cleanup.
-func kernelRecoveryLinkGuard(dataDir, iface string) (bool, error) {
-	if dataDir == "" || iface == "" {
+func kernelStateLinkGuard(state ActiveTunnelState, iface string) (bool, error) {
+	if state.KernelIfindex <= 0 {
 		return false, nil
 	}
-	var owned []*ActiveTunnelState
-	for _, st := range LoadActiveState(dataDir) {
-		if st.KernelIfindex > 0 && st.InterfaceName == iface {
-			owned = append(owned, st)
-		}
-	}
-	if len(owned) == 0 {
-		return false, nil
+	if iface != state.InterfaceName {
+		return true, fmt.Errorf("kernel cleanup interface %q differs from recorded %q", iface, state.InterfaceName)
 	}
 	backend, err := kernelLinkBackendFactory()
 	if err != nil {
 		return true, fmt.Errorf("kernel link recovery for %q: %w", iface, err)
 	}
-	var errs []error
-	for _, st := range owned {
-		err := deleteOwnedKernelLink(backend, st.KernelIfindex, iface, kernelOwnershipAlias(st.TunnelName), false)
-		if errors.Is(err, errKernelLinkNotOwned) {
-			slog.Warn("crash recovery: recorded kernel link is not ours; leaving it untouched", "tunnel", st.TunnelName, "interface", iface, "error", err)
-			err = nil
-		}
-		errs = append(errs, err)
+	err = deleteOwnedKernelLink(backend, state.KernelIfindex, state.InterfaceName, kernelOwnershipAlias(state.TunnelName), false)
+	if errors.Is(err, errKernelLinkNotOwned) {
+		slog.Warn("recorded kernel link was replaced; leaving foreign device untouched", "interface", iface, "index", state.KernelIfindex, "error", err)
+		return true, nil
 	}
-	return true, errors.Join(errs...)
+	return true, err
 }
 
-func installKernelLinkGuard(mgr network.NetworkManager) {
-	if setter, ok := mgr.(network.LinkCleanupGuardSetter); ok {
-		setter.SetLinkCleanupGuard(kernelRecoveryLinkGuard)
+func installKernelLinkGuard(mgr network.NetworkManager, state *ActiveTunnelState) {
+	if setter, ok := mgr.(network.LinkCleanupGuardSetter); ok && state != nil && state.KernelIfindex > 0 {
+		recorded := *state
+		setter.SetLinkCleanupGuard(func(_, iface string) (bool, error) { return kernelStateLinkGuard(recorded, iface) })
 	}
 }

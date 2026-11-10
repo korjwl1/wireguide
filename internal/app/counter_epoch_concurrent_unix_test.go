@@ -10,7 +10,7 @@ func TestConcurrentDisconnectSnapshotTailIsNotLost(t *testing.T) {
 	id, _ := s.activeSessions.Load("a")
 	later := counterSample{name: "a", epoch: "E", rx: 170, snapshot: true, historyID: id.(string)}
 	first := s.markUserDisconnectSample(counterSample{name: "a", epoch: "E", rx: 150, snapshot: true, historyID: id.(string)})
-	s.finishUserDisconnect("a", first)
+	s.finishUserDisconnect("a", disconnectTarget{historyID: first})
 	s.markUserDisconnectSample(later)
 	if got := lastSession(t, s); got.RxBytes != 170 {
 		t.Fatalf("lost observed concurrent snapshot: %+v", got)

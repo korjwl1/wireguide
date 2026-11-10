@@ -58,11 +58,7 @@ const (
 
 // newRecoveryManager builds the platform manager used by crash recovery. It
 // is a var so tests do not drive the host's real network configuration.
-var newRecoveryManager = func() network.NetworkManager {
-	mgr := network.NewPlatformManager()
-	installKernelLinkGuard(mgr)
-	return mgr
-}
+var newRecoveryManager = network.NewPlatformManager
 
 // cleanupStaleSplitDNS is a var for the same reason: it talks to the system
 // dynamic store.
@@ -220,7 +216,7 @@ func RecoverFromCrash(dataDir string, fw FirewallCleaner) []string {
 		// per-tunnel state across iterations and double-restored
 		// overlapping services).
 		mgr := newRecoveryManager()
-		installKernelLinkGuard(mgr)
+		installKernelLinkGuard(mgr, state)
 		if setter, mok := mgr.(network.PersistentStateDirSetter); mok {
 			setter.SetPersistentStateDir(dataDir)
 		}
