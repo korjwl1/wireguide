@@ -102,18 +102,13 @@ func (s *TunnelService) Connect(name string) error {
 // second Disconnect's snapshot may be 0/0 (helper already tearing down)
 // but the cache still holds the fresh values from the steady state.
 func (s *TunnelService) Disconnect() error {
-	name, rx, tx := s.snapshotActiveStats("")
-	s.markUserDisconnect(name, rx, tx)
-
-	// Empty name = "whatever is active" — mark the wildcard so a status
-	// diff for any tunnel in this window counts as user-initiated.
-	actionName := name
-	if actionName == "" {
-		actionName = AnyTunnel
+	samples := s.snapshotCounterSamples()
+	historyIDs := make(map[string]string, len(samples))
+	for name, sample := range samples {
+		historyIDs[name] = s.markUserDisconnectSample(sample)
 	}
-	s.userActions.Begin(actionName, false)
-	defer s.userActions.End(actionName, false)
-
+	s.userActions.Begin(AnyTunnel, false)
+	defer s.userActions.End(AnyTunnel, false)
 	s.clients.MarkInflight()
 	defer s.clients.UnmarkInflight()
 	err := s.callLong(ipc.MethodDisconnect, nil, nil)
@@ -121,23 +116,19 @@ func (s *TunnelService) Disconnect() error {
 		slog.Info("disconnect got client-closed, retrying with fresh client")
 		err = s.callLong(ipc.MethodDisconnect, nil, nil)
 	}
-	if err != nil {
-		// IPC failed — the "user" hint is suspect (helper might still
-		// have the tunnel up). Clear the hint, KEEP the rx/tx so a
-		// genuine helper-driven close still has accurate counters.
-		s.clearUserDisconnect(name)
+	for name, sample := range samples {
+		if err != nil {
+			s.clearUserDisconnect(name)
+		} else if sample.epoch != "" {
+			s.finishUserDisconnect(name, historyIDs[name])
+		}
 	}
 	return err
 }
 
-// DisconnectTunnel disconnects a specific tunnel by name. Mirrors
-// Disconnect()'s "client closed" retry: a helper recovery during a
-// per-tunnel disconnect (e.g. user clicks the tray's per-tunnel
-// item right when the health monitor swaps clients) should be
-// transparent, not surfaced as a confusing error.
 func (s *TunnelService) DisconnectTunnel(name string) error {
-	_, rx, tx := s.snapshotActiveStats(name)
-	s.markUserDisconnect(name, rx, tx)
+	sample := s.snapshotCounterSample(name)
+	historyID := s.markUserDisconnectSample(sample)
 	s.userActions.Begin(name, false)
 	defer s.userActions.End(name, false)
 
@@ -151,6 +142,8 @@ func (s *TunnelService) DisconnectTunnel(name string) error {
 	}
 	if err != nil {
 		s.clearUserDisconnect(name)
+	} else if sample.epoch != "" {
+		s.finishUserDisconnect(name, historyID)
 	}
 	return err
 }

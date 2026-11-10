@@ -13,6 +13,157 @@ import (
 // lastUsedByTunnel maps each tunnel name to the Unix time of its most
 // recent connection start, from history. Missing tunnels get the zero
 // value (0 = never connected). Computed once per list call.
+type counterSample struct {
+	historyID string
+	snapshot  bool
+	name      string
+	epoch     string
+	rx, tx    int64
+}
+
+func countersFromStatus(status ConnectionStatus) map[string]counterSample {
+	out := make(map[string]counterSample, len(status.Tunnels)+1)
+	add := func(st ConnectionStatus) {
+		if st.TunnelName == "" {
+			return
+		}
+		if previous, ok := out[st.TunnelName]; ok && previous.epoch != "" && st.CounterEpoch == "" {
+			return
+		}
+		out[st.TunnelName] = counterSample{name: st.TunnelName, epoch: st.CounterEpoch, rx: st.RxBytes, tx: st.TxBytes}
+	}
+	add(status)
+	for _, st := range status.Tunnels {
+		add(st)
+	}
+	return out
+}
+
+func ObserveHistoryStatus(s *TunnelService, status ConnectionStatus) {
+	s.reconcileHistoryFromStatus(status.ActiveTunnels, countersFromStatus(status), "")
+}
+
+func (s *TunnelService) snapshotCounterSamples() map[string]counterSample {
+	historyIDs := make(map[string]string)
+	s.activeSessions.Range(func(k, v any) bool { name, _ := k.(string); id, _ := v.(string); historyIDs[name] = id; return true })
+	status, err := s.GetStatus()
+	if err != nil || status == nil {
+		return nil
+	}
+	samples := countersFromStatus(*status)
+	for name, sample := range samples {
+		sample.historyID, sample.snapshot = historyIDs[name], true
+		samples[name] = sample
+	}
+	return samples
+}
+
+func (s *TunnelService) snapshotCounterSample(wantName string) counterSample {
+	if sample, ok := s.snapshotCounterSamples()[wantName]; ok {
+		return sample
+	}
+	return counterSample{name: wantName}
+}
+
+func (s *TunnelService) markUserDisconnectSample(sample counterSample) string {
+	if sample.epoch == "" {
+		return s.markUserDisconnect(sample.name, sample.rx, sample.tx)
+	}
+	if sample.name == "" {
+		return ""
+	}
+	s.reconcileMu.Lock()
+	defer s.reconcileMu.Unlock()
+	if s.historyClosed {
+		return ""
+	}
+	id, open := s.activeSessions.Load(sample.name)
+	currentID, _ := id.(string)
+	var previous lastKnownTunnelStats
+	if cached, ok := s.lastKnownStats.Load(sample.name); ok {
+		previous, _ = cached.(lastKnownTunnelStats)
+	}
+	if s.foldTerminalSampleLocked(sample.name, sample) {
+		if open {
+			previous.reason = "user"
+			s.lastKnownStats.Store(sample.name, previous)
+		}
+		return currentID
+	}
+	if sample.snapshot && sample.historyID != currentID {
+		if !open {
+			return ""
+		}
+		if peak, sameEngine := previous.epochs[sample.epoch]; previous.epoch != sample.epoch && (!sameEngine || peak.inherited) {
+			previous.reason = "user"
+			s.lastKnownStats.Store(sample.name, previous)
+			return currentID
+		}
+	}
+	if !open && s.staleClosedEpochLocked(sample.name, sample) {
+		return ""
+	}
+	if !open && s.historyStore != nil {
+		previous = s.seedClosedPeaksLocked(sample.name, lastKnownTunnelStats{})
+		delete(s.closedPeaks, sample.name)
+		currentID = s.historyStore.RecordConnect(sample.name)
+		s.activeSessions.Store(sample.name, currentID)
+		s.refreshHistorySignature()
+	}
+	updated := previous.mergeEpoch(sample.rx, sample.tx, sample.epoch)
+	updated.reason = "user"
+	s.lastKnownStats.Store(sample.name, updated)
+	return currentID
+}
+
+func (s *TunnelService) refreshHistorySignature() {
+	var active []string
+	s.activeSessions.Range(func(k, _ any) bool {
+		name, _ := k.(string)
+		active = append(active, name)
+		return true
+	})
+	s.lastReconcileSig = activeSetSignature(active)
+}
+
+func (s *TunnelService) finishUserDisconnect(name, historyID string) {
+	if s.historyStore == nil || historyID == "" {
+		return
+	}
+	s.reconcileMu.Lock()
+	defer s.reconcileMu.Unlock()
+	if s.historyClosed {
+		return
+	}
+	id, ok := s.activeSessions.Load(name)
+	if !ok || id != historyID {
+		return
+	}
+	var stats lastKnownTunnelStats
+	if cached, ok := s.lastKnownStats.LoadAndDelete(name); ok {
+		stats, _ = cached.(lastKnownTunnelStats)
+	}
+	if stats.epoch != "" {
+		if _, seen := stats.epochs[stats.epoch]; !seen {
+			if stats.epochs == nil {
+				stats.epochs = make(map[string]counterPeak)
+			}
+			stats.epochs[stats.epoch] = counterPeak{}
+		}
+	}
+	for epoch, peak := range stats.epochs {
+		if !peak.inherited || epoch == stats.epoch && !peak.terminal {
+			peak.inherited = false
+			peak.terminal, peak.historyID = true, historyID
+			stats.epochs[epoch] = peak
+		}
+	}
+	s.rememberClosedPeaksLocked(name, stats)
+	s.historyStore.RecordDisconnect(historyID, stats.rx, stats.tx, "user")
+	s.activeSessions.Delete(name)
+	s.refreshHistorySignature()
+}
+
 func (s *TunnelService) lastUsedByTunnel() map[string]int64 {
 	out := map[string]int64{}
 	if s.historyStore == nil {
@@ -30,20 +181,23 @@ func (s *TunnelService) lastUsedByTunnel() map[string]int64 {
 // "user", preserving any rx/tx the Reconcile-driven cache refresh has
 // already recorded. snapRx/snapTx is a fallback for the cold case (no
 // cache entry yet — first Disconnect before any status event was reconciled).
-func (s *TunnelService) markUserDisconnect(name string, snapRx, snapTx int64) {
+func (s *TunnelService) markUserDisconnect(name string, snapRx, snapTx int64) string {
 	s.reconcileMu.Lock()
 	defer s.reconcileMu.Unlock()
-	if name == "" {
-		return
+	if name == "" || s.historyClosed {
+		return ""
 	}
+	id, _ := s.activeSessions.Load(name)
+	currentID, _ := id.(string)
 	if cached, ok := s.lastKnownStats.Load(name); ok {
 		if st, ok := cached.(lastKnownTunnelStats); ok {
 			st.reason = "user"
 			s.lastKnownStats.Store(name, st)
-			return
+			return currentID
 		}
 	}
 	s.lastKnownStats.Store(name, lastKnownTunnelStats{rx: snapRx, tx: snapTx, rawRx: snapRx, rawTx: snapTx, reason: "user"})
+	return currentID
 }
 
 // clearUserDisconnect removes the "user" reason hint after a failed
@@ -114,6 +268,14 @@ func (s *TunnelService) snapshotActiveStats(wantName string) (string, int64, int
 // open-session loop. The stats cache still gets updated so the eventual
 // disappear-close uses fresh counters.
 func (s *TunnelService) ReconcileHistoryFromStatus(activeNames []string, rxByTunnel, txByTunnel map[string]int64, disappearReason string) {
+	samples := make(map[string]counterSample, len(activeNames))
+	for _, name := range activeNames {
+		samples[name] = counterSample{name: name, rx: rxByTunnel[name], tx: txByTunnel[name]}
+	}
+	s.reconcileHistoryFromStatus(activeNames, samples, disappearReason)
+}
+
+func (s *TunnelService) reconcileHistoryFromStatus(activeNames []string, samples map[string]counterSample, disappearReason string) {
 	if s.historyStore == nil {
 		return
 	}
@@ -132,47 +294,42 @@ func (s *TunnelService) ReconcileHistoryFromStatus(activeNames []string, rxByTun
 		}
 	}
 
-	// Refresh cache for currently-active tunnels. Always done — even on the
-	// fast path — so the next disappearance close sees fresh stats. Preserve
-	// any reason hint already in the cache (set by Disconnect/DisconnectTunnel
-	// before the IPC call).
+	stale := make(map[string]bool)
 	for name := range active {
-		var rx, tx int64
-		if rxByTunnel != nil {
-			rx = rxByTunnel[name]
+		sample := samples[name]
+		rx, tx := sample.rx, sample.tx
+		_, open := s.activeSessions.Load(name)
+		if s.foldTerminalSampleLocked(name, sample) {
+			if !open {
+				stale[name] = true
+			}
+			continue
 		}
-		if txByTunnel != nil {
-			tx = txByTunnel[name]
+		if !open && s.staleClosedEpochLocked(name, sample) {
+
+			stale[name] = true
+			continue
 		}
-		// Fold the reading into the session totals instead of overwriting:
-		// a Connecting/Disconnecting tunnel reports 0/0 while still active.
+
 		var prev lastKnownTunnelStats
 		if cached, ok := s.lastKnownStats.Load(name); ok {
 			prev, _ = cached.(lastKnownTunnelStats)
 		}
-		// With no open session this is the first reading of a new one, so a
-		// cache entry still left by an earlier session must not be carried
-		// into it (entries of absent tunnels are dropped below, so this
-		// covers a Disconnect clicked while the tunnel was listed). A
-		// zeroed reading proves nothing and keeps the entry: it may be the
-		// pre-disconnect snapshot of the session about to be opened. The
-		// reason hint survives only if the counters did not go backwards.
-		if _, open := s.activeSessions.Load(name); !open && (rx != 0 || tx != 0) {
+
+		if !open && (rx != 0 || tx != 0) {
 			reason := prev.reason
 			if rx < prev.rawRx || tx < prev.rawTx {
 				reason = ""
 			}
 			prev = lastKnownTunnelStats{reason: reason}
 		}
-		s.lastKnownStats.Store(name, prev.merge(rx, tx))
+		if !open {
+
+			prev = s.seedClosedPeaksLocked(name, prev)
+		}
+		s.lastKnownStats.Store(name, prev.mergeEpoch(rx, tx, sample.epoch))
 	}
 
-	// A cache entry with no active tunnel and no open session belongs to no
-	// session: it was left by a Disconnect that never got a session opened,
-	// or by a cold snapshot. Drop it here, before the fast path below, so it
-	// cannot seed (or label "user") a later session whose first reading is
-	// a zeroed Connecting tick. A tunnel closing on this tick is still in
-	// activeSessions, so its counters survive for RecordDisconnect.
 	s.lastKnownStats.Range(func(k, _ any) bool {
 		name, _ := k.(string)
 		if _, isActive := active[name]; isActive {
@@ -185,11 +342,13 @@ func (s *TunnelService) ReconcileHistoryFromStatus(activeNames []string, rxByTun
 		return true
 	})
 
-	// Build a stable signature of the active set and compare to the prior
-	// one. If unchanged, we know there are no new appearances or
-	// disappearances to record. The cache update above handles the steady
-	// state; this skip just avoids the (cheap but constant) diff work at 1 Hz.
-	sig := activeSetSignature(activeNames)
+	opening := make([]string, 0, len(activeNames))
+	for _, name := range activeNames {
+		if !stale[name] {
+			opening = append(opening, name)
+		}
+	}
+	sig := activeSetSignature(opening)
 	unchanged := sig == s.lastReconcileSig
 	s.lastReconcileSig = sig
 	if unchanged {
@@ -205,9 +364,7 @@ func (s *TunnelService) ReconcileHistoryFromStatus(activeNames []string, rxByTun
 		if id != "" {
 			var rx, tx int64
 			reason := disappearReason
-			// Prefer cached last-seen counters and reason — the current event's
-			// maps don't include this tunnel since it just disappeared, and a
-			// pre-set reason from user Disconnect overrides the default.
+
 			if cached, ok := s.lastKnownStats.LoadAndDelete(name); ok {
 				if st, ok := cached.(lastKnownTunnelStats); ok {
 					rx = st.rx
@@ -215,6 +372,7 @@ func (s *TunnelService) ReconcileHistoryFromStatus(activeNames []string, rxByTun
 					if st.reason != "" {
 						reason = st.reason
 					}
+					s.rememberClosedPeaksLocked(name, st)
 				}
 			}
 			s.historyStore.RecordDisconnect(id, rx, tx, reason)
@@ -223,7 +381,7 @@ func (s *TunnelService) ReconcileHistoryFromStatus(activeNames []string, rxByTun
 		return true
 	})
 
-	for _, name := range activeNames {
+	for _, name := range opening {
 		if name == "" {
 			continue
 		}
@@ -232,13 +390,10 @@ func (s *TunnelService) ReconcileHistoryFromStatus(activeNames []string, rxByTun
 		}
 		id := s.historyStore.RecordConnect(name)
 		s.activeSessions.Store(name, id)
+		delete(s.closedPeaks, name)
 	}
 }
 
-// activeSetSignature returns a stable string representation of activeNames
-// suitable for equality comparison across status events. Sorted so the
-// helper's order is irrelevant; null byte separator avoids collisions
-// between names like ["a", "bc"] and ["ab", "c"].
 func activeSetSignature(names []string) string {
 	if len(names) == 0 {
 		return ""
@@ -270,6 +425,7 @@ func (s *TunnelService) CloseHistorySessions(reason string) {
 	s.reconcileMu.Lock()
 	defer s.reconcileMu.Unlock()
 	s.historyClosed = true
+	s.closedPeaks = nil
 	hasOpen := false
 	s.activeSessions.Range(func(_, _ any) bool {
 		hasOpen = true
@@ -281,26 +437,19 @@ func (s *TunnelService) CloseHistorySessions(reason string) {
 		s.historyStore.CloseOpenSessions(reason)
 		return
 	}
-	rxByTunnel := make(map[string]int64)
-	txByTunnel := make(map[string]int64)
+	var samples map[string]counterSample
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	var status ConnectionStatus
 	if err := s.callWithContext(ctx, ipc.MethodStatus, nil, &status); err == nil {
-		if status.TunnelName != "" {
-			rxByTunnel[status.TunnelName] = status.RxBytes
-			txByTunnel[status.TunnelName] = status.TxBytes
-		}
-		for _, ts := range status.Tunnels {
-			rxByTunnel[ts.TunnelName] = ts.RxBytes
-			txByTunnel[ts.TunnelName] = ts.TxBytes
-		}
+		samples = countersFromStatus(status)
 	}
 	s.activeSessions.Range(func(k, v any) bool {
 		name, _ := k.(string)
 		id, _ := v.(string)
 		if id != "" {
-			rx, tx := rxByTunnel[name], txByTunnel[name]
+			sample := samples[name]
+			rx, tx := sample.rx, sample.tx
 			// Fall back to last-known cache when the helper status
 			// didn't include this tunnel (e.g. helper already torn
 			// down the interface but the GUI's session map is fresh).
@@ -309,7 +458,7 @@ func (s *TunnelService) CloseHistorySessions(reason string) {
 			// device that are below what the session already transferred.
 			if cached, ok := s.lastKnownStats.Load(name); ok {
 				if st, ok := cached.(lastKnownTunnelStats); ok {
-					m := st.merge(rx, tx)
+					m := st.mergeEpoch(rx, tx, sample.epoch)
 					rx, tx = m.rx, m.tx
 				}
 			}
@@ -342,4 +491,72 @@ func (s *TunnelService) ClearConnectionHistory() error {
 		return nil
 	}
 	return s.historyStore.Clear()
+}
+
+func (s *TunnelService) staleClosedEpochLocked(name string, sample counterSample) bool {
+	if sample.epoch == "" {
+		return false
+	}
+	peak, ok := s.closedPeaks[name][sample.epoch]
+	return ok && (peak.terminal || sample.rx <= peak.rx && sample.tx <= peak.tx)
+}
+
+func (s *TunnelService) seedClosedPeaksLocked(name string, st lastKnownTunnelStats) lastKnownTunnelStats {
+	closed := s.closedPeaks[name]
+	if len(closed) == 0 {
+		return st
+	}
+	epochs := make(map[string]counterPeak, len(st.epochs)+len(closed))
+	for epoch, peak := range st.epochs {
+		epochs[epoch] = peak
+	}
+	for epoch, peak := range closed {
+		if _, ok := epochs[epoch]; !ok {
+			peak.inherited = true
+			epochs[epoch] = peak
+		}
+	}
+	st.epochs = epochs
+	return st
+}
+
+func (s *TunnelService) rememberClosedPeaksLocked(name string, st lastKnownTunnelStats) {
+	own := make(map[string]counterPeak, len(st.epochs))
+	for epoch, peak := range st.epochs {
+		if !peak.inherited {
+			own[epoch] = peak
+		}
+	}
+	if len(own) == 0 {
+		delete(s.closedPeaks, name)
+		return
+	}
+	if s.closedPeaks == nil {
+		s.closedPeaks = make(map[string]map[string]counterPeak)
+	}
+	s.closedPeaks[name] = own
+}
+
+func (s *TunnelService) foldTerminalSampleLocked(name string, sample counterSample) bool {
+	var peaks map[string]counterPeak
+	if cached, ok := s.lastKnownStats.Load(name); ok {
+		if stats, ok := cached.(lastKnownTunnelStats); ok {
+			peaks = stats.epochs
+		}
+	}
+	peak, known := peaks[sample.epoch]
+	if !known || !peak.terminal {
+		peaks = s.closedPeaks[name]
+		peak, known = peaks[sample.epoch]
+	}
+	if !known || !peak.terminal {
+		return false
+	}
+	rx, tx := max(sample.rx-peak.rx, 0), max(sample.tx-peak.tx, 0)
+	if rx != 0 || tx != 0 {
+		peak.rx, peak.tx = max(peak.rx, sample.rx), max(peak.tx, sample.tx)
+		peaks[sample.epoch] = peak
+		s.historyStore.AddClosedSessionTraffic(peak.historyID, rx, tx)
+	}
+	return true
 }

@@ -26,60 +26,67 @@ import (
 // must not block the helper's connect/disconnect path indefinitely.
 const kernelIPTimeout = 30 * time.Second
 
-// kernelEngine owns a Linux kernel WireGuard netdev. The module carries the
-// protocol and the UDP socket; Go only creates the netdev, applies its
-// configuration through wgctrl, and reads counters.
 type kernelEngine struct {
 	mu     sync.Mutex
 	iface  string
+	link   *kernelLinkHandle
 	closed bool
 }
 
-// newKernelEngine creates and configures a kernel WireGuard interface. The
-// netdev starts administratively down; the generic connect phases bring it
-// up (BringUp), and Engine.Start re-asserts that state. Unlike Windows,
-// Linux has no endpoint loop-protection layer that must precede the first
-// handshake, so the ordering constraint that shapes the userspace engine
-// does not apply here.
 func newKernelEngine(cfg, resolved *config.WireGuardConfig, resolvedEndpointIPs, resolvedEndpoints []string) (*Engine, error) {
+	return newKernelEngineWithDataDir(cfg, resolved, resolvedEndpointIPs, resolvedEndpoints, "")
+}
+
+// newKernelEngineWithDataDir creates the link through rtnetlink with a random
+// requested ifindex. With a dataDir, a durable intent is written before
+// RTM_NEWLINK so a crash at any point before the first ActiveTunnelState
+// save is recoverable without touching foreign devices.
+func newKernelEngineWithDataDir(cfg, resolved *config.WireGuardConfig, resolvedEndpointIPs, resolvedEndpoints []string, dataDir string) (*Engine, error) {
 	name := platformTUNName(runtime.GOOS, cfg.Name)
-	if err := prepareKernelInterface(name, cfg.Name); err != nil {
-		return nil, err
-	}
-	if _, err := runIP("link", "add", "dev", name, "type", "wireguard"); err != nil {
+	backend, err := kernelLinkBackendFactory()
+	if err != nil {
 		return nil, kernelInterfaceError(name, err)
 	}
-	// Crash recovery relies on this marker, so failing to write it leaves no
-	// safe way to identify the interface later.
-	if _, err := runIP("link", "set", "dev", name, "alias", kernelOwnershipAliasPrefix+cfg.Name); err != nil {
-		_ = deleteKernelInterface(name)
-		return nil, fmt.Errorf("marking kernel interface %q as WireGuide-owned: %w", name, err)
-	}
-
-	wgCfg, err := kernelWgtypesConfig(resolved)
+	link, err := createKernelLink(kernelLinkRequest{
+		backend: backend,
+		dataDir: dataDir,
+		tunnel:  cfg.Name,
+		name:    name,
+		prepare: func() error { return prepareKernelInterface(name, cfg.Name) },
+		configure: func() error {
+			wgCfg, err := kernelWgtypesConfig(resolved)
+			if err != nil {
+				return err
+			}
+			client, err := wgctrl.New()
+			if err != nil {
+				return fmt.Errorf("opening wgctrl client: %w", err)
+			}
+			defer client.Close()
+			if err := client.ConfigureDevice(name, wgCfg); err != nil {
+				return fmt.Errorf("applying WireGuard configuration to %q: %w", name, err)
+			}
+			return nil
+		},
+	})
 	if err != nil {
-		_ = deleteKernelInterface(name)
 		return nil, err
 	}
-	client, err := wgctrl.New()
-	if err != nil {
-		_ = deleteKernelInterface(name)
-		return nil, fmt.Errorf("opening wgctrl client: %w", err)
-	}
-	defer client.Close()
-	if err := client.ConfigureDevice(name, wgCfg); err != nil {
-		_ = deleteKernelInterface(name)
-		return nil, fmt.Errorf("applying WireGuard configuration to %q: %w", name, err)
-	}
 
-	slog.Info("WireGuard kernel interface created", "interface", name)
+	slog.Info("WireGuard kernel interface created", "interface", name, "ifindex", link.kernelLinkIndex())
 	return &Engine{
-		kernel:              &kernelEngine{iface: name},
+		kernel:              &kernelEngine{iface: name, link: link},
 		ifaceName:           name,
 		resolvedEndpointIPs: resolvedEndpointIPs,
 		resolvedEndpoints:   resolvedEndpoints,
 	}, nil
 }
+
+func (e *kernelEngine) kernelLinkIndex() int32 { return e.link.kernelLinkIndex() }
+
+func (e *kernelEngine) commitKernelLinkIntent() error { return e.link.commitKernelLinkIntent() }
+
+func (e *kernelEngine) releaseKernelLink() error { return e.link.releaseKernelLink() }
 
 // kernelWgtypesConfig translates the imported profile into the wgctrl
 // configuration. Keys and endpoints were validated and resolved by
@@ -163,32 +170,6 @@ func runIP(args ...string) ([]byte, error) {
 	return out, nil
 }
 
-func kernelInterfaceError(name string, err error) error {
-	msg := err.Error()
-	hint := ""
-	switch {
-	case strings.Contains(msg, "executable file not found"):
-		hint = " (install iproute2)"
-	case strings.Contains(msg, "Operation not supported"),
-		strings.Contains(msg, "Protocol not supported"),
-		strings.Contains(msg, "Unknown device type"):
-		hint = " (the WireGuard kernel module is unavailable; run 'modprobe wireguard' or install the WireGuard module package for your kernel)"
-	}
-	return fmt.Errorf("creating WireGuard kernel interface %q: %w%s", name, err, hint)
-}
-
-// kernelOwnershipAliasPrefix marks netdevs created by this helper.
-//
-// The interface name is a hash of the tunnel name, so two profiles can
-// collide, and neither the name nor the link kind proves the interface is
-// ours. A leftover netdev may only be deleted when it carries this marker.
-const kernelOwnershipAliasPrefix = "wireguide:"
-
-// errKernelInterfaceConflict reports that the target interface name is
-// already taken by a link this helper does not own. Callers surface it as a
-// connect failure instead of destroying someone else's interface.
-var errKernelInterfaceConflict = errors.New("kernel interface name is already in use")
-
 // ipLinkInfo is the subset of `ip -j -d link show` needed to identify a
 // link's kind and owner without parsing human-readable output.
 type ipLinkInfo struct {
@@ -254,14 +235,6 @@ func prepareKernelInterface(name, tunnel string) error {
 	return fmt.Errorf("%w: %q has a matching profile marker, but may still be active; recover or remove the interface explicitly before reconnecting", errKernelInterfaceConflict, name)
 }
 
-// deleteKernelInterface removes the netdev. Callers decide whether a
-// failure is fatal: connect rollback gives up quietly, while Close logs it
-// because the interface may already have disappeared.
-func deleteKernelInterface(name string) error {
-	_, err := runIP("link", "delete", "dev", name)
-	return err
-}
-
 // Start re-asserts the interface's up state. BringUp already brought it up
 // on the normal connect path; the second call keeps Engine.Start meaningful
 // for callers that construct an engine without the generic phases.
@@ -284,8 +257,9 @@ func (e *kernelEngine) Close() error {
 		return nil
 	}
 	e.closed = true
-	if err := deleteKernelInterface(e.iface); err != nil {
-		slog.Debug("deleting WireGuard kernel interface failed", "interface", e.iface, "error", err)
+	if err := e.link.releaseKernelLink(); err != nil {
+		slog.Warn("deleting WireGuard kernel interface failed", "interface", e.iface, "error", err)
+		return err
 	}
 	return nil
 }

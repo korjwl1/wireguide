@@ -44,6 +44,10 @@ type ActiveTunnelState struct {
 	// which is the correct behaviour for the common no-custom-domains
 	// setup and strictly better than leaking tunnel domains.
 	PreModSearch map[string][]string `json:"pre_mod_search,omitempty"`
+
+	// KernelIfindex identifies a kernel WireGuard link created with a random
+	// requested index. Zero means a legacy or userspace journal.
+	KernelIfindex int32 `json:"kernel_ifindex,omitempty"`
 }
 
 // DNS modes recorded in ActiveTunnelState.DNSMode.
@@ -54,7 +58,11 @@ const (
 
 // newRecoveryManager builds the platform manager used by crash recovery. It
 // is a var so tests do not drive the host's real network configuration.
-var newRecoveryManager = network.NewPlatformManager
+var newRecoveryManager = func() network.NetworkManager {
+	mgr := network.NewPlatformManager()
+	installKernelLinkGuard(mgr)
+	return mgr
+}
 
 // cleanupStaleSplitDNS is a var for the same reason: it talks to the system
 // dynamic store.
@@ -185,6 +193,7 @@ func LoadActiveState(dataDir string) []*ActiveTunnelState {
 // savedDNSInterface/Servers) consistent with what the post-recovery
 // helper code expects. A nil fw is treated as "no firewall cleanup".
 func RecoverFromCrash(dataDir string, fw FirewallCleaner) []string {
+	recoverKernelLinkIntents(dataDir)
 	// Split-DNS dynamic-store keys outlive a crashed helper and are not
 	// tied to a journal, so sweep them whether or not one exists. No
 	// tunnels from the dead process remain, so this cannot hit a live one.
@@ -211,6 +220,7 @@ func RecoverFromCrash(dataDir string, fw FirewallCleaner) []string {
 		// per-tunnel state across iterations and double-restored
 		// overlapping services).
 		mgr := newRecoveryManager()
+		installKernelLinkGuard(mgr)
 		if setter, mok := mgr.(network.PersistentStateDirSetter); mok {
 			setter.SetPersistentStateDir(dataDir)
 		}

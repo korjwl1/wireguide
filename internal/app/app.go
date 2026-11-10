@@ -69,6 +69,7 @@ type TunnelService struct {
 	reconcileMu      sync.Mutex
 	lastReconcileSig string
 	historyClosed    bool
+	closedPeaks      map[string]map[string]counterPeak
 }
 
 // lastKnownTunnelStats is the value type for TunnelService.lastKnownStats.
@@ -91,6 +92,8 @@ type lastKnownTunnelStats struct {
 	rawRx  int64
 	rawTx  int64
 	reason string
+	epoch  string
+	epochs map[string]counterPeak
 }
 
 // merge folds a fresh raw counter reading into the session totals. A reading
@@ -122,12 +125,50 @@ func (st lastKnownTunnelStats) merge(rawRx, rawTx int64) lastKnownTunnelStats {
 	return lastKnownTunnelStats{
 		rx: baseRx + rawRx, tx: baseTx + rawTx,
 		rawRx: rawRx, rawTx: rawTx,
-		reason: st.reason,
+		reason: st.reason, epoch: st.epoch, epochs: st.epochs,
 	}
 }
 
 // NewTunnelService creates a service. Set the app reference via SetApp()
 // after application.New() for dialog support.
+type counterPeak struct {
+	rx, tx    int64
+	inherited bool
+	terminal  bool
+	historyID string
+}
+
+func (st lastKnownTunnelStats) mergeEpoch(rx, tx int64, epoch string) lastKnownTunnelStats {
+	if epoch == "" {
+		return st.merge(rx, tx)
+	}
+	if st.epochs == nil {
+		if rx == 0 && tx == 0 {
+			st.epoch = epoch
+			return st
+		}
+		st = st.merge(rx, tx)
+		st.epoch = epoch
+		st.epochs = map[string]counterPeak{epoch: {rx: st.rawRx, tx: st.rawTx}}
+		return st
+	}
+	peak := st.epochs[epoch]
+	if peak.terminal {
+		return st
+	}
+	if rx > peak.rx {
+		st.rx += rx - peak.rx
+		peak.rx = rx
+	}
+	if tx > peak.tx {
+		st.tx += tx - peak.tx
+		peak.tx = tx
+	}
+	st.epochs[epoch] = peak
+	st.epoch, st.rawRx, st.rawTx = epoch, peak.rx, peak.tx
+	return st
+}
+
 func NewTunnelService(ts *storage.TunnelStore, ss *storage.SettingsStore, hs *storage.HistoryStore, clients *ipc.ClientHolder) *TunnelService {
 	return &TunnelService{
 		tunnelStore:   ts,

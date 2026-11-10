@@ -32,3 +32,21 @@ test('combined generated bindings preserve automation verdict and lint-fix model
   assert.equal(diagnostic.fix.action, 'remove_dns');
   assert.equal(diagnostic.args.value, 'x');
 });
+
+
+test('generated status bindings preserve engine epochs and accept legacy payloads', async () => {
+  const domain = await import('../../bindings/github.com/korjwl1/wireguide/internal/domain/models.js');
+  const status = domain.ConnectionStatus.createFrom({
+    state: 'connected', tunnel_name: 'work', counter_epoch: 'engine-A', rx_bytes: 150,
+    tunnels: [{ state: 'connected', tunnel_name: 'other', counter_epoch: 'engine-B', rx_bytes: 200 }],
+  });
+  assert.equal(status.counter_epoch, 'engine-A');
+  assert.equal(status.tunnels[0].counter_epoch, 'engine-B');
+  assert.ok(status.tunnels[0] instanceof domain.ConnectionStatus);
+  const roundTrip = domain.ConnectionStatus.createFrom(JSON.parse(JSON.stringify(status)));
+  assert.equal(roundTrip.counter_epoch, 'engine-A');
+  assert.equal(roundTrip.tunnels[0].counter_epoch, 'engine-B');
+  const legacy = domain.ConnectionStatus.createFrom({ state: 'connected', rx_bytes: 42 });
+  assert.equal(legacy.counter_epoch, undefined);
+  assert.equal(legacy.rx_bytes, 42);
+});

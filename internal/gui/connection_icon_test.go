@@ -155,7 +155,7 @@ func TestHelperOutageClearsIndicatorsWithoutHistoryMutation(t *testing.T) {
 		onStatusChange: func(names []string, handshakes map[string]bool) {
 			cleared = len(names) == 0 && len(handshakes) == 0
 		},
-		onReconcileHistory: func([]string, map[string]int64, map[string]int64, string) {
+		onReconcileHistory: func(domain.ConnectionStatus) {
 			t.Fatal("outage invented a history disconnect")
 		},
 	}

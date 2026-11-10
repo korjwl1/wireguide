@@ -32,7 +32,7 @@ import (
 // Minor 6 adds AutomationTunnelDecision.Blocked (loop-watchdog block) to Automation.Preview.
 const (
 	ProtocolMajor = 1
-	ProtocolMinor = 6
+	ProtocolMinor = 7
 )
 
 // ProtocolVersion is the canonical "major.minor" string used in

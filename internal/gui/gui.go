@@ -339,7 +339,7 @@ func Run(assetsHandler http.Handler, dataDir string) error {
 	// process restarts. The health monitor swaps the client in the holder.
 	// Pass the tray's cheap icon-update hook — NOT the full menu rebuild —
 	// so the 1 Hz status stream doesn't trigger IPC round-trips on every event.
-	bridge := newEventBridge(app, clients, trayMgr.setIconState, tunnelService.ReconcileHistoryFromStatus, trayMgr.quitApp)
+	bridge := newEventBridge(app, clients, trayMgr.setIconState, func(status domain.ConnectionStatus) { wgapp.ObserveHistoryStatus(tunnelService, status) }, trayMgr.quitApp)
 	bridge.notify = notify
 	bridge.start()
 

@@ -11,6 +11,7 @@ package tunnel
 
 import (
 	"context"
+	"crypto/rand"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -27,6 +28,7 @@ type tunnelEntry struct {
 	state         domain.State
 	engine        *Engine
 	cfg           *domain.WireGuardConfig
+	counterEpoch  string
 	connectedAt   time.Time
 	netMgr        network.NetworkManager // per-tunnel network state (routes, DNS, monitor)
 	connectCancel context.CancelFunc
@@ -440,6 +442,7 @@ func (m *Manager) ConnectWithContext(ctx context.Context, cfg *domain.WireGuardC
 	}
 	entry.connectCancel, entry.connectDone = nil, nil
 	entry.engine = engine
+	entry.counterEpoch = rand.Text()
 	entry.connectedAt = time.Now()
 	entry.state = domain.StateConnected
 
