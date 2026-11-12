@@ -3,6 +3,7 @@ package autostart
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -100,8 +101,12 @@ func TestSyncMacAutostartFileWriteDetails(t *testing.T) {
 	if changed, err := syncMacAutostartFile(path, syncTestExe); err != nil || !changed {
 		t.Fatalf("changed=%v err=%v", changed, err)
 	}
-	if fi, err := os.Stat(path); err != nil || fi.Mode().Perm() != 0644 {
-		t.Fatalf("rewritten plist mode = %v, err = %v, want 0644", fi.Mode().Perm(), err)
+	fi, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.GOOS != "windows" && fi.Mode().Perm() != 0644 {
+		t.Fatalf("rewritten plist mode = %v, want 0644", fi.Mode().Perm())
 	}
 	if left, _ := filepath.Glob(filepath.Join(filepath.Dir(path), ".wireguide-*.tmp")); len(left) != 0 {
 		t.Fatalf("temp files left behind: %v", left)

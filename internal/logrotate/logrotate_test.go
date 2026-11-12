@@ -3,6 +3,7 @@ package logrotate
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -32,8 +33,11 @@ func TestWriterRotatesAndCapsFiles(t *testing.T) {
 	if _, err := os.Stat(p + ".4"); err == nil {
 		t.Error("file count exceeded maxFiles")
 	}
-	fi, _ := os.Stat(p)
-	if fi.Mode().Perm() != 0o644 {
+	fi, err := os.Stat(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.GOOS != "windows" && fi.Mode().Perm() != 0o644 {
 		t.Errorf("mode = %v, want 0644", fi.Mode().Perm())
 	}
 }
