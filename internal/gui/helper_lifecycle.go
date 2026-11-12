@@ -47,6 +47,9 @@ func firstContactBudget(addr string) time.Duration {
 // one with privilege elevation. Authorization time is excluded from the
 // 30-second readiness timeout; ctx can still cancel recovery during shutdown.
 func ensureHelper(ctx context.Context, dataDir string, restoreDesired bool) (*ipc.Client, error) {
+	if err := elevate.ValidateHelperSource(ctx); err != nil {
+		return nil, fmt.Errorf("validate helper source: %w", err)
+	}
 	args := elevate.Args{
 		SocketPath: ipc.DefaultSocketPath(),
 		// -1 on Windows — the SID below is the owner identity there.
@@ -101,7 +104,7 @@ func ensureHelperWith(ctx context.Context, args elevate.Args, spawn func(context
 				return client, nil
 			}
 			if plistDrifted {
-				slog.Warn("LaunchDaemon plist drift detected, forcing reinstall",
+				slog.Warn("LaunchDaemon installation drift detected, forcing reinstall",
 					"helper", helperAppVersion, "gui", guiVersion)
 			} else if ipc.MinorOf(resp.Version) < ipc.ProtocolMinor {
 				slog.Warn("helper protocol update required", "helper", resp.Version, "gui", ipc.ProtocolVersion)

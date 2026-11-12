@@ -4,60 +4,38 @@ package reconnect
 
 /*
 #cgo LDFLAGS: -framework SystemConfiguration -framework CoreFoundation
-
 #include <SystemConfiguration/SystemConfiguration.h>
 #include <CoreFoundation/CoreFoundation.h>
-#include <string.h>
 
-// fetchPrimaryInterfaceForKey reads the given State:/Network/Global/*
-// key from the SCDynamicStore and copies the PrimaryInterface name into
-// the caller's buffer. Returns 1 on success (out is empty when the key
-// is missing), 0 on API failure or truncation. This is the canonical
-// way macOS networking code answers "which interface is currently the
-// default route?": Wi-Fi → Ethernet handovers and Ethernet plug/unplug
-// both change this value, while a wildcard SCNetworkReachability target
-// reports the same "reachable" flag for any non-zero set of active
-// interfaces.
-static int fetchPrimaryInterfaceForKey(CFStringRef key, char *out, int out_len) {
+static int primaryInterfaceFromValue(CFTypeRef value, char *out, int out_len) {
+    if (out_len <= 0) return 0;
+    out[0] = '\0';
+    if (value == NULL) return 1;
+    if (CFGetTypeID(value) != CFDictionaryGetTypeID()) return 0;
+    CFTypeRef iface = CFDictionaryGetValue((CFDictionaryRef)value, CFSTR("PrimaryInterface"));
+    if (iface == NULL || CFGetTypeID(iface) != CFStringGetTypeID()) return 1;
+    return CFStringGetCString((CFStringRef)iface, out, out_len, kCFStringEncodingUTF8) ? 1 : 0;
+}
+
+static int fetchPrimaryInterfaces(char *out4, int len4, char *out6, int len6, int *ok6) {
+    *ok6 = 0;
     SCDynamicStoreRef store = SCDynamicStoreCreate(NULL,
         CFSTR("io.github.korjwl1.wireguide.netmon"), NULL, NULL);
-    if (store == NULL) {
+    if (store == NULL) return 0;
+    const void *keys[] = { CFSTR("State:/Network/Global/IPv4"), CFSTR("State:/Network/Global/IPv6") };
+    CFArrayRef wanted = CFArrayCreate(NULL, keys, 2, &kCFTypeArrayCallBacks);
+    if (wanted == NULL) {
+        CFRelease(store);
         return 0;
     }
-    CFTypeRef value = SCDynamicStoreCopyValue(store, key);
+    CFDictionaryRef snapshot = SCDynamicStoreCopyMultiple(store, wanted, NULL);
+    CFRelease(wanted);
     CFRelease(store);
-    if (value == NULL) {
-        // No default route configured for this address family.
-        if (out_len > 0) {
-            out[0] = '\0';
-        }
-        return 1;
-    }
-    if (CFGetTypeID(value) != CFDictionaryGetTypeID()) {
-        CFRelease(value);
-        return 0;
-    }
-    CFStringRef iface = (CFStringRef)CFDictionaryGetValue((CFDictionaryRef)value,
-        CFSTR("PrimaryInterface"));
-    int ok = 0;
-    if (iface != NULL && CFGetTypeID(iface) == CFStringGetTypeID()) {
-        ok = CFStringGetCString(iface, out, out_len, kCFStringEncodingUTF8) ? 1 : 0;
-    } else {
-        if (out_len > 0) {
-            out[0] = '\0';
-        }
-        ok = 1;
-    }
-    CFRelease(value);
-    return ok;
-}
-
-static int fetchPrimaryInterface(char *out, int out_len) {
-    return fetchPrimaryInterfaceForKey(CFSTR("State:/Network/Global/IPv4"), out, out_len);
-}
-
-static int fetchPrimaryInterfaceV6(char *out, int out_len) {
-    return fetchPrimaryInterfaceForKey(CFSTR("State:/Network/Global/IPv6"), out, out_len);
+    if (snapshot == NULL) return 0;
+    int ok4 = primaryInterfaceFromValue(CFDictionaryGetValue(snapshot, keys[0]), out4, len4);
+    *ok6 = primaryInterfaceFromValue(CFDictionaryGetValue(snapshot, keys[1]), out6, len6);
+    CFRelease(snapshot);
+    return ok4;
 }
 */
 import "C"
@@ -67,7 +45,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-	"unsafe"
 )
 
 // darwinNetworkChangeDetector polls the SCDynamicStore once per
@@ -169,38 +146,19 @@ func (d *darwinNetworkChangeDetector) sendChange() {
 // fetchPrimaryInterface returns the current PrimaryInterface name,
 // or an empty string if none is configured. Returns ok=false on
 // API failure (logged once by the caller).
-func fetchPrimaryInterface() (string, bool) {
-	return fetchGlobalInterface(false)
+func fetchPrimaryInterfaces() (iface4, iface6 string, ok4, ok6 bool) {
+	var buf4, buf6 [64]C.char
+	var rc6 C.int
+	rc4 := C.fetchPrimaryInterfaces(&buf4[0], C.int(len(buf4)), &buf6[0], C.int(len(buf6)), &rc6)
+	if rc4 != 0 {
+		iface4, ok4 = C.GoString(&buf4[0]), true
+	}
+	if rc6 != 0 {
+		iface6, ok6 = C.GoString(&buf6[0]), true
+	}
+	return
 }
 
-// fetchPrimaryInterfaceV6 is fetchPrimaryInterface for the IPv6 key. It
-// feeds only Online(); change detection stays on the IPv4 primary.
-func fetchPrimaryInterfaceV6() (string, bool) {
-	return fetchGlobalInterface(true)
-}
-
-func fetchGlobalInterface(v6 bool) (string, bool) {
-	const bufLen = 64 // BSD interface names are at most ~16 chars
-	buf := make([]byte, bufLen)
-	p := (*C.char)(unsafe.Pointer(&buf[0]))
-	var rc C.int
-	if v6 {
-		rc = C.fetchPrimaryInterfaceV6(p, C.int(bufLen))
-	} else {
-		rc = C.fetchPrimaryInterface(p, C.int(bufLen))
-	}
-	if rc == 0 {
-		return "", false
-	}
-	// Find the null terminator written by CFStringGetCString.
-	n := 0
-	for n < bufLen && buf[n] != 0 {
-		n++
-	}
-	return string(buf[:n]), true
-}
-
-// fireCooldown coalesces interface flaps while retaining the final transition.
 const fireCooldown = 2 * time.Second
 
 func (d *darwinNetworkChangeDetector) poll() {
@@ -220,12 +178,11 @@ func (d *darwinNetworkChangeDetector) poll() {
 			slog.Info("network change detector stopped")
 			return
 		case <-ticker.C:
-			iface, ok := fetchPrimaryInterface()
+			iface, iface6, ok, ok6 := fetchPrimaryInterfaces()
 			if !ok {
 				slog.Warn("SCDynamicStoreCopyValue failed")
 				continue
 			}
-			iface6, ok6 := fetchPrimaryInterfaceV6()
 			d.offline.Store(!onlineFromPrimaries(iface, iface6, ok6))
 			if !gate.initialized {
 				gate.observe(iface, time.Now())

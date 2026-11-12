@@ -16,6 +16,15 @@
   export let updateInfo = null;
   export let onInstall = null;
 
+  // The kernel backend exists on Windows (WireGuardNT) and Linux (the
+  // in-kernel module). Label it per platform so the option never names a
+  // driver the user's OS does not ship.
+  const isLinuxPlatform = /Linux/i.test(navigator.userAgent);
+  const backendLabelKey = (kind) =>
+    isLinuxPlatform
+      ? (kind === 'kernel' ? 'settings.tunnel_backend_kernel_linux' : 'settings.tunnel_backend_userspace_linux')
+      : (kind === 'kernel' ? 'settings.tunnel_backend_kernel_windows' : 'settings.tunnel_backend_userspace_windows');
+
   let aboutUpdating = false;
   let aboutShowVpnWarn = false;
   // updateState mirrors UpdateState DTO from GetUpdateState. Used by the
@@ -145,6 +154,7 @@
     tunnel_backend: 'userspace',
     tray_icon_style: 'color',
     auto_update_check: true,
+    notify_auto_changes: false,
     compact_list: false,
   };
   let loaded = false;
@@ -184,6 +194,7 @@
         // the Go side becomes undefined here; default to true to match
         // Settings.AutoUpdateCheckEnabled() semantics.
         settings.auto_update_check = (s.auto_update_check === false) ? false : true;
+        settings.notify_auto_changes = s.notify_auto_changes === true;
       }
       loaded = true;
       loadError = '';
@@ -252,6 +263,11 @@
     // then persist.
     compactList.set(settings.compact_list);
     queuePatch({ compact_list: settings.compact_list });
+  }
+
+  function onNotifyAutoChange(e) {
+    settings.notify_auto_changes = e.target.checked;
+    queuePatch({ notify_auto_changes: settings.notify_auto_changes });
   }
 
   function onAutoStartChange(e) {
@@ -436,6 +452,25 @@
             </div>
           </div>
 
+          <!-- Windows has no notification backend; hide the toggle there. -->
+          {#if !/Windows/i.test(navigator.userAgent)}
+          <div class="settings-section">
+            <h4 class="section-title">{$t('settings.section_notifications')}</h4>
+            <div class="settings-card">
+              <div class="setting-row setting-row--toggle">
+                <div class="setting-info">
+                  <label class="setting-label" for="notify-auto">{$t('settings.notify_auto_changes')}</label>
+                  <p class="setting-desc">{$t('settings.notify_auto_changes_hint')}</p>
+                </div>
+                <label class="toggle">
+                  <input id="notify-auto" type="checkbox" checked={settings.notify_auto_changes} on:change={onNotifyAutoChange} />
+                  <span class="toggle-track"></span>
+                </label>
+              </div>
+            </div>
+          </div>
+          {/if}
+
           <div class="settings-section">
             <h4 class="section-title">{$t('settings.section_updates')}</h4>
             <div class="settings-card">
@@ -510,15 +545,15 @@
                   <span class="toggle-track"></span>
                 </label>
               </div>
-              {#if /Windows/i.test(navigator.userAgent)}
+              {#if /(Windows|Linux)/i.test(navigator.userAgent)}
                 <div class="setting-row">
                   <div class="setting-info">
                     <label class="setting-label" for="tunnel-backend">{$t('settings.tunnel_backend')}</label>
-                    <p class="setting-desc">{$t('settings.tunnel_backend_hint')}</p>
+                    <p class="setting-desc">{$t(isLinuxPlatform ? 'settings.tunnel_backend_hint_linux' : 'settings.tunnel_backend_hint_windows')}</p>
                   </div>
                   <select id="tunnel-backend" disabled={busyFields.tunnel_backend} value={settings.tunnel_backend} on:change={onTunnelBackendChange}>
-                    <option value="userspace">{$t('settings.tunnel_backend_userspace')}</option>
-                    <option value="kernel">{$t('settings.tunnel_backend_kernel')}</option>
+                    <option value="userspace">{$t(backendLabelKey('userspace'))}</option>
+                    <option value="kernel">{$t(backendLabelKey('kernel'))}</option>
                   </select>
                 </div>
               {/if}
@@ -632,7 +667,7 @@
             <h3 id="backend-confirm-title">{$t('settings.tunnel_backend_confirm_title')}</h3>
           </div>
         </div>
-        <p class="dialog-message">{$t('settings.tunnel_backend_confirm_message', { engine: $t(pendingBackend === 'kernel' ? 'settings.tunnel_backend_kernel' : 'settings.tunnel_backend_userspace') })}</p>
+        <p class="dialog-message">{$t('settings.tunnel_backend_confirm_message', { engine: $t(backendLabelKey(pendingBackend)) })}</p>
         <div class="confirm-footer">
           <button class="dialog-btn dialog-btn-ghost" on:click={cancelBackendChange}>{$t('confirm.no')}</button>
           <button class="dialog-btn dialog-btn-primary" on:click={confirmBackendChange}>
