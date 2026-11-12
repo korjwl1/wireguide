@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	wgapp "github.com/korjwl1/wireguide/internal/app"
 	"github.com/korjwl1/wireguide/internal/domain"
 	"github.com/korjwl1/wireguide/internal/ipc"
 	"github.com/wailsapp/wails/v3/pkg/application"
@@ -27,10 +28,13 @@ type eventBridge struct {
 	// that were started or ended by the helper itself (auto-reconnect on
 	// wake, wifi rules, health-check recovery). nil when the bridge runs
 	// without a history store.
-	onReconcileHistory func(activeNames []string, rx, tx map[string]int64, reason string)
+	onReconcileHistory func(status domain.ConnectionStatus, source *ipc.Client)
 	// onQuitRequested terminates the app. Fired for ipc.EventQuit, which
 	// the helper broadcasts when someone runs `wireguide ctl stop`.
 	onQuitRequested func()
+	// notify posts native notifications for automatic changes. Optional
+	// (nil-safe); wired by gui.Run.
+	notify *notifier
 
 	mu           sync.Mutex
 	subscribedTo *ipc.Client // tracks which client we're currently subscribed on
@@ -40,7 +44,7 @@ func newEventBridge(
 	app *application.App,
 	clients *ipc.ClientHolder,
 	onStatusChange func(activeNames []string, handshakeMap map[string]bool),
-	onReconcileHistory func(activeNames []string, rx, tx map[string]int64, reason string),
+	onReconcileHistory func(status domain.ConnectionStatus, source *ipc.Client),
 	onQuitRequested func(),
 ) *eventBridge {
 	return &eventBridge{
@@ -65,6 +69,9 @@ func (b *eventBridge) Resubscribe() {
 	b.mu.Unlock()
 	if b.resubscribe() {
 		if previous != nil && previous != b.clients.Get() {
+			// Helper restarted: its state is unknown again, so the next
+			// status only seeds the notifier's baseline.
+			b.notify.reset()
 			b.app.Event.Emit("helper_reset", struct{}{})
 		} else {
 			b.app.Event.Emit("tunnels_changed", struct{}{})
@@ -86,7 +93,7 @@ func (b *eventBridge) resubscribe() bool {
 		b.mu.Lock()
 		defer b.mu.Unlock()
 		if b.subscribedTo == c && b.clients.Get() == c {
-			b.handleEvent(method, params)
+			b.handleEvent(method, params, c)
 		}
 	}); err != nil {
 		slog.Warn("event subscription failed", "error", err)
@@ -96,7 +103,7 @@ func (b *eventBridge) resubscribe() bool {
 	return true
 }
 
-func (b *eventBridge) handleEvent(method string, params json.RawMessage) {
+func (b *eventBridge) handleEvent(method string, params json.RawMessage, sources ...*ipc.Client) {
 	switch method {
 	case ipc.EventStatus:
 		var status domain.ConnectionStatus
@@ -104,22 +111,17 @@ func (b *eventBridge) handleEvent(method string, params json.RawMessage) {
 			slog.Debug("event bridge: unmarshal status failed", "error", err)
 		} else {
 			b.app.Event.Emit("status", status)
+			b.notify.onStatus(wgapp.ConnectedTunnels(status))
 			if b.onStatusChange != nil {
 				names, handshakes := connectedStatusIndicators(status)
 				b.onStatusChange(names, handshakes)
 			}
 			if b.onReconcileHistory != nil {
-				rx := make(map[string]int64, len(status.Tunnels)+1)
-				tx := make(map[string]int64, len(status.Tunnels)+1)
-				for _, ts := range status.Tunnels {
-					rx[ts.TunnelName] = ts.RxBytes
-					tx[ts.TunnelName] = ts.TxBytes
+				var source *ipc.Client
+				if len(sources) > 0 {
+					source = sources[0]
 				}
-				if status.TunnelName != "" {
-					rx[status.TunnelName] = status.RxBytes
-					tx[status.TunnelName] = status.TxBytes
-				}
-				b.onReconcileHistory(status.ActiveTunnels, rx, tx, "")
+				b.onReconcileHistory(status, source)
 			}
 		}
 	case ipc.EventReconnect:
@@ -153,6 +155,8 @@ func (b *eventBridge) handleEvent(method string, params json.RawMessage) {
 		} else {
 			b.app.Event.Emit("wifi_ssid", payload)
 		}
+	case ipc.EventAutomationChanged:
+		b.app.Event.Emit("automation_changed", struct{}{})
 	case ipc.EventAutoConnect:
 		// Helper auto-connected a tunnel via Wi-Fi rules. Frontend must run
 		// the same post-connect refresh (refreshTunnels + refreshStatus) as
@@ -162,6 +166,7 @@ func (b *eventBridge) handleEvent(method string, params json.RawMessage) {
 			slog.Debug("event bridge: unmarshal auto_connect failed", "error", err)
 		} else {
 			b.app.Event.Emit("auto_connected", payload)
+			b.notify.onAutoConnected(payload.TunnelName)
 		}
 	case ipc.EventAutomationSkipped:
 		var payload ipc.AutomationSkippedPayload
@@ -179,6 +184,7 @@ func (b *eventBridge) handleEvent(method string, params json.RawMessage) {
 			slog.Debug("event bridge: unmarshal forced_disconnect failed", "error", err)
 		} else {
 			b.app.Event.Emit("forced_disconnect", payload)
+			b.notify.onForcedDisconnect(payload.TunnelName)
 		}
 	case ipc.EventQuit:
 		// `wireguide ctl stop` — the user asked for the whole app to go
@@ -216,6 +222,7 @@ func (b *eventBridge) handleEvent(method string, params json.RawMessage) {
 		} else {
 			slog.Error("helper background goroutine died permanently", "where", payload.Where, "detail", payload.Detail)
 			b.app.Event.Emit("critical_error", payload)
+			b.notify.onCriticalError(payload.Where)
 		}
 	}
 }
