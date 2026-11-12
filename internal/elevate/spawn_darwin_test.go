@@ -14,6 +14,7 @@ import (
 
 	"github.com/korjwl1/wireguide/internal/ipc"
 	"github.com/korjwl1/wireguide/internal/launchd"
+	"github.com/korjwl1/wireguide/internal/logrotate"
 )
 
 // testArgs returns a representative Args for plist generation.
@@ -153,7 +154,7 @@ func TestLaunchdDemandLifecycle(t *testing.T) {
 	plist = strings.ReplaceAll(plist, ipc.DarwinSocketPath, sock)
 	plist = strings.ReplaceAll(plist, daemonBinary, fixture)
 	plist = strings.ReplaceAll(plist, daemonLabel, label)
-	plist = strings.ReplaceAll(plist, "/var/log/wireguide-helper.log", filepath.Join(dir, "helper.log"))
+	plist = strings.ReplaceAll(plist, logrotate.HelperStderrPath, filepath.Join(dir, "helper.log"))
 	path := filepath.Join(dir, "helper.plist")
 	if err := os.WriteFile(path, []byte(plist), 0600); err != nil {
 		t.Fatal(err)
@@ -208,12 +209,13 @@ func TestDaemonInstallScript(t *testing.T) {
 		wantError bool
 		want      string
 	}{
-		{"fresh install", "", false, false, "bootout\nprint\nrm\nmkdir\ncp\nxattr\nchown\nchmod\ncp\nchown\nchmod\nbootstrap\nkickstart\n"},
-		{"kickstart failure after bootstrap", "kickstart", false, true, "bootout\nprint\nrm\nmkdir\ncp\nxattr\nchown\nchmod\ncp\nchown\nchmod\nbootstrap\nkickstart\n"},
+		{"fresh install", "", false, false, "bootout\nprint\nrm\nmkdir\ncp\nxattr\nchown\nchmod\ncodesign\ncp\nchown\nchmod\nbootstrap\nkickstart\n"},
+		{"kickstart failure after bootstrap", "kickstart", false, true, "bootout\nprint\nrm\nmkdir\ncp\nxattr\nchown\nchmod\ncodesign\ncp\nchown\nchmod\nbootstrap\nkickstart\n"},
 		{"copy failure", "cp", false, true, "bootout\nprint\nrm\nmkdir\ncp\n"},
+		{"invalid helper signature", "codesign", false, true, "bootout\nprint\nrm\nmkdir\ncp\nxattr\nchown\nchmod\ncodesign\n"},
 		{"purge failure", "rm", false, true, "bootout\nprint\nrm\n"},
-		{"quarantine absent", "xattr", false, false, "bootout\nprint\nrm\nmkdir\ncp\nxattr\nchown\nchmod\ncp\nchown\nchmod\nbootstrap\nkickstart\n"},
-		{"bootstrap failure", "bootstrap", false, true, "bootout\nprint\nrm\nmkdir\ncp\nxattr\nchown\nchmod\ncp\nchown\nchmod\nbootstrap\n"},
+		{"quarantine absent", "xattr", false, false, "bootout\nprint\nrm\nmkdir\ncp\nxattr\nchown\nchmod\ncodesign\ncp\nchown\nchmod\nbootstrap\nkickstart\n"},
+		{"bootstrap failure", "bootstrap", false, true, "bootout\nprint\nrm\nmkdir\ncp\nxattr\nchown\nchmod\ncodesign\ncp\nchown\nchmod\nbootstrap\n"},
 		{"teardown timeout", "", true, true, ""},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -232,9 +234,12 @@ cp() { record cp; }
 xattr() { record xattr; }
 chown() { record chown; }
 chmod() { record chmod; }
+codesign() { record codesign; }
 sleep() { :; }
 `
-			cmd := exec.Command("/bin/sh", "-c", stubs+daemonInstallScript("/tmp/app's binary", "/tmp/helper.plist"))
+			script := daemonInstallScript("/tmp/app's bundle.app/Contents/Library/LaunchServices/"+daemonLabel, "/tmp/helper.plist")
+			script = strings.ReplaceAll(script, "/usr/bin/codesign", "codesign")
+			cmd := exec.Command("/bin/sh", "-c", stubs+script)
 			cmd.Env = append(os.Environ(), "TRACE="+trace, "FAIL="+tt.fail, fmt.Sprintf("LOADED=%t", tt.loaded))
 			out, err := cmd.CombinedOutput()
 			if (err != nil) != tt.wantError {
@@ -252,5 +257,36 @@ sleep() { :; }
 				t.Errorf("command trace = %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestBareDaemonInstallDoesNotRequireSignature(t *testing.T) {
+	script := daemonInstallScript("/tmp/unsigned Intel binary", "/tmp/helper.plist")
+	if strings.Contains(script, "codesign") {
+		t.Fatal("bare development helper unexpectedly requires a code signature")
+	}
+}
+
+// TestPlistLogPaths pins the helper log split: the helper rotates its own slog
+// output at HelperLogPath, so launchd's stdout/stderr capture must target the
+// separate stderr file. Pointing it at the rotated file again would let
+// launchd's unbounded append fight the in-process rotation.
+func TestPlistLogPaths(t *testing.T) {
+	plist := generatePlistContent("/Library/PrivilegedHelperTools/com.wireguide.helper", testArgs())
+	path := filepath.Join(t.TempDir(), "test.plist")
+	if err := os.WriteFile(path, []byte(plist), 0644); err != nil {
+		t.Fatalf("write plist: %v", err)
+	}
+	for _, key := range []string{"StandardErrorPath", "StandardOutPath"} {
+		out, err := exec.Command("plutil", "-extract", key, "raw", "-o", "-", path).CombinedOutput()
+		if err != nil {
+			t.Fatalf("plutil -extract %s: %v\n%s", key, err, out)
+		}
+		if got := strings.TrimSpace(string(out)); got != logrotate.HelperStderrPath {
+			t.Errorf("%s = %q, want %q", key, got, logrotate.HelperStderrPath)
+		}
+	}
+	if logrotate.HelperStderrPath == logrotate.HelperLogPath {
+		t.Fatal("launchd capture and rotated helper log must be different files")
 	}
 }

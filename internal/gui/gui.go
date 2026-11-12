@@ -19,6 +19,7 @@ import (
 	wgapp "github.com/korjwl1/wireguide/internal/app"
 	"github.com/korjwl1/wireguide/internal/autostart"
 	"github.com/korjwl1/wireguide/internal/domain"
+	"github.com/korjwl1/wireguide/internal/elevate"
 	"github.com/korjwl1/wireguide/internal/guiinstance"
 	"github.com/korjwl1/wireguide/internal/ipc"
 	"github.com/korjwl1/wireguide/internal/storage"
@@ -41,6 +42,18 @@ type HelperEvent struct {
 	Message string `json:"message"`
 }
 
+// WindowVisibilityEvent tells the frontend that the main window was hidden
+// to the tray or shown again, so it can pause work nobody can see.
+// document.visibilityState is not guaranteed to change when the window is
+// hidden to the tray, so the frontend must not rely on it alone.
+type WindowVisibilityEvent struct {
+	Visible bool `json:"visible"`
+}
+
+// emitWindowVisibility broadcasts a WindowVisibilityEvent. Run assigns it
+// before the window can be hidden or shown; it is a no-op until then.
+var emitWindowVisibility = func(bool) {}
+
 // Register Wails event payload types. Called once per process from init.
 func init() {
 	application.RegisterEvent[domain.ConnectionStatus]("status")
@@ -48,12 +61,14 @@ func init() {
 	application.RegisterEvent[map[string]any]("files-dropped")
 	application.RegisterEvent[HelperEvent]("helper")
 	application.RegisterEvent[struct{}]("helper_reset")
+	application.RegisterEvent[struct{}]("automation_changed")
 	application.RegisterEvent[update.UpdateInfo]("update-available")
 	application.RegisterEvent[map[string]any]("update_progress")
 	application.RegisterEvent[ipc.SettingsChangedPayload]("settings_changed")
 	application.RegisterEvent[struct{}]("config_changed")
 	application.RegisterEvent[struct{}]("tunnels_changed")
 	application.RegisterEvent[ipc.RecoveryWarningPayload]("recovery_warning")
+	application.RegisterEvent[WindowVisibilityEvent]("window_visibility")
 }
 
 // Run starts the GUI process. Blocks until the Wails app exits.
@@ -102,15 +117,16 @@ func Run(assetsHandler http.Handler, dataDir string) error {
 
 	// Apply persisted log level to the GUI side immediately (helper-side
 	// gets it after ensureHelper + the UpdateSettings path).
-	if s, err := settingsStore.Load(); err == nil && s != nil && s.LogLevel != "" {
-		setGUILogLevel(s.LogLevel)
+	initialSettings, settingsErr := settingsStore.Load()
+	if settingsErr == nil && initialSettings != nil && initialSettings.LogLevel != "" {
+		setGUILogLevel(initialSettings.LogLevel)
 	}
 
 	// Bring an existing login item up to date with the current template
 	// (macOS: AssociatedBundleIdentifiers). Saving settings only rewrites it
 	// when the toggle changes, so an upgraded user would otherwise keep the
 	// old LaunchAgent. User-level file, no prompt; best-effort.
-	if s, err := settingsStore.Load(); err == nil && s != nil && s.AutoStart {
+	if settingsErr == nil && initialSettings != nil && initialSettings.AutoStart {
 		if exe, err := os.Executable(); err == nil {
 			if changed, err := autostart.SyncAutostart(exe); err != nil {
 				slog.Warn("autostart: cannot refresh login item", "error", err)
@@ -119,6 +135,13 @@ func Run(assetsHandler http.Handler, dataDir string) error {
 			}
 		}
 	}
+
+	elevate.SetNoticeLanguage(func() string {
+		if s, err := settingsStore.Load(); err == nil && s != nil && s.Language != "" && s.Language != "auto" {
+			return s.Language
+		}
+		return preferredGUILanguage()
+	})
 
 	initialClient, err := connectInitialHelper(dataDir)
 	if err != nil {
@@ -224,6 +247,10 @@ func Run(assetsHandler http.Handler, dataDir string) error {
 		win.OnWindowEvent(events.Common.WindowShow, func(*application.WindowEvent) { connectionIndicator.Refresh() })
 	}
 
+	emitWindowVisibility = func(visible bool) {
+		app.Event.Emit("window_visibility", WindowVisibilityEvent{Visible: visible})
+	}
+
 	// macOS standard: close button hides the window instead of destroying it.
 	// The app stays alive in the tray; "Show Window" brings it back.
 	//
@@ -246,6 +273,7 @@ func Run(assetsHandler http.Handler, dataDir string) error {
 		event.Cancel()
 		win.Hide()
 		hideDock()
+		emitWindowVisibility(false)
 	})
 
 	// Wire the window reference so showDock() can retry showing it.
@@ -277,21 +305,32 @@ func Run(assetsHandler http.Handler, dataDir string) error {
 	healthDone := make(chan struct{})
 	var stopHealthOnce sync.Once
 	stopHealth := func() { stopHealthOnce.Do(func() { close(healthDone) }) }
-	shutdown = &guiShutdown{instance: instance, indicator: connectionIndicator, stopHealth: stopHealth, service: tunnelService, history: historyStore, clients: clients}
+	notify := newNotifier(settingsStore, tunnelService.UserActions())
+	shutdown = &guiShutdown{instance: instance, indicator: connectionIndicator, stopHealth: stopHealth, service: tunnelService, history: historyStore, clients: clients, notify: notify}
 	defer shutdown.run()
 
 	trayMgr := newTrayManager(app, win, tray, tunnelService, shutdown.run)
 	trayMgr.connectionIcon = connectionIndicator
-	wgapp.SetGUIPreferencesChanged(func() {
+	wgapp.SetGUIPreferencesChanged(preferencesChangedHook(notify, func() {
 		if !appQuitting.Load() {
 			trayMgr.scheduleRebuild()
 		}
-	})
+	}))
 	trayMgr.initialBuild()
 
 	if runtime.GOOS == "darwin" {
 		app.Event.OnApplicationEvent(events.Mac.ApplicationWillTerminate, func(_ *application.ApplicationEvent) {
 			destroyNativeTray()
+		})
+		// A Dock click or a relaunch (Finder, Spotlight, `open -a`) sends an
+		// application reopen to the running process. Wails' default handler
+		// only calls Show() on the window; route it through showDock so the
+		// activation policy, the retry loop and the window_visibility event
+		// match every other way of bringing the window back.
+		app.Event.OnApplicationEvent(events.Mac.ApplicationShouldHandleReopen, func(*application.ApplicationEvent) {
+			if !appQuitting.Load() {
+				showDock()
+			}
 		})
 	}
 
@@ -300,7 +339,10 @@ func Run(assetsHandler http.Handler, dataDir string) error {
 	// process restarts. The health monitor swaps the client in the holder.
 	// Pass the tray's cheap icon-update hook — NOT the full menu rebuild —
 	// so the 1 Hz status stream doesn't trigger IPC round-trips on every event.
-	bridge := newEventBridge(app, clients, trayMgr.setIconState, tunnelService.ReconcileHistoryFromStatus, trayMgr.quitApp)
+	bridge := newEventBridge(app, clients, trayMgr.setIconState, func(status domain.ConnectionStatus, source *ipc.Client) {
+		wgapp.ObserveHistoryStatus(tunnelService, status, source)
+	}, trayMgr.quitApp)
+	bridge.notify = notify
 	bridge.start()
 
 	// Push the persisted log level to the helper now that the event
