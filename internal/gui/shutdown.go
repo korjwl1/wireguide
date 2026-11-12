@@ -21,12 +21,19 @@ type guiShutdown struct {
 	service    *wgapp.TunnelService
 	history    *storage.HistoryStore
 	clients    *ipc.ClientHolder
+	// notify is silenced on quit so the helper tearing tunnels down is
+	// not reported as a change "outside the app". May be nil.
+	notify *notifier
 }
 
 func (s *guiShutdown) run() {
 	s.once.Do(func() {
 		s.instance.BeginShutdown()
 		appQuitting.Store(true)
+		// Quit disconnects every tunnel: record it as a user action and
+		// silence the notifier before the helper tears them down.
+		s.service.UserActions().Begin(wgapp.AnyTunnel, false)
+		s.notify.stop()
 		if s.indicator != nil {
 			s.indicator.Close()
 		}

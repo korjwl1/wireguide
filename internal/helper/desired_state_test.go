@@ -560,8 +560,10 @@ func TestHandleDisconnect_TunnelAlreadyDownDuringRetry(t *testing.T) {
 
 	// A tunnel the helper knows nothing about is still an error.
 	params, _ = json.Marshal(ipc.DisconnectRequest{TunnelName: "ghost"})
-	if _, err := h.handleDisconnect(params); err == nil {
-		t.Fatal("disconnect of an unknown tunnel should still fail")
+	_, err := h.handleDisconnect(params)
+	var coded *ipc.CodedError
+	if !errors.As(err, &coded) || coded.Code != ipc.ErrCodeNotConnected {
+		t.Fatalf("unknown tunnel must preserve the NotConnected RPC code: %v", err)
 	}
 }
 
