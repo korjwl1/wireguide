@@ -1,4 +1,4 @@
-import { writable } from 'svelte/store';
+import { derived, writable } from 'svelte/store';
 
 // Live automation decision (Wails: GetAutomationPreview). One poller feeds
 // the Automation editor strip and the chips on the tunnel list / hero card.
@@ -13,6 +13,13 @@ import { writable } from 'svelte/store';
 // refresh requested while hidden is skipped, because showing or focusing
 // the window always refreshes.
 export const automationPreview = writable(null);
+export const automationVerdicts = derived(automationPreview, (preview) => {
+  const byName = new Map();
+  for (const verdict of preview?.tunnels || []) {
+    if (!byName.has(verdict.name)) byName.set(verdict.name, verdict);
+  }
+  return byName;
+});
 // Wall-clock time of the last successful poll, shown as "checked HH:MM:SS"
 // where polling is slow (Windows/Linux).
 export const automationCheckedAt = writable(0);
@@ -45,6 +52,19 @@ let generation = 0;
 // A refresh arrived while one was in flight (e.g. right after a rules save);
 // run once more when it lands so that result is not stale.
 let rerun = false;
+let lastStatus = null;
+
+export function refreshAutomationStatus(status) {
+  const next = new Map((status?.tunnels || []).map(t => [t.tunnel_name, t.state]));
+  for (const name of status?.active_tunnels || []) {
+    if (!next.has(name)) next.set(name, 'connected');
+  }
+  if (status?.tunnel_name && !next.has(status.tunnel_name)) next.set(status.tunnel_name, status.state);
+  next.set('', status?.state);
+  if (lastStatus && next.size === lastStatus.size && [...next].every(([name, state]) => lastStatus.has(name) && lastStatus.get(name) === state)) return;
+  lastStatus = next;
+  refreshAutomationPreview();
+}
 
 function isHidden() {
   return windowHidden || document.visibilityState !== 'visible';
@@ -56,15 +76,22 @@ export async function refreshAutomationPreview() {
   if (inflight) { rerun = true; return; }
   inflight = true;
   const gen = generation;
+  const currentService = service;
+  const current = () => gen === generation && service === currentService;
   try {
-    const p = await service.GetAutomationPreview();
+    const p = await currentService.GetAutomationPreview();
+    if (!current()) return;
     if (p && p.ssid_unknown) {
       try {
-        const s = await service.CheckSSIDPermission();
+        const s = await currentService.CheckSSIDPermission();
+        if (!current()) return;
         locationAuth.set(s && s.has_wifi && !s.has_permission ? 'denied' : 'unknown');
-      } catch (_) { locationAuth.set('unknown'); }
+      } catch (_) {
+        if (!current()) return;
+        locationAuth.set('unknown');
+      }
     }
-    wantFast = !!(p && p.available && Array.isArray(p.tunnels) && p.tunnels.length > 0);
+    wantFast = !!(p && p.available && p.has_negated_rules && !p.settled);
     const json = JSON.stringify(p);
     // Only notify subscribers on a real change; a 2 s poll of an idle
     // network would otherwise re-render every chip each tick.
@@ -74,6 +101,7 @@ export async function refreshAutomationPreview() {
     }
     automationCheckedAt.set(Date.now());
   } catch (_) {
+    if (!current()) return;
     wantFast = false;
     // Older helper / transient IPC failure: hide the strip rather than
     // show stale state.
@@ -95,6 +123,8 @@ export async function refreshAutomationPreview() {
 
 function schedule() {
   if (timer) clearTimeout(timer);
+  timer = null;
+  if (!service || isHidden()) return;
   timer = setTimeout(() => {
     timer = null;
     if (!service) return;
@@ -107,6 +137,7 @@ function schedule() {
 
 function onVisibility() {
   if (!isHidden()) refreshAutomationPreview();
+  else schedule();
 }
 
 // setAutomationWindowVisible pauses polling while the window is hidden to
@@ -114,6 +145,7 @@ function onVisibility() {
 export function setAutomationWindowVisible(visible) {
   windowHidden = !visible;
   if (visible) refreshAutomationPreview();
+  else schedule();
 }
 
 // A focused window is a visible one. The Go side reports reopen through
@@ -146,4 +178,5 @@ export function stopAutomationPolling() {
   windowHidden = false;
   wantFast = false;
   rerun = false;
+  lastStatus = null;
 }

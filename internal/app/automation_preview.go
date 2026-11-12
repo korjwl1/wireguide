@@ -95,15 +95,22 @@ func buildAutomationPreview(resp ipc.AutomationPreviewResponse, rules map[string
 	}
 	for _, d := range resp.Tunnels {
 		v := AutomationVerdict{Name: d.Name, Active: d.Active}
-		tr := rules[d.Name]
-		if automation.HasNegated(tr) {
+		evaluation := d.Evaluation
+		if evaluation == nil {
+			tr := rules[d.Name]
+			_, info := automation.EvaluateDetailed(tr, ctx)
+			evaluation = &ipc.AutomationRuleEvaluation{RuleIndex: info.RuleIndex, HasNegatedRules: automation.HasNegated(tr)}
+			if info.RuleIndex >= 0 && info.RuleIndex < len(tr) {
+				condition := tr[info.RuleIndex].When
+				evaluation.Condition = &condition
+			}
+		}
+		if evaluation.HasNegatedRules {
 			out.HasNegatedRules = true
 		}
-		// Re-evaluate locally (pure) to learn WHICH rule decided; the
-		// helper's own decision stays authoritative for the verdict.
-		if _, info := automation.EvaluateDetailed(tr, ctx); info.RuleIndex >= 0 && info.RuleIndex < len(tr) {
-			c := tr[info.RuleIndex].When
-			v.RuleIndex = info.RuleIndex + 1
+		if evaluation.Condition != nil && evaluation.RuleIndex >= 0 {
+			c := evaluation.Condition
+			v.RuleIndex = evaluation.RuleIndex + 1
 			v.RuleType = c.Type
 			v.RuleNegate = c.Negate
 			switch c.Type {
@@ -152,12 +159,21 @@ func configLANOverlap(cfg *domain.WireGuardConfig) (string, bool) {
 	if cfg == nil || strings.EqualFold(cfg.Interface.Table, "off") {
 		return "", false
 	}
-	var ips []string
-	for _, p := range cfg.Peers {
-		ips = append(ips, p.AllowedIPs...)
+	return configLANOverlapIn(cfg, network.LocalPhysicalAddrs())
+}
+
+func configLANOverlapIn(cfg *domain.WireGuardConfig, locals []*net.IPNet) (string, bool) {
+	if cfg == nil || strings.EqualFold(cfg.Interface.Table, "off") {
+		return "", false
 	}
-	cidr, _, ok := network.FirstLocalNetworkOverlap(ips)
-	return cidr, ok
+	for _, p := range cfg.Peers {
+		for _, cidr := range p.AllowedIPs {
+			if _, hit := network.LocalNetworkOverlapIn(cidr, locals); hit {
+				return cidr, true
+			}
+		}
+	}
+	return "", false
 }
 
 // GetAutomationPreview asks the helper for its read-only automation
@@ -171,17 +187,35 @@ func (s *TunnelService) GetAutomationPreview() AutomationPreview {
 		return AutomationPreview{Tunnels: []AutomationVerdict{}}
 	}
 	var rules map[string][]automation.Rule
-	if settings, err := s.settingsStore.Load(); err == nil && settings != nil {
-		settings.EnsureAutomation()
-		if settings.Automation != nil {
-			rules = settings.Automation.PerTunnel
+	needsLegacyRules := false
+	for _, decision := range resp.Tunnels {
+		if decision.Evaluation == nil {
+			needsLegacyRules = true
+			break
 		}
 	}
+	if needsLegacyRules {
+		if settings, err := s.settingsStore.Load(); err == nil && settings != nil {
+			settings.EnsureAutomation()
+			if settings.Automation != nil {
+				rules = settings.Automation.PerTunnel
+			}
+		}
+	}
+	var locals []*net.IPNet
+	localsLoaded := false
 	return buildAutomationPreview(resp, rules, func(name string) (string, bool) {
 		cfg, err := s.tunnelStore.Load(name)
 		if err != nil || cfg == nil {
 			return "", false
 		}
-		return configLANOverlap(cfg)
+		if strings.EqualFold(cfg.Interface.Table, "off") {
+			return "", false
+		}
+		if !localsLoaded {
+			locals = network.LocalPhysicalAddrs()
+			localsLoaded = true
+		}
+		return configLANOverlapIn(cfg, locals)
 	})
 }

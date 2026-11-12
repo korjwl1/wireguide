@@ -7,6 +7,11 @@
 import "../github.com/wailsapp/wails/v3/internal/eventcreate.js";
 
 /**
+ * Name of the custom event "automation_changed".
+ */
+export const AutomationChanged = "automation_changed";
+
+/**
  * Name of the custom event "config_changed".
  */
 export const ConfigChanged = "config_changed";

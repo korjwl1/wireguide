@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/korjwl1/wireguide/internal/domain"
+	"github.com/korjwl1/wireguide/internal/ipc"
 )
 
 func TestConnectionIndicatorsRequireConnectedTunnels(t *testing.T) {
@@ -155,7 +156,7 @@ func TestHelperOutageClearsIndicatorsWithoutHistoryMutation(t *testing.T) {
 		onStatusChange: func(names []string, handshakes map[string]bool) {
 			cleared = len(names) == 0 && len(handshakes) == 0
 		},
-		onReconcileHistory: func([]string, map[string]int64, map[string]int64, string) {
+		onReconcileHistory: func(domain.ConnectionStatus, *ipc.Client) {
 			t.Fatal("outage invented a history disconnect")
 		},
 	}

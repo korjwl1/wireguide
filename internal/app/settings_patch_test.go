@@ -67,3 +67,41 @@ func TestSettingsPatchRejectsUnsupportedTunnelBackend(t *testing.T) {
 		t.Fatal("unsupported backend was persisted")
 	}
 }
+
+func TestSettingsPatchNotifyAutoChanges(t *testing.T) {
+	store := storage.NewSettingsStore(t.TempDir())
+	s := &TunnelService{settingsStore: store}
+	if current, err := store.Load(); err != nil || current.NotifyAutoChanges {
+		t.Fatalf("notifications must default to off: %+v, %v", current, err)
+	}
+	// An unrelated patch leaves the default alone.
+	theme := "dark"
+	if err := s.UpdateSettings(SettingsPatch{Theme: &theme}); err != nil {
+		t.Fatal(err)
+	}
+	if current, _ := store.Load(); current.NotifyAutoChanges {
+		t.Fatal("unrelated patch enabled notifications")
+	}
+	on := true
+	if err := s.UpdateSettings(SettingsPatch{NotifyAutoChanges: &on}); err != nil {
+		t.Fatal(err)
+	}
+	current, err := store.Load()
+	if err != nil || !current.NotifyAutoChanges {
+		t.Fatalf("patch did not turn notifications on: %+v, %v", current, err)
+	}
+	// An unrelated patch leaves the stored choice alone.
+	if err := s.UpdateSettings(SettingsPatch{Theme: &theme}); err != nil {
+		t.Fatal(err)
+	}
+	if current, _ = store.Load(); !current.NotifyAutoChanges {
+		t.Fatal("unrelated patch disabled notifications")
+	}
+	off := false
+	if err := s.UpdateSettings(SettingsPatch{NotifyAutoChanges: &off}); err != nil {
+		t.Fatal(err)
+	}
+	if current, _ = store.Load(); current.NotifyAutoChanges {
+		t.Fatal("patch did not turn notifications back off")
+	}
+}

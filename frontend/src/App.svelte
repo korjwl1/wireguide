@@ -7,7 +7,15 @@
   import TunnelList from './lib/TunnelList.svelte';
   import TunnelDetail from './lib/TunnelDetail.svelte';
   import ConflictWarning from './lib/ConflictWarning.svelte';
-  import ConfigEditor from './lib/ConfigEditor.svelte';
+  let ConfigEditor;
+  let editorModule;
+  async function loadEditor() {
+    const loaded = await (editorModule ||= import('./lib/ConfigEditor.svelte').catch(error => {
+      editorModule = null;
+      throw error;
+    }));
+    ConfigEditor = loaded.default;
+  }
   import Settings from './lib/Settings.svelte';
   import LogViewer from './lib/LogViewer.svelte';
   import History from './lib/History.svelte';
@@ -18,7 +26,7 @@
   import { tunnels, selectedTunnel, refreshTunnels, refreshStatus, subscribeToEvents, unsubscribe, initialLoad, connectionStatus } from './stores/tunnels.js';
   import { applyTheme, initThemeWatcher } from './stores/theme.js';
   import { startLogListener, stopLogListener } from './stores/logs.js';
-  import { startAutomationPolling, stopAutomationPolling, refreshAutomationPreview, setAutomationWindowVisible } from './stores/automation.js';
+  import { startAutomationPolling, stopAutomationPolling, refreshAutomationPreview, refreshAutomationStatus, setAutomationWindowVisible } from './stores/automation.js';
   import { compactList, listSort, listActiveOnTop, listPaneWidth, saveListPrefs, LIST_PANE_MIN, LIST_PANE_MAX, LIST_PANE_DEFAULT } from './stores/ui.js';
   import { errText } from './lib/errors.js';
   import { createEventScope } from './lib/event-scope.js';
@@ -136,6 +144,10 @@
   // Register synchronously so backend events cannot be lost while startup
   // RPCs are pending. The scope owns every listener until component teardown.
   function registerAppEvents() {
+    appEvents.on('status', (event) => refreshAutomationStatus(event.data));
+    for (const event of ['config_changed', 'tunnels_changed', 'settings_changed', 'automation_changed']) {
+      appEvents.on(event, () => refreshAutomationPreview());
+    }
     // Update notifications now come from the Go-side scheduler via the
     // 'update-available' Wails event (see internal/update/scheduler.go).
     // The scheduler handles cadence (24h ±10%), jitter, ETag caching,
@@ -202,8 +214,10 @@
     // Active or pending tunnel intent keeps the helper alive without a GUI.
     // The Automation status strip and the tunnel chips show the network
     // and the verdict; refresh them now rather than at the next poll.
-    appEvents.on('wifi_ssid', () => {
+    appEvents.on('wifi_ssid', (event) => {
       refreshAutomationPreview();
+      const { new_ssid } = event.data || {};
+      if (new_ssid) showToast(`Wi-Fi: ${new_ssid}`);
     });
 
     // Close-to-tray hides the window without necessarily changing
@@ -212,9 +226,10 @@
       setAutomationWindowVisible(event.data?.visible !== false);
     });
 
-    // Helper auto-connected a tunnel via Wi-Fi rules.
+    // Helper auto-connected a tunnel via automation rules.
     // EventStatus broadcast handles tunnel state/status update within 1s.
-    // Only need to apply firewall settings here (same as after manual connect).
+    // Apply firewall settings here (same as after manual connect) and say
+    // which tunnel it was; the native notification covers a hidden window.
     appEvents.on('auto_connected', async () => {
       refreshAutomationPreview();
       await applyFirewallSettings();
@@ -449,11 +464,19 @@
   let editorIsNew = false;
 
   async function handleNewTunnelOpen() {
-    editName = '';
-    editorContent = ''; // ConfigEditor will generate template when isNew + empty
-    editorErrors = [];
-    editorIsNew = true;
-    showEditor = true;
+    const myGen = ++editGen;
+    try {
+      await loadEditor();
+      if (myGen !== editGen || appEvents.disposed) return;
+      editName = '';
+      editorContent = '';
+      editorErrors = [];
+      editorIsNew = true;
+      showEditor = true;
+    } catch (err) {
+      if (myGen !== editGen || appEvents.disposed) return;
+      showToast($t('app.edit_failed') + ': ' + errText(err));
+    }
   }
 
   // editGen serializes rapid Edit clicks: a slow GetConfigText for
@@ -466,10 +489,10 @@
     const myGen = ++editGen;
     const name = e.detail;
     try {
-      const content = await TunnelService.GetConfigText(name);
+      const [content] = await Promise.all([TunnelService.GetConfigText(name), loadEditor()]);
       // If a newer Edit click arrived while we were awaiting, drop
       // this stale resolution.
-      if (myGen !== editGen) return;
+      if (myGen !== editGen || appEvents.disposed) return;
       editName = name;
       editorOriginalName = name;
       editorContent = content;
@@ -477,7 +500,7 @@
       editorIsNew = false;
       showEditor = true;
     } catch (err) {
-      if (myGen !== editGen) return;
+      if (myGen !== editGen || appEvents.disposed) return;
       // Surface the failure as a toast so the user knows why the
       // editor didn't open. Silently console.error'ing left them
       // clicking Edit repeatedly with no feedback.
@@ -832,7 +855,7 @@
       <div class="modal modal-editor" use:modal={() => showEditor = false} tabindex="-1"
         role="dialog" aria-modal="true"
         aria-label={editorIsNew ? $t('tunnel.new_tunnel') : $t('tunnel.edit')}>
-        <ConfigEditor
+        <svelte:component this={ConfigEditor}
           bind:content={editorContent}
           bind:name={editName}
           errors={editorErrors}

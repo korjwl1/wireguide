@@ -9,8 +9,9 @@
   import { createEventDispatcher, tick, onDestroy } from 'svelte';
   import AutomationEditor from './AutomationEditor.svelte';
   import PingHealthSettings from './PingHealthSettings.svelte';
-  import { automationPreview } from '../stores/automation.js';
-  import { verdictFor, verdictText, verdictTone } from './automationLine.js';
+  import { parseDnsEntries, dnsChip } from './dns-mode.js';
+  import { automationVerdicts } from '../stores/automation.js';
+  import { verdictText, verdictTone } from './automationLine.js';
 
   export let TunnelService;
   const dispatch = createEventDispatcher();
@@ -155,21 +156,11 @@
     return { label: sel?.endpoint || '—', fallback: true };
   }
 
-  // Splits an [Interface] DNS= list into servers, search domains and
-  // "~domain" split-DNS (routing-only) domains, mirroring domain.ParseDNSEntries.
-  function parseDnsEntries(list) {
-    const out = { servers: [], search: [], match: [] };
-    for (const raw of list || []) {
-      const tok = String(raw).trim();
-      if (!tok) continue;
-      if (tok.startsWith('~')) out.match.push(tok.slice(1));
-      else if (tok.includes(':') || /^[0-9.]+$/.test(tok)) out.servers.push(tok);
-      else out.search.push(tok);
-    }
-    return out;
-  }
-
   $: dnsInfo = parseDnsEntries(detail?.interface?.dns);
+  // Intended DNS behaviour from the config (not read back from the OS). Once
+  // the detail is loaded it comes from the same parse as the info card below;
+  // until then the backend's classification (the list row's) stands in.
+  $: dnsChipInfo = dnsChip($t, $selectedTunnel?.dns_mode, $selectedTunnel?.dns_domains || []);
   $: autoLatency = autoLatencyTarget(detail, $selectedTunnel);
   $: latencyTargetDisplay = latencyTargetSaved
     ? latencyTargetSaved
@@ -204,7 +195,7 @@
 
   // Why automation is / isn't acting on this tunnel (same one-liner as the
   // Automation editor strip and the list row).
-  $: autoVerdict = verdictFor($automationPreview, $selectedTunnel?.name);
+  $: autoVerdict = $automationVerdicts.get($selectedTunnel?.name);
   $: autoLine = autoVerdict ? verdictText($t, autoVerdict) : '';
 
   onDestroy(() => {
@@ -449,6 +440,11 @@
             <span class="hero-endpoint">{$selectedTunnel.endpoint}</span>
           {/if}
         </div>
+        {#if dnsChipInfo}
+          <div class="hero-dns-line">
+            <span class="dns-chip dns-chip-{dnsChipInfo.mode}" title={dnsChipInfo.hint}>{dnsChipInfo.text}</span>
+          </div>
+        {/if}
         {#if autoLine}
           <div class="hero-auto-line">
             <span class="auto-chip auto-chip-{verdictTone(autoVerdict)}" title={autoLine}>{autoLine}</span>
@@ -892,6 +888,22 @@
   .hero-card.hero-connecting .hero-state-text { color: var(--yellow); }
   .hero-card.hero-warning .hero-state-text { color: var(--orange, #FF9500); }
   .hero-sep { color: var(--text-muted); opacity: 0.6; }
+  .hero-dns-line { margin-top: 6px; min-width: 0; }
+  .dns-chip {
+    display: inline-block;
+    max-width: 100%;
+    padding: 1px 8px;
+    border-radius: 999px;
+    border: 0.5px solid var(--border);
+    background: var(--bg-card);
+    font: 500 11px/16px var(--font-sans);
+    color: var(--text-secondary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    vertical-align: top;
+  }
+  .dns-chip-split { color: var(--blue, var(--accent)); }
   .hero-endpoint {
     color: var(--text-secondary);
     font-family: var(--font-mono);
