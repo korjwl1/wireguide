@@ -43,7 +43,7 @@ jobs:
 
       - name: Install pinned build tools
         run: |
-          go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-beta.34
+          go install github.com/wailsapp/wails/v3/cmd/wails3@v3.1.0
           go install github.com/go-task/task/v3/cmd/task@v3.54.0
           echo "$HOME/go/bin" >> "$GITHUB_PATH"
 
@@ -181,7 +181,7 @@ jobs:
 
       - name: Install pinned build tools
         run: |
-          go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-beta.34
+          go install github.com/wailsapp/wails/v3/cmd/wails3@v3.1.0
           go install github.com/go-task/task/v3/cmd/task@v3.54.0
           echo "$HOME/go/bin" >> "$GITHUB_PATH"
 
@@ -246,7 +246,7 @@ jobs:
       - name: Build Windows application and installer
         shell: pwsh
         run: |
-          go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-beta.34
+          go install github.com/wailsapp/wails/v3/cmd/wails3@v3.1.0
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           go install github.com/go-task/task/v3/cmd/task@v3.54.0
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

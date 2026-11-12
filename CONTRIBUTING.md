@@ -9,7 +9,7 @@ Thanks for your interest in contributing!
 - Go 1.26.10+
 - Node.js 24.22.1+ (`nvm use` selects the version pinned in `.nvmrc`)
 - [Task](https://taskfile.dev/) (`go install github.com/go-task/task/v3/cmd/task@v3.54.0`)
-- [Wails v3](https://v3.wails.io/) (`go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-beta.34`)
+- [Wails v3](https://v3.wails.io/) (`go install github.com/wailsapp/wails/v3/cmd/wails3@v3.1.0`)
 - macOS 12+ (Apple Silicon), Windows 11, or Linux — all three are supported build/dev hosts
 
 Linux desktop builds use GTK4 and WebKitGTK 6.0. On Ubuntu 24.04+ install
