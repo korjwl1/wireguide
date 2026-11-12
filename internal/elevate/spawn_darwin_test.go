@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/korjwl1/wireguide/internal/ipc"
+	"github.com/korjwl1/wireguide/internal/launchd"
 	"github.com/korjwl1/wireguide/internal/logrotate"
 )
 
@@ -78,6 +79,22 @@ func plistExtract(t *testing.T, path, keypath string) string {
 		t.Fatalf("plutil -extract %s: %v\n%s", keypath, err, out)
 	}
 	return strings.TrimSpace(string(out))
+}
+
+// TestPlistAssociatesAppBundle pins the attribution of the LaunchDaemon to the
+// WireGuide app in System Settings > Login Items & Extensions.
+func TestPlistAssociatesAppBundle(t *testing.T) {
+	plist := generatePlistContent("/Library/PrivilegedHelperTools/com.wireguide.helper", testArgs())
+	path := filepath.Join(t.TempDir(), "test.plist")
+	if err := os.WriteFile(path, []byte(plist), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if got := plistExtract(t, path, "AssociatedBundleIdentifiers.0"); got != launchd.AppBundleID {
+		t.Errorf("AssociatedBundleIdentifiers.0 = %q, want %q", got, launchd.AppBundleID)
+	}
+	if got := plistExtract(t, path, "AssociatedBundleIdentifiers"); got != "1" {
+		t.Errorf("AssociatedBundleIdentifiers has %s entries, want 1", got)
+	}
 }
 
 // TestPlistDeclaresLaunchdSocket pins the socket-activation contract: launchd
@@ -192,12 +209,13 @@ func TestDaemonInstallScript(t *testing.T) {
 		wantError bool
 		want      string
 	}{
-		{"fresh install", "", false, false, "bootout\nprint\nrm\nmkdir\ncp\nxattr\nchown\nchmod\ncp\nchown\nchmod\nbootstrap\nkickstart\n"},
-		{"kickstart failure after bootstrap", "kickstart", false, true, "bootout\nprint\nrm\nmkdir\ncp\nxattr\nchown\nchmod\ncp\nchown\nchmod\nbootstrap\nkickstart\n"},
+		{"fresh install", "", false, false, "bootout\nprint\nrm\nmkdir\ncp\nxattr\nchown\nchmod\ncodesign\ncp\nchown\nchmod\nbootstrap\nkickstart\n"},
+		{"kickstart failure after bootstrap", "kickstart", false, true, "bootout\nprint\nrm\nmkdir\ncp\nxattr\nchown\nchmod\ncodesign\ncp\nchown\nchmod\nbootstrap\nkickstart\n"},
 		{"copy failure", "cp", false, true, "bootout\nprint\nrm\nmkdir\ncp\n"},
+		{"invalid helper signature", "codesign", false, true, "bootout\nprint\nrm\nmkdir\ncp\nxattr\nchown\nchmod\ncodesign\n"},
 		{"purge failure", "rm", false, true, "bootout\nprint\nrm\n"},
-		{"quarantine absent", "xattr", false, false, "bootout\nprint\nrm\nmkdir\ncp\nxattr\nchown\nchmod\ncp\nchown\nchmod\nbootstrap\nkickstart\n"},
-		{"bootstrap failure", "bootstrap", false, true, "bootout\nprint\nrm\nmkdir\ncp\nxattr\nchown\nchmod\ncp\nchown\nchmod\nbootstrap\n"},
+		{"quarantine absent", "xattr", false, false, "bootout\nprint\nrm\nmkdir\ncp\nxattr\nchown\nchmod\ncodesign\ncp\nchown\nchmod\nbootstrap\nkickstart\n"},
+		{"bootstrap failure", "bootstrap", false, true, "bootout\nprint\nrm\nmkdir\ncp\nxattr\nchown\nchmod\ncodesign\ncp\nchown\nchmod\nbootstrap\n"},
 		{"teardown timeout", "", true, true, ""},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -216,9 +234,12 @@ cp() { record cp; }
 xattr() { record xattr; }
 chown() { record chown; }
 chmod() { record chmod; }
+codesign() { record codesign; }
 sleep() { :; }
 `
-			cmd := exec.Command("/bin/sh", "-c", stubs+daemonInstallScript("/tmp/app's binary", "/tmp/helper.plist"))
+			script := daemonInstallScript("/tmp/app's bundle.app/Contents/Library/LaunchServices/"+daemonLabel, "/tmp/helper.plist")
+			script = strings.ReplaceAll(script, "/usr/bin/codesign", "codesign")
+			cmd := exec.Command("/bin/sh", "-c", stubs+script)
 			cmd.Env = append(os.Environ(), "TRACE="+trace, "FAIL="+tt.fail, fmt.Sprintf("LOADED=%t", tt.loaded))
 			out, err := cmd.CombinedOutput()
 			if (err != nil) != tt.wantError {
@@ -236,6 +257,13 @@ sleep() { :; }
 				t.Errorf("command trace = %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestBareDaemonInstallDoesNotRequireSignature(t *testing.T) {
+	script := daemonInstallScript("/tmp/unsigned Intel binary", "/tmp/helper.plist")
+	if strings.Contains(script, "codesign") {
+		t.Fatal("bare development helper unexpectedly requires a code signature")
 	}
 }
 
