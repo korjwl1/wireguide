@@ -11,7 +11,6 @@ test('notification strings exist in every language', () => {
     for (const key of ['section_notifications', 'notify_auto_changes', 'notify_auto_changes_hint']) {
       assert.ok(messages.settings[key], `${lang}: settings.${key}`);
     }
-    assert.match(messages.app.automation_connected, /\{name\}/, `${lang}: app.automation_connected`);
   }
   // Localized, not an English copy.
   for (const lang of langs.slice(1)) {

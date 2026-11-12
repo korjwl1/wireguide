@@ -286,7 +286,7 @@ export class Settings {
              * or disconnects without a user action in this GUI process (automation,
              * wake, health-check recovery, CLI) and on helper problems. A plain
              * bool is enough: Load starts from DefaultSettings, so a settings.json
-             * that predates the field keeps the default (true).
+             * that predates the field keeps the default (false: opt-in).
              * @member
              * @type {boolean}
              */

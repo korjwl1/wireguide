@@ -5,12 +5,18 @@
   import { tunnels, selectedTunnel, connectionStatus } from '../stores/tunnels.js';
   import { compactList, listSort, listActiveOnTop, saveListPrefs } from '../stores/ui.js';
   import { t } from '../i18n/index.js';
+  import { dnsChip } from './dns-mode.js';
+  import { automationVerdicts } from '../stores/automation.js';
+  import { sortTunnels } from './tunnel-list.js';
+  import { verdictText, verdictTone } from './automationLine.js';
 
   const dispatch = createEventDispatcher();
   let search = '';
 
+  $: searchQuery = search.toLowerCase();
+  $: dnsChips = new Map(($tunnels || []).map(tun => [tun.name, dnsChip($t, tun.dns_mode, tun.dns_domains || [])]));
   $: filtered = ($tunnels || []).filter(tun =>
-    tun.name.toLowerCase().includes(search.toLowerCase())
+    tun.name.toLowerCase().includes(searchQuery)
   );
 
   // Connected indicators exclude setup and teardown intent.
@@ -18,27 +24,7 @@
 
   // Sorted view. Array.sort is stable, so sorting by the chosen key first
   // and then stably floating active tunnels keeps key order within groups.
-  function nameCmp(a, b) {
-    return a.name.localeCompare(b.name, undefined, { sensitivity: 'base', numeric: true });
-  }
-  $: sorted = (() => {
-    const arr = [...filtered];
-    arr.sort((a, b) => {
-      switch ($listSort) {
-        case 'name_desc': return -nameCmp(a, b);
-        // Newest first; ties (or missing timestamps) fall back to name.
-        case 'added_desc': return (b.created_at_unix || 0) - (a.created_at_unix || 0) || nameCmp(a, b);
-        case 'added_asc':  return (a.created_at_unix || 0) - (b.created_at_unix || 0) || nameCmp(a, b);
-        case 'used_desc':  return (b.last_used_unix || 0) - (a.last_used_unix || 0) || nameCmp(a, b);
-        case 'name_asc':
-        default:           return nameCmp(a, b);
-      }
-    });
-    if ($listActiveOnTop) {
-      arr.sort((a, b) => (activeSet.has(b.name) ? 1 : 0) - (activeSet.has(a.name) ? 1 : 0));
-    }
-    return arr;
-  })();
+  $: sorted = sortTunnels(filtered, $listSort, $listActiveOnTop, activeSet);
 
   function onSortChange(e) {
     listSort.set(e.target.value);
@@ -117,6 +103,8 @@
       </div>
     {:else}
       {#each sorted as tun (tun.name)}
+        {@const chip = dnsChips.get(tun.name)}
+        {@const av = $automationVerdicts.get(tun.name)}
         <button
           class="tunnel-item"
           class:active={$selectedTunnel?.name === tun.name}
@@ -131,6 +119,15 @@
             <span class="tunnel-name">{tun.name}</span>
             {#if tun.endpoint}
               <span class="tunnel-meta">{tun.endpoint}</span>
+            {/if}
+            {#if chip}
+              <span class="tunnel-dns" title={chip.hint}>{chip.text}</span>
+            {/if}
+            {#if av}
+              {@const line = verdictText($t, av)}
+              {#if line}
+                <span class="tunnel-auto tunnel-auto-{verdictTone(av)}" title={line}>{line}</span>
+              {/if}
             {/if}
           </div>
         </button>
@@ -247,18 +244,24 @@
   }
 
   /* --- Sort bar (issue #17) --- */
+  /* The sort control and the checkbox need about 300px side by side, wider
+     than the default list pane. They wrap onto two lines instead of
+     overlapping; neither item shrinks below its text, except that the
+     checkbox label ellipsizes at the narrowest pane widths (the title
+     attribute carries the full text). */
   .sort-bar {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
     justify-content: space-between;
-    gap: 8px;
+    gap: 4px 8px;
     padding: 0 var(--space-3) 6px;
   }
   .sort-select-wrap {
     display: flex;
     align-items: center;
     gap: 5px;
-    min-width: 0;
+    flex: 0 0 auto;
   }
   .sort-label {
     font: 400 11px/1 var(--font-sans);
@@ -281,16 +284,22 @@
     display: flex;
     align-items: center;
     gap: 5px;
+    min-width: 0;
     font: 400 11px/1 var(--font-sans);
     color: var(--text-muted);
     cursor: pointer;
     white-space: nowrap;
   }
   .sort-active-top input {
+    flex: 0 0 auto;
     width: 12px;
     height: 12px;
     accent-color: var(--accent);
     cursor: pointer;
+  }
+  .sort-active-top span {
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   /* --- List items: card-style with name + endpoint --- */
@@ -413,7 +422,18 @@
     padding: 4px 10px;
     margin-bottom: 1px;
   }
-  .list-items.compact .tunnel-meta {
+  .tunnel-dns,
+  .tunnel-auto {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font: 400 11px/14px var(--font-sans);
+    color: var(--text-muted);
+  }
+  .tunnel-auto-warn { color: var(--orange, #FF9500); }
+  .list-items.compact .tunnel-meta,
+  .list-items.compact .tunnel-dns,
+  .list-items.compact .tunnel-auto {
     display: none;
   }
   .list-items.compact .tunnel-item.connected::before {

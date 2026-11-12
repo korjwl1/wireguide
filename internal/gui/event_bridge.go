@@ -28,7 +28,7 @@ type eventBridge struct {
 	// that were started or ended by the helper itself (auto-reconnect on
 	// wake, wifi rules, health-check recovery). nil when the bridge runs
 	// without a history store.
-	onReconcileHistory func(activeNames []string, rx, tx map[string]int64, reason string)
+	onReconcileHistory func(status domain.ConnectionStatus, source *ipc.Client)
 	// onQuitRequested terminates the app. Fired for ipc.EventQuit, which
 	// the helper broadcasts when someone runs `wireguide ctl stop`.
 	onQuitRequested func()
@@ -44,7 +44,7 @@ func newEventBridge(
 	app *application.App,
 	clients *ipc.ClientHolder,
 	onStatusChange func(activeNames []string, handshakeMap map[string]bool),
-	onReconcileHistory func(activeNames []string, rx, tx map[string]int64, reason string),
+	onReconcileHistory func(status domain.ConnectionStatus, source *ipc.Client),
 	onQuitRequested func(),
 ) *eventBridge {
 	return &eventBridge{
@@ -93,7 +93,7 @@ func (b *eventBridge) resubscribe() bool {
 		b.mu.Lock()
 		defer b.mu.Unlock()
 		if b.subscribedTo == c && b.clients.Get() == c {
-			b.handleEvent(method, params)
+			b.handleEvent(method, params, c)
 		}
 	}); err != nil {
 		slog.Warn("event subscription failed", "error", err)
@@ -103,7 +103,7 @@ func (b *eventBridge) resubscribe() bool {
 	return true
 }
 
-func (b *eventBridge) handleEvent(method string, params json.RawMessage) {
+func (b *eventBridge) handleEvent(method string, params json.RawMessage, sources ...*ipc.Client) {
 	switch method {
 	case ipc.EventStatus:
 		var status domain.ConnectionStatus
@@ -117,17 +117,11 @@ func (b *eventBridge) handleEvent(method string, params json.RawMessage) {
 				b.onStatusChange(names, handshakes)
 			}
 			if b.onReconcileHistory != nil {
-				rx := make(map[string]int64, len(status.Tunnels)+1)
-				tx := make(map[string]int64, len(status.Tunnels)+1)
-				for _, ts := range status.Tunnels {
-					rx[ts.TunnelName] = ts.RxBytes
-					tx[ts.TunnelName] = ts.TxBytes
+				var source *ipc.Client
+				if len(sources) > 0 {
+					source = sources[0]
 				}
-				if status.TunnelName != "" {
-					rx[status.TunnelName] = status.RxBytes
-					tx[status.TunnelName] = status.TxBytes
-				}
-				b.onReconcileHistory(status.ActiveTunnels, rx, tx, "")
+				b.onReconcileHistory(status, source)
 			}
 		}
 	case ipc.EventReconnect:
@@ -161,6 +155,8 @@ func (b *eventBridge) handleEvent(method string, params json.RawMessage) {
 		} else {
 			b.app.Event.Emit("wifi_ssid", payload)
 		}
+	case ipc.EventAutomationChanged:
+		b.app.Event.Emit("automation_changed", struct{}{})
 	case ipc.EventAutoConnect:
 		// Helper auto-connected a tunnel via Wi-Fi rules. Frontend must run
 		// the same post-connect refresh (refreshTunnels + refreshStatus) as
