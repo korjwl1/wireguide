@@ -29,6 +29,11 @@ type TunnelService struct {
 	clients       *ipc.ClientHolder
 	app           *application.App
 
+	// userActions records connects/disconnects the user (window, tray)
+	// made in THIS process, so the notifier can tell them apart from
+	// automatic changes (automation, wake, health check, CLI).
+	userActions *UserActions
+
 	// updateScheduler + updateStore are wired in by the GUI Run() entry
 	// after the Wails service registers (we can't inject them at
 	// construction time because the scheduler needs the app reference to
@@ -64,6 +69,8 @@ type TunnelService struct {
 	reconcileMu      sync.Mutex
 	lastReconcileSig string
 	historyClosed    bool
+	closedPeaks      map[string]map[string]counterPeak
+	closedWatermarks map[string]counterWatermark
 }
 
 // lastKnownTunnelStats is the value type for TunnelService.lastKnownStats.
@@ -86,6 +93,8 @@ type lastKnownTunnelStats struct {
 	rawRx  int64
 	rawTx  int64
 	reason string
+	epoch  string
+	epochs map[string]counterPeak
 }
 
 // merge folds a fresh raw counter reading into the session totals. A reading
@@ -117,20 +126,96 @@ func (st lastKnownTunnelStats) merge(rawRx, rawTx int64) lastKnownTunnelStats {
 	return lastKnownTunnelStats{
 		rx: baseRx + rawRx, tx: baseTx + rawTx,
 		rawRx: rawRx, rawTx: rawTx,
-		reason: st.reason,
+		reason: st.reason, epoch: st.epoch, epochs: st.epochs,
 	}
 }
 
 // NewTunnelService creates a service. Set the app reference via SetApp()
 // after application.New() for dialog support.
+type counterWatermark struct {
+	incarnation string
+	sequence    uint64
+}
+
+type counterPeak struct {
+	baseRx, baseTx int64
+	rx, tx         int64
+	inherited      bool
+	terminal       bool
+	historyID      string
+}
+
+func (st *lastKnownTunnelStats) ensureEpochIdentity(epoch string) {
+	if epoch == "" {
+		return
+	}
+	if _, seen := st.epochs[epoch]; seen {
+		return
+	}
+	if st.epochs == nil {
+		st.epochs = make(map[string]counterPeak)
+	}
+	st.epochs[epoch] = counterPeak{}
+}
+
+func (st lastKnownTunnelStats) mergeEpoch(rx, tx int64, epoch string) lastKnownTunnelStats {
+	if epoch == "" {
+		return st.merge(rx, tx)
+	}
+	if st.epochs == nil {
+		if rx == 0 && tx == 0 {
+			if !earlierCounterEpoch(epoch, st.epoch) {
+				st.epoch = epoch
+			}
+			return st
+		}
+		previousEpoch := st.epoch
+		st = st.merge(rx, tx)
+		st.epochs = map[string]counterPeak{epoch: {rx: st.rawRx, tx: st.rawTx}}
+		if earlierCounterEpoch(epoch, previousEpoch) {
+			st.ensureEpochIdentity(previousEpoch)
+			st.epoch, st.rawRx, st.rawTx = previousEpoch, 0, 0
+		} else {
+			st.epoch = epoch
+		}
+		return st
+	}
+	peak := st.epochs[epoch]
+	if peak.terminal {
+		return st
+	}
+	if rx > peak.rx {
+		st.rx += rx - peak.rx
+		peak.rx = rx
+	}
+	if tx > peak.tx {
+		st.tx += tx - peak.tx
+		peak.tx = tx
+	}
+	st.epochs[epoch] = peak
+	if !earlierCounterEpoch(epoch, st.epoch) {
+		st.epoch = epoch
+	}
+	current := st.epochs[st.epoch]
+	st.rawRx, st.rawTx = current.rx, current.tx
+	return st
+}
+
 func NewTunnelService(ts *storage.TunnelStore, ss *storage.SettingsStore, hs *storage.HistoryStore, clients *ipc.ClientHolder) *TunnelService {
 	return &TunnelService{
 		tunnelStore:   ts,
 		settingsStore: ss,
 		historyStore:  hs,
 		clients:       clients,
+		userActions:   NewUserActions(),
 	}
 }
+
+// UserActions exposes the record of user-initiated connects/disconnects
+// to the GUI's notifier. Not bound to the frontend.
+//
+//wails:ignore
+func (s *TunnelService) UserActions() *UserActions { return s.userActions }
 
 // SetApp injects the Wails app for dialog access.
 func (s *TunnelService) SetApp(app *application.App) {
@@ -175,7 +260,11 @@ func (s *TunnelService) callWithContext(ctx context.Context, method string, para
 	if c == nil {
 		return errHelperUnavailable
 	}
-	return c.CallWithContext(ctx, method, params, result)
+	err := c.CallWithContext(ctx, method, params, result)
+	if s.clients.Get() != c {
+		return ipc.ErrClientClosed
+	}
+	return err
 }
 
 // callLong performs an RPC with a generous timeout for operations that may
@@ -192,7 +281,11 @@ func (s *TunnelService) callLong(method string, params interface{}, result inter
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	return c.CallWithContext(ctx, method, params, result)
+	err := c.CallWithContext(ctx, method, params, result)
+	if s.clients.Get() != c {
+		return ipc.ErrClientClosed
+	}
+	return err
 }
 
 // TunnelInfo is the summary shown in the tunnel list.
@@ -207,9 +300,20 @@ type TunnelInfo struct {
 	// feed the tunnel-list "date added" / "last used" sort (issue #17).
 	CreatedAtUnix int64 `json:"created_at_unix,omitempty"`
 	LastUsedUnix  int64 `json:"last_used_unix,omitempty"`
+	// DNSMode is the intended DNS behaviour from the config: "global"
+	// (replaces system DNS), "split" (only DNSDomains), "search" (search
+	// domains only) or "none". Intent, not read back from the OS.
+	DNSMode    string   `json:"dns_mode,omitempty"`
+	DNSDomains []string `json:"dns_domains,omitempty"`
 }
 
 // ConnectionStatus is re-exported from the domain package so Wails bindings
 // expose the same type that the helper broadcasts — preventing field drift
 // between wire format and frontend expectations.
 type ConnectionStatus = domain.ConnectionStatus
+
+func earlierCounterEpoch(candidate, current string) bool {
+	left, leftSequence, leftOK := domain.ParseCounterEpoch(candidate)
+	right, rightSequence, rightOK := domain.ParseCounterEpoch(current)
+	return leftOK && rightOK && left == right && leftSequence < rightSequence
+}
