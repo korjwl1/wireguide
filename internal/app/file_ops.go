@@ -2,6 +2,7 @@ package app
 
 import (
 	"fmt"
+	"log/slog"
 	"path/filepath"
 	"strings"
 
@@ -51,8 +52,7 @@ func (s *TunnelService) ValidateConfig(content string) ([]string, error) {
 // reserved for cross-tunnel checks. It never affects whether a config is
 // valid. Content that does not parse yields no diagnostics (ValidateConfig
 // reports the parse error).
-func (s *TunnelService) LintConfigFor(editing, content string) ([]config.Diagnostic, error) {
-	_ = editing
+func (s *TunnelService) LintConfig(content string) ([]config.Diagnostic, error) {
 	cfg, err := config.Parse(content)
 	if err != nil {
 		return []config.Diagnostic{}, nil
@@ -72,6 +72,7 @@ var lintConfig = config.Lint
 func safeLint(cfg *config.WireGuardConfig, others map[string]*config.WireGuardConfig) (ds []config.Diagnostic) {
 	defer func() {
 		if r := recover(); r != nil {
+			slog.Warn("configuration lint failed")
 			ds = nil
 		}
 	}()

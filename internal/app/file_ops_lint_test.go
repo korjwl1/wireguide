@@ -8,11 +8,11 @@ import (
 
 const lintTestKey = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
 
-func TestLintConfigFor(t *testing.T) {
+func TestLintConfig(t *testing.T) {
 	s := &TunnelService{}
 	content := "[Interface]\nPrivateKey = " + lintTestKey + "\nAddress = 10.0.0.2/32\nDNS = ~intranet.example\n" +
 		"[Peer]\nPublicKey = " + lintTestKey + "\nEndpoint = 1.2.3.4:51820\nAllowedIPs = 10.0.0.0/24\n"
-	ds, err := s.LintConfigFor("", content)
+	ds, err := s.LintConfig(content)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -26,7 +26,7 @@ func TestLintConfigFor(t *testing.T) {
 		t.Fatalf("expected dns_error, got %+v", ds)
 	}
 
-	ds, err = s.LintConfigFor("x", "not a config")
+	ds, err = s.LintConfig("not a config")
 	if err != nil || ds == nil || len(ds) != 0 {
 		t.Fatalf("unparseable content: ds=%v err=%v", ds, err)
 	}

@@ -172,7 +172,8 @@ export const wireguardCompletion = createWireguardCompletion();
  */
 export function wireguardLinter(lintFn, tr = identityTr) {
   return linter(async (view) => {
-    const text = view.state.doc.toString();
+    const doc = view.state.doc;
+    const text = doc.toString();
     let diagnostics;
     try {
       diagnostics = await lintFn(text);
@@ -181,7 +182,7 @@ export function wireguardLinter(lintFn, tr = identityTr) {
     }
     // The document moved on while the call was in flight; the next lint
     // pass will report against the current text.
-    if (view.state.doc.toString() !== text) return [];
+    if (view.state.doc !== doc) return [];
     return mapDiagnostics(text, diagnostics, tr).map((d) => ({
       from: d.from,
       to: d.to,

@@ -29,6 +29,7 @@ type ConnectionStatus struct {
 	State             State     `json:"state"`
 	TunnelName        string    `json:"tunnel_name"`
 	InterfaceName     string    `json:"interface_name,omitempty"`
+	CounterEpoch      string    `json:"counter_epoch,omitempty"`
 	ConnectedAt       time.Time `json:"-"`
 	Duration          string    `json:"duration,omitempty"`
 	RxBytes           int64     `json:"rx_bytes"`
