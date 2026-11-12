@@ -29,6 +29,11 @@ type TunnelService struct {
 	clients       *ipc.ClientHolder
 	app           *application.App
 
+	// userActions records connects/disconnects the user (window, tray)
+	// made in THIS process, so the notifier can tell them apart from
+	// automatic changes (automation, wake, health check, CLI).
+	userActions *UserActions
+
 	// updateScheduler + updateStore are wired in by the GUI Run() entry
 	// after the Wails service registers (we can't inject them at
 	// construction time because the scheduler needs the app reference to
@@ -64,6 +69,8 @@ type TunnelService struct {
 	reconcileMu      sync.Mutex
 	lastReconcileSig string
 	historyClosed    bool
+	closedPeaks      map[string]map[string]counterPeak
+	closedWatermarks map[string]counterWatermark
 }
 
 // lastKnownTunnelStats is the value type for TunnelService.lastKnownStats.
@@ -73,22 +80,142 @@ type TunnelService struct {
 // resulting history row is labelled "user" instead of the default
 // "reconnect" — without this, every user disconnect would look
 // indistinguishable from a helper-driven one in the timeline.
+//
+// rx/tx are the SESSION totals; rawRx/rawTx are the last raw counter reading
+// from the helper. They differ because the helper's per-device counters are
+// not monotonic over a session: a tunnel in the Connecting/Disconnecting
+// state reports 0/0 while still listed as active, and a reconnect builds a
+// fresh WireGuard device whose counters restart from zero. The cache therefore
+// folds each raw reading into the totals (see merge) rather than storing it.
 type lastKnownTunnelStats struct {
 	rx     int64
 	tx     int64
+	rawRx  int64
+	rawTx  int64
 	reason string
+	epoch  string
+	epochs map[string]counterPeak
+}
+
+// merge folds a fresh raw counter reading into the session totals. A reading
+// below the previous one means the underlying counters were reset (teardown or
+// a new device), so everything counted so far is carried over as a base.
+//
+// A reset is recognised only when a counter goes backwards. A new device whose
+// first reading is at or above the previous reading in both directions looks
+// like continued traffic, so the bytes counted before it are not added (for
+// example 1000 -> 0/0 -> 5000 keeps 5000, not 6000). Totals are therefore not
+// guaranteed to survive every reconnect. A 0/0 reading is deliberately not
+// treated as a reset: a transient failed read would count the session twice.
+// Closing this gap needs a device generation or transition identifier from
+// the helper.
+func (st lastKnownTunnelStats) merge(rawRx, rawTx int64) lastKnownTunnelStats {
+	// A 0/0 reading is a failed or mid-transition read, not evidence of a
+	// counter reset: keep what we have so a one-tick blip does not make the
+	// next real reading count the whole session again.
+	if rawRx == 0 && rawTx == 0 {
+		return st
+	}
+	// A new device resets both directions together, so a drop in either
+	// counter means both bases must carry the totals counted so far.
+	reset := rawRx < st.rawRx || rawTx < st.rawTx
+	baseRx, baseTx := st.rx-st.rawRx, st.tx-st.rawTx
+	if reset {
+		baseRx, baseTx = st.rx, st.tx
+	}
+	return lastKnownTunnelStats{
+		rx: baseRx + rawRx, tx: baseTx + rawTx,
+		rawRx: rawRx, rawTx: rawTx,
+		reason: st.reason, epoch: st.epoch, epochs: st.epochs,
+	}
 }
 
 // NewTunnelService creates a service. Set the app reference via SetApp()
 // after application.New() for dialog support.
+type counterWatermark struct {
+	incarnation string
+	sequence    uint64
+}
+
+type counterPeak struct {
+	baseRx, baseTx int64
+	rx, tx         int64
+	inherited      bool
+	terminal       bool
+	historyID      string
+}
+
+func (st *lastKnownTunnelStats) ensureEpochIdentity(epoch string) {
+	if epoch == "" {
+		return
+	}
+	if _, seen := st.epochs[epoch]; seen {
+		return
+	}
+	if st.epochs == nil {
+		st.epochs = make(map[string]counterPeak)
+	}
+	st.epochs[epoch] = counterPeak{}
+}
+
+func (st lastKnownTunnelStats) mergeEpoch(rx, tx int64, epoch string) lastKnownTunnelStats {
+	if epoch == "" {
+		return st.merge(rx, tx)
+	}
+	if st.epochs == nil {
+		if rx == 0 && tx == 0 {
+			if !earlierCounterEpoch(epoch, st.epoch) {
+				st.epoch = epoch
+			}
+			return st
+		}
+		previousEpoch := st.epoch
+		st = st.merge(rx, tx)
+		st.epochs = map[string]counterPeak{epoch: {rx: st.rawRx, tx: st.rawTx}}
+		if earlierCounterEpoch(epoch, previousEpoch) {
+			st.ensureEpochIdentity(previousEpoch)
+			st.epoch, st.rawRx, st.rawTx = previousEpoch, 0, 0
+		} else {
+			st.epoch = epoch
+		}
+		return st
+	}
+	peak := st.epochs[epoch]
+	if peak.terminal {
+		return st
+	}
+	if rx > peak.rx {
+		st.rx += rx - peak.rx
+		peak.rx = rx
+	}
+	if tx > peak.tx {
+		st.tx += tx - peak.tx
+		peak.tx = tx
+	}
+	st.epochs[epoch] = peak
+	if !earlierCounterEpoch(epoch, st.epoch) {
+		st.epoch = epoch
+	}
+	current := st.epochs[st.epoch]
+	st.rawRx, st.rawTx = current.rx, current.tx
+	return st
+}
+
 func NewTunnelService(ts *storage.TunnelStore, ss *storage.SettingsStore, hs *storage.HistoryStore, clients *ipc.ClientHolder) *TunnelService {
 	return &TunnelService{
 		tunnelStore:   ts,
 		settingsStore: ss,
 		historyStore:  hs,
 		clients:       clients,
+		userActions:   NewUserActions(),
 	}
 }
+
+// UserActions exposes the record of user-initiated connects/disconnects
+// to the GUI's notifier. Not bound to the frontend.
+//
+//wails:ignore
+func (s *TunnelService) UserActions() *UserActions { return s.userActions }
 
 // SetApp injects the Wails app for dialog access.
 func (s *TunnelService) SetApp(app *application.App) {
@@ -133,7 +260,11 @@ func (s *TunnelService) callWithContext(ctx context.Context, method string, para
 	if c == nil {
 		return errHelperUnavailable
 	}
-	return c.CallWithContext(ctx, method, params, result)
+	err := c.CallWithContext(ctx, method, params, result)
+	if s.clients.Get() != c {
+		return ipc.ErrClientClosed
+	}
+	return err
 }
 
 // callLong performs an RPC with a generous timeout for operations that may
@@ -150,7 +281,11 @@ func (s *TunnelService) callLong(method string, params interface{}, result inter
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	return c.CallWithContext(ctx, method, params, result)
+	err := c.CallWithContext(ctx, method, params, result)
+	if s.clients.Get() != c {
+		return ipc.ErrClientClosed
+	}
+	return err
 }
 
 // TunnelInfo is the summary shown in the tunnel list.
@@ -176,3 +311,9 @@ type TunnelInfo struct {
 // expose the same type that the helper broadcasts — preventing field drift
 // between wire format and frontend expectations.
 type ConnectionStatus = domain.ConnectionStatus
+
+func earlierCounterEpoch(candidate, current string) bool {
+	left, leftSequence, leftOK := domain.ParseCounterEpoch(candidate)
+	right, rightSequence, rightOK := domain.ParseCounterEpoch(current)
+	return leftOK && rightOK && left == right && leftSequence < rightSequence
+}

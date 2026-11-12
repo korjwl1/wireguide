@@ -17,13 +17,6 @@ export function parseDnsEntries(list) {
 
 // dnsModeOf classifies parsed entries the way diag.DNSModeOf does:
 // split (any ~domain) > global (servers) > search (search domains only) > none.
-export function dnsModeOf(parsed) {
-  if (!parsed) return 'none';
-  if (parsed.match.length) return 'split';
-  if (parsed.servers.length) return 'global';
-  if (parsed.search.length) return 'search';
-  return 'none';
-}
 
 // dnsChip returns { mode, text, hint } for the hero / list chip, or null when
 // there is nothing worth saying (no DNS settings at all).
