@@ -649,6 +649,13 @@ var notifyStrings = map[string]map[msgKind]string{
 		msgForced:   "为避免路由环路，已断开“%s”。请手动重新连接。",
 		msgCritical: "辅助程序出现问题（%s）。请重启 WireGuide 以恢复。",
 	},
+	"es": {
+		msgUp:       "“%s” se ha conectado fuera de la app.",
+		msgDown:     "“%s” se ha desconectado fuera de la app.",
+		msgAuto:     "La automatización ha conectado “%s”.",
+		msgForced:   "Se ha desconectado “%s” para detener un bucle de enrutamiento. Vuelve a conectarlo manualmente.",
+		msgCritical: "Problema con el asistente (%s). Reinicia WireGuide para solucionarlo.",
+	},
 }
 
 // notifyText returns the notification title and body for lang (falling
@@ -664,14 +671,14 @@ func notifyText(lang string, kind msgKind, arg string) (title, body string) {
 
 // pickLanguage maps the FIRST language in raw (a Settings value like "ko",
 // a macOS preferred-language tag like "zh-Hans-CN" or a LANG value like
-// "ja_JP.UTF-8") to en/ko/ja/zh, English otherwise. Only the primary
+// "ja_JP.UTF-8") to en/ko/ja/zh/es, English otherwise. Only the primary
 // language counts, matching labelsForLanguage and the frontend's
 // detectLanguage.
 func pickLanguage(raw string) string {
 	tokens := strings.FieldsFunc(strings.ToLower(raw), func(r rune) bool { return r < 'a' || r > 'z' })
 	if len(tokens) > 0 {
 		switch tokens[0] {
-		case "ko", "ja", "zh":
+		case "ko", "ja", "zh", "es":
 			return tokens[0]
 		}
 	}

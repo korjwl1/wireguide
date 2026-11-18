@@ -11,6 +11,8 @@ func preferredGUILanguage() string {
 		return "ja"
 	case 0x04:
 		return "zh"
+	case 0x0a:
+		return "es"
 	default:
 		return "en"
 	}

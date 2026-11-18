@@ -9,7 +9,7 @@ import (
 
 // localeLangs are the GUI languages; a key missing from any of them renders
 // as the raw key there.
-var localeLangs = []string{"en", "ko", "ja", "zh"}
+var localeLangs = []string{"en", "ko", "ja", "zh", "es"}
 
 func loadLocales(t *testing.T) map[string]map[string]map[string]any {
 	t.Helper()
@@ -35,7 +35,7 @@ func localeString(d map[string]map[string]any, section, key string) string {
 }
 
 // TestDNSChipKeysTranslated asserts that each displayed DNS mode has a chip
-// label and hint in all four locales.
+// label and hint in every locale.
 func TestDNSChipKeysTranslated(t *testing.T) {
 	loc := loadLocales(t)
 	for _, mode := range []string{DNSModeGlobal, DNSModeSplit, DNSModeSearch} {

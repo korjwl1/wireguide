@@ -5,6 +5,7 @@ import "testing"
 func TestNormalizeNoticeLanguage(t *testing.T) {
 	for in, want := range map[string]string{
 		"ko": "ko", "ko-KR": "ko", "ja_JP": "ja", "zh-Hans-CN": "zh", "ZH": "zh",
+		"es-ES": "es", "es_419": "es",
 		"en-US": "en", "fr-FR": "en", "": "en", "auto": "en",
 	} {
 		if got := normalizeNoticeLanguage(in); got != want {

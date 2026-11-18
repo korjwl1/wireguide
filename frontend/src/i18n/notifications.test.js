@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
-const langs = ['en', 'ko', 'ja', 'zh'];
+const langs = ['en', 'ko', 'ja', 'zh', 'es'];
 const load = (lang) => JSON.parse(readFileSync(new URL(`./${lang}.json`, import.meta.url), 'utf8'));
 
 test('notification strings exist in every language', () => {

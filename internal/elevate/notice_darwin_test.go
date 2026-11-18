@@ -9,7 +9,7 @@ import (
 )
 
 func TestAuthNoticesCompleteAndSafeForAppleScript(t *testing.T) {
-	for _, lang := range []string{"en", "ko", "ja", "zh"} {
+	for _, lang := range []string{"en", "ko", "ja", "zh", "es"} {
 		n, ok := authNotices[lang]
 		if !ok {
 			t.Fatalf("missing %s notice", lang)
@@ -41,7 +41,7 @@ func TestAuthNoticesCompleteAndSafeForAppleScript(t *testing.T) {
 
 func TestCurrentAuthNoticeFollowsResolver(t *testing.T) {
 	t.Cleanup(func() { SetNoticeLanguage(nil) })
-	for lang, want := range map[string]string{"ko-KR": "ko", "ja": "ja", "zh_CN": "zh", "de": "en"} {
+	for lang, want := range map[string]string{"ko-KR": "ko", "ja": "ja", "zh_CN": "zh", "es-ES": "es", "de": "en"} {
 		SetNoticeLanguage(func() string { return lang })
 		if got := currentAuthNotice(); got != authNotices[want] {
 			t.Errorf("language %q: got %q notice, want %q", lang, got.Cancel, authNotices[want].Cancel)
