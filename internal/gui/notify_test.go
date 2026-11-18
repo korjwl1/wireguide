@@ -8,7 +8,7 @@ import (
 )
 
 func TestNotifyTextLanguages(t *testing.T) {
-	for _, lang := range []string{"en", "ko", "ja", "zh"} {
+	for _, lang := range []string{"en", "ko", "ja", "zh", "es"} {
 		for _, k := range []msgKind{msgUp, msgDown, msgAuto, msgForced, msgCritical} {
 			title, body := notifyText(lang, k, "Home")
 			if title != "WireGuide" || !strings.Contains(body, "Home") || strings.Contains(body, "%!") {
@@ -21,7 +21,7 @@ func TestNotifyTextLanguages(t *testing.T) {
 		t.Errorf("unknown language must fall back to English, got %q", fb)
 	}
 	// A localized table must not silently fall through to English.
-	for _, lang := range []string{"ko", "ja", "zh"} {
+	for _, lang := range []string{"ko", "ja", "zh", "es"} {
 		_, en := notifyText("en", msgDown, "Home")
 		_, loc := notifyText(lang, msgDown, "Home")
 		if loc == en {
@@ -37,6 +37,7 @@ func TestPickLanguage(t *testing.T) {
 		"zh-Hans-CN":                          "zh",
 		"ja-JP":                               "ja",
 		"ja_JP.UTF-8":                         "ja",
+		"es_ES.UTF-8":                         "es",
 		"zh_CN.UTF-8":                         "zh",
 		"en-US":                               "en",
 		"de_DE.UTF-8":                         "en",
@@ -67,7 +68,7 @@ func TestNotifierLanguage(t *testing.T) {
 	if got := n.language(); got != "ko" {
 		t.Errorf("default auto should follow the system language, got %q", got)
 	}
-	for _, lang := range []string{"en", "ja", "zh"} {
+	for _, lang := range []string{"en", "ja", "zh", "es"} {
 		if err := store.Update(func(s *storage.Settings) error { s.Language = lang; return nil }); err != nil {
 			t.Fatal(err)
 		}

@@ -26,12 +26,12 @@ func SetNoticeLanguage(resolve func() string) {
 }
 
 // normalizeNoticeLanguage reduces a language tag to one of "en", "ko", "ja",
-// "zh". Anything else is English.
+// "zh", "es". Anything else is English.
 func normalizeNoticeLanguage(tag string) string {
 	parts := strings.FieldsFunc(strings.ToLower(tag), func(r rune) bool { return r == '-' || r == '_' || r == '.' })
 	if len(parts) > 0 {
 		switch parts[0] {
-		case "ko", "ja", "zh":
+		case "ko", "ja", "zh", "es":
 			return parts[0]
 		}
 	}

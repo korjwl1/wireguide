@@ -155,7 +155,7 @@ export class Settings {
     constructor($$source = {}) {
         if (!("language" in $$source)) {
             /**
-             * "auto", "en", "ko", "ja", "zh"
+             * "auto", "en", "ko", "ja", "zh", "es"
              * @member
              * @type {string}
              */

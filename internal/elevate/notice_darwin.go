@@ -51,6 +51,13 @@ var authNotices = map[string]authNotice{
 		Go:      "继续",
 		Prompt:  "WireGuide 需要管理员权限才能启动或修复其 VPN 辅助服务。",
 	},
+	"es": {
+		Title:   "WireGuide",
+		Message: `WireGuide necesita acceso de administrador para instalar o reparar su asistente VPN en segundo plano.\n\nEl asistente permite que WireGuide gestione las conexiones VPN, el DNS y el cortafuegos sin ejecutar toda la app como administrador. Se instala la primera vez que usas WireGuide y se reinstala o repara después de actualizar la app o si deja de funcionar.\n\nA continuación, macOS te pedirá la contraseña. No tendrás que introducirla cada vez que te conectes.`,
+		Cancel:  "Cancelar",
+		Go:      "Continuar",
+		Prompt:  "WireGuide necesita acceso de administrador para iniciar o reparar el servicio de su asistente VPN.",
+	},
 }
 
 func currentAuthNotice() authNotice {

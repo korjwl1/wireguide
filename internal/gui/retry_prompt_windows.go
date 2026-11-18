@@ -37,6 +37,9 @@ func askHelperRetry(cause error) bool {
 	case "zh":
 		msg = "VPN 服务无法启动。\n\n请在出现提示时授予管理员权限，然后选择“重试”。"
 		detailsLabel = "详情："
+	case "es":
+		msg = "No se ha podido iniciar el servicio VPN.\n\nPermite el acceso de administrador cuando se solicite y, después, selecciona “Reintentar”."
+		detailsLabel = "Detalles: "
 	}
 	if d := strings.TrimSpace(detail); d != "" {
 		if r := []rune(d); len(r) > 400 {
