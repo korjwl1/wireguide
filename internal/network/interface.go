@@ -152,3 +152,14 @@ type InterfaceDNSRemover interface{ RemoveInterfaceDNS(string) error }
 
 // DNSUnionTracker updates a global DNS monitor without another OS write.
 type DNSUnionTracker interface{ TrackDNSUnion([]string) }
+
+// LinkCleanupGuard lets the owner of a kernel link take over its deletion
+// during Cleanup. When handled is true the manager must not delete the
+// interface by name.
+type LinkCleanupGuard func(dataDir, ifaceName string) (handled bool, err error)
+
+// LinkCleanupGuardSetter is implemented by managers whose Cleanup would
+// otherwise delete a link by name.
+type LinkCleanupGuardSetter interface {
+	SetLinkCleanupGuard(LinkCleanupGuard)
+}

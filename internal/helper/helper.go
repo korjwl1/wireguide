@@ -353,7 +353,7 @@ func Run(addr string, ownerUID int, ownerSID, dataDir string, restoreDesired boo
 			return nil
 		}
 		return h.server.Broadcast
-	})))
+	}, dataDir)))
 
 	// Crash recovery (now logs via broadcast handler). Pass the helper's
 	// own firewall instance so cleanup reuses its in-memory state

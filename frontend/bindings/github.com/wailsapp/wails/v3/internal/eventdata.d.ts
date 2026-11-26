@@ -21,6 +21,7 @@ import type * as update$0 from "../../../../korjwl1/wireguide/internal/update/mo
 declare module "@wailsio/runtime" {
     namespace Events {
         interface CustomEvents {
+            "automation_changed": {};
             "config_changed": {};
             "files-dropped": { [_ in string]?: any };
             "helper": gui$0.HelperEvent;
@@ -33,6 +34,7 @@ declare module "@wailsio/runtime" {
             "tunnels_changed": {};
             "update-available": update$0.UpdateInfo;
             "update_progress": { [_ in string]?: any };
+            "window_visibility": gui$0.WindowVisibilityEvent;
         }
     }
 }

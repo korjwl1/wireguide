@@ -30,6 +30,7 @@ function configure() {
         "status": $$createType6,
         "update-available": $$createType7,
         "update_progress": $$createType0,
+        "window_visibility": $$createType8,
     }));
 }
 
@@ -42,5 +43,6 @@ const $$createType4 = ipc$0.RecoveryWarningPayload.createFrom;
 const $$createType5 = ipc$0.SettingsChangedPayload.createFrom;
 const $$createType6 = domain$0.ConnectionStatus.createFrom;
 const $$createType7 = update$0.UpdateInfo.createFrom;
+const $$createType8 = gui$0.WindowVisibilityEvent.createFrom;
 
 configure();

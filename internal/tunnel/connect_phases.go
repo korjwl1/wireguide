@@ -2,6 +2,7 @@ package tunnel
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"time"
 
@@ -44,8 +45,9 @@ func (m *Manager) connectPhases(ctx context.Context, cfg *domain.WireGuardConfig
 	factory := m.engineFactory
 	if factory == nil {
 		backend := m.backendKind()
+		dataDir := m.dataDir
 		factory = func(cfg *domain.WireGuardConfig) (*Engine, error) {
-			return NewEngineWithBackend(cfg, backend)
+			return newEngineWithBackend(cfg, backend, dataDir)
 		}
 	}
 	engine, err := factory(cfg)
@@ -53,6 +55,14 @@ func (m *Manager) connectPhases(ctx context.Context, cfg *domain.WireGuardConfig
 		return nil, newTunnelError(ErrEngineCreation, "creating engine", err)
 	}
 	ifaceName := engine.InterfaceName()
+	var kernelIfindex int32
+	linkOwner, _ := engine.kernel.(kernelLinkOwner)
+	if linkOwner != nil {
+		kernelIfindex = linkOwner.kernelLinkIndex()
+		if setter, ok := netMgr.(network.LinkCleanupGuardSetter); ok {
+			setter.SetLinkCleanupGuard(kernelLinkGuardFor(linkOwner, ifaceName))
+		}
+	}
 	if err := m.prepareInterfaceDNS(ifaceName); err != nil {
 		// Nothing has been configured yet. Preserve the former owner's
 		// journal and retry entry; rollback of the new owner could erase it.
@@ -62,9 +72,14 @@ func (m *Manager) connectPhases(ctx context.Context, cfg *domain.WireGuardConfig
 
 	// Record interface ownership before the first OS mutation, including
 	// failures that happen before the precise pre-DNS checkpoint.
-	if err := SaveActiveState(m.dataDir, &ActiveTunnelState{TunnelName: cfg.Name, InterfaceName: ifaceName, FullTunnel: fullTunnel, Table: cfg.Interface.Table, FwMark: cfg.Interface.FwMark}); err != nil {
+	if err := SaveActiveState(m.dataDir, &ActiveTunnelState{TunnelName: cfg.Name, InterfaceName: ifaceName, FullTunnel: fullTunnel, Table: cfg.Interface.Table, FwMark: cfg.Interface.FwMark, KernelIfindex: kernelIfindex}); err != nil {
 		engine.Close()
 		return nil, newTunnelError(ErrNetwork, "persisting interface recovery state", err)
+	}
+	if linkOwner != nil {
+		if err := linkOwner.commitKernelLinkIntent(); err != nil {
+			slog.Warn("kernel link intent handoff failed; keeping the creation lock", "interface", ifaceName, "error", err)
+		}
 	}
 	rollback := func(primary error) error { return m.rollbackConnect(cfg, engine, netMgr, primary) }
 
@@ -250,6 +265,7 @@ func (m *Manager) connectPhases(ctx context.Context, cfg *domain.WireGuardConfig
 		Table:          cfg.Interface.Table,
 		FwMark:         cfg.Interface.FwMark,
 		EndpointRoutes: endpointRoutes,
+		KernelIfindex:  kernelIfindex,
 	}
 	// The adapter checkpoints its captured original DNS before its first
 	// write, including services discovered later during route repair.
@@ -303,6 +319,7 @@ func (m *Manager) connectPhases(ctx context.Context, cfg *domain.WireGuardConfig
 		EndpointRoutes: endpointRoutes,
 		PreModDNS:      preMod.Servers,
 		PreModSearch:   preMod.Search,
+		KernelIfindex:  kernelIfindex,
 	}); err != nil {
 		slog.Warn("failed to persist crash recovery state", "error", err)
 	}
@@ -395,8 +412,11 @@ func (m *Manager) disconnectPhases(cfg *domain.WireGuardConfig, engine *Engine, 
 	var cleanupErr error
 	if netMgr != nil {
 		if hasOtherTunnels {
+			if owner, ok := engine.kernel.(kernelLinkOwner); ok {
+				cleanupErr = owner.releaseKernelLink()
+			}
 			if remover, ok := netMgr.(network.InterfaceDNSRemover); ok {
-				cleanupErr = remover.RemoveInterfaceDNS(ifaceName)
+				cleanupErr = errors.Join(cleanupErr, remover.RemoveInterfaceDNS(ifaceName))
 			}
 		} else {
 			cleanupErr = m.cleanupNetwork(netMgr, ifaceName)
