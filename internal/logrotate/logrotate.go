@@ -1,6 +1,7 @@
-// Package logrotate provides a small size-based rotating file writer. It
-// exists so the root helper can own its log file instead of leaving launchd to
-// append to it forever.
+// Package logrotate provides a small size-based rotating file writer and a
+// repeat-suppressing limiter for noisy log lines. It exists so the root
+// helper can own its log file instead of leaving launchd to append to it
+// forever.
 package logrotate
 
 import (

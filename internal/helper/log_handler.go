@@ -16,6 +16,9 @@ import (
 	"github.com/korjwl1/wireguide/internal/logrotate"
 )
 
+// repeatWindow is how often an identical wireguard-go warning may be logged.
+const repeatWindow = 60 * time.Second
+
 // helperLogFile returns the rotating log file the helper writes slog output
 // to, or "" when the helper should keep writing to stderr. macOS always
 // rotates /var/log/wireguide-helper.log (launchd's own capture of the process
@@ -69,6 +72,12 @@ type broadcastHandler struct {
 	// BEFORE the Helper struct is fully constructed.
 	getBroadcaster func() func(method string, params interface{})
 
+	// limiter suppresses repeated identical wireguard-go warnings; shared
+	// across WithAttrs/WithGroup clones.
+	limiter *logrotate.Limiter
+	// clock returns the current time (injectable for tests).
+	clock func() time.Time
+
 	// attrs holds WithAttrs/WithGroup state so Handle can render them.
 	mu    sync.Mutex
 	attrs []slog.Attr
@@ -92,7 +101,43 @@ func newBroadcastHandlerTo(levelVar *slog.LevelVar, getBroadcaster func() func(s
 		levelVar:       levelVar,
 		stderr:         stderr,
 		getBroadcaster: getBroadcaster,
+		limiter:        logrotate.NewLimiter(repeatWindow),
+		clock:          time.Now,
 	}
+}
+
+// rateLimit applies the repeat limiter to wireguard-go warnings (messages
+// tagged "[wg:<iface>] "). It returns false when the record must be dropped
+// and an extra attr count of previously suppressed repeats otherwise. Expired
+// suppression counts of other messages are flushed as a summary line.
+func (h *broadcastHandler) rateLimit(ctx context.Context, r *slog.Record) bool {
+	if h.limiter == nil {
+		return true
+	}
+	now := h.clock()
+	pass := true
+	if r.Level >= slog.LevelWarn && strings.HasPrefix(r.Message, "[wg:") {
+		key := logrotate.NormalizeKey(r.Message)
+		// Allow first: when the window has passed it lets the real message
+		// through with the suppressed count and resets the entry, so a
+		// sustained outage logs the actual warning (not just a summary)
+		// about once per window.
+		ok, suppressed := h.limiter.Allow(key, r.Message, now)
+		if ok {
+			if suppressed > 0 {
+				r.AddAttrs(slog.Int("suppressed_repeats", suppressed))
+			}
+		} else {
+			pass = false
+		}
+	}
+	// Flush trailing summaries for other messages whose window elapsed.
+	for _, s := range h.limiter.Expired(now) {
+		sum := slog.NewRecord(now, slog.LevelWarn, "suppressed repeated engine warnings", 0)
+		sum.AddAttrs(slog.Int("count", s.Count), slog.String("message", s.Message))
+		h.emit(ctx, sum)
+	}
+	return pass
 }
 
 func (h *broadcastHandler) Enabled(_ context.Context, l slog.Level) bool {
@@ -100,8 +145,16 @@ func (h *broadcastHandler) Enabled(_ context.Context, l slog.Level) bool {
 }
 
 func (h *broadcastHandler) Handle(ctx context.Context, r slog.Record) error {
-	// Always write to the helper log (rotating file on macOS, stderr
-	// elsewhere).
+	if !h.rateLimit(ctx, &r) {
+		return nil
+	}
+	h.emit(ctx, r)
+	return nil
+}
+
+// emit writes the record to the helper log (rotating file in prod, stderr in
+// dev) and broadcasts it to IPC subscribers, bypassing the rate limiter.
+func (h *broadcastHandler) emit(ctx context.Context, r slog.Record) {
 	_ = h.stderr.Handle(ctx, r)
 
 	// Render the same record as a single flat string for the viewer.
@@ -134,7 +187,6 @@ func (h *broadcastHandler) Handle(ctx context.Context, r slog.Record) error {
 	if bc := h.getBroadcaster(); bc != nil {
 		bc(ipc.EventLog, entry)
 	}
-	return nil
 }
 
 func (h *broadcastHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
@@ -147,6 +199,8 @@ func (h *broadcastHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
 		levelVar:       h.levelVar,
 		stderr:         h.stderr.WithAttrs(attrs),
 		getBroadcaster: h.getBroadcaster,
+		limiter:        h.limiter,
+		clock:          h.clock,
 		attrs:          combined,
 		group:          h.group,
 	}
@@ -157,6 +211,8 @@ func (h *broadcastHandler) WithGroup(name string) slog.Handler {
 		levelVar:       h.levelVar,
 		stderr:         h.stderr.WithGroup(name),
 		getBroadcaster: h.getBroadcaster,
+		limiter:        h.limiter,
+		clock:          h.clock,
 		attrs:          h.attrs,
 		group:          name,
 	}

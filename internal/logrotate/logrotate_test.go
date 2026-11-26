@@ -6,6 +6,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestWriterRotatesAndCapsFiles(t *testing.T) {
@@ -81,5 +82,79 @@ func TestOpenKeepsSmallExistingLog(t *testing.T) {
 func TestOpenRejectsBadLimits(t *testing.T) {
 	if _, err := Open(filepath.Join(t.TempDir(), "x"), 0, 1); err == nil {
 		t.Error("expected error")
+	}
+}
+
+func TestLimiter(t *testing.T) {
+	l := NewLimiter(60 * time.Second)
+	t0 := time.Unix(1000, 0)
+	if ok, _ := l.Allow("k", "m", t0); !ok {
+		t.Fatal("first must pass")
+	}
+	for i := 1; i <= 5; i++ {
+		if ok, _ := l.Allow("k", "m", t0.Add(time.Duration(i)*time.Second)); ok {
+			t.Fatal("repeat within window must be suppressed")
+		}
+	}
+	if ok, _ := l.Allow("other", "m", t0.Add(time.Second)); !ok {
+		t.Fatal("different key passes")
+	}
+	ok, s := l.Allow("k", "m", t0.Add(61*time.Second))
+	if !ok || s != 5 {
+		t.Fatalf("after window: ok=%v suppressed=%d, want true 5", ok, s)
+	}
+}
+
+func TestLimiterExpiredSummary(t *testing.T) {
+	l := NewLimiter(time.Minute)
+	t0 := time.Unix(0, 0)
+	l.Allow("k", "raw message", t0)
+	l.Allow("k", "raw message", t0.Add(time.Second))
+	if got := l.Expired(t0.Add(30 * time.Second)); len(got) != 0 {
+		t.Errorf("not expired yet: %v", got)
+	}
+	got := l.Expired(t0.Add(2 * time.Minute))
+	if len(got) != 1 || got[0].Count != 1 || got[0].Message != "raw message" {
+		t.Errorf("got %v", got)
+	}
+	if got := l.Expired(t0.Add(4 * time.Minute)); len(got) != 0 {
+		t.Errorf("summary must be emitted once: %v", got)
+	}
+}
+
+// Flushing a summary must not delay the real warning: the next occurrence
+// after the window passes immediately.
+func TestLimiterExpiredDoesNotSuppressNextWarning(t *testing.T) {
+	l := NewLimiter(time.Minute)
+	t0 := time.Unix(0, 0)
+	l.Allow("k", "m", t0)
+	l.Allow("k", "m", t0.Add(time.Second))
+	later := t0.Add(2 * time.Minute)
+	if got := l.Expired(later); len(got) != 1 {
+		t.Fatalf("Expired = %v, want one summary", got)
+	}
+	if ok, _ := l.Allow("k", "m", later.Add(time.Second)); !ok {
+		t.Fatal("warning must pass right after the window, not wait another window")
+	}
+}
+
+func TestNormalizeKey(t *testing.T) {
+	a := NormalizeKey("[wg:utun4] write udp4 1.2.3.4:5->6.7.8.9:51820: network is unreachable")
+	b := NormalizeKey("[wg:utun4] write udp4 10.0.0.1:55->6.7.8.10:51821: network is unreachable")
+	if a != b {
+		t.Errorf("%q != %q", a, b)
+	}
+}
+
+// Each tunnel interface keeps its own key, so one tunnel's warning never
+// suppresses another's identical one.
+func TestNormalizeKeyKeepsInterfacePrefix(t *testing.T) {
+	a := NormalizeKey("[wg:utun4] Failed to send: network is unreachable")
+	b := NormalizeKey("[wg:utun5] Failed to send: network is unreachable")
+	if a == b {
+		t.Errorf("different interfaces share key %q", a)
+	}
+	if !strings.HasPrefix(a, "[wg:utun4] ") {
+		t.Errorf("prefix not kept verbatim: %q", a)
 	}
 }
