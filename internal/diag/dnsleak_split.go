@@ -90,12 +90,33 @@ func evaluateSplitDNS(blocks []scutilResolver, p domain.DNSEntries) []string {
 }
 
 func evaluateSplitDNSPlans(blocks []scutilResolver, plans []domain.DNSEntries) (missing []string) {
+	for _, c := range splitDomainChecks(blocks, plans) {
+		if !c.Registered {
+			missing = append(missing, c.Domain)
+		}
+	}
+	return missing
+}
+
+// splitDomainChecks is the per-domain form of the ownership check: one row
+// per match or search domain of the plans, sorted by domain. Registered means
+// an unscoped supplemental resolver exists for the domain and every one of its
+// nameservers is a configured server of a tunnel claiming that domain.
+// Resolver is the nameserver the system routes the domain to (an expected one
+// when registered, otherwise the first unexpected one, "" when there is none).
+// The leak test's missing-domain list and its per-domain rows both derive
+// from this one function so they cannot disagree. Pure.
+func splitDomainChecks(blocks []scutilResolver, plans []domain.DNSEntries) []DomainCheck {
 	expected := make(map[string]map[string]bool)
+	search := make(map[string]bool)
 	for _, p := range plans {
-		for _, d := range append(append([]string(nil), p.Match...), p.Search...) {
+		add := func(d string, isSearch bool) {
 			d = strings.ToLower(d)
 			if expected[d] == nil {
 				expected[d] = make(map[string]bool)
+			}
+			if isSearch {
+				search[d] = true
 			}
 			for _, s := range p.Servers {
 				if ip := net.ParseIP(s); ip != nil {
@@ -103,29 +124,62 @@ func evaluateSplitDNSPlans(blocks []scutilResolver, plans []domain.DNSEntries) (
 				}
 			}
 		}
+		for _, d := range p.Match {
+			add(d, false)
+		}
+		for _, d := range p.Search {
+			add(d, true)
+		}
 	}
+	checks := make([]DomainCheck, 0, len(expected))
 	for d, servers := range expected {
+		c := DomainCheck{Domain: d}
 		found := false
 		wrong := false
 		for _, b := range blocks {
-			if b.Scoped || b.Domain != strings.ToLower(d) {
+			if b.Scoped || b.Domain != d {
 				continue
 			}
 			for _, ns := range b.Nameservers {
 				ip := net.ParseIP(ns)
 				if ip != nil && servers[ip.String()] {
+					if !found {
+						c.Resolver = ns
+					}
 					found = true
 				} else {
+					if !found && !wrong {
+						c.Resolver = ns
+					}
 					wrong = true
 				}
 			}
 		}
-		if !found || wrong {
-			missing = append(missing, d)
+		c.Registered = found && !wrong
+		// A domain that is both a match and a search entry is a match
+		// domain for display; only pure search entries are flagged.
+		c.Search = search[d] && !containsFold(plansMatch(plans), d)
+		checks = append(checks, c)
+	}
+	sort.Slice(checks, func(i, j int) bool { return checks[i].Domain < checks[j].Domain })
+	return checks
+}
+
+func plansMatch(plans []domain.DNSEntries) []string {
+	var out []string
+	for _, p := range plans {
+		out = append(out, p.Match...)
+	}
+	return out
+}
+
+func containsFold(list []string, s string) bool {
+	for _, v := range list {
+		if strings.EqualFold(v, s) {
+			return true
 		}
 	}
-	sort.Strings(missing)
-	return missing
+	return false
 }
 
 // runSplitDNSCheck is the split-mode variant of the leak test. In split mode
@@ -181,7 +235,12 @@ func evaluateSplitDNSResult(result *DNSLeakResult, plans []domain.DNSEntries, bl
 			}
 		}
 	}
-	result.MissingMatchDomains = evaluateSplitDNSPlans(blocks, plans)
+	result.Domains = splitDomainChecks(blocks, plans)
+	for _, c := range result.Domains {
+		if !c.Registered {
+			result.MissingMatchDomains = append(result.MissingMatchDomains, c.Domain)
+		}
+	}
 	if len(result.MissingMatchDomains) > 0 {
 		message := "split DNS: no supplemental resolver for " + strings.Join(result.MissingMatchDomains, ", ")
 		if result.Error != "" {

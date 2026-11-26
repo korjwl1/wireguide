@@ -61,6 +61,9 @@ func cmdDNSLeak(_ []string) int {
 	} else {
 		fmt.Println("OK: DNS is pinned to the tunnel")
 	}
+	for _, d := range res.Domains {
+		fmt.Println("  " + formatDomainCheck(d))
+	}
 	for _, srv := range res.DNSServers {
 		fmt.Printf("  resolver %s\n", srv.IP)
 	}
@@ -89,4 +92,19 @@ func cmdRoutes(_ []string) int {
 		fmt.Printf("%-24s %-18s %-10s %s\n", r.Destination, r.Gateway, r.Interface, r.Flags)
 	}
 	return 0
+}
+
+// formatDomainCheck renders one per-domain split-DNS row of `ctl dnsleak`.
+func formatDomainCheck(d diag.DomainCheck) string {
+	label := "~" + d.Domain
+	if d.Search {
+		label = d.Domain
+	}
+	switch {
+	case d.Registered:
+		return fmt.Sprintf("domain %s -> %s", label, d.Resolver)
+	case d.Resolver != "":
+		return fmt.Sprintf("domain %s -> %s (not this tunnel's DNS server)", label, d.Resolver)
+	}
+	return fmt.Sprintf("domain %s: no supplemental resolver", label)
 }

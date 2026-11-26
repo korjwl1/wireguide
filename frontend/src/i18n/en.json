@@ -250,7 +250,21 @@
     "route_header_iface": "Interface",
     "route_vpn_badge": "VPN",
     "route_legend_vpn": "VPN route",
-    "route_legend_direct": "Other routes"
+    "route_legend_direct": "Other routes",
+    "dns_leak_dig_note": "Terminal tip: dig and nslookup bypass split-DNS resolvers, so private names can fail there even when the tunnel works. Use dscacheutil -q host -a name <name> or ping instead.",
+    "dns_leak_linux_note": "Terminal tip: use resolvectl query <name> to see which resolver answers a name.",
+    "dns_domains": "Split DNS domains",
+    "dns_domain_registered": "registered",
+    "dns_domain_missing": "not registered",
+    "dns_try_label": "Try a name",
+    "dns_try_placeholder": "nas.corp.example",
+    "dns_try_run": "Resolve",
+    "dns_try_running": "Resolving...",
+    "dns_try_via": "via {resolver}",
+    "dns_try_via_domain": "via {resolver} (~{domain})",
+    "dns_try_nxdomain": "No such name (NXDOMAIN)",
+    "dns_try_timeout": "No answer within 3 s",
+    "dns_try_invalid_name": "Invalid host name"
   },
   "stats": {
     "speed_graph": "Speed Graph",

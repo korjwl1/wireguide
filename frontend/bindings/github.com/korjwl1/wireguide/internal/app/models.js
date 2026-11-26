@@ -311,6 +311,13 @@ export class DNSLeakResult {
              */
             this["missing_match_domains"] = undefined;
         }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {DomainCheck[] | undefined}
+             */
+            this["domains"] = undefined;
+        }
 
         Object.assign(this, $$source);
     }
@@ -323,12 +330,16 @@ export class DNSLeakResult {
     static createFrom($$source = {}) {
         const $$createField1_0 = $$createType3;
         const $$createField5_0 = $$createType4;
+        const $$createField6_0 = $$createType6;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("dns_servers" in $$parsedSource) {
             $$parsedSource["dns_servers"] = $$createField1_0($$parsedSource["dns_servers"]);
         }
         if ("missing_match_domains" in $$parsedSource) {
             $$parsedSource["missing_match_domains"] = $$createField5_0($$parsedSource["missing_match_domains"]);
+        }
+        if ("domains" in $$parsedSource) {
+            $$parsedSource["domains"] = $$createField6_0($$parsedSource["domains"]);
         }
         return new DNSLeakResult(/** @type {Partial<DNSLeakResult>} */($$parsedSource));
     }
@@ -390,6 +401,58 @@ export class DNSServer {
     static createFrom($$source = {}) {
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         return new DNSServer(/** @type {Partial<DNSServer>} */($$parsedSource));
+    }
+}
+
+/**
+ * DomainCheck mirrors diag.DomainCheck.
+ */
+export class DomainCheck {
+    /**
+     * Creates a new DomainCheck instance.
+     * @param {Partial<DomainCheck>} [$$source = {}] - The source object to create the DomainCheck.
+     */
+    constructor($$source = {}) {
+        if (!("domain" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["domain"] = "";
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {string | undefined}
+             */
+            this["resolver"] = undefined;
+        }
+        if (!("registered" in $$source)) {
+            /**
+             * @member
+             * @type {boolean}
+             */
+            this["registered"] = false;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {boolean | undefined}
+             */
+            this["search"] = undefined;
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new DomainCheck instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {DomainCheck}
+     */
+    static createFrom($$source = {}) {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new DomainCheck(/** @type {Partial<DomainCheck>} */($$parsedSource));
     }
 }
 
@@ -468,6 +531,97 @@ export class ProfileMutationResult {
     static createFrom($$source = {}) {
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         return new ProfileMutationResult(/** @type {Partial<ProfileMutationResult>} */($$parsedSource));
+    }
+}
+
+/**
+ * ResolveResult mirrors diag.ResolveResult.
+ */
+export class ResolveResult {
+    /**
+     * Creates a new ResolveResult instance.
+     * @param {Partial<ResolveResult>} [$$source = {}] - The source object to create the ResolveResult.
+     */
+    constructor($$source = {}) {
+        if (!("name" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["name"] = "";
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {string[] | undefined}
+             */
+            this["addrs"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {string | undefined}
+             */
+            this["resolver"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {string | undefined}
+             */
+            this["match_domain"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {boolean | undefined}
+             */
+            this["nxdomain"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {boolean | undefined}
+             */
+            this["timed_out"] = undefined;
+        }
+        if (!("duration_ms" in $$source)) {
+            /**
+             * @member
+             * @type {number}
+             */
+            this["duration_ms"] = 0;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {string | undefined}
+             */
+            this["error"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {string | undefined}
+             */
+            this["error_code"] = undefined;
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new ResolveResult instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {ResolveResult}
+     */
+    static createFrom($$source = {}) {
+        const $$createField1_0 = $$createType4;
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("addrs" in $$parsedSource) {
+            $$parsedSource["addrs"] = $$createField1_0($$parsedSource["addrs"]);
+        }
+        return new ResolveResult(/** @type {Partial<ResolveResult>} */($$parsedSource));
     }
 }
 
@@ -885,3 +1039,5 @@ const $$createType1 = $Create.Array($$createType0);
 const $$createType2 = DNSServer.createFrom;
 const $$createType3 = $Create.Array($$createType2);
 const $$createType4 = $Create.Array($Create.Any);
+const $$createType5 = DomainCheck.createFrom;
+const $$createType6 = $Create.Array($$createType5);

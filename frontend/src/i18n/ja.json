@@ -250,7 +250,21 @@
     "route_header_iface": "インターフェース",
     "route_vpn_badge": "VPN",
     "route_legend_vpn": "VPN ルート",
-    "route_legend_direct": "その他の経路"
+    "route_legend_direct": "その他の経路",
+    "dns_leak_dig_note": "ターミナルのヒント: dig と nslookup はドメイン別 DNS のリゾルバを迂回するため、トンネルが正常でもプライベートな名前の解決に失敗することがあります。代わりに dscacheutil -q host -a name <名前> か ping を使ってください。",
+    "dns_leak_linux_note": "ターミナルのヒント: resolvectl query <名前> で、どのリゾルバが応答するか確認できます。",
+    "dns_domains": "ドメイン別 DNS",
+    "dns_domain_registered": "登録済み",
+    "dns_domain_missing": "未登録",
+    "dns_try_label": "名前を試す",
+    "dns_try_placeholder": "nas.corp.example",
+    "dns_try_run": "解決",
+    "dns_try_running": "解決中...",
+    "dns_try_via": "{resolver} 経由",
+    "dns_try_via_domain": "{resolver} 経由 (~{domain})",
+    "dns_try_nxdomain": "その名前は存在しません (NXDOMAIN)",
+    "dns_try_timeout": "3 秒以内に応答なし",
+    "dns_try_invalid_name": "無効なホスト名"
   },
   "stats": {
     "speed_graph": "速度グラフ",

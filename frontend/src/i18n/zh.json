@@ -250,7 +250,21 @@
     "route_header_iface": "接口",
     "route_vpn_badge": "VPN",
     "route_legend_vpn": "VPN 路由",
-    "route_legend_direct": "其他路由"
+    "route_legend_direct": "其他路由",
+    "dns_leak_dig_note": "终端提示：dig 和 nslookup 会绕过拆分 DNS 解析器，因此即使隧道正常，私有名称在那里也可能解析失败。请改用 dscacheutil -q host -a name <名称> 或 ping。",
+    "dns_leak_linux_note": "终端提示：使用 resolvectl query <名称> 可以查看由哪个解析器应答。",
+    "dns_domains": "拆分 DNS 域",
+    "dns_domain_registered": "已注册",
+    "dns_domain_missing": "未注册",
+    "dns_try_label": "试解析名称",
+    "dns_try_placeholder": "nas.corp.example",
+    "dns_try_run": "解析",
+    "dns_try_running": "解析中...",
+    "dns_try_via": "经由 {resolver}",
+    "dns_try_via_domain": "经由 {resolver}（~{domain}）",
+    "dns_try_nxdomain": "没有此名称（NXDOMAIN）",
+    "dns_try_timeout": "3 秒内无应答",
+    "dns_try_invalid_name": "主机名无效"
   },
   "stats": {
     "speed_graph": "速度图表",

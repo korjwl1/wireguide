@@ -250,7 +250,21 @@
     "route_header_iface": "인터페이스",
     "route_vpn_badge": "VPN",
     "route_legend_vpn": "VPN 경로",
-    "route_legend_direct": "기타 경로"
+    "route_legend_direct": "기타 경로",
+    "dns_leak_dig_note": "터미널 팁: dig와 nslookup은 도메인별 DNS 리졸버를 우회하므로 터널이 정상이어도 사설 이름이 실패할 수 있습니다. 대신 dscacheutil -q host -a name <이름> 또는 ping을 사용하세요.",
+    "dns_leak_linux_note": "터미널 팁: resolvectl query <이름>으로 어떤 리졸버가 응답하는지 확인할 수 있습니다.",
+    "dns_domains": "도메인별 DNS",
+    "dns_domain_registered": "등록됨",
+    "dns_domain_missing": "등록되지 않음",
+    "dns_try_label": "이름 시험",
+    "dns_try_placeholder": "nas.corp.example",
+    "dns_try_run": "조회",
+    "dns_try_running": "조회 중...",
+    "dns_try_via": "{resolver} 경유",
+    "dns_try_via_domain": "{resolver} 경유 (~{domain})",
+    "dns_try_nxdomain": "해당 이름 없음 (NXDOMAIN)",
+    "dns_try_timeout": "3초 내 응답 없음",
+    "dns_try_invalid_name": "잘못된 호스트 이름"
   },
   "stats": {
     "speed_graph": "속도 그래프",
