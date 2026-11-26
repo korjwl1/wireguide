@@ -32,6 +32,28 @@ void cwRequestLocationAuthorization(void) {
     });
 }
 
+// cwLocationAuthorizationStatus reports this process's Location Services
+// authorization WITHOUT requesting anything: 0 not determined, 1 restricted,
+// 2 denied, 3 authorized (always), 4 authorized (when in use), -1 unknown
+// (macOS < 11, where the instance property does not exist). It may run on
+// any thread. A fresh manager is created and released on every call: a
+// long-lived manager on a thread without a run loop is not updated when
+// the user changes the permission and can report a stale status. No
+// delegate is attached, so the manager needs no run loop. This file is
+// compiled without ARC.
+int cwLocationAuthorizationStatus(void) {
+    if (@available(macOS 11.0, *)) {
+        int status;
+        @autoreleasepool {
+            CLLocationManager *manager = [[CLLocationManager alloc] init];
+            status = (int)manager.authorizationStatus;
+            [manager release];
+        }
+        return status;
+    }
+    return -1;
+}
+
 const char* cwCurrentSSID(void) {
     CWWiFiClient *client = [CWWiFiClient sharedWiFiClient];
     CWInterface *iface = [client interface];

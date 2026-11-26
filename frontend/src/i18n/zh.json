@@ -295,7 +295,10 @@
   "wifi_permission": {
     "title": "需要定位服务",
     "desc": "Wi-Fi 规则需要权限才能读取网络名称。请在系统设置 → 隐私与安全性 → 定位服务中允许 WireGuide。",
-    "open_settings": "打开设置"
+    "open_settings": "打开设置",
+    "desc_denied": "WireGuide 的定位服务被拒绝，无法读取 Wi-Fi 名称，“不是” SSID 规则将保持暂缓。请在系统设置 → 隐私与安全性 → 定位服务中允许。",
+    "desc_restricted": "此 Mac 上的定位服务受到限制（例如被描述文件限制），WireGuide 无法读取 Wi-Fi 名称，“不是” SSID 规则将保持暂缓。",
+    "desc_not_determined": "尚未允许 WireGuide 使用定位服务，因此无法读取 Wi-Fi 名称。请在系统设置 → 隐私与安全性 → 定位服务中允许。"
   },
   "automation": {
     "title": "自动化",
@@ -350,7 +353,9 @@
       "v_overlap": "不连接 — {cidr} 与当前局域网重叠",
       "v_blocked": "不再重连 — 路由环路看门狗已停止此隧道；手动连接即可解除",
       "v_no_match": "没有规则匹配当前网络",
-      "net_unknown_denied": "WireGuide 的定位服务被拒绝 — 无法获取 Wi-Fi 名称，“不是” SSID 规则暂缓"
+      "net_unknown_denied": "WireGuide 的定位服务被拒绝 — 无法获取 Wi-Fi 名称，“不是” SSID 规则暂缓",
+      "net_unknown_not_allowed": "尚未允许 WireGuide 使用定位服务 — 无法获取 Wi-Fi 名称，“不是” SSID 规则暂缓",
+      "net_unknown_roaming": "Wi-Fi 名称暂时不可用（正在重连或漫游）— “不是”规则暂缓"
     }
   },
   "ping_health": {

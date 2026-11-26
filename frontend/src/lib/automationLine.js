@@ -48,10 +48,13 @@ export function verdictTone(v) {
   return v && ['held', 'paused', 'overlap', 'blocked'].includes(v.verdict) ? 'warn' : 'info';
 }
 
-// Why the Wi-Fi name is unreadable. When the GUI knows Location Services
-// is denied the line says so instead of guessing.
+// Why the Wi-Fi name is unreadable. With a known Location Services state
+// the line says so precisely instead of guessing.
 export function unknownSSIDText(tr, locAuth) {
-  if (locAuth === 'denied') return tr('automation.why.net_unknown_denied');
+  if (locAuth === 'denied' || locAuth === 'restricted') return tr('automation.why.net_unknown_denied');
+  if (locAuth === 'not_determined') return tr('automation.why.net_unknown_not_allowed');
+  // Allowed, yet the name is blank: a roam / reconnect, not a permission issue.
+  if (locAuth === 'authorized') return tr('automation.why.net_unknown_roaming');
   return tr('automation.why.net_unknown');
 }
 

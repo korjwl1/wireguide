@@ -74,6 +74,14 @@ func (s *TunnelService) CheckSSIDPermission() wifi.SSIDPermissionStatus {
 	return wifi.CheckSSIDPermission()
 }
 
+// GetLocationAuthorization reports the GUI process's own macOS Location
+// Services state (authorized / denied / restricted / not_determined /
+// unknown). Read-only: it never prompts, and only the GUI process asks —
+// the root helper must never request or report an authorization.
+func (s *TunnelService) GetLocationAuthorization() string {
+	return wifi.LocationAuthorization()
+}
+
 // OpenLocationSettings opens System Settings to the Location Services page so
 // the user can grant SSID access without navigating there manually.
 func (s *TunnelService) OpenLocationSettings() {

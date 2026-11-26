@@ -288,6 +288,17 @@ export function GetKnownSSIDs() {
 }
 
 /**
+ * GetLocationAuthorization reports the GUI process's own macOS Location
+ * Services state (authorized / denied / restricted / not_determined /
+ * unknown). Read-only: it never prompts, and only the GUI process asks —
+ * the root helper must never request or report an authorization.
+ * @returns {$CancellablePromise<string>}
+ */
+export function GetLocationAuthorization() {
+    return $Call.ByID(3862500133);
+}
+
+/**
  * GetRoutingTable returns the current OS routing table.
  * @returns {$CancellablePromise<$models.RouteEntry[]>}
  */

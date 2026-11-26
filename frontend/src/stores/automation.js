@@ -23,10 +23,9 @@ export const automationVerdicts = derived(automationPreview, (preview) => {
 // Wall-clock time of the last successful poll, shown as "checked HH:MM:SS"
 // where polling is slow (Windows/Linux).
 export const automationCheckedAt = writable(0);
-// Location Services hint for an unreadable Wi-Fi name: 'denied' when the
-// GUI process is on Wi-Fi but cannot read its name (CheckSSIDPermission),
-// 'unknown' otherwise. Only fetched while the preview reports an
-// unreadable Wi-Fi name, so a healthy network costs nothing.
+// Location Services status of the GUI process (authorized / denied /
+// restricted / not_determined / unknown). Only fetched while the preview
+// reports an unreadable Wi-Fi name, so a healthy network costs nothing.
 export const locationAuth = writable('unknown');
 
 const IS_MAC = typeof navigator !== 'undefined' && /Mac/i.test(navigator.platform || navigator.userAgent || '');
@@ -81,11 +80,11 @@ export async function refreshAutomationPreview() {
   try {
     const p = await currentService.GetAutomationPreview();
     if (!current()) return;
-    if (p && p.ssid_unknown) {
+    if (p && p.ssid_unknown && currentService.GetLocationAuthorization) {
       try {
-        const s = await currentService.CheckSSIDPermission();
+        const auth = await currentService.GetLocationAuthorization();
         if (!current()) return;
-        locationAuth.set(s && s.has_wifi && !s.has_permission ? 'denied' : 'unknown');
+        locationAuth.set(auth || 'unknown');
       } catch (_) {
         if (!current()) return;
         locationAuth.set('unknown');

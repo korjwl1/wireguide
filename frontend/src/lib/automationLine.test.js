@@ -57,6 +57,9 @@ test('verdictFor finds by name', () => {
 test('unreadable Wi-Fi name says why, by Location Services state', () => {
   const p = { available: true, online: true, ssid_unknown: true };
   assert.equal(networkLines(tr, p, 'denied').network, 'automation.why.net_unknown_denied');
+  assert.equal(networkLines(tr, p, 'restricted').network, 'automation.why.net_unknown_denied');
+  assert.equal(networkLines(tr, p, 'not_determined').network, 'automation.why.net_unknown_not_allowed');
+  assert.equal(networkLines(tr, p, 'authorized').network, 'automation.why.net_unknown_roaming');
   assert.equal(networkLines(tr, p).network, 'automation.why.net_unknown');
   assert.equal(networkLines(tr, { ...p, ssid_unknown: false, ssid: 'Home' }, 'denied').network, 'automation.why.net_ssid|ssid=Home');
 });

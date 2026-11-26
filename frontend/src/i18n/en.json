@@ -295,7 +295,10 @@
   "wifi_permission": {
     "title": "Location Services required",
     "desc": "Wi-Fi rules need permission to read the network name. Allow WireGuide in System Settings → Privacy & Security → Location Services.",
-    "open_settings": "Open Settings"
+    "open_settings": "Open Settings",
+    "desc_denied": "Location Services is denied for WireGuide, so Wi-Fi names can't be read and 'is not' SSID rules stay on hold. Allow it in System Settings → Privacy & Security → Location Services.",
+    "desc_restricted": "Location Services is restricted on this Mac (for example by a profile), so WireGuide can't read Wi-Fi names and 'is not' SSID rules stay on hold.",
+    "desc_not_determined": "Location Services has not been allowed for WireGuide yet, so Wi-Fi names can't be read. Allow it in System Settings → Privacy & Security → Location Services."
   },
   "automation": {
     "title": "Automation",
@@ -350,7 +353,9 @@
       "v_overlap": "not connecting — {cidr} overlaps your current LAN",
       "v_blocked": "not reconnecting — the routing-loop watchdog stopped this tunnel; connect it by hand to clear",
       "v_no_match": "no rule matches the current network",
-      "net_unknown_denied": "Location Services denied for WireGuide — Wi-Fi names unknown, 'is not' SSID rules on hold"
+      "net_unknown_denied": "Location Services denied for WireGuide — Wi-Fi names unknown, 'is not' SSID rules on hold",
+      "net_unknown_not_allowed": "Location Services not yet allowed for WireGuide — Wi-Fi names unknown, 'is not' SSID rules on hold",
+      "net_unknown_roaming": "Wi-Fi name momentarily unavailable (reconnecting or roaming) — 'is not' rules hold"
     }
   },
   "ping_health": {

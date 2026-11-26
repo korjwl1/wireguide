@@ -31,7 +31,7 @@ test('an old preview cannot overwrite a restarted service or request old permiss
   try {
     startAutomationPolling({
       GetAutomationPreview: () => old.promise,
-      CheckSSIDPermission: async () => { permissionCalls++; return {}; },
+      GetLocationAuthorization: async () => { permissionCalls++; return 'denied'; },
     });
     stopAutomationPolling();
     startAutomationPolling({ GetAutomationPreview: async () => ({ available: true, tunnels: [{ name: 'new' }] }) });
@@ -60,16 +60,37 @@ test('a late permission response cannot publish after restart', async () => {
   try {
     startAutomationPolling({
       GetAutomationPreview: async () => ({ available: true, ssid_unknown: true, tunnels: [] }),
-      CheckSSIDPermission: () => permission.promise,
+      GetLocationAuthorization: () => permission.promise,
     });
     await settle();
     startAutomationPolling({ GetAutomationPreview: async () => ({ available: true, tunnels: [{ name: 'new' }] }) });
     await settle();
     locationAuth.set('unknown');
-    permission.resolve({ has_wifi: true, has_permission: false });
+    permission.resolve('denied');
     await settle();
     assert.equal(get(automationPreview).tunnels[0].name, 'new');
     assert.equal(get(locationAuth), 'unknown');
+  } finally { stopAutomationPolling(); }
+});
+
+test('the Location Services state is read only while the Wi-Fi name is unreadable', async () => {
+  let authCalls = 0;
+  const svc = {
+    preview: { available: true, ssid: 'HomeWiFi', tunnels: [] },
+    async GetAutomationPreview() { return svc.preview; },
+    async GetLocationAuthorization() { authCalls++; return 'not_determined'; },
+  };
+  try {
+    locationAuth.set('unknown');
+    startAutomationPolling(svc);
+    await settle();
+    assert.equal(authCalls, 0, 'a readable Wi-Fi name costs no lookup');
+    assert.equal(get(locationAuth), 'unknown');
+
+    svc.preview = { available: true, ssid_unknown: true, tunnels: [] };
+    await refreshAutomationPreview();
+    assert.equal(authCalls, 1);
+    assert.equal(get(locationAuth), 'not_determined');
   } finally { stopAutomationPolling(); }
 });
 

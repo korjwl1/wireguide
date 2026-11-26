@@ -295,7 +295,10 @@
   "wifi_permission": {
     "title": "位置情報サービスの許可が必要",
     "desc": "Wi-Fi ルールを使うにはネットワーク名の確認を許可する必要があります。システム設定 → プライバシーとセキュリティ → 位置情報サービスで WireGuide を許可してください。",
-    "open_settings": "設定を開く"
+    "open_settings": "設定を開く",
+    "desc_denied": "WireGuide の位置情報サービスが拒否されているため、Wi-Fi 名を取得できず「でない」SSID ルールは保留されます。システム設定 → プライバシーとセキュリティ → 位置情報サービスで許可してください。",
+    "desc_restricted": "この Mac では位置情報サービスが制限されている（プロファイルなど）ため、WireGuide は Wi-Fi 名を取得できず「でない」SSID ルールは保留されます。",
+    "desc_not_determined": "WireGuide の位置情報サービスがまだ許可されていないため、Wi-Fi 名を取得できません。システム設定 → プライバシーとセキュリティ → 位置情報サービスで許可してください。"
   },
   "automation": {
     "title": "オートメーション",
@@ -350,7 +353,9 @@
       "v_overlap": "接続しません — {cidr} が現在の LAN と重複しています",
       "v_blocked": "再接続しません — ルーティングループ監視がこのトンネルを停止しました。手動で接続すると解除されます",
       "v_no_match": "現在のネットワークに一致するルールはありません",
-      "net_unknown_denied": "WireGuide の位置情報サービスが拒否されています — Wi-Fi 名が不明のため「でない」SSID ルールは保留中です"
+      "net_unknown_denied": "WireGuide の位置情報サービスが拒否されています — Wi-Fi 名が不明のため「でない」SSID ルールは保留中です",
+      "net_unknown_not_allowed": "WireGuide の位置情報サービスがまだ許可されていません — Wi-Fi 名が不明のため「でない」SSID ルールは保留中です",
+      "net_unknown_roaming": "Wi-Fi 名を一時的に取得できません (再接続またはローミング中) — 「でない」ルールは保留中です"
     }
   },
   "ping_health": {

@@ -10,6 +10,17 @@
   // tri-state: null = not yet checked, true = ok, false = denied
   let permissionOk = null;
   let pollTimer = null;
+  // Precise Location Services state of THIS (GUI) process, or 'unknown'.
+  let locAuth = 'unknown';
+  $: descKey = locAuth === 'denied' ? 'wifi_permission.desc_denied'
+    : locAuth === 'restricted' ? 'wifi_permission.desc_restricted'
+    : locAuth === 'not_determined' ? 'wifi_permission.desc_not_determined'
+    : 'wifi_permission.desc';
+
+  async function refreshAuth() {
+    try { locAuth = (await TunnelService.GetLocationAuthorization()) || 'unknown'; }
+    catch (_) { locAuth = 'unknown'; }
+  }
 
   async function check() {
     if (!TunnelService) return;
@@ -18,7 +29,7 @@
       // No WiFi hardware → no issue, don't show banner
       if (!s.has_wifi) { permissionOk = true; return; }
       permissionOk = s.has_permission;
-      if (!permissionOk) startPolling();
+      if (!permissionOk) { await refreshAuth(); startPolling(); }
     } catch (_) {
       permissionOk = true; // fail open — don't block the UI
     }
@@ -29,6 +40,7 @@
     pollTimer = setInterval(async () => {
       try {
         const s = await TunnelService.CheckSSIDPermission();
+        if (!s.has_wifi || !s.has_permission) await refreshAuth();
         if (!s.has_wifi || s.has_permission) {
           permissionOk = true;
           clearInterval(pollTimer);
@@ -54,7 +66,7 @@
     <div class="banner-icon">⚠</div>
     <div class="banner-body">
       <p class="banner-title">{$t('wifi_permission.title')}</p>
-      <p class="banner-desc">{$t('wifi_permission.desc')}</p>
+      <p class="banner-desc">{$t(descKey)}</p>
     </div>
     <button class="banner-btn" on:click={openSettings}>
       {$t('wifi_permission.open_settings')}

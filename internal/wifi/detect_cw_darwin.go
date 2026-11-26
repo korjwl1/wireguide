@@ -10,6 +10,7 @@ package wifi
 const char* cwCurrentSSID(void);
 const char* cwInterfaceName(void);
 void cwRequestLocationAuthorization(void);
+int  cwLocationAuthorizationStatus(void);
 int  cwStartSSIDMonitor(void);
 void cwStopSSIDMonitor(void);
 */
@@ -39,6 +40,12 @@ func currentSSIDCoreWLAN() string {
 // user can grant SSID access in System Settings → Privacy & Security → Location Services.
 func RequestLocationAuthorization() {
 	C.cwRequestLocationAuthorization()
+}
+
+// locationAuthorizationRaw returns the raw CLAuthorizationStatus of this
+// process (-1 when unavailable). Read-only: never prompts.
+func locationAuthorizationRaw() int {
+	return int(C.cwLocationAuthorizationStatus())
 }
 
 // wifiInterfaceNameCoreWLAN returns the BSD name of the Wi-Fi interface via CoreWLAN.

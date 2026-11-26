@@ -7,6 +7,7 @@ import "errors"
 func currentSSIDCoreWLAN() string       { return "" }
 func wifiInterfaceNameCoreWLAN() string { return "" }
 func RequestLocationAuthorization()     {}
+func locationAuthorizationRaw() int     { return -1 }
 
 // StartCoreWLANSSIDMonitor / StopCoreWLANSSIDMonitor are macOS-only.
 // On Linux / Windows the wifi monitor falls back to its polling path.
