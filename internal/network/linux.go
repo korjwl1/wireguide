@@ -4,6 +4,7 @@ package network
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os/exec"
@@ -45,6 +46,8 @@ type LinuxManager struct {
 	// by this manager. They must be removed explicitly; deleting the default
 	// route from the policy table does not flush sibling throw routes.
 	endpointThrowRoutes []string
+
+	linkCleanupGuard LinkCleanupGuard
 }
 
 func NewPlatformManager() NetworkManager {
@@ -185,6 +188,11 @@ func (m *LinuxManager) Cleanup(ifaceName string) error {
 	//
 	// Engine.Close normally deletes the TUN first. Keep this final delete as a
 	// best-effort fallback for platform/engine implementations where it remains.
+	if m.linkCleanupGuard != nil {
+		if handled, err := m.linkCleanupGuard(m.dataDir, ifaceName); handled {
+			return errors.Join(dnsErr, err)
+		}
+	}
 	if err := runCmd("ip", "link", "delete", "dev", ifaceName); err != nil {
 		slog.Debug("cleanup: interface already absent or delete failed", "iface", ifaceName, "error", err)
 	}

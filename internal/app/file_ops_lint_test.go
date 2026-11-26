@@ -11,11 +11,11 @@ import (
 
 const lintTestKey = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
 
-func TestLintConfigFor(t *testing.T) {
+func TestLintConfig(t *testing.T) {
 	s := &TunnelService{}
 	content := "[Interface]\nPrivateKey = " + lintTestKey + "\nAddress = 10.0.0.2/32\nDNS = ~intranet.example\n" +
 		"[Peer]\nPublicKey = " + lintTestKey + "\nEndpoint = 1.2.3.4:51820\nAllowedIPs = 10.0.0.0/24\n"
-	ds, err := s.LintConfigFor("", content)
+	ds, err := s.LintConfig("", content)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -29,7 +29,7 @@ func TestLintConfigFor(t *testing.T) {
 		t.Fatalf("expected dns_error, got %+v", ds)
 	}
 
-	ds, err = s.LintConfigFor("x", "not a config")
+	ds, err = s.LintConfig("", "not a config")
 	if err != nil || ds == nil || len(ds) != 0 {
 		t.Fatalf("unparseable content: ds=%v err=%v", ds, err)
 	}
@@ -60,18 +60,18 @@ func hasCode(ds []config.Diagnostic, code string) bool {
 	return false
 }
 
-func TestLintConfigForCrossTunnel(t *testing.T) {
+func TestLintConfigCrossTunnel(t *testing.T) {
 	s := &TunnelService{tunnelStore: storage.NewTunnelStore(t.TempDir())}
 	if _, err := s.ImportConfig("home-vpn", lintTestConf("10.66.66.2/32")); err != nil {
 		t.Fatal(err)
 	}
 	// A new tunnel sharing the address is flagged.
-	ds, err := s.LintConfigFor("", lintTestConf("10.66.66.2/24"))
+	ds, err := s.LintConfig("", lintTestConf("10.66.66.2/24"))
 	if err != nil || !hasCode(ds, "address_shared") {
 		t.Fatalf("expected address_shared, got %+v err=%v", ds, err)
 	}
 	// Editing home-vpn itself must not conflict with its own saved copy.
-	ds, err = s.LintConfigFor("home-vpn", lintTestConf("10.66.66.2/32"))
+	ds, err = s.LintConfig("home-vpn", lintTestConf("10.66.66.2/32"))
 	if err != nil || hasCode(ds, "address_shared") {
 		t.Fatalf("self-conflict: %+v err=%v", ds, err)
 	}

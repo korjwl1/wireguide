@@ -57,6 +57,7 @@ func (m *Manager) Status() *ConnectionStatus {
 	state := primary.state
 	engine := primary.engine
 	connectedAt := primary.connectedAt
+	epoch := primary.counterEpoch
 	_ = primaryName // used for logging only
 	cfgName := ""
 	if primary.cfg != nil {
@@ -100,6 +101,7 @@ func (m *Manager) Status() *ConnectionStatus {
 			ActiveTunnels: activeTunnels,
 		}
 	}
+	status.CounterEpoch = epoch
 	status.ActiveTunnels = activeTunnels
 	return status
 }
@@ -115,6 +117,7 @@ func (m *Manager) StatusFor(name string) *ConnectionStatus {
 	state := entry.state
 	engine := entry.engine
 	connectedAt := entry.connectedAt
+	epoch := entry.counterEpoch
 	cfgName := ""
 	if entry.cfg != nil {
 		cfgName = entry.cfg.Name
@@ -137,6 +140,7 @@ func (m *Manager) StatusFor(name string) *ConnectionStatus {
 	if err != nil {
 		return &ConnectionStatus{State: domain.StateError, TunnelName: cfgName}
 	}
+	status.CounterEpoch = epoch
 	return status
 }
 
@@ -149,6 +153,7 @@ func (m *Manager) AllStatuses() []*ConnectionStatus {
 		engine      *Engine
 		connectedAt time.Time
 		cfgName     string
+		epoch       string
 	}
 	var snaps []snap
 	for name, e := range m.tunnels {
@@ -156,7 +161,7 @@ func (m *Manager) AllStatuses() []*ConnectionStatus {
 		if e.cfg != nil {
 			cfgName = e.cfg.Name
 		}
-		snaps = append(snaps, snap{name, e.state, e.engine, e.connectedAt, cfgName})
+		snaps = append(snaps, snap{name, e.state, e.engine, e.connectedAt, cfgName, e.counterEpoch})
 	}
 	m.mu.Unlock()
 
@@ -178,6 +183,7 @@ func (m *Manager) AllStatuses() []*ConnectionStatus {
 			if err != nil {
 				out = append(out, &ConnectionStatus{State: domain.StateError, TunnelName: s.cfgName})
 			} else {
+				st.CounterEpoch = s.epoch
 				out = append(out, st)
 			}
 		}

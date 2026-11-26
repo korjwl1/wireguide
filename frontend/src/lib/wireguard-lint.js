@@ -59,34 +59,62 @@ function keyOf(lineText) {
 
 /** All lines for a validator-style field ("Interface.DNS", "Peer[1].AllowedIPs"). */
 export function fieldLines(text, field) {
-  const m = /^(Interface|Peer(?:\[(\d+)\])?)\.(\w+)$/i.exec(field || '');
-  if (!m) return [];
-  const isPeer = m[1].toLowerCase().startsWith('peer');
-  const peerIdx = m[2] === undefined ? 0 : Number(m[2]);
-  const key = m[3].toLowerCase();
-  return scanSections(text).filter((l) => {
-    if (l.header || keyOf(l.text) !== key) return false;
-    return isPeer ? l.section === 'peer' && l.peer === peerIdx : l.section === 'interface';
-  });
+  const wanted = fieldKey(field);
+  if (!wanted) return [];
+  return scanSections(text).filter(line => lineFieldKey(line) === wanted);
 }
 
 /** Header line of a field's section, used when the key itself is absent. */
-function sectionHeader(text, field) {
-  const isPeer = /^peer/i.test(field || '');
+function fieldKey(field) {
+  const m = /^(Interface|Peer(?:\[(\d+)\])?)\.(\w+)$/i.exec(field || '');
+  if (!m) return null;
+  const section = m[1].toLowerCase().startsWith('peer')
+    ? `peer[${m[2] === undefined ? 0 : Number(m[2])}]` : 'interface';
+  return `${section}.${m[3].toLowerCase()}`;
+}
+
+function headerKey(field) {
   const m = /\[(\d+)\]/.exec(field || '');
-  const peerIdx = m ? Number(m[1]) : 0;
-  return scanSections(text).find((l) =>
-    l.header && (isPeer ? l.section === 'peer' && l.peer === peerIdx : l.section === 'interface'));
+  return /^peer/i.test(field || '') ? `peer[${m ? Number(m[1]) : 0}]` : 'interface';
+}
+
+function lineRange(line) {
+  const from = line.from + line.text.length - line.text.trimStart().length;
+  return { from, to: Math.max(from, line.from + line.text.trimEnd().length) };
+}
+
+function lineFieldKey(line) {
+  if (!line.section || line.header) return null;
+  const key = keyOf(line.text);
+  if (!key) return null;
+  const section = line.section === 'peer' ? `peer[${line.peer}]` : 'interface';
+  return `${section}.${key}`;
+}
+
+function indexFields(text) {
+  const lines = scanSections(text);
+  const ranges = new Map();
+  const headers = new Map();
+  for (const line of lines) {
+    if (!line.section) continue;
+    const section = line.section === 'peer' ? `peer[${line.peer}]` : 'interface';
+    if (line.header) {
+      if (!headers.has(section)) headers.set(section, lineRange(line));
+      continue;
+    }
+    const field = lineFieldKey(line);
+    if (field && !ranges.has(field)) ranges.set(field, lineRange(line));
+  }
+  return { ranges, headers, first: lineRange(lines[0]) };
+}
+
+function indexedRange(index, field) {
+  return index.ranges.get(fieldKey(field)) || index.headers.get(headerKey(field)) || index.first;
 }
 
 /** Absolute range ({ from, to }) a diagnostic's Field should be anchored to. */
 export function fieldRange(text, field) {
-  const lines = fieldLines(text, field);
-  const target = lines[0] || sectionHeader(text, field) || scanLines(text)[0];
-  const lead = target.text.length - target.text.trimStart().length;
-  const from = target.from + lead;
-  const to = Math.max(from, target.from + target.text.trimEnd().length);
-  return { from, to };
+  return indexedRange(indexFields(text), field);
 }
 
 // ---- diagnostics -------------------------------------------------------
@@ -119,12 +147,13 @@ export function fixLabel(fix, tr) {
  */
 export function mapDiagnostics(text, diagnostics, tr) {
   const out = [];
+  let index;
   for (const d of diagnostics || []) {
     if (!d) continue;
-    const { from, to } = fieldRange(text, d.field);
+    index ||= indexFields(text);
+    const { from, to } = indexedRange(index, d.field);
     out.push({
-      from,
-      to,
+      from, to,
       severity: SEVERITIES.has(d.severity) ? d.severity : 'info',
       message: diagText(d, tr),
       fix: d.fix || null,

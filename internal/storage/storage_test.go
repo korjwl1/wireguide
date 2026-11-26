@@ -412,3 +412,33 @@ func TestCreatedUnixStampedOnceAcrossEdits(t *testing.T) {
 		t.Errorf("CreatedUnix changed after edit: was %d, now %d", created, meta.CreatedUnix)
 	}
 }
+
+// Notifications are opt-in: fresh settings and a settings.json written
+// before notify_auto_changes existed leave it off; an explicit true is
+// honoured and an explicit false stays off.
+func TestNotifyAutoChangesDefaultsOff(t *testing.T) {
+	dir := t.TempDir()
+	store := NewSettingsStore(dir)
+	if s, err := store.Load(); err != nil || s.NotifyAutoChanges {
+		t.Fatalf("fresh settings: %+v, %v", s, err)
+	}
+	path := filepath.Join(dir, "config.json")
+	if err := os.WriteFile(path, []byte(`{"language":"ko","theme":"dark"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if s, err := store.Load(); err != nil || s.Language != "ko" || s.NotifyAutoChanges {
+		t.Fatalf("legacy settings must leave the toggle off: %+v, %v", s, err)
+	}
+	if err := os.WriteFile(path, []byte(`{"notify_auto_changes":true}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if s, err := store.Load(); err != nil || !s.NotifyAutoChanges {
+		t.Fatalf("explicit true must stick: %+v, %v", s, err)
+	}
+	if err := os.WriteFile(path, []byte(`{"notify_auto_changes":false}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if s, err := store.Load(); err != nil || s.NotifyAutoChanges {
+		t.Fatalf("explicit false must stick: %+v, %v", s, err)
+	}
+}

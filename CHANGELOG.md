@@ -2,6 +2,36 @@
 
 All notable changes to WireGuide will be documented in this file.
 
+## [0.7.0] - 2026-11-13
+
+### Added
+- **Optional Linux kernel engine (#62)** - select the in-kernel WireGuard module in Settings, mirroring the Windows WireGuardNT option. wireguard-go remains the default. Interrupted kernel links are recovered by verified interface index, so a same-named non-WireGuard interface is never removed.
+- **Notifications for automatic tunnel changes (#69)** - native, localized notifications when automation, wake or health-check recovery, the CLI or the loop watchdog connects or disconnects a tunnel. Changes made from the window or tray never notify. Off by default.
+- **Automation status strip (#68)** - the Automation editor, tunnel detail card and list rows explain what automation decided and why: connect, on hold, paused by a manual action, blocked by the routing-loop watchdog, or held back by AllowedIPs overlapping the LAN.
+- **DNS editor help (#66)** - inline DNS diagnostics with one-click fixes, hover help for `DNS` and `~domain` entries, and `DNS =` value completion. Diagnostics are advisory and never block saving.
+- **DNS mode display (#67)** - each tunnel shows whether its config requests global, split or search-only DNS, including the platform caveats; `wireguide ctl status` reports the mode.
+- **macOS administrator prompt explanation (#72)** - a short dialog explains why the password is needed before installing or repairing the helper.
+
+### Changed
+- **Wails v3.1.0** - move from beta.34 to the first stable Wails v3 line, which includes Windows fixes for crashes while painting the menu bar and applying dark mode. Also update `golang.org/x/{sys,net,image,crypto}`, Svelte and Vite, and require the patched Go 1.26.11 toolchain.
+- **macOS helper packaging** - ship the helper as a separately signed executable and validate it before replacing the running service. The helper and login item are attributed to WireGuide in System Settings (#71).
+- **Helper logs (#70)** - the macOS helper log rotates by size instead of growing without bound. On Windows, `WIREGUIDE_HELPER_STDERR=1` writes a rotated helper log.
+
+### Fixed
+- **Connection history (#64)** - session byte totals survive zeroed readings during teardown and counter restarts across reconnects; late samples from an earlier engine can no longer reopen or distort a closed session.
+- **Health check after sleep (#65)** - sleep and offline time no longer count as a dead handshake, and a stale-tunnel check never cancels a reconnect already in progress.
+- **Tunnel list sort bar (#74)** - the sort control and "connected first" checkbox wrap instead of overlapping in narrow panes.
+
+### Upgrade notes
+- Notifications for automatic changes are opt-in; enable them in Settings.
+- The Linux kernel engine requires the `wireguard` kernel module. Existing installations keep using wireguard-go unless the engine is changed in Settings.
+- macOS applications remain ad-hoc signed. Windows Authenticode signing depends on SignPath availability. Every release publishes SHA256SUMS and an Ed25519 signature for verified in-app updates.
+
+### Verification
+- CI covered Windows, macOS and Linux amd64/arm64 tests on the release commit, including production Windows installer, macOS bundle and Linux package builds.
+- Native Windows 11 checks on the release build covered connect, disconnect and reconnect with HTTPS and DNS through a full tunnel, kill-switch blocking, DNS protection, ping health-check reconnection, the WireGuardNT engine, automation connecting on startup with an automatic-change notification, single-instance enforcement and clean shutdown. Original user settings and tunnel configurations were restored.
+- The Linux kernel engine was covered by hermetic creation, ownership and recovery tests; a live Linux kernel-engine session was not exercised. macOS runtime behavior, Windows ARM64, reboot, sleep/wake and an installed-upgrade cycle were not exercised in this release's local runtime checks.
+
 ## [0.6.1] - 2026-10-26
 
 ### Added

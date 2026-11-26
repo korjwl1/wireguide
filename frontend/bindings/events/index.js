@@ -7,6 +7,11 @@
 import "../github.com/wailsapp/wails/v3/internal/eventcreate.js";
 
 /**
+ * Name of the custom event "automation_changed".
+ */
+export const AutomationChanged = "automation_changed";
+
+/**
  * Name of the custom event "config_changed".
  */
 export const ConfigChanged = "config_changed";
@@ -65,4 +70,9 @@ export const UpdateAvailable = "update-available";
  * Name of the custom event "update_progress".
  */
 export const UpdateProgress = "update_progress";
+
+/**
+ * Name of the custom event "window_visibility".
+ */
+export const WindowVisibility = "window_visibility";
 

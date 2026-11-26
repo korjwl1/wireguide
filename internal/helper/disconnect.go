@@ -27,7 +27,12 @@ func (h *Helper) handleDisconnect(params json.RawMessage) (interface{}, error) {
 		// If unmarshal fails (e.g. empty params), disconnect first tunnel (backward compat).
 	}
 
-	return h.disconnectHeld(tunnelName)
+	result, err := h.disconnectHeld(tunnelName)
+	var tunnelErr *domain.TunnelError
+	if errors.As(err, &tunnelErr) && tunnelErr.Kind == domain.ErrNotConnected {
+		return nil, &ipc.CodedError{Code: ipc.ErrCodeNotConnected, Message: err.Error()}
+	}
+	return result, err
 }
 
 // disconnectHeld runs under connectMu for both explicit Off and atomic delete.

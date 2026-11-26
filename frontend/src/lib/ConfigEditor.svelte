@@ -143,7 +143,7 @@ PersistentKeepalive = 25
         keymap.of([indentWithTab, ...defaultKeymap, ...historyKeymap]),
         wireguardLanguage,
         autocompletion({ override: [createWireguardCompletion(tr, { splitDns })] }),
-        wireguardLinter((text) => TunnelService.LintConfigFor(lintName, text), tr),
+        wireguardLinter((text) => TunnelService.LintConfig(lintName, text), tr),
         lintGutter(),
         wireguardHover(tr, { splitDns }),
         themeCompartment.of(initialThemeExt),

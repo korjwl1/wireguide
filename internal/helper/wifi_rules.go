@@ -82,7 +82,12 @@ func (h *Helper) reevaluateAutomation(reason string) {
 		return
 	}
 	h.reevalMu.Lock()
-	defer h.reevalMu.Unlock()
+	defer func() {
+		h.reevalMu.Unlock()
+		if h.server != nil {
+			h.server.Broadcast(ipc.EventAutomationChanged, ipc.Empty{})
+		}
+	}()
 
 	settings, err := h.loadUserSettings()
 	if err != nil {
@@ -193,13 +198,20 @@ func (h *Helper) handleAutomationPreview(_ json.RawMessage) (interface{}, error)
 			if latched {
 				decision = "latched"
 			}
+			evaluation := &ipc.AutomationRuleEvaluation{RuleIndex: info.RuleIndex, HasNegatedRules: automation.HasNegated(rules)}
+			if info.RuleIndex >= 0 && info.RuleIndex < len(rules) {
+				condition := rules[info.RuleIndex].When
+				evaluation.Condition = &condition
+			}
 			resp.Tunnels = append(resp.Tunnels, ipc.AutomationTunnelDecision{
-				Name:      name,
-				RuleCount: len(rules),
-				Decision:  decision,
-				Active:    active[name],
-				Held:      info.Held,
-				Latched:   latched,
+				Name:       name,
+				RuleCount:  len(rules),
+				Decision:   decision,
+				Active:     active[name],
+				Held:       info.Held,
+				Latched:    latched,
+				Blocked:    h.isWatchdogBlocked(name),
+				Evaluation: evaluation,
 			})
 		}
 	}

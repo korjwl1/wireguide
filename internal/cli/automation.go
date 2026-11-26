@@ -72,6 +72,8 @@ func automationPreview() int {
 		}
 		note := ""
 		switch {
+		case tdec.Blocked:
+			note = "  (blocked by the loop watchdog: automation will not reconnect it)"
 		case tdec.Latched:
 			note = "  (manual override: automation paused until the network changes)"
 		case tdec.Held:

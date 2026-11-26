@@ -2,6 +2,7 @@ package app
 
 import (
 	"fmt"
+	"log/slog"
 	"path/filepath"
 	"strings"
 
@@ -78,14 +79,14 @@ func (s *TunnelService) ValidateConfig(content string) ([]string, error) {
 	return result.ErrorMessages(), nil
 }
 
-// LintConfigFor returns advisory (non-blocking) editor diagnostics for a raw
+// LintConfig returns advisory (non-blocking) editor diagnostics for a raw
 // config string: DNS errors mirroring ValidateConfig, plus warnings and hints.
 // editing is the saved tunnel name being edited ("" for a new tunnel); it is
 // excluded from the cross-tunnel duplicate-Address check so an edit never
 // "conflicts" with its own saved copy. It never affects whether a config is
 // valid. Content that does not parse yields no diagnostics (ValidateConfig
 // reports the parse error).
-func (s *TunnelService) LintConfigFor(editing, content string) ([]config.Diagnostic, error) {
+func (s *TunnelService) LintConfig(editing, content string) ([]config.Diagnostic, error) {
 	cfg, err := config.Parse(content)
 	if err != nil {
 		return []config.Diagnostic{}, nil
@@ -127,6 +128,7 @@ var lintConfig = config.Lint
 func safeLint(cfg *config.WireGuardConfig, others map[string]*config.WireGuardConfig) (ds []config.Diagnostic) {
 	defer func() {
 		if r := recover(); r != nil {
+			slog.Warn("configuration lint failed")
 			ds = nil
 		}
 	}()

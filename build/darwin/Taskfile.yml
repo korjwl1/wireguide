@@ -154,8 +154,10 @@ tasks:
     cmds:
       - mkdir -p "{{.BIN_DIR}}/{{.APP_NAME}}.app/Contents/MacOS"
       - mkdir -p "{{.BIN_DIR}}/{{.APP_NAME}}.app/Contents/Resources"
+      - mkdir -p "{{.BIN_DIR}}/{{.APP_NAME}}.app/Contents/Library/LaunchServices"
       - cp build/darwin/icons.icns "{{.BIN_DIR}}/{{.APP_NAME}}.app/Contents/Resources"
       - cp "{{.BIN_DIR}}/{{.APP_NAME}}" "{{.BIN_DIR}}/{{.APP_NAME}}.app/Contents/MacOS"
+      - cp "{{.BIN_DIR}}/{{.APP_NAME}}" "{{.BIN_DIR}}/{{.APP_NAME}}.app/Contents/Library/LaunchServices/com.wireguide.helper"
       - cp build/darwin/Info.plist "{{.BIN_DIR}}/{{.APP_NAME}}.app/Contents"
       - task: '{{if eq OS "darwin"}}codesign:adhoc{{else}}codesign:skip{{end}}'
 
@@ -163,7 +165,9 @@ tasks:
     summary: Ad-hoc signs the app bundle (macOS only)
     internal: true
     cmds:
-      - codesign --force --deep --sign - "{{.BIN_DIR}}/{{.APP_NAME}}.app"
+      - codesign --force --sign - --identifier com.wireguide.helper "{{.BIN_DIR}}/{{.APP_NAME}}.app/Contents/Library/LaunchServices/com.wireguide.helper"
+      - codesign --force --sign - "{{.BIN_DIR}}/{{.APP_NAME}}.app"
+      - codesign --verify --deep --strict --all-architectures "{{.BIN_DIR}}/{{.APP_NAME}}.app"
 
   codesign:skip:
     summary: Skips codesigning when cross-compiling
@@ -175,10 +179,14 @@ tasks:
     cmds:
       - mkdir -p "{{.BIN_DIR}}/{{.APP_NAME}}.dev.app/Contents/MacOS"
       - mkdir -p "{{.BIN_DIR}}/{{.APP_NAME}}.dev.app/Contents/Resources"
+      - mkdir -p "{{.BIN_DIR}}/{{.APP_NAME}}.dev.app/Contents/Library/LaunchServices"
       - cp build/darwin/icons.icns "{{.BIN_DIR}}/{{.APP_NAME}}.dev.app/Contents/Resources"
       - cp "{{.BIN_DIR}}/{{.APP_NAME}}" "{{.BIN_DIR}}/{{.APP_NAME}}.dev.app/Contents/MacOS"
+      - cp "{{.BIN_DIR}}/{{.APP_NAME}}" "{{.BIN_DIR}}/{{.APP_NAME}}.dev.app/Contents/Library/LaunchServices/com.wireguide.helper"
       - cp "build/darwin/Info.dev.plist" "{{.BIN_DIR}}/{{.APP_NAME}}.dev.app/Contents/Info.plist"
-      - codesign --force --deep --sign - "{{.BIN_DIR}}/{{.APP_NAME}}.dev.app"
+      - codesign --force --sign - --identifier com.wireguide.helper "{{.BIN_DIR}}/{{.APP_NAME}}.dev.app/Contents/Library/LaunchServices/com.wireguide.helper"
+      - codesign --force --sign - "{{.BIN_DIR}}/{{.APP_NAME}}.dev.app"
+      - codesign --verify --deep --strict --all-architectures "{{.BIN_DIR}}/{{.APP_NAME}}.dev.app"
       - '{{.BIN_DIR}}/{{.APP_NAME}}.dev.app/Contents/MacOS/{{.APP_NAME}}'
 
   sign:
@@ -189,7 +197,9 @@ tasks:
     deps:
       - task: package
     cmds:
+      - codesign --force --options runtime --timestamp --sign "{{.SIGN_IDENTITY}}" --identifier com.wireguide.helper "{{.BIN_DIR}}/{{.APP_NAME}}.app/Contents/Library/LaunchServices/com.wireguide.helper"
       - wails3 tool sign --input "{{.BIN_DIR}}/{{.APP_NAME}}.app" --identity "{{.SIGN_IDENTITY}}" {{if .ENTITLEMENTS}}--entitlements {{.ENTITLEMENTS}}{{end}}
+      - codesign --verify --deep --strict --all-architectures "{{.BIN_DIR}}/{{.APP_NAME}}.app"
     preconditions:
       - sh: '[ -n "{{.SIGN_IDENTITY}}" ]'
         msg: "SIGN_IDENTITY is required. Set it in the vars section at the top of build/darwin/Taskfile.yml"
@@ -205,7 +215,9 @@ tasks:
     deps:
       - task: package
     cmds:
+      - codesign --force --options runtime --timestamp --sign "{{.SIGN_IDENTITY}}" --identifier com.wireguide.helper "{{.BIN_DIR}}/{{.APP_NAME}}.app/Contents/Library/LaunchServices/com.wireguide.helper"
       - wails3 tool sign --input "{{.BIN_DIR}}/{{.APP_NAME}}.app" --identity "{{.SIGN_IDENTITY}}" {{if .ENTITLEMENTS}}--entitlements {{.ENTITLEMENTS}}{{end}} --notarize --keychain-profile {{.KEYCHAIN_PROFILE}}
+      - codesign --verify --deep --strict --all-architectures "{{.BIN_DIR}}/{{.APP_NAME}}.app"
     preconditions:
       - sh: '[ -n "{{.SIGN_IDENTITY}}" ]'
         msg: "SIGN_IDENTITY is required. Set it in the vars section at the top of build/darwin/Taskfile.yml"

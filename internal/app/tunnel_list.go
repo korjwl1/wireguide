@@ -3,6 +3,7 @@ package app
 import (
 	"log/slog"
 
+	"github.com/korjwl1/wireguide/internal/diag"
 	"github.com/korjwl1/wireguide/internal/ipc"
 )
 
@@ -45,6 +46,7 @@ func (s *TunnelService) ListTunnelsLocal() ([]TunnelInfo, error) {
 		if created == 0 {
 			created = s.tunnelStore.ModTimeUnix(name)
 		}
+		dnsMode := diag.DNSModeOf(cfg.Interface.DNS)
 		result = append(result, TunnelInfo{
 			Name:               name,
 			Endpoint:           endpoint,
@@ -52,6 +54,8 @@ func (s *TunnelService) ListTunnelsLocal() ([]TunnelInfo, error) {
 			LatencyProbeTarget: latencyProbeTarget,
 			CreatedAtUnix:      created,
 			LastUsedUnix:       lastUsed[name],
+			DNSMode:            dnsMode.Mode,
+			DNSDomains:         dnsMode.Domains,
 		})
 	}
 	return result, nil

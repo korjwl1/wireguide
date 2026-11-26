@@ -83,6 +83,7 @@ func cmdStatus(args []string) int {
 	if jsonOut {
 		return printJSON(rows)
 	}
+	dns := tunnelDNSModes(rows)
 	for _, r := range rows {
 		if pendingRows[r.TunnelName] {
 			fmt.Printf("○ %s  waiting to reconnect\n", r.TunnelName)
@@ -96,14 +97,40 @@ func cmdStatus(args []string) int {
 			fmt.Printf("○ %s  connecting\n", r.TunnelName)
 			continue
 		}
-		hs := r.LastHandshake
-		if hs == "" {
-			hs = "—"
-		}
-		fmt.Printf("● %s  %s  rx=%s tx=%s  handshake=%s\n",
-			r.TunnelName, r.Duration, humanBytes(r.RxBytes), humanBytes(r.TxBytes), hs)
+		fmt.Println(formatStatusRow(r, dns[r.TunnelName]))
 	}
 	return 0
+}
+
+// formatStatusRow renders one connected `ctl status` line. dns is the
+// DNSMode StatusString ("" when the config could not be read).
+func formatStatusRow(r domain.ConnectionStatus, dns string) string {
+	hs := r.LastHandshake
+	if hs == "" {
+		hs = "—"
+	}
+	line := fmt.Sprintf("● %s  %s  rx=%s tx=%s  handshake=%s",
+		r.TunnelName, r.Duration, humanBytes(r.RxBytes), humanBytes(r.TxBytes), hs)
+	if dns != "" {
+		line += "  dns=" + dns
+	}
+	return line
+}
+
+// tunnelDNSModes maps each row's tunnel to its intended DNS mode, read from
+// the stored config (no IPC). Unreadable configs are simply absent.
+func tunnelDNSModes(rows []domain.ConnectionStatus) map[string]string {
+	out := make(map[string]string, len(rows))
+	store, err := tunnelStore()
+	if err != nil {
+		return out
+	}
+	for _, r := range rows {
+		if cfg, err := store.Load(r.TunnelName); err == nil && cfg != nil {
+			out[r.TunnelName] = diag.DNSModeOf(cfg.Interface.DNS).StatusString()
+		}
+	}
+	return out
 }
 
 func cmdList(args []string) int {
