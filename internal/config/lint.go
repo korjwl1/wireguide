@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"runtime"
+	"sort"
 	"strings"
 )
 
@@ -55,9 +56,9 @@ type Diagnostic struct {
 
 // Lint returns advisory diagnostics for cfg. others holds the other saved
 // tunnels keyed by name (exclude the tunnel being edited) for cross-tunnel
-// checks; it may be nil and is currently unused. Lint never affects
+// checks (duplicate interface Address); it may be nil. Lint never affects
 // Validate/IsValid.
-func Lint(cfg *WireGuardConfig, _ map[string]*WireGuardConfig) []Diagnostic {
+func Lint(cfg *WireGuardConfig, others map[string]*WireGuardConfig) []Diagnostic {
 	if cfg == nil {
 		return nil
 	}
@@ -149,6 +150,9 @@ func Lint(cfg *WireGuardConfig, _ map[string]*WireGuardConfig) []Diagnostic {
 		}
 	}
 
+	// Warning: another saved tunnel uses the same interface Address.
+	out = append(out, DuplicateAddressDiagnostics(cfg, others)...)
+
 	// Info: MTU above the recommended maximum.
 	if cfg.Interface.MTU > mtuRecommendedMax {
 		out = append(out, Diagnostic{
@@ -190,6 +194,67 @@ func Lint(cfg *WireGuardConfig, _ map[string]*WireGuardConfig) []Diagnostic {
 	}
 
 	return out
+}
+
+// DuplicateAddressDiagnostics returns one address_shared warning per entry of
+// others whose interface Address shares an IP with cfg (prefix length
+// ignored), sorted by tunnel name. others must not contain cfg itself.
+func DuplicateAddressDiagnostics(cfg *WireGuardConfig, others map[string]*WireGuardConfig) []Diagnostic {
+	if len(others) == 0 || len(cfg.Interface.Address) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(others))
+	for n := range others {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	var out []Diagnostic
+	for _, name := range names {
+		shared := SharedAddresses(cfg.Interface.Address, others[name].Interface.Address)
+		if len(shared) == 0 {
+			continue
+		}
+		addr := strings.Join(shared, ", ")
+		out = append(out, Diagnostic{
+			Field:    "Interface.Address",
+			Severity: SeverityWarning,
+			Code:     "address_shared",
+			Message:  fmt.Sprintf("shares Address %s with %s", addr, name),
+			Args:     map[string]string{"address": addr, "tunnel": name},
+		})
+	}
+	return out
+}
+
+// SharedAddresses returns the entries of a (as written) whose IP also appears
+// in b, ignoring the prefix length.
+func SharedAddresses(a, b []string) []string {
+	set := make(map[string]struct{}, len(b))
+	for _, s := range b {
+		if ip := addrIP(s); ip != "" {
+			set[ip] = struct{}{}
+		}
+	}
+	var shared []string
+	for _, s := range a {
+		if ip := addrIP(s); ip != "" {
+			if _, ok := set[ip]; ok {
+				shared = append(shared, s)
+			}
+		}
+	}
+	return shared
+}
+
+func addrIP(s string) string {
+	s = strings.TrimSpace(s)
+	if ip, _, err := net.ParseCIDR(s); err == nil {
+		return ip.String()
+	}
+	if ip := net.ParseIP(s); ip != nil {
+		return ip.String()
+	}
+	return ""
 }
 
 // reverseZoneDiagnostic suggests every reverse zone the routes need. The

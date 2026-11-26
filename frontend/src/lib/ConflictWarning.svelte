@@ -6,6 +6,12 @@
   export let conflicts = [];
   const dispatch = createEventDispatcher();
 
+  // Connected tunnels that share this tunnel's interface Address (owner
+  // "address"); the dialog can offer to disconnect them first.
+  const ADDRESS_OWNER = 'address';
+  $: addressConflicts = conflicts.filter((c) => c.owner === ADDRESS_OWNER);
+  $: routeConflicts = conflicts.filter((c) => c.owner !== ADDRESS_OWNER);
+
   // Match the other modals: Escape cancels.
   function onKeyDown(e) {
     if (e.key === 'Escape') {
@@ -20,14 +26,14 @@
 <div class="modal-backdrop" use:backdrop={() => dispatch('cancel')}>
   <div class="modal" use:modal={() => dispatch('cancel')} tabindex="-1"
     role="dialog" aria-modal="true" aria-labelledby="conflict-title">
-    <h3 id="conflict-title">{$t('conflict.title')}</h3>
+    <h3 id="conflict-title">{routeConflicts.length === 0 ? $t('conflict.address_title') : $t('conflict.title')}</h3>
 
     <div class="conflict-list">
       {#each conflicts as conflict}
         <div class="conflict-item">
           <div class="conflict-header">
             <span class="iface">{conflict.interface_name}</span>
-            <span class="owner">({conflict.owner})</span>
+            <span class="owner">({conflict.owner === ADDRESS_OWNER ? $t('conflict.same_address') : conflict.owner})</span>
           </div>
           <div class="overlap-list">
             {#each conflict.overlapping_ips.slice(0, 3) as overlap}
@@ -41,9 +47,20 @@
       {/each}
     </div>
 
-    <p class="warning-text">{$t('conflict.message')}</p>
+    {#if routeConflicts.length > 0}
+      <p class="warning-text">{$t('conflict.message')}</p>
+    {/if}
+    {#if addressConflicts.length > 0}
+      <p class="warning-text">{$t('conflict.address_message')}</p>
+    {/if}
 
     <div class="modal-footer">
+      {#if addressConflicts.length > 0}
+        <button class="btn btn-warn"
+          on:click={() => dispatch('disconnect_proceed', { names: addressConflicts.map((c) => c.interface_name) })}>
+          {$t('conflict.disconnect_and_connect', { names: addressConflicts.map((c) => c.interface_name).join(', ') })}
+        </button>
+      {/if}
       <button class="btn btn-warn" on:click={() => dispatch('proceed')}>
         {$t('conflict.proceed')}
       </button>
@@ -100,7 +117,7 @@
     color: var(--text-secondary);
     margin: 12px 0;
   }
-  .modal-footer { display: flex; gap: 8px; justify-content: flex-end; }
+  .modal-footer { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
   .btn {
     padding: 8px 16px;
     border: none;

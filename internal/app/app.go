@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/korjwl1/wireguide/internal/config"
 	"github.com/korjwl1/wireguide/internal/domain"
 	"github.com/korjwl1/wireguide/internal/ipc"
 	"github.com/korjwl1/wireguide/internal/storage"
@@ -305,6 +306,10 @@ type TunnelInfo struct {
 	// domains only) or "none". Intent, not read back from the OS.
 	DNSMode    string   `json:"dns_mode,omitempty"`
 	DNSDomains []string `json:"dns_domains,omitempty"`
+	// Warnings carries non-blocking lint findings (currently the
+	// cross-tunnel duplicate-Address warning) from ImportConfig so the UI
+	// can surface them after a successful import.
+	Warnings []config.Diagnostic `json:"warnings,omitempty"`
 }
 
 // ConnectionStatus is re-exported from the domain package so Wails bindings

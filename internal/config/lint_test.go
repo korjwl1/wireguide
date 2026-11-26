@@ -202,6 +202,28 @@ func TestLintReverseZoneFix(t *testing.T) {
 	}
 }
 
+func TestLintDuplicateAddress(t *testing.T) {
+	cfg := lintCfg(t, "MTU = 1380", "10.0.0.0/24")
+	other := lintCfg(t, "MTU = 1380", "10.9.0.0/24")
+	other.Interface.Address = []string{"10.0.0.2/24"} // same IP, different prefix
+	third := lintCfg(t, "MTU = 1380", "10.9.0.0/24")
+	third.Interface.Address = []string{"10.0.0.3/32"}
+	ds := Lint(cfg, map[string]*WireGuardConfig{"Branch": other, "Third": third})
+	var dups []Diagnostic
+	for _, d := range ds {
+		if d.Code == "address_shared" {
+			dups = append(dups, d)
+		}
+	}
+	if len(dups) != 1 || dups[0].Severity != SeverityWarning || dups[0].Field != "Interface.Address" ||
+		dups[0].Message != "shares Address 10.0.0.2/32 with Branch" {
+		t.Fatalf("unexpected duplicates: %+v", dups)
+	}
+	if find(Lint(cfg, nil), "address_shared") != nil {
+		t.Error("duplicate without others")
+	}
+}
+
 func TestLintNeverAffectsValidity(t *testing.T) {
 	cfg := lintCfg(t, "DNS = 1.1.1.1\nMTU = 1500", "192.168.1.0/24")
 	before := Validate(cfg).IsValid()
@@ -319,6 +341,19 @@ func TestDNSErrorsValidInput(t *testing.T) {
 	}
 	if errs := dnsErrors(nil); len(errs) != 0 {
 		t.Fatalf("unexpected errors %v", errs)
+	}
+}
+
+func TestSharedAddresses(t *testing.T) {
+	got := SharedAddresses([]string{"10.0.0.2/24", "fd00::2/128", "10.0.0.9/32"}, []string{"10.0.0.2/32", "fd00::2/64", "bogus"})
+	if strings.Join(got, ",") != "10.0.0.2/24,fd00::2/128" {
+		t.Errorf("got %v", got)
+	}
+	if got := SharedAddresses([]string{"10.0.0.2/24"}, []string{"10.0.0.3/24"}); len(got) != 0 {
+		t.Errorf("unexpected %v", got)
+	}
+	if got := SharedAddresses(nil, []string{"10.0.0.2/24"}); len(got) != 0 {
+		t.Errorf("unexpected %v", got)
 	}
 }
 

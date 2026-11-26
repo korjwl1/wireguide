@@ -21,7 +21,7 @@ test('lint.* and editor.tpl_* keys exist in every language', () => {
 
 test('every diagnostic code emitted by the Go linter has a translation', () => {
   const codes = ['dns_global_outside', 'dns_global_outside_adapter', 'dns_mdns', 'dns_split_windows',
-    'dns_split_linux', 'mtu_high', 'dns_lan_none', 'dns_no_reverse', 'fix_remove_dns', 'fix_append_dns',
+    'dns_split_linux', 'address_shared', 'mtu_high', 'dns_lan_none', 'dns_no_reverse', 'fix_remove_dns', 'fix_append_dns',
     'dns_global_outside_windows', 'dns_lan_none_windows', 'dns_no_reverse_limit', 'hover_split_unsupported'];
   for (const l of ['en', 'ko', 'ja', 'zh']) {
     for (const c of codes) assert.ok(load(l).lint[c], `${l}: lint.${c}`);

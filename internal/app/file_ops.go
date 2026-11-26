@@ -13,6 +13,15 @@ import (
 // ImportConfig parses, validates, and saves a tunnel config under the given
 // name. Returns a TunnelInfo for optimistic UI display.
 func (s *TunnelService) ImportConfig(name, content string) (*TunnelInfo, error) {
+	return s.importConfig(name, content, nil)
+}
+
+// importConfig is ImportConfig with an optional snapshot of the saved tunnels
+// for the duplicate-Address check. A non-nil saved is owned by the caller and
+// is updated with the imported tunnel, so a batch import loads the store once
+// and later entries are checked against earlier ones. A nil saved is loaded
+// on demand.
+func (s *TunnelService) importConfig(name, content string, saved map[string]*config.WireGuardConfig) (*TunnelInfo, error) {
 	cfg, err := s.tunnelStore.ImportFromContent(name, content)
 	if err != nil {
 		return nil, err
@@ -21,10 +30,34 @@ func (s *TunnelService) ImportConfig(name, content string) (*TunnelInfo, error) 
 	if len(cfg.Peers) > 0 {
 		endpoint = cfg.Peers[0].Endpoint
 	}
-	return &TunnelInfo{
+	info := &TunnelInfo{
 		Name:     cfg.Name,
 		Endpoint: endpoint,
-	}, nil
+	}
+	// Non-blocking: surface a duplicate-Address warning against the other
+	// saved tunnels. The import has already succeeded, so a failure here must
+	// not fail it.
+	others := saved
+	if others == nil {
+		others = s.otherTunnelConfigs(cfg.Name)
+	}
+	delete(others, cfg.Name) // an overwritten tunnel is not its own duplicate
+	info.Warnings = safeDuplicateAddress(cfg, others)
+	if saved != nil {
+		saved[cfg.Name] = cfg
+	}
+	return info, nil
+}
+
+// safeDuplicateAddress runs config.DuplicateAddressDiagnostics but never lets a
+// panic escape.
+func safeDuplicateAddress(cfg *config.WireGuardConfig, others map[string]*config.WireGuardConfig) (ds []config.Diagnostic) {
+	defer func() {
+		if r := recover(); r != nil {
+			ds = nil
+		}
+	}()
+	return config.DuplicateAddressDiagnostics(cfg, others)
 }
 
 // BaseName extracts the filename without extension from a path.
@@ -46,29 +79,52 @@ func (s *TunnelService) ValidateConfig(content string) ([]string, error) {
 	return result.ErrorMessages(), nil
 }
 
-// LintConfigFor returns advisory (non-blocking) editor diagnostics for a raw
+// LintConfig returns advisory (non-blocking) editor diagnostics for a raw
 // config string: DNS errors mirroring ValidateConfig, plus warnings and hints.
 // editing is the saved tunnel name being edited ("" for a new tunnel); it is
-// reserved for cross-tunnel checks. It never affects whether a config is
+// excluded from the cross-tunnel duplicate-Address check so an edit never
+// "conflicts" with its own saved copy. It never affects whether a config is
 // valid. Content that does not parse yields no diagnostics (ValidateConfig
 // reports the parse error).
-func (s *TunnelService) LintConfig(content string) ([]config.Diagnostic, error) {
+func (s *TunnelService) LintConfig(editing, content string) ([]config.Diagnostic, error) {
 	cfg, err := config.Parse(content)
 	if err != nil {
 		return []config.Diagnostic{}, nil
 	}
-	ds := safeLint(cfg, nil)
+	ds := safeLint(cfg, s.otherTunnelConfigs(editing))
 	if ds == nil {
 		ds = []config.Diagnostic{}
 	}
 	return ds, nil
 }
 
+// otherTunnelConfigs loads every saved tunnel except `exclude`. Unreadable
+// tunnels are skipped.
+func (s *TunnelService) otherTunnelConfigs(exclude string) map[string]*config.WireGuardConfig {
+	if s.tunnelStore == nil {
+		return nil
+	}
+	names, err := s.tunnelStore.List()
+	if err != nil {
+		return nil
+	}
+	others := make(map[string]*config.WireGuardConfig, len(names))
+	for _, n := range names {
+		if n == exclude {
+			continue
+		}
+		if c, err := s.tunnelStore.Load(n); err == nil {
+			others[n] = c
+		}
+	}
+	return others
+}
+
 // lintConfig is the linter safeLint guards; a variable so tests can make it panic.
 var lintConfig = config.Lint
 
 // safeLint runs config.Lint but never lets a panic escape: linting is advisory
-// and must not be able to kill the GUI.
+// and must not be able to kill the GUI or fail an already-saved import.
 func safeLint(cfg *config.WireGuardConfig, others map[string]*config.WireGuardConfig) (ds []config.Diagnostic) {
 	defer func() {
 		if r := recover(); r != nil {

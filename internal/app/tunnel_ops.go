@@ -43,9 +43,11 @@ func (s *TunnelService) SetTunnelLatencyProbeTarget(name, target string) error {
 }
 
 // CheckConflicts loads a tunnel's config and scans local network interfaces
-// for routing overlaps (e.g. Tailscale, another WireGuard instance). Runs
-// entirely in the GUI process — no IPC needed. The frontend calls this before
-// Connect so it can show a warning dialog if conflicts exist.
+// for routing overlaps (e.g. Tailscale, another WireGuard instance). The
+// interface scan runs in the GUI process; the shared-Address check asks the
+// helper which tunnels are connected (Tunnel.ActiveTunnels) and is skipped if
+// that call fails. The frontend calls this before Connect so it can show a
+// warning dialog if conflicts exist.
 func (s *TunnelService) CheckConflicts(name string) ([]diag.ConflictInfo, error) {
 	cfg, err := s.tunnelStore.Load(name)
 	if err != nil {
@@ -59,9 +61,33 @@ func (s *TunnelService) CheckConflicts(name string) ([]diag.ConflictInfo, error)
 	if err != nil {
 		slog.Warn("conflict check failed", "tunnel", name, "error", err)
 		// Non-fatal — don't block connect if the scan itself fails.
-		return nil, nil
+		conflicts = nil
 	}
-	return conflicts, nil
+	// Another CONNECTED tunnel with the same interface Address is a latent
+	// routing ambiguity; surface it through the same dialog.
+	return append(conflicts, s.addressConflicts(name, cfg)...), nil
+}
+
+// addressConflicts returns an "address" conflict for every currently
+// connected tunnel (other than `name`) that shares an Address IP with cfg.
+func (s *TunnelService) addressConflicts(name string, cfg *config.WireGuardConfig) []diag.ConflictInfo {
+	if len(cfg.Interface.Address) == 0 {
+		return nil
+	}
+	var resp ipc.ActiveTunnelsResponse
+	if err := s.call(ipc.MethodActiveTunnels, nil, &resp); err != nil {
+		return nil
+	}
+	connected := make(map[string][]string)
+	for _, n := range resp.Names {
+		if n == name {
+			continue
+		}
+		if c, err := s.tunnelStore.Load(n); err == nil {
+			connected[n] = c.Interface.Address
+		}
+	}
+	return diag.AddressConflicts(cfg.Interface.Address, connected)
 }
 
 // Connect loads a tunnel config from local storage and asks the helper to

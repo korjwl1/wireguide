@@ -1,3 +1,5 @@
+import { diagText } from './wireguard-lint.js';
+
 export const MAX_CONFIG_BYTES = 1 << 20;
 export const MAX_ZIP_BYTES = 32 << 20;
 export const MAX_QR_BYTES = 8 << 20;
@@ -37,4 +39,36 @@ export async function fileBase64(file, limit) {
     binary += String.fromCharCode(...bytes.subarray(i, i + 8192));
   }
   return btoa(binary);
+}
+
+/**
+ * Joined, translated text of the cross-tunnel duplicate-Address warnings in a
+ * list of Go Diagnostics (TunnelInfo.Warnings / ZipImportResult.Warnings).
+ * Other diagnostics are only shown inside the editor. Returns '' when none.
+ */
+export function warningText(diagnostics, tr) {
+  return (diagnostics || [])
+    .filter((d) => d && d.code === 'address_shared')
+    .map((d) => diagText(d, tr))
+    .join('; ');
+}
+
+/** Toast text after a successful import, with any warning appended. */
+export function importedMessage(name, diagnostics, tr) {
+  const warning = warningText(diagnostics, tr);
+  return warning
+    ? tr('app.imported_with_warning', { name, warning })
+    : tr('app.imported', { name });
+}
+
+/**
+ * True when a DisconnectTunnel error only means "already disconnected".
+ *
+ * The IPC layer has no dedicated error code for this case, so this matches the
+ * helper's message text, "tunnel %q is not connected" (internal/tunnel
+ * manager.go, ErrNotConnected). TestDisconnectNotConnectedMessage pins that
+ * text; change both together.
+ */
+export function isNotConnectedError(message) {
+  return /is not connected/i.test(message || '');
 }

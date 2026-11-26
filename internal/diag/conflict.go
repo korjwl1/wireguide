@@ -7,9 +7,11 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"sort"
 	"strings"
 	"time"
 
+	"github.com/korjwl1/wireguide/internal/config"
 	"github.com/korjwl1/wireguide/internal/sysexec"
 )
 
@@ -37,8 +39,35 @@ func runConflictCmdLC(name string, args ...string) ([]byte, error) {
 // ConflictInfo describes a routing conflict with an existing interface.
 type ConflictInfo struct {
 	InterfaceName  string   `json:"interface_name"`
-	Owner          string   `json:"owner"`           // "WireGuide", "Tailscale", "WireGuard", "Unknown"
+	Owner          string   `json:"owner"`           // "WireGuide", "Tailscale", "WireGuard", "Unknown", or OwnerAddress
 	OverlappingIPs []string `json:"overlapping_ips"` // CIDRs that overlap
+}
+
+// OwnerAddress is the ConflictInfo.Owner for a connected WireGuide tunnel that
+// has the same interface Address as the tunnel being connected. In that case
+// InterfaceName holds the other tunnel's name and OverlappingIPs the shared
+// addresses.
+const OwnerAddress = "address"
+
+// AddressConflicts reports connected tunnels whose interface Address shares an
+// IP with newAddrs (prefix length ignored). connected maps tunnel name to its
+// Address list and must exclude the tunnel being connected. Pure: no scan, no
+// side effects; results are sorted by tunnel name.
+func AddressConflicts(newAddrs []string, connected map[string][]string) []ConflictInfo {
+	names := make([]string, 0, len(connected))
+	for n := range connected {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	var out []ConflictInfo
+	for _, n := range names {
+		shared := config.SharedAddresses(newAddrs, connected[n])
+		if len(shared) == 0 {
+			continue
+		}
+		out = append(out, ConflictInfo{InterfaceName: n, Owner: OwnerAddress, OverlappingIPs: shared})
+	}
+	return out
 }
 
 // CheckConflicts scans existing interfaces for routing conflicts

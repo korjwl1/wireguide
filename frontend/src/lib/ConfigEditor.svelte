@@ -25,6 +25,7 @@
   export let nameEditable = true;
   // Saved tunnel name being edited ('' for a new tunnel); passed to the linter
   // so checks against other saved tunnels can exclude the one being edited.
+  export let lintName = '';
 
   const dispatch = createEventDispatcher();
 
@@ -142,7 +143,7 @@ PersistentKeepalive = 25
         keymap.of([indentWithTab, ...defaultKeymap, ...historyKeymap]),
         wireguardLanguage,
         autocompletion({ override: [createWireguardCompletion(tr, { splitDns })] }),
-        wireguardLinter((text) => TunnelService.LintConfig(text), tr),
+        wireguardLinter((text) => TunnelService.LintConfig(lintName, text), tr),
         lintGutter(),
         wireguardHover(tr, { splitDns }),
         themeCompartment.of(initialThemeExt),

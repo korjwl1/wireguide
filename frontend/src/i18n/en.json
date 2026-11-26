@@ -25,7 +25,8 @@
     "forced_disconnect": "⚠ {name} disconnected: {reason}",
     "tunnel": "Tunnel",
     "helper_forced": "Disconnected by the VPN service",
-    "recovery_warning": "{name}: retrying restoration of the previous DNS settings. You can still connect new tunnels."
+    "recovery_warning": "{name}: retrying restoration of the previous DNS settings. You can still connect new tunnels.",
+    "imported_with_warning": "Imported “{name}” — {warning}"
   },
   "nav": {
     "tunnels": "Tunnels",
@@ -147,7 +148,8 @@
     "hover_none": "No DNS line leaves system DNS untouched, so private names will not resolve through the tunnel.",
     "hover_nxdomain": "A name that the tunnel's server does not know returns NXDOMAIN; there is no fallback to system DNS.",
     "hover_dig": "dig queries servers directly and bypasses split DNS. To test what apps see, use dscacheutil -q host -a name <name> (macOS) or resolvectl query <name> (Linux).",
-    "hover_match": "Split DNS: queries for {domain} and its subdomains go to this tunnel's DNS server; everything else uses system DNS."
+    "hover_match": "Split DNS: queries for {domain} and its subdomains go to this tunnel's DNS server; everything else uses system DNS.",
+    "address_shared": "shares Address {address} with {tunnel}"
   },
   "settings": {
     "automation_backup_recovery": "A backup of earlier automation rules is available in the settings folder. Review it before restoring rules.",
@@ -261,7 +263,12 @@
     "message": "The tunnel’s routes overlap existing network routes. Connecting may affect traffic on other networks or VPNs.",
     "proceed": "Connect Anyway",
     "cancel": "Cancel",
-    "and_more": "… and {n} more"
+    "and_more": "… and {n} more",
+    "address_title": "Shared interface Address",
+    "same_address": "same Address",
+    "address_message": "A connected tunnel already uses the same interface Address. Two tunnels claiming one address can make routing ambiguous. You can disconnect it first, or connect anyway.",
+    "disconnect_and_connect": "Disconnect {names} and Connect",
+    "disconnect_failed": "Disconnect failed: {error}"
   },
   "update": {
     "available": "Version {version} is available.",

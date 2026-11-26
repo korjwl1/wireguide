@@ -25,7 +25,8 @@
     "forced_disconnect": "⚠ {name}の接続が解除されました: {reason}",
     "tunnel": "トンネル",
     "helper_forced": "VPN サービスによって切断されました。",
-    "recovery_warning": "{name}: 元のDNS設定の復旧が保留中です。設定は保持され、新しい接続は利用できます。"
+    "recovery_warning": "{name}: 元のDNS設定の復旧が保留中です。設定は保持され、新しい接続は利用できます。",
+    "imported_with_warning": "「{name}」をインポートしました — {warning}"
   },
   "nav": {
     "tunnels": "トンネル",
@@ -147,7 +148,8 @@
     "hover_none": "DNS 行がなければシステム DNS は変更されないため、プライベート名はトンネル経由で解決されません。",
     "hover_nxdomain": "トンネルのサーバーが知らない名前は NXDOMAIN を返し、システム DNS へのフォールバックはありません。",
     "hover_dig": "dig はドメイン別 DNS を回避してサーバーに直接問い合わせます。アプリから見える結果は dscacheutil -q host -a name <名前>(macOS)または resolvectl query <名前>(Linux)で確認してください。",
-    "hover_match": "ドメイン別 DNS: {domain} とそのサブドメインのクエリはこのトンネルの DNS サーバーへ、それ以外はシステム DNS を使います。"
+    "hover_match": "ドメイン別 DNS: {domain} とそのサブドメインのクエリはこのトンネルの DNS サーバーへ、それ以外はシステム DNS を使います。",
+    "address_shared": "{tunnel} と Address {address} を共有しています"
   },
   "settings": {
     "automation_backup_recovery": "以前の自動化ルールのバックアップが設定フォルダーにあります。復元する前に内容を確認してください。",
@@ -261,7 +263,12 @@
     "message": "トンネルの経路が既存の経路と重複しています。接続すると、ほかのネットワークや VPN の通信に影響する場合があります。",
     "proceed": "それでも接続",
     "cancel": "キャンセル",
-    "and_more": "… ほか {n} 件"
+    "and_more": "… ほか {n} 件",
+    "address_title": "インターフェース Address の重複",
+    "same_address": "同じ Address",
+    "address_message": "接続中のトンネルがすでに同じインターフェース Address を使用しています。2 つのトンネルが 1 つのアドレスを使うとルーティングが曖昧になる場合があります。先にそのトンネルを切断するか、そのまま接続できます。",
+    "disconnect_and_connect": "{names} を切断して接続",
+    "disconnect_failed": "切断に失敗しました: {error}"
   },
   "update": {
     "available": "v{version} が利用可能",

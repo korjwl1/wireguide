@@ -2,6 +2,7 @@ package tunnel
 
 import (
 	"errors"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -541,6 +542,19 @@ func TestDisconnect_NotConnected(t *testing.T) {
 
 	err := mgr.Disconnect()
 	assertTunnelError(t, err, ErrNotConnected)
+}
+
+// The GUI recognises "already disconnected" by this message text
+// (isNotConnectedError in frontend/src/lib/imports.js); the IPC layer has no
+// dedicated code for it.
+func TestDisconnectNotConnectedMessage(t *testing.T) {
+	net := &mockNetworkManager{}
+	mgr := newTestManagerWithDir(net, succeedingFactory(), t.TempDir())
+
+	err := mgr.DisconnectTunnel("home-vpn")
+	if err == nil || !strings.Contains(err.Error(), "is not connected") {
+		t.Fatalf("Disconnect error %q must contain %q", err, "is not connected")
+	}
 }
 
 func TestDisconnect_WaitsForConnectToFinish(t *testing.T) {
