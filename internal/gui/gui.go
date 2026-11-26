@@ -12,11 +12,14 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"os"
 	"runtime"
 	"sync"
 
 	wgapp "github.com/korjwl1/wireguide/internal/app"
+	"github.com/korjwl1/wireguide/internal/autostart"
 	"github.com/korjwl1/wireguide/internal/domain"
+	"github.com/korjwl1/wireguide/internal/elevate"
 	"github.com/korjwl1/wireguide/internal/guiinstance"
 	"github.com/korjwl1/wireguide/internal/ipc"
 	"github.com/korjwl1/wireguide/internal/storage"
@@ -58,6 +61,7 @@ func init() {
 	application.RegisterEvent[map[string]any]("files-dropped")
 	application.RegisterEvent[HelperEvent]("helper")
 	application.RegisterEvent[struct{}]("helper_reset")
+	application.RegisterEvent[struct{}]("automation_changed")
 	application.RegisterEvent[update.UpdateInfo]("update-available")
 	application.RegisterEvent[map[string]any]("update_progress")
 	application.RegisterEvent[ipc.SettingsChangedPayload]("settings_changed")
@@ -113,9 +117,31 @@ func Run(assetsHandler http.Handler, dataDir string) error {
 
 	// Apply persisted log level to the GUI side immediately (helper-side
 	// gets it after ensureHelper + the UpdateSettings path).
-	if s, err := settingsStore.Load(); err == nil && s != nil && s.LogLevel != "" {
-		setGUILogLevel(s.LogLevel)
+	initialSettings, settingsErr := settingsStore.Load()
+	if settingsErr == nil && initialSettings != nil && initialSettings.LogLevel != "" {
+		setGUILogLevel(initialSettings.LogLevel)
 	}
+
+	// Bring an existing login item up to date with the current template
+	// (macOS: AssociatedBundleIdentifiers). Saving settings only rewrites it
+	// when the toggle changes, so an upgraded user would otherwise keep the
+	// old LaunchAgent. User-level file, no prompt; best-effort.
+	if settingsErr == nil && initialSettings != nil && initialSettings.AutoStart {
+		if exe, err := os.Executable(); err == nil {
+			if changed, err := autostart.SyncAutostart(exe); err != nil {
+				slog.Warn("autostart: cannot refresh login item", "error", err)
+			} else if changed {
+				slog.Info("autostart: login item updated to the current template")
+			}
+		}
+	}
+
+	elevate.SetNoticeLanguage(func() string {
+		if s, err := settingsStore.Load(); err == nil && s != nil && s.Language != "" && s.Language != "auto" {
+			return s.Language
+		}
+		return preferredGUILanguage()
+	})
 
 	initialClient, err := connectInitialHelper(dataDir)
 	if err != nil {
@@ -279,16 +305,17 @@ func Run(assetsHandler http.Handler, dataDir string) error {
 	healthDone := make(chan struct{})
 	var stopHealthOnce sync.Once
 	stopHealth := func() { stopHealthOnce.Do(func() { close(healthDone) }) }
-	shutdown = &guiShutdown{instance: instance, indicator: connectionIndicator, stopHealth: stopHealth, service: tunnelService, history: historyStore, clients: clients}
+	notify := newNotifier(settingsStore, tunnelService.UserActions())
+	shutdown = &guiShutdown{instance: instance, indicator: connectionIndicator, stopHealth: stopHealth, service: tunnelService, history: historyStore, clients: clients, notify: notify}
 	defer shutdown.run()
 
 	trayMgr := newTrayManager(app, win, tray, tunnelService, shutdown.run)
 	trayMgr.connectionIcon = connectionIndicator
-	wgapp.SetGUIPreferencesChanged(func() {
+	wgapp.SetGUIPreferencesChanged(preferencesChangedHook(notify, func() {
 		if !appQuitting.Load() {
 			trayMgr.scheduleRebuild()
 		}
-	})
+	}))
 	trayMgr.initialBuild()
 
 	if runtime.GOOS == "darwin" {
@@ -312,7 +339,10 @@ func Run(assetsHandler http.Handler, dataDir string) error {
 	// process restarts. The health monitor swaps the client in the holder.
 	// Pass the tray's cheap icon-update hook — NOT the full menu rebuild —
 	// so the 1 Hz status stream doesn't trigger IPC round-trips on every event.
-	bridge := newEventBridge(app, clients, trayMgr.setIconState, tunnelService.ReconcileHistoryFromStatus, trayMgr.quitApp)
+	bridge := newEventBridge(app, clients, trayMgr.setIconState, func(status domain.ConnectionStatus, source *ipc.Client) {
+		wgapp.ObserveHistoryStatus(tunnelService, status, source)
+	}, trayMgr.quitApp)
+	bridge.notify = notify
 	bridge.start()
 
 	// Push the persisted log level to the helper now that the event

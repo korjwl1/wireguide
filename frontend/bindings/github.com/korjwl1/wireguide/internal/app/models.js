@@ -638,6 +638,14 @@ export class SettingsPatch {
              */
             this["list_pane_width"] = undefined;
         }
+        if (/** @type {any} */(false)) {
+            /**
+             * NotifyAutoChanges is GUI-only: no helper side effect to apply.
+             * @member
+             * @type {boolean | null | undefined}
+             */
+            this["notify_auto_changes"] = undefined;
+        }
 
         Object.assign(this, $$source);
     }
@@ -714,6 +722,23 @@ export class TunnelInfo {
              */
             this["last_used_unix"] = undefined;
         }
+        if (/** @type {any} */(false)) {
+            /**
+             * DNSMode is the intended DNS behaviour from the config: "global"
+             * (replaces system DNS), "split" (only DNSDomains), "search" (search
+             * domains only) or "none". Intent, not read back from the OS.
+             * @member
+             * @type {string | undefined}
+             */
+            this["dns_mode"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {string[] | undefined}
+             */
+            this["dns_domains"] = undefined;
+        }
 
         Object.assign(this, $$source);
     }
@@ -724,7 +749,11 @@ export class TunnelInfo {
      * @returns {TunnelInfo}
      */
     static createFrom($$source = {}) {
+        const $$createField8_0 = $$createType4;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("dns_domains" in $$parsedSource) {
+            $$parsedSource["dns_domains"] = $$createField8_0($$parsedSource["dns_domains"]);
+        }
         return new TunnelInfo(/** @type {Partial<TunnelInfo>} */($$parsedSource));
     }
 }

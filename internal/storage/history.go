@@ -339,3 +339,20 @@ func newSessionID() string {
 	}
 	return hex.EncodeToString(b[:])
 }
+
+func (h *HistoryStore) AddClosedSessionTraffic(id string, rx, tx int64) {
+	if id == "" || rx < 0 || tx < 0 || rx == 0 && tx == 0 {
+		return
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	sessions := h.loadLocked()
+	for i := range sessions {
+		if sessions[i].ID == id && sessions[i].EndTime != nil {
+			sessions[i].RxBytes += rx
+			sessions[i].TxBytes += tx
+			h.commitLocked(sessions)
+			return
+		}
+	}
+}

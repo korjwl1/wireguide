@@ -1,6 +1,9 @@
 package ipc
 
-import "github.com/korjwl1/wireguide/internal/domain"
+import (
+	"github.com/korjwl1/wireguide/internal/automation"
+	"github.com/korjwl1/wireguide/internal/domain"
+)
 
 // Empty is used for requests/responses with no payload.
 type Empty struct{}
@@ -212,7 +215,14 @@ type AutomationTunnelDecision struct {
 	Latched  bool   `json:"latched,omitempty"`
 	// Blocked is true when the loop watchdog has blocked this tunnel from
 	// automatic (re)connects; a "connect" decision is then not acted on.
-	Blocked bool `json:"blocked,omitempty"`
+	Blocked    bool                      `json:"blocked,omitempty"`
+	Evaluation *AutomationRuleEvaluation `json:"evaluation,omitempty"`
+}
+
+type AutomationRuleEvaluation struct {
+	RuleIndex       int                   `json:"rule_index"`
+	Condition       *automation.Condition `json:"condition,omitempty"`
+	HasNegatedRules bool                  `json:"has_negated_rules"`
 }
 
 // RecoveryWarningPayload reports retained OS cleanup without disabling new connections.

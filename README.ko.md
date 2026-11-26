@@ -90,7 +90,7 @@ PolicyKit을 통해 필요할 때만 기동됩니다.
 ```bash
 brew install go node
 go install github.com/go-task/task/v3/cmd/task@v3.54.0
-go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-beta.34
+go install github.com/wailsapp/wails/v3/cmd/wails3@v3.1.0
 
 task build
 ./bin/wireguide

@@ -220,4 +220,8 @@ func TestPreviewReportsWatchdogBlock(t *testing.T) {
 	if len(resp.Tunnels) != 1 || resp.Tunnels[0].Decision != "connect" || !resp.Tunnels[0].Blocked {
 		t.Fatalf("want connect+blocked, got %+v", resp.Tunnels)
 	}
+	evaluation := resp.Tunnels[0].Evaluation
+	if evaluation == nil || evaluation.RuleIndex != 0 || evaluation.Condition == nil || evaluation.Condition.SSID != "CafeWiFi" || evaluation.HasNegatedRules {
+		t.Fatalf("preview must include the evaluated rule snapshot: %+v", evaluation)
+	}
 }

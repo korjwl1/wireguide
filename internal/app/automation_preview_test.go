@@ -166,3 +166,23 @@ func TestConfigLANOverlap_TableOffNeverOverlaps(t *testing.T) {
 		t.Error("nil config must not overlap")
 	}
 }
+
+func TestAutomationPreviewUsesTheHelpersRuleSnapshot(t *testing.T) {
+	rules := map[string][]automation.Rule{"v": {ssidRule("different", true, automation.ActionConnect)}}
+	resp := ipc.AutomationPreviewResponse{SSID: "Home", Online: true, Settled: true,
+		Tunnels: []ipc.AutomationTunnelDecision{{Name: "v", Decision: "connect", Active: true,
+			Evaluation: &ipc.AutomationRuleEvaluation{RuleIndex: 2, HasNegatedRules: false,
+				Condition: &automation.Condition{Type: automation.CondSSID, SSID: "helper snapshot"}},
+		}},
+	}
+	p := buildAutomationPreview(resp, rules, nil)
+	v := verdictFor(t, p, "v")
+	if v.RuleIndex != 3 || v.RuleValue != "helper snapshot" || v.RuleNegate || p.HasNegatedRules {
+		t.Fatalf("GUI must not re-evaluate a different settings snapshot: %+v", p)
+	}
+	resp.Tunnels[0].Evaluation = &ipc.AutomationRuleEvaluation{RuleIndex: -1}
+	p = buildAutomationPreview(resp, rules, nil)
+	if v := verdictFor(t, p, "v"); v.RuleIndex != 0 || v.RuleType != "" {
+		t.Fatalf("an evaluated no-match must not run the legacy fallback: %+v", v)
+	}
+}
