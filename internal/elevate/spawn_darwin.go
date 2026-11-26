@@ -15,9 +15,11 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/korjwl1/wireguide/internal/ipc"
+	"github.com/korjwl1/wireguide/internal/launchd"
 	"github.com/korjwl1/wireguide/internal/logrotate"
 	"github.com/korjwl1/wireguide/internal/version"
 )
@@ -85,6 +87,12 @@ func generatePlistContent(exe string, args Args) string {
 <dict>
     <key>Label</key>
     <string>%s</string>
+    <!-- Ties this background item to the WireGuide app in System Settings
+         (Login Items and Extensions). -->
+    <key>AssociatedBundleIdentifiers</key>
+    <array>
+        <string>%s</string>
+    </array>
     <key>ProgramArguments</key>
     <array>
         <string>%s</string>
@@ -149,7 +157,7 @@ func generatePlistContent(exe string, args Args) string {
     <string>%s</string>
 </dict>
 </plist>
-`, daemonLabel, daemonBinary, args.SocketPath, uid, args.DataDir, ipc.DarwinSocketPath, uid,
+`, daemonLabel, launchd.AppBundleID, daemonBinary, args.SocketPath, uid, args.DataDir, ipc.DarwinSocketPath, uid,
 		logrotate.HelperLogPath, logrotate.HelperStderrPath, logrotate.HelperStderrPath)
 }
 
@@ -174,7 +182,14 @@ func PlistNeedsReinstall(args Args) bool {
 		return false
 	}
 	expected := generatePlistContent(exe, args)
-	return string(existing) != expected
+	if string(existing) != expected {
+		return true
+	}
+	source, err := daemonSource(exe)
+	if err != nil {
+		return false
+	}
+	return !daemonBinariesMatch(source, daemonBinary)
 }
 
 // installAndLoadDaemon brings the LaunchDaemon to a state where the helper
@@ -196,6 +211,13 @@ func PlistNeedsReinstall(args Args) bool {
 func installAndLoadDaemon(ctx context.Context, args Args) error {
 	exe, err := SelfPath()
 	if err != nil {
+		return err
+	}
+	exe, err = daemonSource(exe)
+	if err != nil {
+		return err
+	}
+	if err := validateDaemonSource(ctx, exe); err != nil {
 		return err
 	}
 
@@ -323,12 +345,39 @@ func daemonLoadedFromPrint(out []byte, err error) error {
 	return nil
 }
 
+// runAuthorizationScript runs the administrator-privileges AppleScript; a seam
+// for tests so they can never open a real password prompt.
+var runAuthorizationScript = func(script string) ([]byte, error) {
+	return exec.Command("osascript", "-e", script).CombinedOutput()
+}
+
+// authNoticeShown records that the explanation dialog has already been
+// displayed in this process. The longer explanation is shown at most once per
+// process ("session", nothing is persisted) so repeated repair retries do not
+// stack a second modal dialog in front of every password prompt.
+var authNoticeShown atomic.Bool
+
 func runDaemonAuthorization(shellScript string) error {
+	// Explain BEFORE the password prompt, and only here: this runs solely
+	// when an install or repair really needs administrator rights, never on
+	// the passive no-prompt start path. Once per process: the claim is taken
+	// before showing so concurrent attempts cannot both show it, kept when the
+	// user saw the dialog (accepted or declined), and released when the dialog
+	// could not be shown at all so a later attempt may try again.
+	if authNoticeShown.CompareAndSwap(false, true) {
+		shown, err := showAuthorizationNotice()
+		if !shown {
+			authNoticeShown.Store(false)
+		}
+		if err != nil {
+			return err
+		}
+	}
 	escaped := strings.ReplaceAll(shellScript, `\`, `\\`)
 	escaped = strings.ReplaceAll(escaped, `"`, `\"`)
-	script := fmt.Sprintf(`do shell script "%s" with administrator privileges with prompt "WireGuide needs administrator access to start or repair its VPN helper service."`, escaped)
+	script := fmt.Sprintf(`do shell script "%s" with administrator privileges with prompt "%s"`, escaped, currentAuthNotice().Prompt)
 	slog.Info("starting LaunchDaemon (administrator authorization)")
-	out, err := exec.Command("osascript", "-e", script).CombinedOutput()
+	out, err := runAuthorizationScript(script)
 	if err != nil {
 		if strings.Contains(string(out), "(-128)") {
 			return fmt.Errorf("%w: %s", ErrAuthorizationCanceled, tailOf(out, 500))
@@ -432,6 +481,10 @@ func daemonStateSummary(ctx context.Context) string {
 // starts the helper right away rather than waiting for the first connect. A
 // stale socket file left by bootout is simply rebound by launchd.)
 func daemonInstallScript(exe, tmpPlist string) string {
+	verify := ":"
+	if daemonSourceBundle(exe) != "" {
+		verify = "/usr/bin/codesign --verify --strict --all-architectures " + shellQuote(daemonBinary)
+	}
 	return fmt.Sprintf(
 		`launchctl bootout system/%s 2>/dev/null; `+
 			`i=0; while [ $i -lt 150 ] && launchctl print system/%s >/dev/null 2>&1; do sleep 0.1; i=$((i+1)); done; `+
@@ -442,6 +495,7 @@ func daemonInstallScript(exe, tmpPlist string) string {
 			`{ xattr -d com.apple.quarantine %s 2>/dev/null || true; } && `+
 			`chown root:wheel %s && `+
 			`chmod 755 %s && `+
+			`%s && `+
 			`cp -f %s %s && `+
 			`chown root:wheel %s && `+
 			`chmod 644 %s && `+
@@ -454,6 +508,7 @@ func daemonInstallScript(exe, tmpPlist string) string {
 		shellQuote(daemonBinary),
 		shellQuote(daemonBinary),
 		shellQuote(daemonBinary),
+		verify,
 		shellQuote(tmpPlist), shellQuote(daemonPlist),
 		shellQuote(daemonPlist),
 		shellQuote(daemonPlist),
@@ -467,15 +522,23 @@ func daemonInstallScript(exe, tmpPlist string) string {
 // plist content. Used to route SpawnHelper onto the no-authorization path.
 // Any read error (not installed yet, permissions) → false → full install.
 func daemonUpToDate(exe, wantPlist string) bool {
-	onDisk, err := os.ReadFile(daemonPlist)
+	return daemonUpToDateAt(exe, wantPlist, daemonBinary, daemonPlist)
+}
+
+func daemonUpToDateAt(exe, wantPlist, binaryPath, plistPath string) bool {
+	onDisk, err := os.ReadFile(plistPath)
 	if err != nil || !bytes.Equal(onDisk, []byte(wantPlist)) {
 		return false
 	}
+	return daemonBinariesMatch(exe, binaryPath)
+}
+
+func daemonBinariesMatch(exe, binaryPath string) bool {
 	selfSum, err := fileSHA256(exe)
 	if err != nil {
 		return false
 	}
-	installedSum, err := fileSHA256(daemonBinary)
+	installedSum, err := fileSHA256(binaryPath)
 	if err != nil {
 		return false
 	}

@@ -75,7 +75,15 @@ func NewEngine(cfg *config.WireGuardConfig) (*Engine, error) {
 // The MTU passed in here is the initial value the userspace TUN device is
 // created with. It can be overridden later by the platform network manager's
 // SetMTU. The kernel backend relies on that same platform SetMTU path.
+// NewEngineWithBackend has no state directory, so a kernel link it creates
+// has no durable creation intent; see newEngineWithBackend.
 func NewEngineWithBackend(cfg *config.WireGuardConfig, kind BackendKind) (*Engine, error) {
+	return newEngineWithBackend(cfg, kind, "")
+}
+
+// newEngineWithBackend passes dataDir to the kernel backend so its creation
+// intent is durable before RTM_NEWLINK. Other backends ignore it.
+func newEngineWithBackend(cfg *config.WireGuardConfig, kind BackendKind, dataDir string) (*Engine, error) {
 	if !kind.Supported() {
 		return nil, fmt.Errorf("WireGuard backend %q is not supported on this platform", kind)
 	}
@@ -137,7 +145,7 @@ func NewEngineWithBackend(cfg *config.WireGuardConfig, kind BackendKind) (*Engin
 	// The kernel backend owns its adapter lifecycle; the platform network
 	// manager still applies MTU/address/routes to the adapter it creates.
 	if kind == BackendKernel {
-		return newKernelEngine(cfg, &resolvedCfg, resolvedEndpointIPs, resolvedEndpoints)
+		return newKernelEngineWithDataDir(cfg, &resolvedCfg, resolvedEndpointIPs, resolvedEndpoints, dataDir)
 	}
 
 	mtu := cfg.Interface.MTU

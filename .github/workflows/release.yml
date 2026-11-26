@@ -67,7 +67,7 @@ jobs:
 
       - name: Install wails3 + task
         run: |
-          go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-beta.34
+          go install github.com/wailsapp/wails/v3/cmd/wails3@v3.1.0
           go install github.com/go-task/task/v3/cmd/task@v3.54.0
           echo "$HOME/go/bin" >> "$GITHUB_PATH"
 
@@ -122,7 +122,7 @@ jobs:
       - name: Install wails3 + task
         shell: pwsh
         run: |
-          go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-beta.34
+          go install github.com/wailsapp/wails/v3/cmd/wails3@v3.1.0
           go install github.com/go-task/task/v3/cmd/task@v3.54.0
           # Append, don't overwrite — PATH already has system entries.
           "$env:USERPROFILE\go\bin" | Out-File -FilePath $env:GITHUB_PATH -Append
@@ -276,7 +276,7 @@ jobs:
 
       - name: Install wails3 + task
         run: |
-          go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-beta.34
+          go install github.com/wailsapp/wails/v3/cmd/wails3@v3.1.0
           go install github.com/go-task/task/v3/cmd/task@v3.54.0
           echo "$HOME/go/bin" >> "$GITHUB_PATH"
 
